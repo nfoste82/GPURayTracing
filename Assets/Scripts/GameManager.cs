@@ -10,7 +10,8 @@ public class GameManager : MonoBehaviour
     
     private RenderTexture _outputTexture;
     private Vector2Int _textureSize;
-    
+
+    private List<Sphere> _spheres;
     private ComputeBuffer _sphereBuffer;
     
     private static bool _meshObjectsNeedRebuilding = false;
@@ -68,6 +69,8 @@ public class GameManager : MonoBehaviour
     
     private void OnRenderImage(RenderTexture src, RenderTexture dest)
     {
+        MoveSpheres();
+        
         var kernelHandle = shader.FindKernel("CSMain");
         
         SetShaderParameters(kernelHandle);
@@ -79,32 +82,50 @@ public class GameManager : MonoBehaviour
 
     private void SetupSpheres()
     {
-        List<Sphere> spheres = new List<Sphere>();
+        _spheres = new List<Sphere>();
 
         var sphere = new Sphere
         {
             position = Vector3.zero,
-            emission = new Vector3(0.1f, 0.1f, 0.1f),
+            emission = new Vector3(0.0f, 0.0f, 0.0f),
             radius = 0.5f,
             smoothness = 0.8f
         };
-        spheres.Add(sphere);
-
-        if (_sphereBuffer != null)
+        _spheres.Add(sphere);
+        
+        var sphere2 = new Sphere
         {
-            _sphereBuffer.Release();
-        }
+            position = new Vector3(-2.0f, 2.0f, 0.0f),
+            emission = new Vector3(0.0f, 0.0f, 0.0f),
+            radius = 0.3f,
+            smoothness = 0.6f
+        };
+        _spheres.Add(sphere2);
 
-        if (spheres.Count > 0)
+        _sphereBuffer?.Release();
+
+        if (_spheres.Count > 0)
         {
-            shader.SetInt("_NumSpheres", spheres.Count);
-            //shader.SetInt("_SphereStride", 56);
+            shader.SetInt("_NumSpheres", _spheres.Count);
             
-            _sphereBuffer = new ComputeBuffer(spheres.Count, 32);
-            _sphereBuffer.SetData(spheres);
+            _sphereBuffer = new ComputeBuffer(_spheres.Count, 32);
+            _sphereBuffer.SetData(_spheres);
         }
     }
-    
+
+    private void MoveSpheres()
+    {
+        for (int i = 0; i < _spheres.Count; ++i)
+        {
+            var sphere = _spheres[i];
+            
+            sphere.position.y += Mathf.Sin(Time.time + i) * Time.deltaTime;
+            _spheres[i] = sphere;
+        }
+
+        _sphereBuffer.SetData(_spheres);
+    }
+
     public static void RegisterObject(RayTracingObject obj)
     {
         _rayTracingObjects.Add(obj);

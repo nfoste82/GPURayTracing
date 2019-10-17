@@ -12,7 +12,6 @@ Texture2D<float4> _SkyboxTexture;
 SamplerState sampler_SkyboxTexture;
 
 int _NumSpheres;
-int _SphereStride;
 
 static const float PI = 3.141592f;
 
@@ -84,7 +83,7 @@ RayHit CreateRayHit()
     //hit.albedo = float3(0.0f, 0.0f, 0.0f);
     //hit.specular = float3(0.0f, 0.0f, 0.0f);
     hit.smoothness = 0.0f;
-    //hit.emission = float3(0.0f, 0.0f, 0.0f);
+    hit.emission = float3(0.0f, 0.0f, 0.0f);
     return hit;
 }
 // =======================================================
@@ -108,7 +107,7 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
         bestHit.normal = normalize(bestHit.position - sphere.position);
         //bestHit.albedo = sphere.albedo;
         //bestHit.specular = sphere.specular;
-        //bestHit.smoothness = sphere.smoothness;
+        bestHit.smoothness = sphere.smoothness;
         bestHit.emission = sphere.emission;
     }
 }
@@ -117,52 +116,42 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
 RayHit Trace(Ray ray)
 {
 	RayHit bestHit = CreateRayHit();
-	int i;
-	//uint count, stride, i;
 	
-	//int _NumSpheres;
-    //int _SphereStride;
-
-	// Trace ground plane
-	//IntersectGroundPlane(ray, bestHit);
-
-	// Trace spheres
-	//_Spheres.GetDimensions(count, stride);
+	int i;
 	for (i = 0; i < _NumSpheres; i++)
 	{
 		IntersectSphere(ray, bestHit, _Spheres[i]);
 	}
-
-	// Trace mesh objects
-	//_MeshObjects.GetDimensions(count, stride);
-	//for (i = 0; i < count; i++)
-	//{
-	//	IntersectMeshObject(ray, bestHit, _MeshObjects[i]);
-	//}
-
+	
 	return bestHit;
 }
 
 float3 Shade(inout Ray ray, RayHit hit)
 {
-    if (hit.distance < 1.#INF)
-    {
-        // Diffuse reflection
-        ray.origin = hit.position + hit.normal * 0.001f;
-        ray.direction = reflect(ray.direction, hit.normal); //SampleHemisphere(hit.normal, 1.0f);
-        ray.energy *= hit.smoothness;   //(1.0f / diffChance) * hit.albedo;
-
-        return hit.emission;
-    }
-    else
-    {
-        // Erase the ray's energy - the sky doesn't reflect anything
-        ray.energy = 0.0f;
-
-        // Sample the skybox and write it
-        float theta = acos(ray.direction.y) / -PI;
-        float phi = atan2(ray.direction.x, -ray.direction.z) / -PI * 0.5f;
-        return _SkyboxTexture.SampleLevel(sampler_SkyboxTexture, float2(phi, theta), 0).xyz;
+    float3 result;
+    while (true)
+    {    
+        if (hit.distance < 1.#INF)
+        {
+            // Diffuse reflection
+            ray.origin = hit.position + hit.normal * 0.001f;
+            ray.direction = reflect(ray.direction, hit.normal);
+            ray.energy *= hit.smoothness;
+    
+            result += hit.emission;
+            
+            hit = Trace(ray);             
+        }
+        else
+        {
+            // Erase the ray's energy - the sky doesn't reflect anything
+            //ray.energy = 0.0f;
+    
+            // Sample the skybox and write it
+            float theta = acos(ray.direction.y) / -PI;
+            float phi = atan2(ray.direction.x, -ray.direction.z) / -PI * 0.5f;
+            return result + _SkyboxTexture.SampleLevel(sampler_SkyboxTexture, float2(phi, theta), 0).xyz * ray.energy;
+        }
     }
 }
 
@@ -170,32 +159,23 @@ float3 Shade(inout Ray ray, RayHit hit)
 [numthreads(8,8,1)]
 void CSMain (uint3 id : SV_DispatchThreadID)
 {
-    //_Pixel = id.xy;
-
     // Get the dimensions of the RenderTexture
     uint width, height;
     Result.GetDimensions(width, height);
 
     // Transform pixel to [-1,1] range
-    //float2 uv = float2((id.xy + _PixelOffset) / float2(width, height) * 2.0f - 1.0f);
     float2 uv = (id.xy / float2(width, height) * 2.0f - 1.0f);
     
     Ray ray = CreateCameraRay(uv);
 
     // Trace and shade the ray
     float3 result = float3(0, 0, 0);
-    for (int i = 0; i < 8; i++)
-    {
-        RayHit hit = Trace(ray);
-        result += ray.energy * Shade(ray, hit);
+    
+    RayHit hit = Trace(ray);
+    result += ray.energy * Shade(ray, hit);
 
-        if (!any(ray.energy))
-            break;
-    }
+    //if (!any(ray.energy))
+        //break;
 
     Result[id.xy] = float4(result, 1);
-
-
-    //Result[id.xy] = float4(id.x & id.y, (id.x & 15)/15.0, (id.y & 15)/15.0, 0.0);
-    //Result[id.xy] = float4(1.0, 0.0, 0.0, 0.0);
 }
