@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 
@@ -34,11 +35,12 @@ public class GameManager : MonoBehaviour
     private struct Sphere
     {
         public Vector3 position;
+        public Vector3 color;
+        public Vector3 emission;
         public float radius;
+        public float smoothness;
         //public Vector3 albedo;
         //public Vector3 specular;
-        public float smoothness;
-        public Vector3 emission;
     }
     
     private void Start()
@@ -52,6 +54,11 @@ public class GameManager : MonoBehaviour
         _outputTexture.Create();
 
         SetupSpheres();
+    }
+
+    private void OnDestroy()
+    {
+        _sphereBuffer?.Release();
     }
 
 //    private void Update()
@@ -88,6 +95,7 @@ public class GameManager : MonoBehaviour
         {
             position = Vector3.zero,
             emission = new Vector3(0.0f, 0.0f, 0.0f),
+            color = new Vector3(1.0f, 0f, 0f),
             radius = 0.5f,
             smoothness = 0.8f
         };
@@ -97,6 +105,7 @@ public class GameManager : MonoBehaviour
         {
             position = new Vector3(-2.0f, 2.0f, 0.0f),
             emission = new Vector3(0.0f, 0.0f, 0.0f),
+            color = new Vector3(0f, 0f, 1f),
             radius = 0.3f,
             smoothness = 0.6f
         };
@@ -108,7 +117,7 @@ public class GameManager : MonoBehaviour
         {
             shader.SetInt("_NumSpheres", _spheres.Count);
             
-            _sphereBuffer = new ComputeBuffer(_spheres.Count, 32);
+            _sphereBuffer = new ComputeBuffer(_spheres.Count, 44);
             _sphereBuffer.SetData(_spheres);
         }
     }

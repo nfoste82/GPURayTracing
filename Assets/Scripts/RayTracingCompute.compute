@@ -15,14 +15,22 @@ int _NumSpheres;
 
 static const float PI = 3.141592f;
 
+float3 Combine(float3 a, float3 b)
+{
+    return float3(a.x + b.x, a.y + b.y, a.z + b.z);
+}
+
+// =======================================================
+// Sphere
 struct Sphere
 {
     float3 position;
+    float3 emission;
+    float3 color;
     float radius;
     //float3 albedo;
     //float3 specular;
     float smoothness;
-    float3 emission;
 };
 
 StructuredBuffer<Sphere> _Spheres;
@@ -34,6 +42,7 @@ struct Ray
     float3 origin;
     float3 direction;
     float3 energy;
+    float3 color;
 };
 
 Ray CreateRay(float3 origin, float3 direction)
@@ -42,6 +51,7 @@ Ray CreateRay(float3 origin, float3 direction)
     ray.origin = origin;
     ray.direction = direction;
     ray.energy = float3(1.0f, 1.0f, 1.0f);
+    ray.color = float3(0.0f, 0.0f, 0.0f);
     return ray;
 }
 
@@ -66,12 +76,13 @@ Ray CreateCameraRay(float2 uv)
 struct RayHit
 {
     float3 position;
-    float distance;
     float3 normal;
+    float3 emission;
+    float3 color;
+    float distance;
     //float3 albedo;
     //float3 specular;
     float smoothness;
-    float3 emission;
 };
 
 RayHit CreateRayHit()
@@ -109,6 +120,7 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
         //bestHit.specular = sphere.specular;
         bestHit.smoothness = sphere.smoothness;
         bestHit.emission = sphere.emission;
+        bestHit.color = sphere.color;
     }
 }
 
@@ -137,6 +149,8 @@ float3 Shade(inout Ray ray, RayHit hit)
             ray.origin = hit.position + hit.normal * 0.001f;
             ray.direction = reflect(ray.direction, hit.normal);
             ray.energy *= hit.smoothness;
+            
+            ray.color = Combine(ray.color, hit.color);
     
             result += hit.emission;
             
@@ -154,6 +168,7 @@ float3 Shade(inout Ray ray, RayHit hit)
         }
     }
 }
+
 
 
 [numthreads(8,8,1)]
