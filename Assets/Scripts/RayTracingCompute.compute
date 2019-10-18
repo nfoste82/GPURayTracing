@@ -11,7 +11,8 @@ float4x4 _CameraInverseProjection;
 Texture2D<float4> _SkyboxTexture;
 SamplerState sampler_SkyboxTexture;
 
-float4 _DiffuseLight;
+float4 _AmbientLight;
+float4 _SkyboxLight;
 
 int _NumSpheres;
 int _NumLights;
@@ -55,7 +56,7 @@ Ray CreateRay(float3 origin, float3 direction)
     ray.origin = origin;
     ray.direction = direction;
     ray.energy = float3(1.0f, 1.0f, 1.0f);
-    ray.color = _DiffuseLight.xyz;  //float3(0.0f, 0.0f, 0.0f);
+    ray.color = float3(0.0f, 0.0f, 0.0f);
     return ray;
 }
 
@@ -186,7 +187,8 @@ float3 Shade(inout Ray ray, RayHit hit)
 {
     float3 result;
     float lastHitSmoothness = 1.0f;
-    int numBounces = 0;    
+    int numBounces = 0;
+   
     
     while (true)
     {   
@@ -197,11 +199,11 @@ float3 Shade(inout Ray ray, RayHit hit)
             // Diffuse reflection
             ray.origin = hit.position + hit.normal * 0.001f;
             ray.direction = reflect(ray.direction, hit.normal);
-            ray.energy *= hit.smoothness;
+            //ray.energy *= hit.smoothness;
             
             // TODO: hit.color needs to factor in light sources
             float3 colorAtPt = GetLightHittingPoint(ray, hit);
-            ray.color = Combine(ray.color, colorAtPt * ray.energy);
+            ray.color = Combine(ray.color, colorAtPt * hit.color * ray.energy);
             //ray.color = Combine(ray.color, _DiffuseLight.xyz);
     
             if ((hit.emission.x + hit.emission.y + hit.emission.z) > 0.0f)
@@ -221,8 +223,17 @@ float3 Shade(inout Ray ray, RayHit hit)
             // Sample the skybox and write it
             float theta = acos(ray.direction.y) / -PI;
             float phi = atan2(ray.direction.x, -ray.direction.z) / -PI * 0.5f;
-            return Combine(ray.color, _SkyboxTexture.SampleLevel(sampler_SkyboxTexture, float2(phi, theta), 0).xyz * ray.energy * lastHitSmoothness);
-            //return ray.color;
+            float3 skyboxColor = _SkyboxTexture.SampleLevel(sampler_SkyboxTexture, float2(phi, theta), 0).xyz;
+            
+            if (numBounces == 1)
+            {
+                return skyboxColor * _SkyboxLight.xyz;
+            }
+            else
+            {
+                float3 rayPlusSky = ray.color + (skyboxColor * _SkyboxLight.xyz);
+                return Combine(rayPlusSky, _AmbientLight.xyz);
+            }
         }
     }
 }

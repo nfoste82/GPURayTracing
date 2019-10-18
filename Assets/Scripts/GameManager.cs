@@ -9,8 +9,11 @@ public class GameManager : MonoBehaviour
     public Camera renderTextureCamera;
     public Texture skyboxTexture;
 
-    public Color _diffuseLightColor;
-    private Vector4 _diffuseLightColorAsVector;
+    public Color _ambientLightColor;
+    private Vector4 _ambientLightColorAsVector;
+
+    public Color32 _skyboxLightColor = new Color32(123, 107, 101, 255);
+    private Vector4 _skyboxLightColorAsVector;
     
     private RenderTexture _outputTexture;
     private Vector2Int _textureSize;
@@ -67,11 +70,6 @@ public class GameManager : MonoBehaviour
         _sphereBuffer?.Release();
         _lightBuffer?.Release();
     }
-
-//    private void Update()
-//    {
-//        
-//    }
 
     private void UpdateTextureFromCompute(int kernelHandle)
     {
@@ -284,8 +282,12 @@ public class GameManager : MonoBehaviour
         shader.SetMatrix("_CameraToWorld", renderTextureCamera.cameraToWorldMatrix);
         shader.SetMatrix("_CameraInverseProjection", renderTextureCamera.projectionMatrix.inverse);
 
-        _diffuseLightColorAsVector = new Vector4(_diffuseLightColor.r, _diffuseLightColor.g, _diffuseLightColor.b, 1.0f);
-        shader.SetVector("_DiffuseLight", _diffuseLightColorAsVector);
+        _ambientLightColorAsVector = new Vector4(_ambientLightColor.r, _ambientLightColor.g, _ambientLightColor.b, 1.0f);
+        shader.SetVector("_AmbientLight", _ambientLightColorAsVector);
+        
+        _skyboxLightColorAsVector = new Vector4(_skyboxLightColor.r / 255f, _skyboxLightColor.g / 255f, _skyboxLightColor.b / 255f, 1.0f);
+        shader.SetVector("_SkyboxLight", _skyboxLightColorAsVector);
+        
         //shader.SetVector("_PixelOffset", new Vector2(Random.value, Random.value));
         //shader.SetFloat("_Seed", Random.value);
 
