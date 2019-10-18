@@ -8,12 +8,18 @@ public class GameManager : MonoBehaviour
     public ComputeShader shader;
     public Camera renderTextureCamera;
     public Texture skyboxTexture;
+
+    public Color _diffuseLightColor;
+    private Vector4 _diffuseLightColorAsVector;
     
     private RenderTexture _outputTexture;
     private Vector2Int _textureSize;
 
     private List<Sphere> _spheres;
     private ComputeBuffer _sphereBuffer;
+
+    private List<Sphere> _lights;
+    private ComputeBuffer _lightBuffer;
     
     private static bool _meshObjectsNeedRebuilding = false;
     private static readonly List<RayTracingObject> _rayTracingObjects = new List<RayTracingObject>();
@@ -52,13 +58,14 @@ public class GameManager : MonoBehaviour
             filterMode = FilterMode.Point
         };
         _outputTexture.Create();
-
+        
         SetupSpheres();
     }
 
     private void OnDestroy()
     {
         _sphereBuffer?.Release();
+        _lightBuffer?.Release();
     }
 
 //    private void Update()
@@ -90,10 +97,11 @@ public class GameManager : MonoBehaviour
     private void SetupSpheres()
     {
         _spheres = new List<Sphere>();
+        _lights = new List<Sphere>();
 
         var sphere = new Sphere
         {
-            position = Vector3.zero,
+            position = new Vector3(0.0f, 1.0f, 0.0f),
             emission = new Vector3(0.0f, 0.0f, 0.0f),
             color = new Vector3(1.0f, 0f, 0f),
             radius = 0.5f,
@@ -103,15 +111,37 @@ public class GameManager : MonoBehaviour
         
         var sphere2 = new Sphere
         {
-            position = new Vector3(-2.0f, 2.0f, 0.0f),
+            position = new Vector3(-2.0f, 1.0f, 0.0f),
             emission = new Vector3(0.0f, 0.0f, 0.0f),
             color = new Vector3(0f, 0f, 1f),
             radius = 0.3f,
             smoothness = 0.6f
         };
         _spheres.Add(sphere2);
+        
+        var groundSphere = new Sphere
+        {
+            position = new Vector3(0.0f, -10000.0f, 0.0f),
+            emission = new Vector3(0.0f, 0.0f, 0.0f),
+            color = new Vector3(0.5f, 0.5f, 0.5f),
+            radius = 10000f,
+            smoothness = 0.6f
+        };
+        _spheres.Add(groundSphere);
+        
+        // Lights
+        var light1 = new Sphere
+        {
+            position = new Vector3(1.0f, 2.0f, 0.0f),
+            emission = new Vector3(0.0f, 1.0f, 0.0f),
+            color = new Vector3(0f, 0f, 0f),
+            radius = 0.3f,
+            smoothness = 0.6f
+        };
+        _lights.Add(light1);
 
         _sphereBuffer?.Release();
+        _lightBuffer?.Release();
 
         if (_spheres.Count > 0)
         {
@@ -119,6 +149,14 @@ public class GameManager : MonoBehaviour
             
             _sphereBuffer = new ComputeBuffer(_spheres.Count, 44);
             _sphereBuffer.SetData(_spheres);
+        }
+
+        if (_lights.Count > 0)
+        {
+            shader.SetInt("_NumLights", _lights.Count);
+            
+            _lightBuffer = new ComputeBuffer(_lights.Count, 44);
+            _lightBuffer.SetData(_lights);
         }
     }
 
@@ -128,11 +166,25 @@ public class GameManager : MonoBehaviour
         {
             var sphere = _spheres[i];
             
-            sphere.position.y += Mathf.Sin(Time.time + i) * Time.deltaTime;
+            if (sphere.radius > 1000f)
+            {
+                continue;
+            }
+            
+            sphere.position.y += Mathf.Sin(Time.time + i) * Time.deltaTime * 0.25f;
             _spheres[i] = sphere;
+        }
+        
+        for (int i = 0; i < _lights.Count; ++i)
+        {
+            var sphere = _lights[i];
+
+            sphere.position.y += Mathf.Sin(Time.time + i + _spheres.Count) * Time.deltaTime * 0.25f;
+            _lights[i] = sphere;
         }
 
         _sphereBuffer.SetData(_spheres);
+        _lightBuffer.SetData(_lights);
     }
 
     public static void RegisterObject(RayTracingObject obj)
@@ -231,9 +283,14 @@ public class GameManager : MonoBehaviour
         shader.SetTexture(kernelHandle, "_SkyboxTexture", skyboxTexture);
         shader.SetMatrix("_CameraToWorld", renderTextureCamera.cameraToWorldMatrix);
         shader.SetMatrix("_CameraInverseProjection", renderTextureCamera.projectionMatrix.inverse);
+
+        _diffuseLightColorAsVector = new Vector4(_diffuseLightColor.r, _diffuseLightColor.g, _diffuseLightColor.b, 1.0f);
+        shader.SetVector("_DiffuseLight", _diffuseLightColorAsVector);
         //shader.SetVector("_PixelOffset", new Vector2(Random.value, Random.value));
         //shader.SetFloat("_Seed", Random.value);
 
         SetComputeBuffer("_Spheres", _sphereBuffer, kernelHandle);
+        SetComputeBuffer("_Lights", _lightBuffer, kernelHandle);
+        
     }
 }

@@ -11,13 +11,16 @@ float4x4 _CameraInverseProjection;
 Texture2D<float4> _SkyboxTexture;
 SamplerState sampler_SkyboxTexture;
 
-int _NumSpheres;
+float4 _DiffuseLight;
 
-static const float PI = 3.141592f;
+int _NumSpheres;
+int _NumLights;
+
+static const float PI = 3.141593f;
 
 float3 Combine(float3 a, float3 b)
 {
-    return float3(a.x + b.x, a.y + b.y, a.z + b.z);
+    return float3(max(a.x, b.x), max(a.y, b.y), max(a.z, b.z));
 }
 
 // =======================================================
@@ -25,8 +28,8 @@ float3 Combine(float3 a, float3 b)
 struct Sphere
 {
     float3 position;
-    float3 emission;
     float3 color;
+    float3 emission;
     float radius;
     //float3 albedo;
     //float3 specular;
@@ -34,6 +37,7 @@ struct Sphere
 };
 
 StructuredBuffer<Sphere> _Spheres;
+StructuredBuffer<Sphere> _Lights;
 
 // =======================================================
 // Ray
@@ -51,7 +55,7 @@ Ray CreateRay(float3 origin, float3 direction)
     ray.origin = origin;
     ray.direction = direction;
     ray.energy = float3(1.0f, 1.0f, 1.0f);
-    ray.color = float3(0.0f, 0.0f, 0.0f);
+    ray.color = _DiffuseLight.xyz;  //float3(0.0f, 0.0f, 0.0f);
     return ray;
 }
 
@@ -125,7 +129,7 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
 }
 
 
-RayHit Trace(Ray ray)
+RayHit GetNearestIntersection(Ray ray)
 {
 	RayHit bestHit = CreateRayHit();
 	
@@ -135,26 +139,79 @@ RayHit Trace(Ray ray)
 		IntersectSphere(ray, bestHit, _Spheres[i]);
 	}
 	
+	for (i = 0; i < _NumLights; i++)
+	{
+		IntersectSphere(ray, bestHit, _Lights[i]);
+	}
+	
 	return bestHit;
+}
+
+float3 GetLightHittingPoint(Ray ray, RayHit hit)
+{
+    float3 combinedLightColor = float3(0.0f, 0.0f, 0.0f);
+
+    int i;
+	for (i = 0; i < _NumLights; i++)
+	{
+		float3 ptToLight = _Lights[i].position - hit.position;
+		float distanceToLight = length(ptToLight);
+		ptToLight = normalize(ptToLight);
+		
+		Ray rayToLight = CreateRay(hit.position + (ptToLight * 0.01f), ptToLight);
+		RayHit bestHit = CreateRayHit();
+		
+		bool lightHitsPoint = true;
+		int j;
+		for (j = 0; j < _NumSpheres; j++)
+	    {	       
+		    IntersectSphere(rayToLight, bestHit, _Spheres[j]);		    
+	    }
+	    
+	    if (bestHit.distance > distanceToLight)
+	    {
+	        float3 lightColor = _Lights[i].emission;
+	    
+	        float rayNormalDot = dot(ptToLight, hit.normal);
+	        float lightPercentageThatHits = rayNormalDot;
+	        
+	        combinedLightColor = Combine(combinedLightColor, lightColor * lightPercentageThatHits);
+	    }
+	}
+	
+	return combinedLightColor;
 }
 
 float3 Shade(inout Ray ray, RayHit hit)
 {
     float3 result;
+    float lastHitSmoothness = 1.0f;
+    int numBounces = 0;    
+    
     while (true)
-    {    
-        if (hit.distance < 1.#INF)
+    {   
+        numBounces += 1;
+        
+        if (hit.distance < 1.#INF && numBounces < 4)
         {
             // Diffuse reflection
             ray.origin = hit.position + hit.normal * 0.001f;
             ray.direction = reflect(ray.direction, hit.normal);
             ray.energy *= hit.smoothness;
             
-            ray.color = Combine(ray.color, hit.color);
+            // TODO: hit.color needs to factor in light sources
+            float3 colorAtPt = GetLightHittingPoint(ray, hit);
+            ray.color = Combine(ray.color, colorAtPt * ray.energy);
+            //ray.color = Combine(ray.color, _DiffuseLight.xyz);
     
-            result += hit.emission;
+            if ((hit.emission.x + hit.emission.y + hit.emission.z) > 0.0f)
+            {
+                return ray.color + hit.emission;
+            }           
             
-            hit = Trace(ray);             
+            lastHitSmoothness = hit.smoothness;
+            
+            hit = GetNearestIntersection(ray);             
         }
         else
         {
@@ -164,7 +221,8 @@ float3 Shade(inout Ray ray, RayHit hit)
             // Sample the skybox and write it
             float theta = acos(ray.direction.y) / -PI;
             float phi = atan2(ray.direction.x, -ray.direction.z) / -PI * 0.5f;
-            return result + _SkyboxTexture.SampleLevel(sampler_SkyboxTexture, float2(phi, theta), 0).xyz * ray.energy;
+            return Combine(ray.color, _SkyboxTexture.SampleLevel(sampler_SkyboxTexture, float2(phi, theta), 0).xyz * ray.energy * lastHitSmoothness);
+            //return ray.color;
         }
     }
 }
@@ -186,7 +244,7 @@ void CSMain (uint3 id : SV_DispatchThreadID)
     // Trace and shade the ray
     float3 result = float3(0, 0, 0);
     
-    RayHit hit = Trace(ray);
+    RayHit hit = GetNearestIntersection(ray);
     result += ray.energy * Shade(ray, hit);
 
     //if (!any(ray.energy))
