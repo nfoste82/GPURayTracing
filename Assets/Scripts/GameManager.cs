@@ -101,9 +101,9 @@ public class GameManager : MonoBehaviour
         {
             position = new Vector3(0.0f, 1.0f, 0.0f),
             emission = new Vector3(0.0f, 0.0f, 0.0f),
-            color = new Vector3(1.0f, 0f, 0f),
+            color = new Vector3(1.0f, 0.2f, 0.2f),
             radius = 0.5f,
-            smoothness = 0.8f
+            smoothness = 0.1f
         };
         _spheres.Add(sphere);
         
@@ -116,6 +116,16 @@ public class GameManager : MonoBehaviour
             smoothness = 0.6f
         };
         _spheres.Add(sphere2);
+        
+        var sphere3 = new Sphere
+        {
+            position = new Vector3(2.0f, 1.0f, 0.0f),
+            emission = new Vector3(0.0f, 0.0f, 0.0f),
+            color = new Vector3(1f, 1f, 1f),
+            radius = 0.3f,
+            smoothness = 0.1f
+        };
+        _spheres.Add(sphere3);
         
         var groundSphere = new Sphere
         {
@@ -131,12 +141,23 @@ public class GameManager : MonoBehaviour
         var light1 = new Sphere
         {
             position = new Vector3(1.0f, 2.0f, 0.0f),
-            emission = new Vector3(0.0f, 1.0f, 0.0f),
+            emission = new Vector3(1f, 1f, 1f),
             color = new Vector3(0f, 0f, 0f),
             radius = 0.3f,
             smoothness = 0.6f
         };
         _lights.Add(light1);
+        
+        // Lights
+        var light2 = new Sphere
+        {
+            position = new Vector3(-3.0f, 3.0f, 0.0f),
+            emission = new Vector3(1f, 0.8f, 0.6f),
+            color = new Vector3(0f, 0f, 0f),
+            radius = 0.3f,
+            smoothness = 0.6f
+        };
+        _lights.Add(light2);
 
         _sphereBuffer?.Release();
         _lightBuffer?.Release();

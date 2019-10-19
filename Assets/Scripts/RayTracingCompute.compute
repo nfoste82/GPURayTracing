@@ -32,8 +32,6 @@ struct Sphere
     float3 color;
     float3 emission;
     float radius;
-    //float3 albedo;
-    //float3 specular;
     float smoothness;
 };
 
@@ -85,8 +83,6 @@ struct RayHit
     float3 emission;
     float3 color;
     float distance;
-    //float3 albedo;
-    //float3 specular;
     float smoothness;
 };
 
@@ -96,8 +92,6 @@ RayHit CreateRayHit()
     hit.position = float3(0.0f, 0.0f, 0.0f);
     hit.distance = 1.#INF;
     hit.normal = float3(0.0f, 0.0f, 0.0f);
-    //hit.albedo = float3(0.0f, 0.0f, 0.0f);
-    //hit.specular = float3(0.0f, 0.0f, 0.0f);
     hit.smoothness = 0.0f;
     hit.emission = float3(0.0f, 0.0f, 0.0f);
     return hit;
@@ -121,8 +115,6 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
         bestHit.distance = t;
         bestHit.position = ray.origin + t * ray.direction;
         bestHit.normal = normalize(bestHit.position - sphere.position);
-        //bestHit.albedo = sphere.albedo;
-        //bestHit.specular = sphere.specular;
         bestHit.smoothness = sphere.smoothness;
         bestHit.emission = sphere.emission;
         bestHit.color = sphere.color;
@@ -183,60 +175,69 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit)
 	return combinedLightColor;
 }
 
-float3 Shade(inout Ray ray, RayHit hit)
+float3 GetSkyboxColor(float3 direction)
 {
-    float3 result;
-    float lastHitSmoothness = 1.0f;
-    int numBounces = 0;
-   
-    
-    while (true)
-    {   
-        numBounces += 1;
-        
-        if (hit.distance < 1.#INF && numBounces < 4)
-        {
-            // Diffuse reflection
-            ray.origin = hit.position + hit.normal * 0.001f;
-            ray.direction = reflect(ray.direction, hit.normal);
-            //ray.energy *= hit.smoothness;
-            
-            // TODO: hit.color needs to factor in light sources
-            float3 colorAtPt = GetLightHittingPoint(ray, hit);
-            ray.color = Combine(ray.color, colorAtPt * hit.color * ray.energy);
-            //ray.color = Combine(ray.color, _DiffuseLight.xyz);
-    
-            if ((hit.emission.x + hit.emission.y + hit.emission.z) > 0.0f)
-            {
-                return ray.color + hit.emission;
-            }           
-            
-            lastHitSmoothness = hit.smoothness;
-            
-            hit = GetNearestIntersection(ray);             
-        }
-        else
-        {
-            // Erase the ray's energy - the sky doesn't reflect anything
-            //ray.energy = 0.0f;
-    
-            // Sample the skybox and write it
-            float theta = acos(ray.direction.y) / -PI;
-            float phi = atan2(ray.direction.x, -ray.direction.z) / -PI * 0.5f;
-            float3 skyboxColor = _SkyboxTexture.SampleLevel(sampler_SkyboxTexture, float2(phi, theta), 0).xyz;
-            
-            if (numBounces == 1)
-            {
-                return skyboxColor * _SkyboxLight.xyz;
-            }
-            else
-            {
-                float3 rayPlusSky = ray.color + (skyboxColor * _SkyboxLight.xyz);
-                return Combine(rayPlusSky, _AmbientLight.xyz);
-            }
-        }
-    }
+    float theta = acos(direction.y) / -PI;
+    float phi = atan2(direction.x, -direction.z) / -PI * 0.5f;
+    return _SkyboxTexture.SampleLevel(sampler_SkyboxTexture, float2(phi, theta), 0).xyz;
 }
+
+float3 GetColorAtHit(Ray ray, RayHit hit)
+{
+    // Shaders don't support recursion, so we'll do manual passes for each bounce we want to support
+    // This function will be terrible for performance for a GPU, but even so the frameray should be decent.
+    
+    if (hit.distance >= 1.#INF)
+    {
+        return GetSkyboxColor(ray.direction) * _SkyboxLight.xyz;
+    }
+    
+    if ((hit.emission.x + hit.emission.y + hit.emission.z) > 0.0f)
+    {
+        return hit.emission;
+    }
+    
+    ray.color = GetLightHittingPoint(ray, hit);         
+    
+    
+    // Second bounce
+    Ray secondRay = CreateRay(hit.position + (hit.normal * 0.001f), reflect(ray.direction, hit.normal));
+    RayHit secondHit = GetNearestIntersection(secondRay);       
+    
+    if (secondHit.distance >= 1.#INF)
+    {
+        return hit.color * Combine(ray.color, (GetSkyboxColor(secondRay.direction) * _SkyboxLight.xyz));
+    }
+    
+    if ((secondHit.emission.x + secondHit.emission.y + secondHit.emission.z) > 0.0f)
+    {
+        return hit.color * Combine(ray.color, secondHit.emission);
+    }
+    
+    secondRay.color = GetLightHittingPoint(secondRay, secondHit);
+        
+        
+    // Third bounce        
+    Ray thirdRay = CreateRay(secondHit.position + (secondHit.normal * 0.001f), reflect(secondRay.direction, secondHit.normal));
+    RayHit thirdHit = GetNearestIntersection(thirdRay);       
+    
+    if (thirdHit.distance >= 1.#INF)
+    {
+        float3 secondResult = secondHit.color * Combine(secondRay.color, (GetSkyboxColor(thirdRay.direction) * _SkyboxLight.xyz));
+        return hit.color * Combine(ray.color, secondResult);
+    }
+    
+    if ((thirdHit.emission.x + thirdHit.emission.y + thirdHit.emission.z) > 0.0f)
+    {
+        float3 secondResult = secondHit.color * Combine(secondRay.color, thirdHit.emission);
+        return hit.color * Combine(ray.color, secondResult);
+    }
+    
+    thirdRay.color = GetLightHittingPoint(thirdRay, thirdHit);
+       
+    return hit.color * Combine(ray.color, secondHit.color * Combine(secondRay.color, thirdHit.color * thirdRay.color));    
+}
+
 
 
 
@@ -256,10 +257,7 @@ void CSMain (uint3 id : SV_DispatchThreadID)
     float3 result = float3(0, 0, 0);
     
     RayHit hit = GetNearestIntersection(ray);
-    result += ray.energy * Shade(ray, hit);
-
-    //if (!any(ray.energy))
-        //break;
+    result += GetColorAtHit(ray, hit);
 
     Result[id.xy] = float4(result, 1);
 }
