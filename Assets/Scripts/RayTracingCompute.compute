@@ -11,6 +11,9 @@ float4x4 _CameraInverseProjection;
 Texture2D<float4> _SkyboxTexture;
 SamplerState sampler_SkyboxTexture;
 
+Texture2D<float4> _CheckerboardTexture;
+SamplerState sampler_CheckerboardTexture;
+
 float4 _AmbientLight;
 float4 _SkyboxLight;
 
@@ -235,6 +238,21 @@ float3 Refract(float3 sourceDirection, float sourceRefraction, float targetRefra
     return (reflectAmount * targetNormal) + sourceDirection;
 }
 
+float3 GetTextureColorOnSphere(float3 position, float3 center, float radius)
+{
+    float3 localPos = position - center;
+    
+    float v = acos(localPos.z / radius) / PI;
+    float u = acos(localPos.x / (radius * sin(PI * v))) / 2.0f * radius;
+    
+    return _CheckerboardTexture.SampleLevel(sampler_CheckerboardTexture, float2(u, v), 0).xyz;
+}
+
+float3 ModifyNormalByBumpColor(float3 normal, float3 bumpColor, float bumpiness)
+{
+    return (normal * 2.0f + bumpColor * 2.0f * bumpiness) * 0.5f;
+}
+
 float3 GetColorAtHit(Ray ray, RayHit hit)
 {
     // Shaders don't support recursion, so we'll do manual passes for each bounce we want to support
@@ -250,12 +268,15 @@ float3 GetColorAtHit(Ray ray, RayHit hit)
         return hit.emission;
     }
     
-    ray.color = GetLightHittingPoint(ray, hit) * hit.opacity;         
+    ray.color = GetLightHittingPoint(ray, hit) * hit.opacity;       
+    
+    float3 bumpColor = GetTextureColorOnSphere(hit.position, hit.obj_position, hit.obj_radius);
+    hit.normal = ModifyNormalByBumpColor(hit.normal, bumpColor, (1 - hit.smoothness));  
     
     // Second bounce
     Ray secondRay = CreateRay(hit.position + (hit.normal * 0.001f), reflect(ray.direction, hit.normal));
     if (hit.opacity < 1.0f)
-    {        
+    {     
         // Get refraction direction after entering sphere
         secondRay.direction = Refract(ray.direction, 1.0f, hit.refraction, hit.normal);
         
@@ -281,11 +302,13 @@ float3 GetColorAtHit(Ray ray, RayHit hit)
     
     secondRay.color = GetLightHittingPoint(secondRay, secondHit);
         
+    bumpColor = GetTextureColorOnSphere(secondHit.position, secondHit.obj_position, secondHit.obj_radius);
+    secondHit.normal = ModifyNormalByBumpColor(secondHit.normal, bumpColor, (1 - secondHit.smoothness));     
         
     // Third bounce        
     Ray thirdRay = CreateRay(secondHit.position + (secondHit.normal * 0.001f), reflect(secondRay.direction, secondHit.normal));
     if (secondHit.opacity < 1.0f)
-    {        
+    {    
         // Get refraction direction after entering sphere
         thirdRay.direction = Refract(secondRay.direction, 1.0f, secondHit.refraction, secondHit.normal);
         
@@ -312,11 +335,12 @@ float3 GetColorAtHit(Ray ray, RayHit hit)
     }
     
     thirdRay.color = GetLightHittingPoint(thirdRay, thirdHit);
+    
+    bumpColor = GetTextureColorOnSphere(thirdHit.position, thirdHit.obj_position, thirdHit.obj_radius);
+    thirdHit.normal = ModifyNormalByBumpColor(thirdHit.normal, bumpColor, (1 - thirdHit.smoothness));
        
     return hit.color * Combine(ray.color, secondHit.color * Combine(secondRay.color, thirdHit.color * thirdRay.color));    
 }
-
-
 
 
 [numthreads(8,8,1)]
@@ -333,6 +357,8 @@ void CSMain (uint3 id : SV_DispatchThreadID)
     RayHit hit = GetNearestIntersection(ray);
         
     float3 result = GetColorAtHit(ray, hit);
+    
+    //float3 textureColor = GetTextureColorOnSphere(hit.position, hit.obj_position, hit.obj_radius);
 
     Result[id.xy] = float4(result, 1);
 }

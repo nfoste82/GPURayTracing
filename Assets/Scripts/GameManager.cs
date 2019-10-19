@@ -9,6 +9,7 @@ public class GameManager : MonoBehaviour
     public ComputeShader shader;
     public Camera renderTextureCamera;
     public Texture skyboxTexture;
+    public Texture checkerboardTexture;
 
     public Color _ambientLightColor;
     private Vector4 _ambientLightColorAsVector;
@@ -18,7 +19,7 @@ public class GameManager : MonoBehaviour
     
     private RenderTexture _outputTexture;
     private Vector2Int _textureSize;
-
+    
     private List<Sphere> _spheres;
     private List<GameObject> _sphereObjects;
     private ComputeBuffer _sphereBuffer;
@@ -223,6 +224,8 @@ public class GameManager : MonoBehaviour
             sphere.color = material.Color.ToVector3();
             sphere.refraction = material.RefractionIndex;
             sphere.opacity = material.Opacity;
+            sphere.smoothness = material.Smoothness;
+            
             _spheres[i] = sphere;
         }
         
@@ -233,6 +236,7 @@ public class GameManager : MonoBehaviour
             sphere.position = _lightObjects[i].transform.position;
             var light = _lightObjects[i].GetComponent<RayLight>();
             sphere.emission = light.Color.ToVector3();
+            
             _lights[i] = sphere;
         }
 
@@ -334,6 +338,8 @@ public class GameManager : MonoBehaviour
     private void SetShaderParameters(int kernelHandle)
     {
         shader.SetTexture(kernelHandle, "_SkyboxTexture", skyboxTexture);
+        shader.SetTexture(kernelHandle, "_CheckerboardTexture", checkerboardTexture);
+        
         shader.SetMatrix("_CameraToWorld", renderTextureCamera.cameraToWorldMatrix);
         shader.SetMatrix("_CameraInverseProjection", renderTextureCamera.projectionMatrix.inverse);
 

@@ -184,7 +184,7 @@ MonoBehaviour:
   Color:
     serializedVersion: 2
     rgba: 16711836
-  Smoothness: 0.1
+  Smoothness: 1
   Opacity: 1
   RefractionIndex: 1
 --- !u!135 &29507923
@@ -194,7 +194,7 @@ SphereCollider:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 29507919}
-  m_Material: {fileID: 13400000, guid: 5fe131d98932e409d84a6e4b3ce638dd, type: 2}
+  m_Material: {fileID: 13400000, guid: b76481c18fffe4ca6927b778b8a95d47, type: 2}
   m_IsTrigger: 0
   m_Enabled: 1
   serializedVersion: 2
@@ -281,7 +281,7 @@ MonoBehaviour:
   Color:
     serializedVersion: 2
     rgba: 16777215
-  Smoothness: 0.1
+  Smoothness: 1
   Opacity: 1
   RefractionIndex: 1
 --- !u!135 &224981665
@@ -291,7 +291,7 @@ SphereCollider:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 224981662}
-  m_Material: {fileID: 13400000, guid: 5fe131d98932e409d84a6e4b3ce638dd, type: 2}
+  m_Material: {fileID: 13400000, guid: b76481c18fffe4ca6927b778b8a95d47, type: 2}
   m_IsTrigger: 0
   m_Enabled: 1
   serializedVersion: 2
@@ -595,7 +595,7 @@ MonoBehaviour:
   Color:
     serializedVersion: 2
     rgba: 255
-  Smoothness: 0.1
+  Smoothness: 1
   Opacity: 1
   RefractionIndex: 1
 --- !u!135 &757336770
@@ -605,7 +605,7 @@ SphereCollider:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 757336767}
-  m_Material: {fileID: 13400000, guid: 5fe131d98932e409d84a6e4b3ce638dd, type: 2}
+  m_Material: {fileID: 13400000, guid: b76481c18fffe4ca6927b778b8a95d47, type: 2}
   m_IsTrigger: 0
   m_Enabled: 1
   serializedVersion: 2
@@ -761,7 +761,7 @@ SphereCollider:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 794064987}
-  m_Material: {fileID: 13400000, guid: 5fe131d98932e409d84a6e4b3ce638dd, type: 2}
+  m_Material: {fileID: 13400000, guid: b76481c18fffe4ca6927b778b8a95d47, type: 2}
   m_IsTrigger: 0
   m_Enabled: 1
   serializedVersion: 2
@@ -831,7 +831,7 @@ MonoBehaviour:
   Color:
     serializedVersion: 2
     rgba: 12500670
-  Smoothness: 0.1
+  Smoothness: 0.991
   Opacity: 1
   RefractionIndex: 1
 --- !u!135 &820826626
@@ -997,6 +997,7 @@ MonoBehaviour:
   shader: {fileID: 7200000, guid: adaed5b09d5374556b1cda0917c8f291, type: 3}
   renderTextureCamera: {fileID: 1029813413}
   skyboxTexture: {fileID: 2800000, guid: 498101212922c43cb9800ac08f1737bd, type: 3}
+  checkerboardTexture: {fileID: 2800000, guid: 9b4cb99bb158f4b35b00452727466a77, type: 3}
   _ambientLightColor: {r: 1, g: 0.9918116, b: 0.7877358, a: 0}
   _skyboxLightColor:
     serializedVersion: 2
@@ -1305,7 +1306,7 @@ MonoBehaviour:
   Color:
     serializedVersion: 2
     rgba: 8978300
-  Smoothness: 0.312
+  Smoothness: 1
   Opacity: 0.355
   RefractionIndex: 1.3
 --- !u!135 &1471724681
@@ -1446,7 +1447,7 @@ MonoBehaviour:
   Color:
     serializedVersion: 2
     rgba: 16729927
-  Smoothness: 0.601
+  Smoothness: 1
   Opacity: 1
   RefractionIndex: 1
 --- !u!135 &1621635363
