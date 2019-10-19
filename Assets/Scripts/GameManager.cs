@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using DefaultNamespace;
 using UnityEngine;
 
 public class GameManager : MonoBehaviour
@@ -141,67 +142,46 @@ public class GameManager : MonoBehaviour
         _spheres = new List<Sphere>();
         _lights = new List<Sphere>();
 
-        var sphere = new Sphere
+        var sphereTransforms = GameObject.Find("Spheres").GetComponentsInChildren<Transform>();
+
+        foreach (var sphereObj in sphereTransforms)
         {
-            position = new Vector3(0.0f, 1.0f, 0.0f),
-            emission = new Vector3(0.0f, 0.0f, 0.0f),
-            color = new Vector3(1.0f, 0.2f, 0.2f),
-            radius = 0.5f,
-            smoothness = 0.1f
-        };
-        _spheres.Add(sphere);
-        
-        var sphere2 = new Sphere
+            var material = sphereObj.GetComponent<RayMaterial>();
+
+            if (material == null)
+            {
+                continue;
+            }
+            
+            var sphere = new Sphere
+            {
+                position = sphereObj.transform.position,
+                color = material.Color.ToVector3(),
+                smoothness = material.Smoothness,
+                radius = sphereObj.GetComponent<SphereCollider>().radius
+            };
+            _spheres.Add(sphere);
+        }
+
+        var lightTransforms = GameObject.Find("Lights").GetComponentsInChildren<Transform>();
+
+        foreach (var lightObj in lightTransforms)
         {
-            position = new Vector3(-2.0f, 1.0f, 0.0f),
-            emission = new Vector3(0.0f, 0.0f, 0.0f),
-            color = new Vector3(0f, 0f, 1f),
-            radius = 0.3f,
-            smoothness = 0.6f
-        };
-        _spheres.Add(sphere2);
-        
-        var sphere3 = new Sphere
-        {
-            position = new Vector3(2.0f, 1.0f, 0.0f),
-            emission = new Vector3(0.0f, 0.0f, 0.0f),
-            color = new Vector3(1f, 1f, 1f),
-            radius = 0.3f,
-            smoothness = 0.1f
-        };
-        _spheres.Add(sphere3);
-        
-        var groundSphere = new Sphere
-        {
-            position = new Vector3(0.0f, -10000.0f, 0.0f),
-            emission = new Vector3(0.0f, 0.0f, 0.0f),
-            color = new Vector3(0.5f, 0.5f, 0.5f),
-            radius = 10000f,
-            smoothness = 0.6f
-        };
-        _spheres.Add(groundSphere);
-        
-        // Lights
-        var light1 = new Sphere
-        {
-            position = new Vector3(1.0f, 2.0f, 0.0f),
-            emission = new Vector3(1f, 1f, 1f),
-            color = new Vector3(0f, 0f, 0f),
-            radius = 0.3f,
-            smoothness = 0.6f
-        };
-        _lights.Add(light1);
-        
-        // Lights
-        var light2 = new Sphere
-        {
-            position = new Vector3(-3.0f, 3.0f, 0.0f),
-            emission = new Vector3(1f, 0.8f, 0.6f),
-            color = new Vector3(0f, 0f, 0f),
-            radius = 0.3f,
-            smoothness = 0.6f
-        };
-        _lights.Add(light2);
+            var light = lightObj.GetComponent<RayLight>();
+
+            if (light == null)
+            {
+                continue;
+            }
+            
+            var sphere = new Sphere
+            {
+                position = lightObj.transform.position,
+                radius = lightObj.GetComponent<SphereCollider>().radius,
+                emission = light.Color.ToVector3()
+            };
+            _lights.Add(sphere);
+        }
 
         _sphereBuffer?.Release();
         _lightBuffer?.Release();
