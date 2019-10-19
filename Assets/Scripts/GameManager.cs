@@ -65,6 +65,50 @@ public class GameManager : MonoBehaviour
         SetupSpheres();
     }
 
+    private void Update()
+    {
+        HandleInputForCamera(renderTextureCamera);
+    }
+
+    private void HandleInputForCamera(Camera camera)
+    {
+        if (Input.GetKey(KeyCode.W))
+        {
+            camera.transform.position += camera.transform.forward * Time.deltaTime * 3f;
+        }
+        else if (Input.GetKey(KeyCode.S))
+        {
+            camera.transform.position -= camera.transform.forward * Time.deltaTime * 3f;
+        }
+        
+        if (Input.GetKey(KeyCode.A))
+        {
+            camera.transform.position -= camera.transform.right * Time.deltaTime * 3f;
+        }
+        else if (Input.GetKey(KeyCode.D))
+        {
+            camera.transform.position += camera.transform.right * Time.deltaTime * 3f;
+        }
+        
+        if (Input.GetKey(KeyCode.LeftArrow))
+        {
+            camera.transform.eulerAngles += new Vector3(0f, -Time.deltaTime * 50f, 0f);
+        }
+        else if (Input.GetKey(KeyCode.RightArrow))
+        {
+            camera.transform.eulerAngles += new Vector3(0f, Time.deltaTime * 50f, 0f);
+        }
+        
+        if (Input.GetKey(KeyCode.UpArrow))
+        {
+            camera.transform.eulerAngles += new Vector3(Time.deltaTime * 50f, 0f, 0f);
+        }
+        else if (Input.GetKey(KeyCode.DownArrow))
+        {
+            camera.transform.eulerAngles += new Vector3(-Time.deltaTime * 50f, 0f, 0f);
+        }
+    }
+    
     private void OnDestroy()
     {
         _sphereBuffer?.Release();
@@ -314,6 +358,5 @@ public class GameManager : MonoBehaviour
 
         SetComputeBuffer("_Spheres", _sphereBuffer, kernelHandle);
         SetComputeBuffer("_Lights", _lightBuffer, kernelHandle);
-        
     }
 }
