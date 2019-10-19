@@ -51,8 +51,8 @@ public class GameManager : MonoBehaviour
         public Vector3 emission;
         public float radius;
         public float smoothness;
-        //public Vector3 albedo;
-        //public Vector3 specular;
+        public float opacity;
+        public float refraction;
     }
     
     private void Start()
@@ -163,7 +163,9 @@ public class GameManager : MonoBehaviour
                 position = sphereObj.transform.position,
                 color = material.Color.ToVector3(),
                 smoothness = material.Smoothness,
-                radius = sphereObj.GetComponent<SphereCollider>().radius
+                radius = sphereObj.GetComponent<SphereCollider>().radius,
+                opacity = material.Opacity,
+                refraction = material.RefractionIndex,
             };
             _spheres.Add(sphere);
             _sphereObjects.Add(sphereObj.gameObject);
@@ -197,7 +199,7 @@ public class GameManager : MonoBehaviour
         {
             shader.SetInt("_NumSpheres", _spheres.Count);
             
-            _sphereBuffer = new ComputeBuffer(_spheres.Count, 44);
+            _sphereBuffer = new ComputeBuffer(_spheres.Count, 52);
             _sphereBuffer.SetData(_spheres);
         }
 
@@ -205,7 +207,7 @@ public class GameManager : MonoBehaviour
         {
             shader.SetInt("_NumLights", _lights.Count);
             
-            _lightBuffer = new ComputeBuffer(_lights.Count, 44);
+            _lightBuffer = new ComputeBuffer(_lights.Count, 52);
             _lightBuffer.SetData(_lights);
         }
     }
@@ -217,6 +219,10 @@ public class GameManager : MonoBehaviour
             var sphere = _spheres[i];
 
             sphere.position = _sphereObjects[i].transform.position;
+            var material = _sphereObjects[i].GetComponent<RayMaterial>();
+            sphere.color = material.Color.ToVector3();
+            sphere.refraction = material.RefractionIndex;
+            sphere.opacity = material.Opacity;
             _spheres[i] = sphere;
         }
         
@@ -225,6 +231,8 @@ public class GameManager : MonoBehaviour
             var sphere = _lights[i];
 
             sphere.position = _lightObjects[i].transform.position;
+            var light = _lightObjects[i].GetComponent<RayLight>();
+            sphere.emission = light.Color.ToVector3();
             _lights[i] = sphere;
         }
 

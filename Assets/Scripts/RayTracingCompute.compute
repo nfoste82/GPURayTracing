@@ -18,6 +18,8 @@ int _NumSpheres;
 int _NumLights;
 
 static const float PI = 3.141593f;
+static const float MaxRefractionDiff = 4;
+static const float MaxReflect = 2;
 
 float3 Combine(float3 a, float3 b)
 {
@@ -33,6 +35,8 @@ struct Sphere
     float3 emission;
     float radius;
     float smoothness;
+    float opacity;
+    float refraction;
 };
 
 StructuredBuffer<Sphere> _Spheres;
@@ -79,21 +83,30 @@ Ray CreateCameraRay(float2 uv)
 struct RayHit
 {
     float3 position;
+    float3 obj_position;
     float3 normal;
     float3 emission;
     float3 color;
+    float obj_radius;
     float distance;
     float smoothness;
+    float opacity;
+    float refraction;
 };
 
 RayHit CreateRayHit()
 {
     RayHit hit;
     hit.position = float3(0.0f, 0.0f, 0.0f);
-    hit.distance = 1.#INF;
+    hit.obj_position = float3(0.0f, 0.0f, 0.0f);
     hit.normal = float3(0.0f, 0.0f, 0.0f);
-    hit.smoothness = 0.0f;
     hit.emission = float3(0.0f, 0.0f, 0.0f);
+    hit.color = float3(0.0f, 0.0f, 0.0f);
+    hit.obj_radius = 0.0f;
+    hit.distance = 1.#INF;
+    hit.smoothness = 0.0f;
+    hit.opacity = 1.0f;
+    hit.refraction = 1.0f;
     return hit;
 }
 // =======================================================
@@ -106,18 +119,24 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
     float p2sqr = p1 * p1 - dot(d, d) + sphere.radius * sphere.radius;
     
     if (p2sqr < 0)
+    {
         return;
+    }
     
     float p2 = sqrt(p2sqr);
     float t = p1 - p2 > 0 ? p1 - p2 : p1 + p2;
     if (t > 0 && t < bestHit.distance)
     {
-        bestHit.distance = t;
         bestHit.position = ray.origin + t * ray.direction;
+        bestHit.obj_position = sphere.position;
         bestHit.normal = normalize(bestHit.position - sphere.position);
-        bestHit.smoothness = sphere.smoothness;
         bestHit.emission = sphere.emission;
         bestHit.color = sphere.color;
+        bestHit.obj_radius = sphere.radius;
+        bestHit.distance = t;
+        bestHit.smoothness = sphere.smoothness;
+        bestHit.opacity = sphere.opacity;
+        bestHit.refraction = sphere.refraction;
     }
 }
 
@@ -182,6 +201,40 @@ float3 GetSkyboxColor(float3 direction)
     return _SkyboxTexture.SampleLevel(sampler_SkyboxTexture, float2(phi, theta), 0).xyz;
 }
 
+float3 GetClosestPointOnLineSegment(float3 linePointStart, float3 linePointEnd, float3 testPoint)
+{
+    float3 lineDiff = linePointEnd - linePointStart;
+    float lineSegSqrLength = dot(lineDiff, lineDiff);
+ 
+    float3 lineToPoint = testPoint - linePointStart;
+    float dotProduct = dot(lineDiff, lineToPoint);
+
+    float percentageAlongLine = dotProduct / lineSegSqrLength;
+
+    if (percentageAlongLine < 0.0f || percentageAlongLine > 1.0f)
+    {
+        // Point isn't within the line segment
+        return float3(0.0f, 0.0f, 0.0f);
+    }
+
+    return linePointStart + (percentageAlongLine * (linePointEnd - linePointStart));
+}
+
+float3 Refract(float3 sourceDirection, float sourceRefraction, float targetRefraction, float3 targetNormal)
+{
+    float refraction = (targetRefraction - sourceRefraction) / MaxRefractionDiff;
+    float reflectAmount = refraction * MaxReflect;
+
+    // reflect amount
+    // ------------------
+    // 0 no refraction
+    // -2 (-90 degrees)
+    // 2 (90 degrees)
+    
+    reflectAmount = reflectAmount * dot(targetNormal, sourceDirection);
+    return (reflectAmount * targetNormal) + sourceDirection;
+}
+
 float3 GetColorAtHit(Ray ray, RayHit hit)
 {
     // Shaders don't support recursion, so we'll do manual passes for each bounce we want to support
@@ -197,11 +250,23 @@ float3 GetColorAtHit(Ray ray, RayHit hit)
         return hit.emission;
     }
     
-    ray.color = GetLightHittingPoint(ray, hit);         
-    
+    ray.color = GetLightHittingPoint(ray, hit) * hit.opacity;         
     
     // Second bounce
     Ray secondRay = CreateRay(hit.position + (hit.normal * 0.001f), reflect(ray.direction, hit.normal));
+    if (hit.opacity < 1.0f)
+    {        
+        // Get refraction direction after entering sphere
+        secondRay.direction = Refract(ray.direction, 1.0f, hit.refraction, hit.normal);
+        
+        // Calculate exit point/normal for sphere
+        float3 halfway = GetClosestPointOnLineSegment(secondRay.origin, secondRay.origin + (2.0f * hit.obj_radius * secondRay.direction), hit.obj_position);
+        secondRay.origin = ((halfway - secondRay.origin) * 2.0f) + secondRay.origin;
+        float3 exitPointNormal = normalize(secondRay.origin - hit.obj_position);
+
+        // Now refract again since we've left the sphere
+        secondRay.direction = Refract(secondRay.direction, hit.refraction, 1.0f, exitPointNormal);        
+    }
     RayHit secondHit = GetNearestIntersection(secondRay);       
     
     if (secondHit.distance >= 1.#INF)
@@ -219,6 +284,19 @@ float3 GetColorAtHit(Ray ray, RayHit hit)
         
     // Third bounce        
     Ray thirdRay = CreateRay(secondHit.position + (secondHit.normal * 0.001f), reflect(secondRay.direction, secondHit.normal));
+    if (secondHit.opacity < 1.0f)
+    {        
+        // Get refraction direction after entering sphere
+        thirdRay.direction = Refract(secondRay.direction, 1.0f, secondHit.refraction, secondHit.normal);
+        
+        // Calculate exit point/normal for sphere
+        float3 halfway = GetClosestPointOnLineSegment(thirdRay.origin, thirdRay.origin + (2.0f * secondHit.obj_radius * thirdRay.direction), secondHit.obj_position);
+        thirdRay.origin = ((halfway - thirdRay.origin) * 2.0f) + thirdRay.origin;
+        float3 exitPointNormal = normalize(thirdRay.origin - secondHit.obj_position);
+
+        // Now refract again since we've left the sphere
+        thirdRay.direction = Refract(thirdRay.direction, secondHit.refraction, 1.0f, exitPointNormal);        
+    }
     RayHit thirdHit = GetNearestIntersection(thirdRay);       
     
     if (thirdHit.distance >= 1.#INF)
@@ -251,13 +329,10 @@ void CSMain (uint3 id : SV_DispatchThreadID)
     // Transform pixel to [-1,1] range
     float2 uv = (id.xy / float2(width, height) * 2.0f - 1.0f);
     
-    Ray ray = CreateCameraRay(uv);
-
-    // Trace and shade the ray
-    float3 result = float3(0, 0, 0);
-    
+    Ray ray = CreateCameraRay(uv);    
     RayHit hit = GetNearestIntersection(ray);
-    result += GetColorAtHit(ray, hit);
+        
+    float3 result = GetColorAtHit(ray, hit);
 
     Result[id.xy] = float4(result, 1);
 }
