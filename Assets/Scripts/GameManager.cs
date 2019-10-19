@@ -20,9 +20,11 @@ public class GameManager : MonoBehaviour
     private Vector2Int _textureSize;
 
     private List<Sphere> _spheres;
+    private List<GameObject> _sphereObjects;
     private ComputeBuffer _sphereBuffer;
 
     private List<Sphere> _lights;
+    private List<GameObject> _lightObjects;
     private ComputeBuffer _lightBuffer;
     
     private static bool _meshObjectsNeedRebuilding = false;
@@ -126,7 +128,7 @@ public class GameManager : MonoBehaviour
     
     private void OnRenderImage(RenderTexture src, RenderTexture dest)
     {
-        MoveSpheres();
+        UpdateSpheres();
         
         var kernelHandle = shader.FindKernel("CSMain");
         
@@ -140,7 +142,10 @@ public class GameManager : MonoBehaviour
     private void SetupSpheres()
     {
         _spheres = new List<Sphere>();
+        _sphereObjects = new List<GameObject>();
+        
         _lights = new List<Sphere>();
+        _lightObjects = new List<GameObject>();
 
         var sphereTransforms = GameObject.Find("Spheres").GetComponentsInChildren<Transform>();
 
@@ -161,6 +166,7 @@ public class GameManager : MonoBehaviour
                 radius = sphereObj.GetComponent<SphereCollider>().radius
             };
             _spheres.Add(sphere);
+            _sphereObjects.Add(sphereObj.gameObject);
         }
 
         var lightTransforms = GameObject.Find("Lights").GetComponentsInChildren<Transform>();
@@ -181,6 +187,7 @@ public class GameManager : MonoBehaviour
                 emission = light.Color.ToVector3()
             };
             _lights.Add(sphere);
+            _lightObjects.Add(lightObj.gameObject);
         }
 
         _sphereBuffer?.Release();
@@ -203,18 +210,13 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    private void MoveSpheres()
+    private void UpdateSpheres()
     {
         for (int i = 0; i < _spheres.Count; ++i)
         {
             var sphere = _spheres[i];
-            
-            if (sphere.radius > 1000f)
-            {
-                continue;
-            }
-            
-            sphere.position.y += Mathf.Sin(Time.time + i) * Time.deltaTime * 0.25f;
+
+            sphere.position = _sphereObjects[i].transform.position;
             _spheres[i] = sphere;
         }
         
@@ -222,7 +224,7 @@ public class GameManager : MonoBehaviour
         {
             var sphere = _lights[i];
 
-            sphere.position.y += Mathf.Sin(Time.time + i + _spheres.Count) * Time.deltaTime * 0.25f;
+            sphere.position = _lightObjects[i].transform.position;
             _lights[i] = sphere;
         }
 
