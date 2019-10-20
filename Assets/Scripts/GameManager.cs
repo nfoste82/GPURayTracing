@@ -220,6 +220,9 @@ public class GameManager : MonoBehaviour
             var sphere = _spheres[i];
 
             sphere.position = _sphereObjects[i].transform.position;
+
+            sphere.radius = _sphereObjects[i].GetComponent<SphereCollider>().radius;
+            
             var material = _sphereObjects[i].GetComponent<RayMaterial>();
             sphere.color = material.Color.ToVector3();
             sphere.refraction = material.RefractionIndex;
@@ -234,6 +237,9 @@ public class GameManager : MonoBehaviour
             var sphere = _lights[i];
 
             sphere.position = _lightObjects[i].transform.position;
+            
+            sphere.radius = _lightObjects[i].GetComponent<SphereCollider>().radius;
+            
             var light = _lightObjects[i].GetComponent<RayLight>();
             sphere.emission = light.Color.ToVector3();
             

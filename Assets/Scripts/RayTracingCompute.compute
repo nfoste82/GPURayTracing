@@ -114,16 +114,43 @@ RayHit CreateRayHit()
 }
 // =======================================================
 
-void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
+void IntersectGroundPlane(Ray ray, inout RayHit bestHit)
+{
+    // Calculate distance along the ray where the ground plane is intersected
+    float t = -ray.origin.y / ray.direction.y;
+    if (t > 0 && t < bestHit.distance)
+    {
+        bestHit.distance = t;
+        bestHit.position = ray.origin + t * ray.direction;
+        bestHit.normal = float3(0.0f, 1.0f, 0.0f);
+        bestHit.color = float3(0.8f, 0.8f, 0.8f);
+        bestHit.smoothness = 0.2f;
+        bestHit.emission = float3(0.0f, 0.0f, 0.0f);
+        bestHit.obj_position = float3(0.0f, 0.0f, 0.0f);
+        bestHit.obj_radius = 0.0f;
+        bestHit.smoothness = 1.0f;
+        bestHit.opacity = 1.0f;
+    }
+}
+
+bool IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
 {
     // Calculate distance along the ray where the sphere is intersected
-    float3 d = ray.origin - sphere.position;
-    float p1 = -dot(ray.direction, d);
+    float3 d = sphere.position - ray.origin;
+    float p1 = dot(ray.direction, d);
+    
+    // Ray is pointing away from sphere
+    if (p1 < 0)
+    {
+        return false;
+    }
+    
     float p2sqr = p1 * p1 - dot(d, d) + sphere.radius * sphere.radius;
     
+    // Ray missed the sphere
     if (p2sqr < 0)
     {
-        return;
+        return false;
     }
     
     float p2 = sqrt(p2sqr);
@@ -141,12 +168,16 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
         bestHit.opacity = sphere.opacity;
         bestHit.refraction = sphere.refraction;
     }
+    
+    return true;
 }
 
 
 RayHit GetNearestIntersection(Ray ray)
 {
 	RayHit bestHit = CreateRayHit();
+	
+	IntersectGroundPlane(ray, bestHit);
 	
 	int i;
 	for (i = 0; i < _NumSpheres; i++)
@@ -162,7 +193,7 @@ RayHit GetNearestIntersection(Ray ray)
 	return bestHit;
 }
 
-float3 GetLightHittingPoint(Ray ray, RayHit hit)
+float3 GetLightHittingPointHardShadow(Ray ray, RayHit hit)
 {
     float3 combinedLightColor = float3(0.0f, 0.0f, 0.0f);
 
@@ -193,6 +224,64 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit)
 	        combinedLightColor = Combine(combinedLightColor, lightColor * lightPercentageThatHits);
 	    }
 	}
+	
+	return combinedLightColor;
+}
+
+float3 GetLightHittingPoint(Ray ray, RayHit hit)
+{
+    float3 combinedLightColor = float3(0.0f, 0.0f, 0.0f);
+
+    int i;
+	for (i = 0; i < _NumLights; i++)
+	{
+	    float3 lightTotal = float3(0.0f, 0.0f, 0.0f);
+	    float3 lightPos = _Lights[i].position;
+		float3 ptToLight = lightPos - hit.position;
+		float distanceToLight = length(ptToLight);
+		ptToLight = normalize(ptToLight);
+		
+		float3 sideDir = cross(float3(0.0f, 1.0f, 0.0f), ptToLight) * _Lights[i].radius;
+		float3 upDir = cross(sideDir, ptToLight) * _Lights[i].radius;
+		
+		// Sample 49 positions on each light source
+		int x;
+		int y;
+		for (x = -2; x <= 2; x++)
+		{
+		    for (y = -2; y <= 2; y++)
+		    {
+		        RayHit bestHit = CreateRayHit();
+		    
+                float3 sideOffset = sideDir * x * 0.5f;
+                float3 upOffset = upDir * y * 0.5f;
+                float3 offsetPt = lightPos + sideOffset + upOffset;
+                float3 ptToOffset = offsetPt - hit.position;
+                float distanceToLight = length(ptToOffset);
+                ptToOffset = normalize(ptToOffset);
+                Ray rayToLight = CreateRay(hit.position + (hit.normal * 0.001f), ptToOffset);  
+                
+                int j;
+                for (j = 0; j < _NumSpheres; j++)
+                {	       
+                    IntersectSphere(rayToLight, bestHit, _Spheres[j]);	    
+                }
+                
+                if (bestHit.distance > distanceToLight)
+                {
+                    float3 lightColor = _Lights[i].emission;
+                
+                    float rayNormalDot = dot(ptToOffset, hit.normal);
+                    float lightStrength = clamp(1.0f / (log2(max(1.0f, distanceToLight)) * 0.5f) , 0, 1);
+                    float lightPercentageThatHits = rayNormalDot * lightStrength;
+                    
+                    lightTotal += lightColor * lightPercentageThatHits;
+                }
+		    }
+		}
+		
+		combinedLightColor = Combine(combinedLightColor, lightTotal * 0.04f);
+    }
 	
 	return combinedLightColor;
 }
@@ -250,7 +339,7 @@ float3 GetTextureColorOnSphere(float3 position, float3 center, float radius)
 
 float3 ModifyNormalByBumpColor(float3 normal, float3 bumpColor, float bumpiness)
 {
-    return (normal * 2.0f + bumpColor * 2.0f * bumpiness) * 0.5f;
+    return (normal + bumpColor * bumpiness) * (1 - bumpiness * 0.5f);
 }
 
 float3 GetColorAtHit(Ray ray, RayHit hit)
@@ -268,10 +357,13 @@ float3 GetColorAtHit(Ray ray, RayHit hit)
         return hit.emission;
     }
     
-    ray.color = GetLightHittingPoint(ray, hit) * hit.opacity;       
+    if (hit.obj_radius > 0.0f)
+    {
+        float3 bumpColor = GetTextureColorOnSphere(hit.position, hit.obj_position, hit.obj_radius);
+        hit.normal = ModifyNormalByBumpColor(hit.normal, bumpColor, (1 - hit.smoothness));
+    }
     
-    float3 bumpColor = GetTextureColorOnSphere(hit.position, hit.obj_position, hit.obj_radius);
-    hit.normal = ModifyNormalByBumpColor(hit.normal, bumpColor, (1 - hit.smoothness));  
+    ray.color = GetLightHittingPoint(ray, hit) * hit.opacity;  
     
     // Second bounce
     Ray secondRay = CreateRay(hit.position + (hit.normal * 0.001f), reflect(ray.direction, hit.normal));
@@ -298,12 +390,14 @@ float3 GetColorAtHit(Ray ray, RayHit hit)
     if ((secondHit.emission.x + secondHit.emission.y + secondHit.emission.z) > 0.0f)
     {
         return hit.color * Combine(ray.color, secondHit.emission);
-    }
-    
-    secondRay.color = GetLightHittingPoint(secondRay, secondHit);
-        
-    bumpColor = GetTextureColorOnSphere(secondHit.position, secondHit.obj_position, secondHit.obj_radius);
-    secondHit.normal = ModifyNormalByBumpColor(secondHit.normal, bumpColor, (1 - secondHit.smoothness));     
+    }   
+      
+    if (secondHit.obj_radius > 0.0f)
+    {  
+        float3 bumpColor = GetTextureColorOnSphere(secondHit.position, secondHit.obj_position, secondHit.obj_radius);
+        secondHit.normal = ModifyNormalByBumpColor(secondHit.normal, bumpColor, (1 - secondHit.smoothness));
+    }     
+    secondRay.color = GetLightHittingPointHardShadow(secondRay, secondHit) * secondHit.opacity;
         
     // Third bounce        
     Ray thirdRay = CreateRay(secondHit.position + (secondHit.normal * 0.001f), reflect(secondRay.direction, secondHit.normal));
@@ -334,10 +428,12 @@ float3 GetColorAtHit(Ray ray, RayHit hit)
         return hit.color * Combine(ray.color, secondResult);
     }
     
-    thirdRay.color = GetLightHittingPoint(thirdRay, thirdHit);
-    
-    bumpColor = GetTextureColorOnSphere(thirdHit.position, thirdHit.obj_position, thirdHit.obj_radius);
-    thirdHit.normal = ModifyNormalByBumpColor(thirdHit.normal, bumpColor, (1 - thirdHit.smoothness));
+    if (thirdHit.obj_radius > 0.0f)
+    {  
+        float3 bumpColor = GetTextureColorOnSphere(thirdHit.position, thirdHit.obj_position, thirdHit.obj_radius);
+        thirdHit.normal = ModifyNormalByBumpColor(thirdHit.normal, bumpColor, (1 - thirdHit.smoothness));
+    }
+    thirdRay.color = GetLightHittingPointHardShadow(thirdRay, thirdHit) * thirdHit.opacity;
        
     return hit.color * Combine(ray.color, secondHit.color * Combine(secondRay.color, thirdHit.color * thirdRay.color));    
 }
