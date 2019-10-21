@@ -8,13 +8,19 @@ public class GameManager : MonoBehaviour
 {
     public ComputeShader shader;
     public Camera renderTextureCamera;
+    
+    [Range(1, 32)]
+    public int numberOfPasses = 1;
+
+    public bool randomNoise = false;
+    
+    public Color _ambientLightColor;
+    public Color32 _skyboxLightColor = new Color32(123, 107, 101, 255);
+    
     public Texture skyboxTexture;
     public Texture checkerboardTexture;
 
-    public Color _ambientLightColor;
     private Vector4 _ambientLightColorAsVector;
-
-    public Color32 _skyboxLightColor = new Color32(123, 107, 101, 255);
     private Vector4 _skyboxLightColorAsVector;
     
     private RenderTexture _outputTexture;
@@ -355,8 +361,18 @@ public class GameManager : MonoBehaviour
         _skyboxLightColorAsVector = new Vector4(_skyboxLightColor.r / 255f, _skyboxLightColor.g / 255f, _skyboxLightColor.b / 255f, 1.0f);
         shader.SetVector("_SkyboxLight", _skyboxLightColorAsVector);
         
-        //shader.SetVector("_PixelOffset", new Vector2(Random.value, Random.value));
-        //shader.SetFloat("_Seed", Random.value);
+        shader.SetVector("_PixelOffset", new Vector2(UnityEngine.Random.value, UnityEngine.Random.value));
+
+        if (randomNoise)
+        {
+            shader.SetFloat("_Seed", UnityEngine.Random.value);
+        }
+        else
+        {
+            shader.SetFloat("_Seed", (float) (new System.Random(0).NextDouble()));
+        }
+
+        shader.SetInt("_NumberOfPasses", numberOfPasses);
 
         SetComputeBuffer("_Spheres", _sphereBuffer, kernelHandle);
         SetComputeBuffer("_Lights", _lightBuffer, kernelHandle);
