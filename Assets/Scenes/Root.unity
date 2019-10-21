@@ -705,7 +705,7 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 763484031}
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: 2.24, y: 3.52, z: 0}
+  m_LocalPosition: {x: 2.24, y: 6.12, z: 5}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_Children: []
   m_Father: {fileID: 165278042}
@@ -725,7 +725,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   Color:
     serializedVersion: 2
-    rgba: 13224447
+    rgba: 13236223
 --- !u!135 &763484034
 SphereCollider:
   m_ObjectHideFlags: 0
@@ -765,7 +765,7 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 794064987}
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: -6, y: 1, z: 0}
+  m_LocalPosition: {x: -1, y: 1, z: -6}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_Children: []
   m_Father: {fileID: 514649113}
@@ -786,7 +786,7 @@ MonoBehaviour:
   Color:
     serializedVersion: 2
     rgba: 16777215
-  Smoothness: 0.493
+  Smoothness: 1
   Opacity: 0.109
   RefractionIndex: 1.35
 --- !u!135 &794064990
@@ -957,7 +957,7 @@ MonoBehaviour:
   _ambientLightColor: {r: 1, g: 0.9918116, b: 0.7877358, a: 0}
   _skyboxLightColor:
     serializedVersion: 2
-    rgba: 4278190080
+    rgba: 4280756021
 --- !u!20 &1029813413
 Camera:
   m_ObjectHideFlags: 0
@@ -1041,7 +1041,7 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1144479670}
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: -3, y: 3, z: 0}
+  m_LocalPosition: {x: -3, y: 3, z: 5}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_Children: []
   m_Father: {fileID: 165278042}
