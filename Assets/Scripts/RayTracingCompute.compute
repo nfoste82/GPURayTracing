@@ -235,6 +235,8 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit)
     int i;
 	for (i = 0; i < _NumLights; i++)
 	{
+        float4 transparentColor = float4(0.0f, 0.0f, 0.0f, 0.0f);	
+	
 	    float3 lightTotal = float3(0.0f, 0.0f, 0.0f);
 	    float3 lightPos = _Lights[i].position;
 		float3 ptToLight = lightPos - hit.position;
@@ -244,7 +246,7 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit)
 		float3 sideDir = cross(float3(0.0f, 1.0f, 0.0f), ptToLight) * _Lights[i].radius;
 		float3 upDir = cross(sideDir, ptToLight) * _Lights[i].radius;
 		
-		// Sample 49 positions on each light source
+		// Sample 25 positions on each light source (more is higher quality and higher cost)
 		int x;
 		int y;
 		for (x = -2; x <= 2; x++)
@@ -267,20 +269,29 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit)
                     IntersectSphere(rayToLight, bestHit, _Spheres[j]);	    
                 }
                 
-                if (bestHit.distance > distanceToLight)
-                {
-                    float3 lightColor = _Lights[i].emission;
+                float3 lightColor = _Lights[i].emission;
+                float lightStrength = clamp(1.0f / (log2(max(1.0f, distanceToLight)) * 0.5f), 0, 1);
+                float rayNormalDot = dot(ptToOffset, hit.normal);
+                float lightPercentageThatHits = rayNormalDot * lightStrength;
                 
-                    float rayNormalDot = dot(ptToOffset, hit.normal);
-                    float lightStrength = clamp(1.0f / (log2(max(1.0f, distanceToLight)) * 0.5f) , 0, 1);
-                    float lightPercentageThatHits = rayNormalDot * lightStrength;
-                    
+                if (bestHit.distance > distanceToLight)
+                {    
                     lightTotal += lightColor * lightPercentageThatHits;
+                }
+                else if (bestHit.opacity < 1.0f)
+                {
+                    transparentColor.xyz += (lightColor * lightPercentageThatHits) * bestHit.color * (1 - bestHit.opacity);
+                    transparentColor.w += (1 - bestHit.opacity);
                 }
 		    }
 		}
 		
 		combinedLightColor = Combine(combinedLightColor, lightTotal * 0.04f);
+		
+		if (transparentColor.w > 0.0f)
+		{
+		    combinedLightColor = Combine(combinedLightColor, transparentColor.xyz * 0.04f);// * transparentColor.w * 0.04f;
+        }
     }
 	
 	return combinedLightColor;
@@ -433,7 +444,7 @@ float3 GetColorAtHit(Ray ray, RayHit hit)
         float3 bumpColor = GetTextureColorOnSphere(thirdHit.position, thirdHit.obj_position, thirdHit.obj_radius);
         thirdHit.normal = ModifyNormalByBumpColor(thirdHit.normal, bumpColor, (1 - thirdHit.smoothness));
     }
-    thirdRay.color = GetLightHittingPointHardShadow(thirdRay, thirdHit) * thirdHit.opacity;
+    thirdRay.color = GetLightHittingPointHardShadow(thirdRay, thirdHit) * thirdHit.opacity * GetSkyboxColor(thirdRay.direction) * _SkyboxLight.xyz;
        
     return hit.color * Combine(ray.color, secondHit.color * Combine(secondRay.color, thirdHit.color * thirdRay.color));    
 }
