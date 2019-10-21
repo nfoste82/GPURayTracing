@@ -133,7 +133,7 @@ void IntersectGroundPlane(Ray ray, inout RayHit bestHit)
     }
 }
 
-bool IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
+void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
 {
     // Calculate distance along the ray where the sphere is intersected
     float3 d = sphere.position - ray.origin;
@@ -142,7 +142,7 @@ bool IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
     // Ray is pointing away from sphere
     if (p1 < 0)
     {
-        return false;
+        return;
     }
     
     float p2sqr = p1 * p1 - dot(d, d) + sphere.radius * sphere.radius;
@@ -150,7 +150,7 @@ bool IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
     // Ray missed the sphere
     if (p2sqr < 0)
     {
-        return false;
+        return;
     }
     
     float p2 = sqrt(p2sqr);
@@ -168,8 +168,6 @@ bool IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
         bestHit.opacity = sphere.opacity;
         bestHit.refraction = sphere.refraction;
     }
-    
-    return true;
 }
 
 
@@ -335,7 +333,7 @@ float3 Refract(float3 sourceDirection, float sourceRefraction, float targetRefra
     // 2 (90 degrees)
     
     reflectAmount = reflectAmount * dot(targetNormal, sourceDirection);
-    return (reflectAmount * targetNormal) + sourceDirection;
+    return normalize((reflectAmount * targetNormal) + sourceDirection);
 }
 
 float3 GetTextureColorOnSphere(float3 position, float3 center, float radius)
@@ -385,7 +383,7 @@ float3 GetColorAtHit(Ray ray, RayHit hit)
         
         // Calculate exit point/normal for sphere
         float3 halfway = GetClosestPointOnLineSegment(secondRay.origin, secondRay.origin + (2.0f * hit.obj_radius * secondRay.direction), hit.obj_position);
-        secondRay.origin = ((halfway - secondRay.origin) * 2.0f) + secondRay.origin;
+        secondRay.origin += ((halfway - secondRay.origin) * 2.0f);
         float3 exitPointNormal = normalize(secondRay.origin - hit.obj_position);
 
         // Now refract again since we've left the sphere
@@ -464,8 +462,6 @@ void CSMain (uint3 id : SV_DispatchThreadID)
     RayHit hit = GetNearestIntersection(ray);
         
     float3 result = GetColorAtHit(ray, hit);
-    
-    //float3 textureColor = GetTextureColorOnSphere(hit.position, hit.obj_position, hit.obj_radius);
-
+   
     Result[id.xy] = float4(result, 1);
 }
