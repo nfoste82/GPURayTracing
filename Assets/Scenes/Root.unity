@@ -929,10 +929,10 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 1029813414}
-  - component: {fileID: 1029813413}
   - component: {fileID: 1029813411}
+  - component: {fileID: 1029813413}
   m_Layer: 0
-  m_Name: Camera
+  m_Name: GameManager
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -953,6 +953,10 @@ MonoBehaviour:
   shader: {fileID: 7200000, guid: adaed5b09d5374556b1cda0917c8f291, type: 3}
   renderTextureCamera: {fileID: 1029813413}
   numberOfPasses: 1
+  shadowQuality: 2
+  numRayBounces: 2
+  shadowRandomness: 0.05
+  cameraFocalDistance: 100
   randomNoise: 0
   _ambientLightColor: {r: 1, g: 0.9918116, b: 0.7877358, a: 0}
   _skyboxLightColor:

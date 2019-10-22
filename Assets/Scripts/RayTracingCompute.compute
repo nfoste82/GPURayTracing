@@ -19,7 +19,9 @@ float4 _SkyboxLight;
 
 int _NumberOfPasses;
 int _ShadowQuality;
+int _NumBounces;
 float _ShadowRandomness;
+float _FocalDistance;
 
 float _Seed;
 float2 _Pixel;
@@ -379,7 +381,7 @@ float3 GetRandomizedNormalBasedOnAmount(float3 normal, float amount)
     return normalWithRand;
 }
 
-float3 GetColorAtHit(Ray ray, RayHit hit)
+float3 GetColorAtHitThreeBounces(Ray ray, RayHit hit)
 {
     // Shaders don't support recursion, so we'll do manual passes for each bounce we want to support
     // This function will be terrible for performance for a GPU, but even so the framerate should be decent (unless other settings are cranked up).
@@ -397,10 +399,16 @@ float3 GetColorAtHit(Ray ray, RayHit hit)
     // Randomize the hit normal somewhat based on roughness of the surface
     hit.normal = GetRandomizedNormalBasedOnAmount(hit.normal, hit.smoothness);
     
-    ray.color = GetLightHittingPoint(ray, hit) * hit.opacity;  
+    ray.color = GetLightHittingPoint(ray, hit) * hit.opacity;
     
     // Second bounce
-    Ray secondRay = CreateRay(hit.position + (hit.normal * 0.001f), reflect(ray.direction, hit.normal));
+    Ray secondRay = CreateRay(hit.position + (hit.normal * 0.001f), reflect(ray.direction, hit.normal));    
+    // In a ray tracer that allowed recursion we would split the ray off here into two rays that would
+    // both contribute to the same pixel on the screen. Unfortunately a realistic solution to that requires 
+    // recursion (tree of ray results), and compute shaders don't support recursion. Without that
+    // we're stuck with transparency that doesn't look just right. A transparent object behind another will
+    // look too opaque. Shadows from transparent objects don't look right when looking at them through
+    // another transparent object.
     if (hit.opacity < 1.0f)
     {     
         // Get refraction direction after entering sphere
@@ -434,7 +442,7 @@ float3 GetColorAtHit(Ray ray, RayHit hit)
     secondHit.normal = GetRandomizedNormalBasedOnAmount(secondHit.normal, secondHit.smoothness);
     
     secondRay.color = GetLightHittingPointHardShadow(secondRay, secondHit) * secondHit.opacity;
-        
+    
     // Third bounce        
     Ray thirdRay = CreateRay(secondHit.position + (secondHit.normal * 0.001f), reflect(secondRay.direction, secondHit.normal));
     if (secondHit.opacity < 1.0f)
@@ -471,9 +479,144 @@ float3 GetColorAtHit(Ray ray, RayHit hit)
     //}
     thirdHit.normal = GetRandomizedNormalBasedOnAmount(thirdHit.normal, thirdHit.smoothness);
     
-    thirdRay.color = GetLightHittingPointHardShadow(thirdRay, thirdHit) * thirdHit.opacity * GetSkyboxColor(thirdRay.direction) * _SkyboxLight.xyz;
-       
-    return hit.color * Combine(ray.color, secondHit.color * Combine(secondRay.color, thirdHit.color * thirdRay.color));    
+    thirdRay.color = GetLightHittingPointHardShadow(thirdRay, thirdHit) * thirdHit.opacity * GetSkyboxColor(thirdRay.direction) * _SkyboxLight.xyz;   
+    
+    return hit.color * Combine(ray.color, secondHit.color * Combine(secondRay.color, thirdHit.color * thirdRay.color));     
+}
+
+float3 GetColorAtHitFourBounces(Ray ray, RayHit hit)
+{
+    // Shaders don't support recursion, so we'll do manual passes for each bounce we want to support
+    // This function will be terrible for performance for a GPU, but even so the framerate should be decent (unless other settings are cranked up).
+    
+    if (hit.distance >= 1.#INF)
+    {
+        return GetSkyboxColor(ray.direction) * _SkyboxLight.xyz;
+    }
+    
+    if ((hit.emission.x + hit.emission.y + hit.emission.z) > 0.0f)
+    {
+        return hit.emission;
+    }
+    
+    // Randomize the hit normal somewhat based on roughness of the surface
+    hit.normal = GetRandomizedNormalBasedOnAmount(hit.normal, hit.smoothness);
+    
+    ray.color = GetLightHittingPoint(ray, hit) * hit.opacity;
+    
+    // Second bounce
+    Ray secondRay = CreateRay(hit.position + (hit.normal * 0.001f), reflect(ray.direction, hit.normal));
+    // In a ray tracer that allowed recursion we would split the ray off here into two rays that would
+    // both contribute to the same pixel on the screen. Unfortunately a realistic solution to that requires 
+    // recursion (tree of ray results), and compute shaders don't support recursion. Without that
+    // we're stuck with transparency that doesn't look just right. A transparent object behind another will
+    // look too opaque. Shadows from transparent objects don't look right when looking at them through
+    // another transparent object.
+    if (hit.opacity < 1.0f)
+    {     
+        // Get refraction direction after entering sphere
+        secondRay.direction = Refract(ray.direction, 1.0f, hit.refraction, hit.normal);
+        
+        // Calculate exit point/normal for sphere
+        float3 halfway = GetClosestPointOnLineSegment(secondRay.origin, secondRay.origin + (2.0f * hit.obj_radius * secondRay.direction), hit.obj_position);
+        secondRay.origin += ((halfway - secondRay.origin) * 2.0f);
+        float3 exitPointNormal = normalize(secondRay.origin - hit.obj_position);
+
+        // Now refract again since we've left the sphere
+        secondRay.direction = Refract(secondRay.direction, hit.refraction, 1.0f, exitPointNormal);        
+    }
+    RayHit secondHit = GetNearestIntersection(secondRay);       
+    
+    if (secondHit.distance >= 1.#INF)
+    {
+        return hit.color * Combine(ray.color, (GetSkyboxColor(secondRay.direction) * _SkyboxLight.xyz));
+    }
+    
+    if ((secondHit.emission.x + secondHit.emission.y + secondHit.emission.z) > 0.0f)
+    {
+        return hit.color * Combine(ray.color, secondHit.emission);
+    }   
+      
+    //if (secondHit.obj_radius > 0.0f)
+    //{  
+    //    float3 bumpColor = GetTextureColorOnSphere(secondHit.position, secondHit.obj_position, secondHit.obj_radius);
+    //    secondHit.normal = ModifyNormalByBumpColor(secondHit.normal, bumpColor, (1 - secondHit.smoothness));
+    //}     
+    secondHit.normal = GetRandomizedNormalBasedOnAmount(secondHit.normal, secondHit.smoothness);
+    
+    secondRay.color = GetLightHittingPointHardShadow(secondRay, secondHit) * secondHit.opacity;
+    
+    // Third bounce        
+    Ray thirdRay = CreateRay(secondHit.position + (secondHit.normal * 0.001f), reflect(secondRay.direction, secondHit.normal));
+    if (secondHit.opacity < 1.0f)
+    {    
+        // Get refraction direction after entering sphere
+        thirdRay.direction = Refract(secondRay.direction, 1.0f, secondHit.refraction, secondHit.normal);
+        
+        // Calculate exit point/normal for sphere
+        float3 halfway = GetClosestPointOnLineSegment(thirdRay.origin, thirdRay.origin + (2.0f * secondHit.obj_radius * thirdRay.direction), secondHit.obj_position);
+        thirdRay.origin = ((halfway - thirdRay.origin) * 2.0f) + thirdRay.origin;
+        float3 exitPointNormal = normalize(thirdRay.origin - secondHit.obj_position);
+
+        // Now refract again since we've left the sphere
+        thirdRay.direction = Refract(thirdRay.direction, secondHit.refraction, 1.0f, exitPointNormal);        
+    }
+    RayHit thirdHit = GetNearestIntersection(thirdRay);       
+    
+    if (thirdHit.distance >= 1.#INF)
+    {
+        float3 secondResult = secondHit.color * Combine(secondRay.color, (GetSkyboxColor(thirdRay.direction) * _SkyboxLight.xyz));
+        return hit.color * Combine(ray.color, secondResult);
+    }
+    
+    if ((thirdHit.emission.x + thirdHit.emission.y + thirdHit.emission.z) > 0.0f)
+    {
+        float3 secondResult = secondHit.color * Combine(secondRay.color, thirdHit.emission);
+        return hit.color * Combine(ray.color, secondResult);
+    }
+    
+    //if (thirdHit.obj_radius > 0.0f)
+    //{  
+    //    float3 bumpColor = GetTextureColorOnSphere(thirdHit.position, thirdHit.obj_position, thirdHit.obj_radius);
+    //    thirdHit.normal = ModifyNormalByBumpColor(thirdHit.normal, bumpColor, (1 - thirdHit.smoothness));
+    //}
+    thirdHit.normal = GetRandomizedNormalBasedOnAmount(thirdHit.normal, thirdHit.smoothness);
+    
+    thirdRay.color = GetLightHittingPointHardShadow(thirdRay, thirdHit) * thirdHit.opacity * GetSkyboxColor(thirdRay.direction) * _SkyboxLight.xyz;   
+    
+    Ray fourthRay = CreateRay(thirdHit.position + (thirdHit.normal * 0.001f), reflect(thirdRay.direction, thirdHit.normal));
+    if (secondHit.opacity < 1.0f)
+    {    
+        // Get refraction direction after entering sphere
+        fourthRay.direction = Refract(thirdRay.direction, 1.0f, thirdHit.refraction, thirdHit.normal);
+        
+        // Calculate exit point/normal for sphere
+        float3 halfway = GetClosestPointOnLineSegment(fourthRay.origin, fourthRay.origin + (2.0f * thirdHit.obj_radius * fourthRay.direction), thirdHit.obj_position);
+        fourthRay.origin = ((halfway - fourthRay.origin) * 2.0f) + fourthRay.origin;
+        float3 exitPointNormal = normalize(fourthRay.origin - thirdHit.obj_position);
+
+        // Now refract again since we've left the sphere
+        fourthRay.direction = Refract(fourthRay.direction, thirdHit.refraction, 1.0f, exitPointNormal);        
+    }
+    RayHit fourthHit = GetNearestIntersection(fourthRay);
+    
+    float3 thirdResult = float3(0.0f, 0.0f, 0.0f);
+    float3 secondResult = float3(0.0f, 0.0f, 0.0f);
+    if (fourthHit.distance >= 1.#INF)
+    {
+        thirdResult = thirdHit.color * Combine(thirdRay.color, GetSkyboxColor(fourthRay.direction) * _SkyboxLight.xyz);        
+    }    
+    else if ((fourthHit.emission.x + fourthHit.emission.y + fourthHit.emission.z) > 0.0f)
+    {
+        thirdResult = thirdHit.color * Combine(thirdRay.color, fourthHit.emission);        
+    }   
+    else
+    {
+        thirdResult = thirdHit.color * Combine(thirdRay.color, fourthHit.color * fourthRay.color);
+    }
+    
+    secondResult = secondHit.color * Combine(secondRay.color, thirdResult);
+    return hit.color * Combine(ray.color, secondResult);         
 }
 
 
@@ -489,23 +632,32 @@ void CSMain (uint3 id : SV_DispatchThreadID)
     // Transform pixel to [-1,1] range
     float2 uv = (id.xy / float2(width, height) * 2.0f - 1.0f);
         
-    //Ray screenCenterRay = CreateCameraRay(float2(0.5f, 0.5f));
-    //float focalDistance = 500000.0f;
-    //float3 focalPoint = screenCenterRay.origin + screenCenterRay.direction * focalDistance;
+    Ray screenCenterRay = CreateCameraRay(float2(0.0f, 0.0f));
+    float focalDistance = 1.0f;
+    float3 focalPoint = screenCenterRay.origin + screenCenterRay.direction * focalDistance;
     
     float3 result = float3(0.0f, 0.0f, 0.0f);
     for (int i = 0; i < _NumberOfPasses; i++)
     {
         Ray ray = CreateCameraRay(uv);
-        ray.origin.x += rand() * 0.001f - rand() * 0.001f;
-        ray.origin.y += rand() * 0.001f - rand() * 0.001f;
         
-        ray.direction.x += rand() * 0.001f - rand() * 0.001f;
-        ray.direction.y += rand() * 0.001f - rand() * 0.001f;
-        ray.direction = normalize(ray.direction); 
+        float3 focalPoint = ray.origin + ray.direction * _FocalDistance;
+        
+        float shiftAmount = 0.01f/max(0.05,log(_FocalDistance));
+        ray.origin.x += rand() * shiftAmount - rand() * shiftAmount;
+        ray.origin.y += rand() * shiftAmount - rand() * shiftAmount;
+        ray.origin.z += rand() * shiftAmount - rand() * shiftAmount;
+        
+        //ray.direction.x += rand() * 0.001f - rand() * 0.001f;
+        //ray.direction.y += rand() * 0.001f - rand() * 0.001f;
+        //ray.direction.z += rand() * 0.001f - rand() * 0.001f;
+        //ray.direction = normalize(ray.direction);
+        
+        //ray.direction = normalize(ray.direction * 0.5f + normalize(focalPoint - ray.origin) * 0.5f);
+        ray.direction = normalize(focalPoint - ray.origin); 
         
         RayHit hit = GetNearestIntersection(ray);        
-        result += GetColorAtHit(ray, hit);
+        result += GetColorAtHitThreeBounces(ray, hit);
     }
    
     Result[id.xy] = float4(result / _NumberOfPasses, 1);

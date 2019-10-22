@@ -15,8 +15,14 @@ public class GameManager : MonoBehaviour
     [Range(0, 5)]
     public int shadowQuality = 2;
 
+    [Range(0, 4)]
+    public int numRayBounces = 2;
+
     [Range(0f, 0.2f)] 
     public float shadowRandomness = 0.06f;
+
+    [Range(1.5f, 100f)] 
+    public float cameraFocalDistance = 100f;
     
     public bool randomNoise = false;
     
@@ -367,7 +373,7 @@ public class GameManager : MonoBehaviour
         _skyboxLightColorAsVector = new Vector4(_skyboxLightColor.r / 255f, _skyboxLightColor.g / 255f, _skyboxLightColor.b / 255f, 1.0f);
         shader.SetVector("_SkyboxLight", _skyboxLightColorAsVector);
         
-        shader.SetVector("_PixelOffset", new Vector2(UnityEngine.Random.value, UnityEngine.Random.value));
+        shader.SetVector("_PixelOffset", new Vector2(UnityEngine.Random.value,UnityEngine.Random.value));
 
         if (randomNoise)
         {
@@ -380,7 +386,9 @@ public class GameManager : MonoBehaviour
 
         shader.SetInt("_NumberOfPasses", numberOfPasses);
         shader.SetInt("_ShadowQuality", shadowQuality);
+        shader.SetInt("_NumBounces", numRayBounces);
         shader.SetFloat("_ShadowRandomness", shadowRandomness);
+        shader.SetFloat("_FocalDistance", cameraFocalDistance);
 
         SetComputeBuffer("_Spheres", _sphereBuffer, kernelHandle);
         SetComputeBuffer("_Lights", _lightBuffer, kernelHandle);
