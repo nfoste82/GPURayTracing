@@ -639,30 +639,24 @@ void CSMain (uint3 id : SV_DispatchThreadID)
 
     // Transform pixel to [-1,1] range
     float2 uv = (id.xy / float2(width, height) * 2.0f - 1.0f);
-        
-    Ray screenCenterRay = CreateCameraRay(float2(0.0f, 0.0f));
-    float focalDistance = 1.0f;
-    float3 focalPoint = screenCenterRay.origin + screenCenterRay.direction * focalDistance;
-    
+            
     float3 result = float3(0.0f, 0.0f, 0.0f);
     for (int i = 0; i < _NumberOfPasses; i++)
     {
         Ray ray = CreateCameraRay(uv);
         
-        float3 focalPoint = ray.origin + ray.direction * _FocalDistance;
-        
-        float shiftAmount = 0.01;
-        ray.origin.x += rand() * shiftAmount - rand() * shiftAmount;
-        ray.origin.y += rand() * shiftAmount - rand() * shiftAmount;
-        ray.origin.z += rand() * shiftAmount - rand() * shiftAmount;
-        
-        //ray.direction.x += rand() * 0.001f - rand() * 0.001f;
-        //ray.direction.y += rand() * 0.001f - rand() * 0.001f;
-        //ray.direction.z += rand() * 0.001f - rand() * 0.001f;
-        //ray.direction = normalize(ray.direction);
-        
-        //ray.direction = normalize(ray.direction * 0.5f + normalize(focalPoint - ray.origin) * 0.5f);
-        ray.direction = normalize(focalPoint - ray.origin); 
+        // We find the camera focal point, then shift the ray origin, and find the adjusted ray
+        // direction after that shift. This gives us depth of field.
+        {
+            float3 focalPoint = ray.origin + ray.direction * _FocalDistance;
+            
+            float shiftAmount = 0.01;
+            ray.origin.x += rand() * shiftAmount - rand() * shiftAmount;
+            ray.origin.y += rand() * shiftAmount - rand() * shiftAmount;
+            ray.origin.z += rand() * shiftAmount - rand() * shiftAmount;
+            
+            ray.direction = normalize(focalPoint - ray.origin);
+        } 
         
         RayHit hit = GetNearestIntersection(ray);        
         result += GetColorAtHitThreeBounces(ray, hit);
