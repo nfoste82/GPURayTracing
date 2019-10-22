@@ -441,6 +441,26 @@ public class GameManager : MonoBehaviour
             }
         }
 
+        foreach (var sphere in _lights)
+        {
+            var hitDistance = sphere.Intersect(ray.origin, ray.direction);
+
+            if (hitDistance >= 0.0f && hitDistance < nearestDistance)
+            {
+                nearestDistance = hitDistance;
+            }
+        }
+        
+        // Ground plane
+        {
+            var hitDistance = -ray.origin.y / ray.direction.y;
+
+            if (hitDistance > 0 && hitDistance < nearestDistance)
+            {
+                nearestDistance = hitDistance;
+            }
+        }
+
         return nearestDistance;
     }
     
