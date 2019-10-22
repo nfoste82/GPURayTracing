@@ -285,7 +285,7 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit)
                 }
                 
                 float3 lightColor = _Lights[i].emission;
-                float lightStrength = clamp(1.0f / (log2(max(1.0f, distanceToLight)) * 0.5f), 0, 1);
+                float lightStrength = clamp(1.0f / (log2(max(1.0f, distanceToLight)) * 0.5f), 0, 1);                
                 float rayNormalDot = dot(ptToOffset, hit.normal);
                 float lightPercentageThatHits = rayNormalDot * lightStrength;
                 
@@ -385,11 +385,17 @@ float3 GetColorAtHit(Ray ray, RayHit hit)
         return hit.emission;
     }
     
-    if (hit.obj_radius > 0.0f)
-    {
-        float3 bumpColor = GetTextureColorOnSphere(hit.position, hit.obj_position, hit.obj_radius);
-        hit.normal = ModifyNormalByBumpColor(hit.normal, bumpColor, (1 - hit.smoothness));
-    }
+    //if (hit.obj_radius > 0.0f)
+    //{
+    //    float3 bumpColor = GetTextureColorOnSphere(hit.position, hit.obj_position, hit.obj_radius);
+    //    hit.normal = ModifyNormalByBumpColor(hit.normal, bumpColor, (1 - hit.smoothness));
+    //}
+    
+    float3 hitNormalWithRand = normalize( float3(
+                hit.normal.x + rand() * (1 - hit.smoothness) - rand() * (1 - hit.smoothness), 
+                hit.normal.y + rand() * (1 - hit.smoothness) - rand() * (1 - hit.smoothness), 
+                hit.normal.z + rand() * (1 - hit.smoothness) - rand() * (1 - hit.smoothness)));
+    hit.normal = hitNormalWithRand;
     
     ray.color = GetLightHittingPoint(ray, hit) * hit.opacity;  
     
@@ -420,11 +426,11 @@ float3 GetColorAtHit(Ray ray, RayHit hit)
         return hit.color * Combine(ray.color, secondHit.emission);
     }   
       
-    if (secondHit.obj_radius > 0.0f)
-    {  
-        float3 bumpColor = GetTextureColorOnSphere(secondHit.position, secondHit.obj_position, secondHit.obj_radius);
-        secondHit.normal = ModifyNormalByBumpColor(secondHit.normal, bumpColor, (1 - secondHit.smoothness));
-    }     
+    //if (secondHit.obj_radius > 0.0f)
+    //{  
+    //    float3 bumpColor = GetTextureColorOnSphere(secondHit.position, secondHit.obj_position, secondHit.obj_radius);
+    //    secondHit.normal = ModifyNormalByBumpColor(secondHit.normal, bumpColor, (1 - secondHit.smoothness));
+    //}     
     secondRay.color = GetLightHittingPointHardShadow(secondRay, secondHit) * secondHit.opacity;
         
     // Third bounce        
@@ -456,11 +462,11 @@ float3 GetColorAtHit(Ray ray, RayHit hit)
         return hit.color * Combine(ray.color, secondResult);
     }
     
-    if (thirdHit.obj_radius > 0.0f)
-    {  
-        float3 bumpColor = GetTextureColorOnSphere(thirdHit.position, thirdHit.obj_position, thirdHit.obj_radius);
-        thirdHit.normal = ModifyNormalByBumpColor(thirdHit.normal, bumpColor, (1 - thirdHit.smoothness));
-    }
+    //if (thirdHit.obj_radius > 0.0f)
+    //{  
+    //    float3 bumpColor = GetTextureColorOnSphere(thirdHit.position, thirdHit.obj_position, thirdHit.obj_radius);
+    //    thirdHit.normal = ModifyNormalByBumpColor(thirdHit.normal, bumpColor, (1 - thirdHit.smoothness));
+    //}
     thirdRay.color = GetLightHittingPointHardShadow(thirdRay, thirdHit) * thirdHit.opacity * GetSkyboxColor(thirdRay.direction) * _SkyboxLight.xyz;
        
     return hit.color * Combine(ray.color, secondHit.color * Combine(secondRay.color, thirdHit.color * thirdRay.color));    
