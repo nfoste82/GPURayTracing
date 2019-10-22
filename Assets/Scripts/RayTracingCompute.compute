@@ -18,6 +18,8 @@ float4 _AmbientLight;
 float4 _SkyboxLight;
 
 int _NumberOfPasses;
+int _ShadowQuality;
+
 float _Seed;
 float2 _Pixel;
 
@@ -255,17 +257,18 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit)
 		float3 sideDir = cross(float3(0.0f, 1.0f, 0.0f), ptToLight) * _Lights[i].radius;
 		float3 upDir = cross(sideDir, ptToLight) * _Lights[i].radius;
 		
-		// Sample 25 positions on each light source (more is higher quality and higher cost)
 		int x;
 		int y;
-		for (x = -2; x <= 2; x++)
+		for (x = -_ShadowQuality; x <= _ShadowQuality; x++)
 		{
-		    for (y = -2; y <= 2; y++)
+		    for (y = -_ShadowQuality; y <= _ShadowQuality; y++)
 		    {
 		        RayHit bestHit = CreateRayHit();
 		    
-                float3 sideOffset = sideDir * x * 0.5f;
-                float3 upOffset = upDir * y * 0.5f;
+		        float offsetAmount = (1.0f / max(1, _ShadowQuality)); 
+		        
+                float3 sideOffset = sideDir * x * offsetAmount;
+                float3 upOffset = upDir * y * offsetAmount;
                 float3 offsetPt = lightPos + sideOffset + upOffset;
                 float3 ptToOffset = offsetPt - hit.position;
                 float distanceToLight = length(ptToOffset);
@@ -295,11 +298,13 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit)
 		    }
 		}
 		
-		combinedLightColor = Combine(combinedLightColor, lightTotal * 0.04f);
+		uint numLightSamples = pow((_ShadowQuality + _ShadowQuality + 1), 2);
+		float inverseNumLightSamples = min(1.0f, (1.0f / numLightSamples)); 
+		combinedLightColor = Combine(combinedLightColor, lightTotal * inverseNumLightSamples);
 		
 		if (transparentColor.w > 0.0f)
 		{
-		    combinedLightColor = Combine(combinedLightColor, transparentColor.xyz * 0.04f);// * transparentColor.w * 0.04f;
+		    combinedLightColor = Combine(combinedLightColor, transparentColor.xyz * inverseNumLightSamples);
         }
     }
 	

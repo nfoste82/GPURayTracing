@@ -12,6 +12,9 @@ public class GameManager : MonoBehaviour
     [Range(1, 32)]
     public int numberOfPasses = 1;
 
+    [Range(0, 5)]
+    public int shadowQuality = 2;
+
     public bool randomNoise = false;
     
     public Color _ambientLightColor;
@@ -373,6 +376,7 @@ public class GameManager : MonoBehaviour
         }
 
         shader.SetInt("_NumberOfPasses", numberOfPasses);
+        shader.SetInt("_ShadowQuality", shadowQuality);
 
         SetComputeBuffer("_Spheres", _sphereBuffer, kernelHandle);
         SetComputeBuffer("_Lights", _lightBuffer, kernelHandle);
