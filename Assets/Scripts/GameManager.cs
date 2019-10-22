@@ -24,6 +24,9 @@ public class GameManager : MonoBehaviour
     [Range(0.1f, 100f)] 
     public float cameraFocalDistance = 100f;
 
+    private float previousFocalDistance = 100f;
+    private float timeSincePreviousFocusDistance = 1f;
+
     public float shiftAmount = 0.1f;
 
     public bool cameraAutoFocus = true;
@@ -192,6 +195,20 @@ public class GameManager : MonoBehaviour
             autoFocusDistance *= modifier;
 
             autoFocusDistance = Mathf.Max(autoFocusDistance, 0.1f);
+            float targetFocusDistance = autoFocusDistance;
+
+            autoFocusDistance = Mathf.Lerp(previousFocalDistance, autoFocusDistance,
+                Mathf.SmoothStep(0.0f, 1.0f, timeSincePreviousFocusDistance));
+
+            if (Mathf.Abs(autoFocusDistance - targetFocusDistance) < 0.05f)
+            {
+                previousFocalDistance = autoFocusDistance;
+                timeSincePreviousFocusDistance = 0.0f;
+            }
+            else
+            {
+                timeSincePreviousFocusDistance += Time.deltaTime;
+            }
         }
         
         cameraFocalDistance = autoFocusDistance;
