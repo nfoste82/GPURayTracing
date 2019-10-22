@@ -21,8 +21,12 @@ public class GameManager : MonoBehaviour
     [Range(0f, 0.2f)] 
     public float shadowRandomness = 0.06f;
 
-    [Range(1.5f, 100f)] 
+    [Range(0.1f, 100f)] 
     public float cameraFocalDistance = 100f;
+
+    public float shiftAmount = 0.1f;
+
+    public bool cameraAutoFocus = true;
     
     public bool randomNoise = false;
     
@@ -72,6 +76,39 @@ public class GameManager : MonoBehaviour
         public float smoothness;
         public float opacity;
         public float refraction;
+        
+        public float Intersect(Vector3 origin, Vector3 direction)
+        {
+            var diffToSphere = position - origin;
+            var b = Vector3.Dot(diffToSphere, direction);
+
+            // ray is pointing away from sphere (b < 0)
+            if (b < 0f)
+            {
+                return -1.0f;
+            }
+            
+            var c = diffToSphere.sqrMagnitude - radius * radius;
+
+            var discriminant = (b * b) - c; 
+
+            // A negative discriminant corresponds to ray missing sphere 
+            if (discriminant < 0.0f)
+            {
+                return -1.0f;
+            } 
+
+            // Ray now found to intersect sphere, compute smallest t value of intersection
+            var hitDistance = b - Mathf.Sqrt(discriminant) - 0.001f;
+
+            // If hit distance is negative, ray started inside sphere so clamp it to zero
+            if (hitDistance < 0.0f)
+            {
+                hitDistance = 0.0f;
+            }
+
+            return hitDistance;
+        }
     }
     
     private void Start()
@@ -147,6 +184,18 @@ public class GameManager : MonoBehaviour
     
     private void OnRenderImage(RenderTexture src, RenderTexture dest)
     {
+        var autoFocusDistance = (cameraAutoFocus) ? GetNearestIntersectionDistance(new Ray(renderTextureCamera.transform.position, renderTextureCamera.transform.forward)) : cameraFocalDistance;
+
+        if (cameraAutoFocus && autoFocusDistance < 1.0f)
+        {
+            var modifier = Mathf.Lerp(1.75f, 1.0f, autoFocusDistance);
+            autoFocusDistance *= modifier;
+
+            autoFocusDistance = Mathf.Max(autoFocusDistance, 0.1f);
+        }
+        
+        cameraFocalDistance = autoFocusDistance;
+        
         UpdateSpheres();
         
         var kernelHandle = shader.FindKernel("CSMain");
@@ -359,6 +408,25 @@ public class GameManager : MonoBehaviour
         }
     }
     
+    private float GetNearestIntersectionDistance(Ray ray)
+    {
+        float nearestDistance = 10000.0f;
+            
+        Collider nearestCollider = null;
+
+        foreach (var sphere in _spheres)
+        {
+            var hitDistance = sphere.Intersect(ray.origin, ray.direction);
+
+            if (hitDistance >= 0.0f && hitDistance < nearestDistance)
+            {
+                nearestDistance = hitDistance;
+            }
+        }
+
+        return nearestDistance;
+    }
+    
     private void SetShaderParameters(int kernelHandle)
     {
         shader.SetTexture(kernelHandle, "_SkyboxTexture", skyboxTexture);
@@ -389,6 +457,7 @@ public class GameManager : MonoBehaviour
         shader.SetInt("_NumBounces", numRayBounces);
         shader.SetFloat("_ShadowRandomness", shadowRandomness);
         shader.SetFloat("_FocalDistance", cameraFocalDistance);
+        shader.SetFloat("_ShiftAmount", shiftAmount);
 
         SetComputeBuffer("_Spheres", _sphereBuffer, kernelHandle);
         SetComputeBuffer("_Lights", _lightBuffer, kernelHandle);

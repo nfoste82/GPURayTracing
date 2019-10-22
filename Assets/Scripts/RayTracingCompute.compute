@@ -23,6 +23,8 @@ int _NumBounces;
 float _ShadowRandomness;
 float _FocalDistance;
 
+float _ShiftAmount;
+
 float _Seed;
 float2 _Pixel;
 
@@ -499,6 +501,12 @@ float3 GetColorAtHitFourBounces(Ray ray, RayHit hit)
         return hit.emission;
     }
     
+    if (hit.obj_radius > 0.0f)
+    {  
+        float3 bumpColor = GetTextureColorOnSphere(hit.position, hit.obj_position, hit.obj_radius);
+        hit.normal = ModifyNormalByBumpColor(hit.normal, bumpColor, (1 - hit.smoothness));
+    }
+    
     // Randomize the hit normal somewhat based on roughness of the surface
     hit.normal = GetRandomizedNormalBasedOnAmount(hit.normal, hit.smoothness);
     
@@ -643,7 +651,7 @@ void CSMain (uint3 id : SV_DispatchThreadID)
         
         float3 focalPoint = ray.origin + ray.direction * _FocalDistance;
         
-        float shiftAmount = 0.01f/max(0.05,log(_FocalDistance));
+        float shiftAmount = 0.01;
         ray.origin.x += rand() * shiftAmount - rand() * shiftAmount;
         ray.origin.y += rand() * shiftAmount - rand() * shiftAmount;
         ray.origin.z += rand() * shiftAmount - rand() * shiftAmount;
