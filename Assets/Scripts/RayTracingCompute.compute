@@ -19,6 +19,7 @@ float4 _SkyboxLight;
 
 int _NumberOfPasses;
 int _ShadowQuality;
+float _ShadowRandomness;
 
 float _Seed;
 float2 _Pixel;
@@ -213,6 +214,8 @@ float3 GetLightHittingPointHardShadow(Ray ray, RayHit hit)
 	{
 		float3 ptToLight = _Lights[i].position - hit.position;
 		float distanceToLight = length(ptToLight);
+		ptToLight.x += rand() * _ShadowRandomness * 0.5f - rand() * _ShadowRandomness * 0.5f;
+		ptToLight.y += rand() * _ShadowRandomness * 0.5f - rand() * _ShadowRandomness * 0.5f;
 		ptToLight = normalize(ptToLight);
 		
 		Ray rayToLight = CreateRay(hit.position + (ptToLight * 0.01f), ptToLight);
@@ -267,8 +270,8 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit)
 		    
 		        float offsetAmount = (1.0f / max(1, _ShadowQuality)); 
 		        
-                float3 sideOffset = sideDir * x * offsetAmount;
-                float3 upOffset = upDir * y * offsetAmount;
+                float3 sideOffset = sideDir * x * offsetAmount + rand() * _ShadowRandomness - rand() * _ShadowRandomness;
+                float3 upOffset = upDir * y * offsetAmount + rand() * _ShadowRandomness - rand() * _ShadowRandomness;
                 float3 offsetPt = lightPos + sideOffset + upOffset;
                 float3 ptToOffset = offsetPt - hit.position;
                 float distanceToLight = length(ptToOffset);
