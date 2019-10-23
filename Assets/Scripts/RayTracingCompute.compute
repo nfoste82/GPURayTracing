@@ -112,6 +112,7 @@ struct RayHit
     float distance;
     float smoothness;
     float opacity;
+    float distanceThroughOpacity;
     float refraction;
 };
 
@@ -148,6 +149,7 @@ void IntersectGroundPlane(Ray ray, inout RayHit bestHit)
         bestHit.obj_radius = 0.0f;
         bestHit.smoothness = 1.0f;
         bestHit.opacity = 1.0f;
+        bestHit.distanceThroughOpacity = 0.0f;
     }
 }
 
@@ -184,10 +186,10 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
         bestHit.distance = t;
         bestHit.smoothness = sphere.smoothness;
         bestHit.opacity = sphere.opacity;
+        bestHit.distanceThroughOpacity = 0.0f;
         bestHit.refraction = sphere.refraction;
     }
 }
-
 
 RayHit GetNearestIntersection(Ray ray)
 {
@@ -207,6 +209,40 @@ RayHit GetNearestIntersection(Ray ray)
 	}
 	
 	return bestHit;
+}
+
+float3 GetClosestPointOnLineSegment(float3 linePointStart, float3 linePointEnd, float3 testPoint)
+{
+    float3 lineDiff = linePointEnd - linePointStart;
+    float lineSegSqrLength = dot(lineDiff, lineDiff);
+ 
+    float3 lineToPoint = testPoint - linePointStart;
+    float dotProduct = dot(lineDiff, lineToPoint);
+
+    float percentageAlongLine = dotProduct / lineSegSqrLength;
+
+    if (percentageAlongLine < 0.0f || percentageAlongLine > 1.0f)
+    {
+        // Point isn't within the line segment
+        return float3(0.0f, 0.0f, 0.0f);
+    }
+
+    return linePointStart + (percentageAlongLine * (linePointEnd - linePointStart));
+}
+
+float3 Refract(float3 sourceDirection, float sourceRefraction, float targetRefraction, float3 targetNormal)
+{
+    float refraction = (targetRefraction - sourceRefraction) / MaxRefractionDiff;
+    float reflectAmount = refraction * MaxReflect;
+
+    // reflect amount
+    // ------------------
+    // 0 no refraction
+    // -2 (-90 degrees)
+    // 2 (90 degrees)
+    
+    reflectAmount = reflectAmount * dot(targetNormal, sourceDirection);
+    return normalize((reflectAmount * targetNormal) + sourceDirection);
 }
 
 float3 GetLightHittingPointHardShadow(Ray ray, RayHit hit)
@@ -299,7 +335,15 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit)
                 }
                 else if (bestHit.opacity < 1.0f)
                 {
-                    transparentColor.xyz += (lightColor * lightPercentageThatHits) * bestHit.color * (1 - bestHit.opacity);
+                    // Calculate distance through sphere
+                    float3 halfway = GetClosestPointOnLineSegment(bestHit.position, bestHit.position + (2.0f * bestHit.obj_radius * rayToLight.direction), bestHit.obj_position);
+                    float3 halfOffset = ((halfway - bestHit.position));                   
+                    
+                    bestHit.distanceThroughOpacity = length(halfOffset);
+        
+                    const float lightFocusAmount = max(0.9f, (bestHit.distanceThroughOpacity * (pow(bestHit.refraction, 3.5f) - 1.0f)) / bestHit.obj_radius);
+                
+                    transparentColor.xyz += (lightColor * lightPercentageThatHits) * bestHit.color * (1 - bestHit.opacity) * lightFocusAmount;
                     transparentColor.w += (1 - bestHit.opacity);
                 }
 		    }
@@ -323,40 +367,6 @@ float3 GetSkyboxColor(float3 direction)
     float theta = acos(direction.y) / -PI;
     float phi = atan2(direction.x, -direction.z) / -PI * 0.5f;
     return _SkyboxTexture.SampleLevel(sampler_SkyboxTexture, float2(phi, theta), 0).xyz;
-}
-
-float3 GetClosestPointOnLineSegment(float3 linePointStart, float3 linePointEnd, float3 testPoint)
-{
-    float3 lineDiff = linePointEnd - linePointStart;
-    float lineSegSqrLength = dot(lineDiff, lineDiff);
- 
-    float3 lineToPoint = testPoint - linePointStart;
-    float dotProduct = dot(lineDiff, lineToPoint);
-
-    float percentageAlongLine = dotProduct / lineSegSqrLength;
-
-    if (percentageAlongLine < 0.0f || percentageAlongLine > 1.0f)
-    {
-        // Point isn't within the line segment
-        return float3(0.0f, 0.0f, 0.0f);
-    }
-
-    return linePointStart + (percentageAlongLine * (linePointEnd - linePointStart));
-}
-
-float3 Refract(float3 sourceDirection, float sourceRefraction, float targetRefraction, float3 targetNormal)
-{
-    float refraction = (targetRefraction - sourceRefraction) / MaxRefractionDiff;
-    float reflectAmount = refraction * MaxReflect;
-
-    // reflect amount
-    // ------------------
-    // 0 no refraction
-    // -2 (-90 degrees)
-    // 2 (90 degrees)
-    
-    reflectAmount = reflectAmount * dot(targetNormal, sourceDirection);
-    return normalize((reflectAmount * targetNormal) + sourceDirection);
 }
 
 float3 GetTextureColorOnSphere(float3 position, float3 center, float radius)
@@ -510,8 +520,6 @@ float3 GetColorAtHitFourBounces(Ray ray, RayHit hit)
     // Randomize the hit normal somewhat based on roughness of the surface
     hit.normal = GetRandomizedNormalBasedOnAmount(hit.normal, hit.smoothness);
     
-    ray.color = GetLightHittingPoint(ray, hit) * hit.opacity;
-    
     // Second bounce
     Ray secondRay = CreateRay(hit.position + (hit.normal * 0.001f), reflect(ray.direction, hit.normal));
     // In a ray tracer that allowed recursion we would split the ray off here into two rays that would
@@ -527,13 +535,23 @@ float3 GetColorAtHitFourBounces(Ray ray, RayHit hit)
         
         // Calculate exit point/normal for sphere
         float3 halfway = GetClosestPointOnLineSegment(secondRay.origin, secondRay.origin + (2.0f * hit.obj_radius * secondRay.direction), hit.obj_position);
-        secondRay.origin += ((halfway - secondRay.origin) * 2.0f);
+        float3 offset = ((halfway - secondRay.origin) * 2.0f);
+        secondRay.origin += offset;
         float3 exitPointNormal = normalize(secondRay.origin - hit.obj_position);
+        
+        hit.distanceThroughOpacity = length(offset);
 
         // Now refract again since we've left the sphere
         secondRay.direction = Refract(secondRay.direction, hit.refraction, 1.0f, exitPointNormal);        
     }
-    RayHit secondHit = GetNearestIntersection(secondRay);       
+    RayHit secondHit = GetNearestIntersection(secondRay);    
+    
+    const float lightLostPerMeter = 5.8f;
+                
+    //float lightRemainingThroughRefraction = max(0, (1 - (hit.distanceThroughOpacity * lightLostPerMeter))); 
+    
+    // Now we finish the color hitting the point of the first ray, which can factor in the depth of any refraction that occurred
+    ray.color = GetLightHittingPoint(ray, hit) * hit.opacity;// * lightRemainingThroughRefraction;         
     
     if (secondHit.distance >= 1.#INF)
     {
@@ -550,9 +568,7 @@ float3 GetColorAtHitFourBounces(Ray ray, RayHit hit)
     //    float3 bumpColor = GetTextureColorOnSphere(secondHit.position, secondHit.obj_position, secondHit.obj_radius);
     //    secondHit.normal = ModifyNormalByBumpColor(secondHit.normal, bumpColor, (1 - secondHit.smoothness));
     //}     
-    secondHit.normal = GetRandomizedNormalBasedOnAmount(secondHit.normal, secondHit.smoothness);
-    
-    secondRay.color = GetLightHittingPointHardShadow(secondRay, secondHit) * secondHit.opacity;
+    secondHit.normal = GetRandomizedNormalBasedOnAmount(secondHit.normal, secondHit.smoothness);    
     
     // Third bounce        
     Ray thirdRay = CreateRay(secondHit.position + (secondHit.normal * 0.001f), reflect(secondRay.direction, secondHit.normal));
@@ -563,13 +579,18 @@ float3 GetColorAtHitFourBounces(Ray ray, RayHit hit)
         
         // Calculate exit point/normal for sphere
         float3 halfway = GetClosestPointOnLineSegment(thirdRay.origin, thirdRay.origin + (2.0f * secondHit.obj_radius * thirdRay.direction), secondHit.obj_position);
-        thirdRay.origin = ((halfway - thirdRay.origin) * 2.0f) + thirdRay.origin;
+        float3 offset = ((halfway - thirdRay.origin) * 2.0f);
+        thirdRay.origin += offset;        
         float3 exitPointNormal = normalize(thirdRay.origin - secondHit.obj_position);
 
+        secondHit.distanceThroughOpacity = length(offset);
+        
         // Now refract again since we've left the sphere
         thirdRay.direction = Refract(thirdRay.direction, secondHit.refraction, 1.0f, exitPointNormal);        
     }
-    RayHit thirdHit = GetNearestIntersection(thirdRay);       
+    RayHit thirdHit = GetNearestIntersection(thirdRay); 
+    
+    secondRay.color = GetLightHittingPointHardShadow(secondRay, secondHit) * secondHit.opacity;      
     
     if (thirdHit.distance >= 1.#INF)
     {
@@ -659,7 +680,7 @@ void CSMain (uint3 id : SV_DispatchThreadID)
         } 
         
         RayHit hit = GetNearestIntersection(ray);        
-        result += GetColorAtHitThreeBounces(ray, hit);
+        result += GetColorAtHitFourBounces(ray, hit);
     }
    
     Result[id.xy] = float4(result / _NumberOfPasses, 1);
