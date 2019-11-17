@@ -428,8 +428,6 @@ public class GameManager : MonoBehaviour
     private float GetNearestIntersectionDistance(Ray ray)
     {
         float nearestDistance = 10000.0f;
-            
-        Collider nearestCollider = null;
 
         foreach (var sphere in _spheres)
         {

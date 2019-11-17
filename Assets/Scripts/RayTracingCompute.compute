@@ -69,8 +69,8 @@ struct Ray
 {
     float3 origin;
     float3 direction;
-    float3 energy;
     float3 color;
+    float energy;
 };
 
 Ray CreateRay(float3 origin, float3 direction)
@@ -78,8 +78,8 @@ Ray CreateRay(float3 origin, float3 direction)
     Ray ray;
     ray.origin = origin;
     ray.direction = direction;
-    ray.energy = float3(1.0f, 1.0f, 1.0f);
     ray.color = float3(0.0f, 0.0f, 0.0f);
+    ray.energy = 1.0f;
     return ray;
 }
 
@@ -129,6 +129,7 @@ RayHit CreateRayHit()
     hit.smoothness = 0.0f;
     hit.opacity = 1.0f;
     hit.refraction = 1.0f;
+
     return hit;
 }
 // =======================================================
@@ -143,11 +144,11 @@ void IntersectGroundPlane(Ray ray, inout RayHit bestHit)
         bestHit.position = ray.origin + t * ray.direction;
         bestHit.normal = float3(0.0f, 1.0f, 0.0f);
         bestHit.color = float3(0.8f, 0.8f, 0.8f);
-        bestHit.smoothness = 0.2f;
+        bestHit.smoothness = 0.4f;
         bestHit.emission = float3(0.0f, 0.0f, 0.0f);
         bestHit.obj_position = float3(0.0f, 0.0f, 0.0f);
         bestHit.obj_radius = 0.0f;
-        bestHit.smoothness = 1.0f;
+        bestHit.smoothness = 0.93f;
         bestHit.opacity = 1.0f;
         bestHit.distanceThroughOpacity = 0.0f;
     }
@@ -341,7 +342,7 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit)
                     
                     bestHit.distanceThroughOpacity = length(halfOffset);
         
-                    const float lightFocusAmount = max(0.9f, (bestHit.distanceThroughOpacity * (pow(bestHit.refraction, 3.5f) - 1.0f)) / bestHit.obj_radius);
+                    const float lightFocusAmount = max(0.9f, bestHit.distanceThroughOpacity * 2.0f / bestHit.obj_radius);
                 
                     transparentColor.xyz += (lightColor * lightPercentageThatHits) * bestHit.color * (1 - bestHit.opacity) * lightFocusAmount;
                     transparentColor.w += (1 - bestHit.opacity);
@@ -409,12 +410,15 @@ float3 GetColorAtHitThreeBounces(Ray ray, RayHit hit)
     }
     
     // Randomize the hit normal somewhat based on roughness of the surface
-    hit.normal = GetRandomizedNormalBasedOnAmount(hit.normal, hit.smoothness);
-    
-    ray.color = GetLightHittingPoint(ray, hit) * hit.opacity;
+    hit.normal = GetRandomizedNormalBasedOnAmount(hit.normal, hit.smoothness);    
     
     // Second bounce
-    Ray secondRay = CreateRay(hit.position + (hit.normal * 0.001f), reflect(ray.direction, hit.normal));    
+    Ray secondRay = CreateRay(hit.position + (hit.normal * 0.001f), reflect(ray.direction, hit.normal));
+    
+    Ray secondRaySplit = CreateRay(hit.position + (hit.normal * 0.001f), reflect(ray.direction, hit.normal));
+    secondRaySplit.energy = 0.0f;
+    RayHit secondHitSplit = GetNearestIntersection(secondRaySplit);
+    
     // In a ray tracer that allowed recursion we would split the ray off here into two rays that would
     // both contribute to the same pixel on the screen. Unfortunately a realistic solution to that requires 
     // recursion (tree of ray results), and compute shaders don't support recursion. Without that
@@ -428,35 +432,55 @@ float3 GetColorAtHitThreeBounces(Ray ray, RayHit hit)
         
         // Calculate exit point/normal for sphere
         float3 halfway = GetClosestPointOnLineSegment(secondRay.origin, secondRay.origin + (2.0f * hit.obj_radius * secondRay.direction), hit.obj_position);
-        secondRay.origin += ((halfway - secondRay.origin) * 2.0f);
+        float3 offset = ((halfway - secondRay.origin) * 2.0f);
+        secondRay.origin += offset;
         float3 exitPointNormal = normalize(secondRay.origin - hit.obj_position);
+        
+        hit.distanceThroughOpacity = length(offset);
 
         // Now refract again since we've left the sphere
-        secondRay.direction = Refract(secondRay.direction, hit.refraction, 1.0f, exitPointNormal);        
+        secondRay.direction = Refract(secondRay.direction, hit.refraction, 1.0f, exitPointNormal);   
+        
+        // Ray that reflects off of transparent object loses some energy
+        secondRaySplit.energy = hit.opacity;
+        
+        // Ray that goes through transparent object loses some energy
+        secondRay.energy = 1.0f - hit.opacity;             
     }
-    RayHit secondHit = GetNearestIntersection(secondRay);       
+    
+    if (secondHitSplit.distance >= 1.#INF)
+    {
+        secondRaySplit.color = GetSkyboxColor(secondRaySplit.direction) * _SkyboxLight.xyz;
+    }
+    else if ((secondHitSplit.emission.x + secondHitSplit.emission.y + secondHitSplit.emission.z) > 0.0f)
+    {
+        secondRaySplit.color = secondHitSplit.emission;
+    }
+    else
+    {
+        secondRaySplit.color = GetLightHittingPoint(secondRaySplit, secondHitSplit) * secondHitSplit.color;
+    }
+       
+    RayHit secondHit = GetNearestIntersection(secondRay);    
+    
+    // Now we finish the color hitting the point of the first ray, which can factor in the depth of any refraction that occurred
+    ray.color = Combine(GetLightHittingPoint(ray, hit) * hit.opacity, secondRaySplit.color * secondRaySplit.energy);         
     
     if (secondHit.distance >= 1.#INF)
     {
-        return hit.color * Combine(ray.color, (GetSkyboxColor(secondRay.direction) * _SkyboxLight.xyz));
+        return hit.color * Combine(ray.color, (GetSkyboxColor(secondRay.direction) * _SkyboxLight.xyz * secondRay.energy));
     }
     
     if ((secondHit.emission.x + secondHit.emission.y + secondHit.emission.z) > 0.0f)
     {
-        return hit.color * Combine(ray.color, secondHit.emission);
+        return hit.color * Combine(ray.color, secondHit.emission * secondRay.energy);
     }   
-      
-    //if (secondHit.obj_radius > 0.0f)
-    //{  
-    //    float3 bumpColor = GetTextureColorOnSphere(secondHit.position, secondHit.obj_position, secondHit.obj_radius);
-    //    secondHit.normal = ModifyNormalByBumpColor(secondHit.normal, bumpColor, (1 - secondHit.smoothness));
-    //}     
-    secondHit.normal = GetRandomizedNormalBasedOnAmount(secondHit.normal, secondHit.smoothness);
-    
-    secondRay.color = GetLightHittingPointHardShadow(secondRay, secondHit) * secondHit.opacity;
+       
+    secondHit.normal = GetRandomizedNormalBasedOnAmount(secondHit.normal, secondHit.smoothness);    
     
     // Third bounce        
     Ray thirdRay = CreateRay(secondHit.position + (secondHit.normal * 0.001f), reflect(secondRay.direction, secondHit.normal));
+    thirdRay.energy = secondRay.energy;
     if (secondHit.opacity < 1.0f)
     {    
         // Get refraction direction after entering sphere
@@ -464,36 +488,36 @@ float3 GetColorAtHitThreeBounces(Ray ray, RayHit hit)
         
         // Calculate exit point/normal for sphere
         float3 halfway = GetClosestPointOnLineSegment(thirdRay.origin, thirdRay.origin + (2.0f * secondHit.obj_radius * thirdRay.direction), secondHit.obj_position);
-        thirdRay.origin = ((halfway - thirdRay.origin) * 2.0f) + thirdRay.origin;
+        float3 offset = ((halfway - thirdRay.origin) * 2.0f);
+        thirdRay.origin += offset;        
         float3 exitPointNormal = normalize(thirdRay.origin - secondHit.obj_position);
 
+        secondHit.distanceThroughOpacity = length(offset);
+        
         // Now refract again since we've left the sphere
         thirdRay.direction = Refract(thirdRay.direction, secondHit.refraction, 1.0f, exitPointNormal);        
     }
-    RayHit thirdHit = GetNearestIntersection(thirdRay);       
+    RayHit thirdHit = GetNearestIntersection(thirdRay); 
+    
+    secondRay.color = GetLightHittingPointHardShadow(secondRay, secondHit) * secondHit.opacity * secondRay.energy;      
     
     if (thirdHit.distance >= 1.#INF)
     {
-        float3 secondResult = secondHit.color * Combine(secondRay.color, (GetSkyboxColor(thirdRay.direction) * _SkyboxLight.xyz));
+        float3 secondResult = secondHit.color * Combine(secondRay.color * secondRay.energy, (GetSkyboxColor(thirdRay.direction) * _SkyboxLight.xyz * thirdRay.energy));
         return hit.color * Combine(ray.color, secondResult);
     }
     
     if ((thirdHit.emission.x + thirdHit.emission.y + thirdHit.emission.z) > 0.0f)
     {
-        float3 secondResult = secondHit.color * Combine(secondRay.color, thirdHit.emission);
+        float3 secondResult = secondHit.color * Combine(secondRay.color * secondRay.energy, thirdHit.emission * thirdRay.energy);
         return hit.color * Combine(ray.color, secondResult);
     }
     
-    //if (thirdHit.obj_radius > 0.0f)
-    //{  
-    //    float3 bumpColor = GetTextureColorOnSphere(thirdHit.position, thirdHit.obj_position, thirdHit.obj_radius);
-    //    thirdHit.normal = ModifyNormalByBumpColor(thirdHit.normal, bumpColor, (1 - thirdHit.smoothness));
-    //}
     thirdHit.normal = GetRandomizedNormalBasedOnAmount(thirdHit.normal, thirdHit.smoothness);
     
     thirdRay.color = GetLightHittingPointHardShadow(thirdRay, thirdHit) * thirdHit.opacity * GetSkyboxColor(thirdRay.direction) * _SkyboxLight.xyz;   
     
-    return hit.color * Combine(ray.color, secondHit.color * Combine(secondRay.color, thirdHit.color * thirdRay.color));     
+    return hit.color * Combine(ray.color, secondHit.color * Combine(secondRay.color * secondRay.energy, thirdHit.color * thirdRay.color * thirdRay.energy));     
 }
 
 float3 GetColorAtHitFourBounces(Ray ray, RayHit hit)
@@ -509,12 +533,6 @@ float3 GetColorAtHitFourBounces(Ray ray, RayHit hit)
     if ((hit.emission.x + hit.emission.y + hit.emission.z) > 0.0f)
     {
         return hit.emission;
-    }
-    
-    if (hit.obj_radius > 0.0f)
-    {  
-        float3 bumpColor = GetTextureColorOnSphere(hit.position, hit.obj_position, hit.obj_radius);
-        hit.normal = ModifyNormalByBumpColor(hit.normal, bumpColor, (1 - hit.smoothness));
     }
     
     // Randomize the hit normal somewhat based on roughness of the surface
@@ -546,10 +564,6 @@ float3 GetColorAtHitFourBounces(Ray ray, RayHit hit)
     }
     RayHit secondHit = GetNearestIntersection(secondRay);    
     
-    const float lightLostPerMeter = 5.8f;
-                
-    //float lightRemainingThroughRefraction = max(0, (1 - (hit.distanceThroughOpacity * lightLostPerMeter))); 
-    
     // Now we finish the color hitting the point of the first ray, which can factor in the depth of any refraction that occurred
     ray.color = GetLightHittingPoint(ray, hit) * hit.opacity;// * lightRemainingThroughRefraction;         
     
@@ -562,12 +576,7 @@ float3 GetColorAtHitFourBounces(Ray ray, RayHit hit)
     {
         return hit.color * Combine(ray.color, secondHit.emission);
     }   
-      
-    //if (secondHit.obj_radius > 0.0f)
-    //{  
-    //    float3 bumpColor = GetTextureColorOnSphere(secondHit.position, secondHit.obj_position, secondHit.obj_radius);
-    //    secondHit.normal = ModifyNormalByBumpColor(secondHit.normal, bumpColor, (1 - secondHit.smoothness));
-    //}     
+       
     secondHit.normal = GetRandomizedNormalBasedOnAmount(secondHit.normal, secondHit.smoothness);    
     
     // Third bounce        
@@ -604,11 +613,6 @@ float3 GetColorAtHitFourBounces(Ray ray, RayHit hit)
         return hit.color * Combine(ray.color, secondResult);
     }
     
-    //if (thirdHit.obj_radius > 0.0f)
-    //{  
-    //    float3 bumpColor = GetTextureColorOnSphere(thirdHit.position, thirdHit.obj_position, thirdHit.obj_radius);
-    //    thirdHit.normal = ModifyNormalByBumpColor(thirdHit.normal, bumpColor, (1 - thirdHit.smoothness));
-    //}
     thirdHit.normal = GetRandomizedNormalBasedOnAmount(thirdHit.normal, thirdHit.smoothness);
     
     thirdRay.color = GetLightHittingPointHardShadow(thirdRay, thirdHit) * thirdHit.opacity * GetSkyboxColor(thirdRay.direction) * _SkyboxLight.xyz;   
@@ -659,7 +663,7 @@ void CSMain (uint3 id : SV_DispatchThreadID)
     Result.GetDimensions(width, height);
 
     // Transform pixel to [-1,1] range
-    float2 uv = (id.xy / float2(width, height) * 2.0f - 1.0f);
+    float2 uv = (id.xy / float2(width, height) * 2.0f - 1.0f) + float2(1/(float)width * rand(), 1/(float)height * rand());
             
     float3 result = float3(0.0f, 0.0f, 0.0f);
     for (int i = 0; i < _NumberOfPasses; i++)
@@ -671,7 +675,7 @@ void CSMain (uint3 id : SV_DispatchThreadID)
         {
             float3 focalPoint = ray.origin + ray.direction * _FocalDistance;
             
-            float shiftAmount = 0.01;
+            float shiftAmount = 0.005f;
             ray.origin.x += rand() * shiftAmount - rand() * shiftAmount;
             ray.origin.y += rand() * shiftAmount - rand() * shiftAmount;
             ray.origin.z += rand() * shiftAmount - rand() * shiftAmount;
@@ -680,7 +684,7 @@ void CSMain (uint3 id : SV_DispatchThreadID)
         } 
         
         RayHit hit = GetNearestIntersection(ray);        
-        result += GetColorAtHitFourBounces(ray, hit);
+        result += GetColorAtHitThreeBounces(ray, hit);
     }
    
     Result[id.xy] = float4(result / _NumberOfPasses, 1);
