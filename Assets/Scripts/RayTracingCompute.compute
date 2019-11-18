@@ -459,10 +459,10 @@ float3 GetColorAtHit(Ray ray, RayHit hit)
         secondRay.direction = Refract(secondRay.direction, hit.refraction, 1.0f, exitPointNormal);   
         
         // Ray that reflects off of transparent object loses some energy
-        secondRaySplit.energy = hit.opacity;
+        secondRaySplit.energy = clamp(hit.opacity * 1.333f, 0, 1);
         
         // Ray that goes through transparent object loses some energy
-        secondRay.energy = 1.0f - hit.opacity;             
+        secondRay.energy = clamp((1.0f - hit.opacity) * 1.333f, 0, 1);             
     }
     
     if (secondHitSplit.distance >= 1.#INF)
