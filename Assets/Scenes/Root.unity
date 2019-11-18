@@ -94,8 +94,8 @@ LightmapSettings:
     m_PVRFilteringAtrousPositionSigmaDirect: 0.5
     m_PVRFilteringAtrousPositionSigmaIndirect: 2
     m_PVRFilteringAtrousPositionSigmaAO: 1
-    m_ShowResolutionOverlay: 1
     m_ExportTrainingData: 0
+    m_TrainingDataDestination: TrainingData
   m_LightingDataAsset: {fileID: 0}
   m_UseShadowmask: 1
 --- !u!196 &4
@@ -952,11 +952,12 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   shader: {fileID: 7200000, guid: adaed5b09d5374556b1cda0917c8f291, type: 3}
   renderTextureCamera: {fileID: 1029813413}
-  numberOfPasses: 1
-  shadowQuality: 2
-  numRayBounces: 2
-  shadowRandomness: 0.05
+  numberOfPasses: 2
+  shadowQuality: 1
+  shadowRandomness: 0.4
   cameraFocalDistance: 100
+  groundSmoothness: 0.98
+  cameraAutoFocus: 1
   randomNoise: 0
   _ambientLightColor: {r: 1, g: 0.9918116, b: 0.7877358, a: 0}
   _skyboxLightColor:

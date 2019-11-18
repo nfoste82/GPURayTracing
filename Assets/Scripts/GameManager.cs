@@ -15,19 +15,17 @@ public class GameManager : MonoBehaviour
     [Range(0, 5)]
     public int shadowQuality = 2;
 
-    [Range(0, 4)]
-    public int numRayBounces = 2;
-
-    [Range(0f, 0.2f)] 
-    public float shadowRandomness = 0.06f;
+    [Range(0f, 1.5f)] 
+    public float shadowRandomness = 0.3f;
 
     [Range(0.1f, 100f)] 
     public float cameraFocalDistance = 100f;
 
+    [Range(0.6f, 1.0f)]
+    public float groundSmoothness = 0.98f;
+
     private float previousFocalDistance = 100f;
     private float timeSincePreviousFocusDistance = 1f;
-
-    public float shiftAmount = 0.1f;
 
     public bool cameraAutoFocus = true;
     
@@ -489,10 +487,9 @@ public class GameManager : MonoBehaviour
 
         shader.SetInt("_NumberOfPasses", numberOfPasses);
         shader.SetInt("_ShadowQuality", shadowQuality);
-        shader.SetInt("_NumBounces", numRayBounces);
         shader.SetFloat("_ShadowRandomness", shadowRandomness);
         shader.SetFloat("_FocalDistance", cameraFocalDistance);
-        shader.SetFloat("_ShiftAmount", shiftAmount);
+        shader.SetFloat("_GroundSmoothness", groundSmoothness);
 
         SetComputeBuffer("_Spheres", _sphereBuffer, kernelHandle);
         SetComputeBuffer("_Lights", _lightBuffer, kernelHandle);
