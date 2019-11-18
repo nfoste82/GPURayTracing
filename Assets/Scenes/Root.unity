@@ -954,17 +954,18 @@ MonoBehaviour:
   renderTextureCamera: {fileID: 1029813413}
   numberOfPasses: 2
   shadowQuality: 1
-  shadowRandomness: 0.4
+  shadowRandomness: 0.8
+  cameraAutoFocus: 1
   cameraFocalDistance: 100
   groundSmoothness: 0.98
-  cameraAutoFocus: 1
   randomNoise: 0
   _ambientLightColor: {r: 1, g: 0.9918116, b: 0.7877358, a: 0}
   _skyboxLightColor:
     serializedVersion: 2
-    rgba: 4280756021
+    rgba: 4282006091
   skyboxTexture: {fileID: 2800000, guid: 498101212922c43cb9800ac08f1737bd, type: 3}
   checkerboardTexture: {fileID: 2800000, guid: 9b4cb99bb158f4b35b00452727466a77, type: 3}
+  _singleFrame: 0
 --- !u!20 &1029813413
 Camera:
   m_ObjectHideFlags: 0

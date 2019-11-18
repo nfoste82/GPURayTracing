@@ -9,6 +9,7 @@ public class GameManager : MonoBehaviour
     public ComputeShader shader;
     public Camera renderTextureCamera;
     
+    [Header("Quality settings (Higher quality -> Slower)")]
     [Range(1, 32)]
     public int numberOfPasses = 1;
 
@@ -18,7 +19,10 @@ public class GameManager : MonoBehaviour
     [Range(0f, 1.5f)] 
     public float shadowRandomness = 0.3f;
 
-    [Range(0.1f, 100f)] 
+    [Header("Misc settings")]
+    public bool cameraAutoFocus = true;
+    
+    [Range(0.1f, 100f)]
     public float cameraFocalDistance = 100f;
 
     [Range(0.6f, 1.0f)]
@@ -27,8 +31,6 @@ public class GameManager : MonoBehaviour
     private float previousFocalDistance = 100f;
     private float timeSincePreviousFocusDistance = 1f;
 
-    public bool cameraAutoFocus = true;
-    
     public bool randomNoise = false;
     
     public Color _ambientLightColor;
@@ -50,6 +52,11 @@ public class GameManager : MonoBehaviour
     private List<Sphere> _lights;
     private List<GameObject> _lightObjects;
     private ComputeBuffer _lightBuffer;
+
+    [Header("Render single frame")] 
+    public bool _singleFrame = false;
+
+    private bool _running = true;
     
     private static bool _meshObjectsNeedRebuilding = false;
     private static readonly List<RayTracingObject> _rayTracingObjects = new List<RayTracingObject>();
@@ -128,8 +135,43 @@ public class GameManager : MonoBehaviour
     private void Update()
     {
         HandleInputForCamera(renderTextureCamera);
+
+        if (Input.GetKeyDown(KeyCode.T))
+        {
+            _singleFrame = !_singleFrame;
+            if (!_singleFrame)
+            {
+                _running = true;
+                EnableRealtimeSettings();
+            }
+            else
+            {
+                _running = false;
+                EnableSingleFrameSettings();
+            }
+        }
+
+        if (Input.GetKeyDown(KeyCode.Space))
+        {
+            _running = true;
+            EnableRealtimeSettings();
+        }
     }
 
+    private void EnableSingleFrameSettings()
+    {
+        QualitySettings.vSyncCount = 0;
+        Application.targetFrameRate = 10;
+        Time.timeScale = 0.0f;
+    }
+
+    private void EnableRealtimeSettings()
+    {
+        QualitySettings.vSyncCount = 2;
+        Application.targetFrameRate = 60;
+        Time.timeScale = 1.0f;
+    }
+    
     private void HandleInputForCamera(Camera camera)
     {
         if (Input.GetKey(KeyCode.W))
@@ -185,39 +227,51 @@ public class GameManager : MonoBehaviour
     
     private void OnRenderImage(RenderTexture src, RenderTexture dest)
     {
-        var autoFocusDistance = (cameraAutoFocus) ? GetNearestIntersectionDistance(new Ray(renderTextureCamera.transform.position, renderTextureCamera.transform.forward)) : cameraFocalDistance;
-
-        if (cameraAutoFocus && autoFocusDistance < 1.0f)
+        if (_running)
         {
-            var modifier = Mathf.Lerp(1.75f, 1.0f, autoFocusDistance);
-            autoFocusDistance *= modifier;
+            var autoFocusDistance = (cameraAutoFocus)
+                ? GetNearestIntersectionDistanceForAutoFocus(new Ray(renderTextureCamera.transform.position,
+                    renderTextureCamera.transform.forward))
+                : cameraFocalDistance;
 
-            autoFocusDistance = Mathf.Max(autoFocusDistance, 0.1f);
-            float targetFocusDistance = autoFocusDistance;
-
-            autoFocusDistance = Mathf.Lerp(previousFocalDistance, autoFocusDistance,
-                Mathf.SmoothStep(0.0f, 1.0f, timeSincePreviousFocusDistance));
-
-            if (Mathf.Abs(autoFocusDistance - targetFocusDistance) < 0.05f)
+            if (cameraAutoFocus && autoFocusDistance < 1.0f)
             {
-                previousFocalDistance = autoFocusDistance;
-                timeSincePreviousFocusDistance = 0.0f;
+                var modifier = Mathf.Lerp(1.75f, 1.0f, autoFocusDistance);
+                autoFocusDistance *= modifier;
+
+                autoFocusDistance = Mathf.Max(autoFocusDistance, 0.1f);
+                float targetFocusDistance = autoFocusDistance;
+
+                autoFocusDistance = Mathf.Lerp(previousFocalDistance, autoFocusDistance,
+                    Mathf.SmoothStep(0.0f, 1.0f, timeSincePreviousFocusDistance));
+
+                if (Mathf.Abs(autoFocusDistance - targetFocusDistance) < 0.05f)
+                {
+                    previousFocalDistance = autoFocusDistance;
+                    timeSincePreviousFocusDistance = 0.0f;
+                }
+                else
+                {
+                    timeSincePreviousFocusDistance += Time.deltaTime;
+                }
             }
-            else
+
+            cameraFocalDistance = autoFocusDistance;
+
+            UpdateSpheres();
+
+            var kernelHandle = shader.FindKernel("CSMain");
+
+            SetShaderParameters(kernelHandle);
+            UpdateTextureFromCompute(kernelHandle);
+            
+            if (_singleFrame)
             {
-                timeSincePreviousFocusDistance += Time.deltaTime;
+                _running = false;
+                EnableSingleFrameSettings();
             }
         }
-        
-        cameraFocalDistance = autoFocusDistance;
-        
-        UpdateSpheres();
-        
-        var kernelHandle = shader.FindKernel("CSMain");
-        
-        SetShaderParameters(kernelHandle);
-        UpdateTextureFromCompute(kernelHandle);
-        
+
         renderTextureCamera.targetTexture = null;
         Graphics.Blit(_outputTexture, null as RenderTexture);
     }
@@ -423,9 +477,13 @@ public class GameManager : MonoBehaviour
         }
     }
     
-    private float GetNearestIntersectionDistance(Ray ray)
+    private float GetNearestIntersectionDistanceForAutoFocus(Ray ray)
     {
-        float nearestDistance = 10000.0f;
+        // This is a distance that allows things in the mid-distance to still get sub-pixel jitter, which
+        // allows better anti-aliasing. Beyond this distance the focus changes are even more of a sub-pixel
+        // and barely noticeable. We increase the jitter a bit if there is more super-sampling (passes) to get
+        // more anti-aliasing.
+        float nearestDistance = 12 - Math.Min(8.0f, numberOfPasses * 1.75f);
 
         foreach (var sphere in _spheres)
         {
