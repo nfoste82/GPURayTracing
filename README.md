@@ -1,4 +1,4 @@
-# Realtime Ray Tracing
+# Realtime Path Tracing
 Realtime 3D raytracer running in a GPU compute shader.
 
 Features:
