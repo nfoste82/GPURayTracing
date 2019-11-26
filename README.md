@@ -10,6 +10,10 @@ Features:
 * Depth of field with auto-focusing
 * Multiple ray bounces
 
+Features missing (possibly added later):
+* Indirect lighting (Global illumination)
+* Caustics
+
 There are multiple quality settings on the GameManager object in the root scene. At normal settings you should be able to easily sustain 60+ frames per second. At the highest settings you'll end up with frames taking one or more seconds to render.
 
 ![Depth of field, soft shadows, surface reflections](https://imgur.com/ZR4qbcz.jpg)
