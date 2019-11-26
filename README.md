@@ -6,7 +6,7 @@ Features:
 * Diffuse and ambient lighting
 * Transparency and light refraction
 * Hard and soft shadows
-* Transparent objects created colored shadows
+* Transparent objects create colored shadows
 * Depth of field with auto-focusing
 * Multiple ray bounces
 
