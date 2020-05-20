@@ -1,16 +1,21 @@
 using UnityEngine;
 
-[RequireComponent(typeof(MeshRenderer))]
-[RequireComponent(typeof(MeshFilter))]
+// [RequireComponent(typeof(MeshRenderer))]
+// [RequireComponent(typeof(MeshFilter))]
+[RequireComponent(typeof(SphereCollider))]
 public class RayTracingObject : MonoBehaviour
 {
     private void OnEnable()
     {
-        GameManager.RegisterObject(this);
+        GetComponentInParent<GameManager>().RegisterObject(this);
     }
 
     private void OnDisable()
     {
-        GameManager.UnregisterObject(this);
+        var gameManager = GetComponentInParent<GameManager>();
+        if (gameManager != null)
+        {
+            gameManager.UnregisterObject(this);
+        }
     }
 }

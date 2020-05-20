@@ -45,20 +45,20 @@ public class GameManager : MonoBehaviour
     private RenderTexture _outputTexture;
     private Vector2Int _textureSize;
     
-    private List<Sphere> _spheres;
-    private List<GameObject> _sphereObjects;
+    private List<Sphere> _spheres = new List<Sphere>();
+    private List<GameObject> _sphereObjects = new List<GameObject>();
     private ComputeBuffer _sphereBuffer;
 
-    private List<Sphere> _lights;
-    private List<GameObject> _lightObjects;
+    private List<Sphere> _lights = new List<Sphere>();
+    private List<GameObject> _lightObjects = new List<GameObject>();
     private ComputeBuffer _lightBuffer;
-
+    
     [Header("Render single frame")] 
     public bool _singleFrame = false;
 
     private bool _running = true;
     
-    private static bool _meshObjectsNeedRebuilding = false;
+    private static bool _buffersNeedRebuilding = false;
     private static readonly List<RayTracingObject> _rayTracingObjects = new List<RayTracingObject>();
     private static readonly List<MeshObject> _meshObjects = new List<MeshObject>();
     private static readonly List<Vector3> _vertices = new List<Vector3>();
@@ -128,12 +128,15 @@ public class GameManager : MonoBehaviour
             filterMode = FilterMode.Point
         };
         _outputTexture.Create();
-        
-        SetupSpheres();
     }
 
     private void Update()
     {
+        if (_buffersNeedRebuilding)
+        {
+            RebuildBuffers();
+        }
+        
         HandleInputForCamera(renderTextureCamera);
 
         if (Input.GetKeyDown(KeyCode.T))
@@ -272,81 +275,7 @@ public class GameManager : MonoBehaviour
             }
         }
 
-        renderTextureCamera.targetTexture = null;
-        Graphics.Blit(_outputTexture, null as RenderTexture);
-    }
-
-    private void SetupSpheres()
-    {
-        _spheres = new List<Sphere>();
-        _sphereObjects = new List<GameObject>();
-        
-        _lights = new List<Sphere>();
-        _lightObjects = new List<GameObject>();
-
-        var sphereTransforms = GameObject.Find("Spheres").GetComponentsInChildren<Transform>();
-
-        foreach (var sphereObj in sphereTransforms)
-        {
-            var material = sphereObj.GetComponent<RayMaterial>();
-
-            if (material == null)
-            {
-                continue;
-            }
-            
-            var sphere = new Sphere
-            {
-                position = sphereObj.transform.position,
-                color = material.Color.ToVector3(),
-                smoothness = material.Smoothness,
-                radius = sphereObj.GetComponent<SphereCollider>().radius,
-                opacity = material.Opacity,
-                refraction = material.RefractionIndex,
-            };
-            _spheres.Add(sphere);
-            _sphereObjects.Add(sphereObj.gameObject);
-        }
-
-        var lightTransforms = GameObject.Find("Lights").GetComponentsInChildren<Transform>();
-
-        foreach (var lightObj in lightTransforms)
-        {
-            var light = lightObj.GetComponent<RayLight>();
-
-            if (light == null)
-            {
-                continue;
-            }
-            
-            var sphere = new Sphere
-            {
-                position = lightObj.transform.position,
-                radius = lightObj.GetComponent<SphereCollider>().radius,
-                emission = light.Color.ToVector3()
-            };
-            _lights.Add(sphere);
-            _lightObjects.Add(lightObj.gameObject);
-        }
-
-        _sphereBuffer?.Release();
-        _lightBuffer?.Release();
-
-        if (_spheres.Count > 0)
-        {
-            shader.SetInt("_NumSpheres", _spheres.Count);
-            
-            _sphereBuffer = new ComputeBuffer(_spheres.Count, 52);
-            _sphereBuffer.SetData(_spheres);
-        }
-
-        if (_lights.Count > 0)
-        {
-            shader.SetInt("_NumLights", _lights.Count);
-            
-            _lightBuffer = new ComputeBuffer(_lights.Count, 52);
-            _lightBuffer.SetData(_lights);
-        }
+        Graphics.Blit(_outputTexture, dest);
     }
 
     private void UpdateSpheres()
@@ -386,15 +315,71 @@ public class GameManager : MonoBehaviour
         _lightBuffer.SetData(_lights);
     }
 
-    public static void RegisterObject(RayTracingObject obj)
+    public void RebuildBuffers()
+    {
+        _sphereBuffer?.Release();
+        _lightBuffer?.Release();
+
+        if (_spheres.Count > 0)
+        {
+            shader.SetInt("_NumSpheres", _spheres.Count);
+            
+            _sphereBuffer = new ComputeBuffer(_spheres.Count, 52);
+            _sphereBuffer.SetData(_spheres);
+        }
+
+        if (_lights.Count > 0)
+        {
+            shader.SetInt("_NumLights", _lights.Count);
+            
+            _lightBuffer = new ComputeBuffer(_lights.Count, 52);
+            _lightBuffer.SetData(_lights);
+        }
+    }
+
+    public void RegisterObject(RayTracingObject obj)
     {
         _rayTracingObjects.Add(obj);
-        //_meshObjectsNeedRebuilding = true;
+        _buffersNeedRebuilding = true;
+
+        var material = obj.GetComponent<RayMaterial>();
+
+        if (material != null)
+        {
+            var sphere = new Sphere
+            {
+                position = obj.transform.position,
+                color = material.Color.ToVector3(),
+                smoothness = material.Smoothness,
+                radius = obj.GetComponent<SphereCollider>().radius,
+                opacity = material.Opacity,
+                refraction = material.RefractionIndex,
+            };
+            _spheres.Add(sphere);
+            _sphereObjects.Add(obj.gameObject);
+        }
+        else
+        {
+            var rayLight = obj.GetComponent<RayLight>();
+            
+            var sphere = new Sphere
+            {
+                position = obj.transform.position,
+                radius = obj.GetComponent<SphereCollider>().radius,
+                emission = rayLight.Color.ToVector3()
+            };
+            _lights.Add(sphere);
+            _lightObjects.Add(obj.gameObject);
+        }
     }
-    public static void UnregisterObject(RayTracingObject obj)
+    
+    public void UnregisterObject(RayTracingObject obj)
     {
         _rayTracingObjects.Remove(obj);
-        //_meshObjectsNeedRebuilding = true;
+        _buffersNeedRebuilding = true;
+        
+        // TODO: Implement me (need a mapping of GameObject -> Sphere/Light)
+        
     }
 
 //    private void RebuildMeshObjectBuffers()
