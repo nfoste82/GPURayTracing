@@ -1,5 +1,5 @@
 # Realtime Path Tracing
-Realtime 3D raytracer running in a GPU compute shader.
+Realtime 3D raytracer running in a GPU compute shader in Unity.
 
 Features:
 * Surface reflections
