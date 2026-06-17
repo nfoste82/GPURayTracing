@@ -287,138 +287,115 @@ float3 Refract(float3 sourceDirection, float sourceRefraction, float targetRefra
     return normalize((reflectAmount * targetNormal) + sourceDirection);
 }
 
-float3 GetLightHittingPointHardShadow(Ray ray, RayHit hit, inout uint rngState)
+void CreateBasisFromNormal(float3 normal, out float3 tangent, out float3 bitangent)
 {
-    float3 combinedLightColor = float3(0.0f, 0.0f, 0.0f);
-
-    int i;
-	for (i = 0; i < _NumLights; i++)
-	{
-        float3 transparentColor = float3(0.0f, 0.0f, 0.0f);	
-	
-	    float3 lightTotal = float3(0.0f, 0.0f, 0.0f);
-	    float3 lightPos = _Lights[i].position;
-		float3 ptToLight = lightPos - hit.position;
-		ptToLight = normalize(ptToLight);
-		
-		float3 sideDir = cross(float3(0.0f, 1.0f, 0.0f), ptToLight) * _Lights[i].radius;
-		float3 upDir = cross(sideDir, ptToLight) * _Lights[i].radius;
-		
-        RayHit bestHit = CreateRayHit();
-        
-        float3 sideOffset = sideDir * ((rand(rngState) * _ShadowRandomness) - (rand(rngState) * _ShadowRandomness));
-        float3 upOffset = upDir * ((rand(rngState) * _ShadowRandomness) - (rand(rngState) * _ShadowRandomness));
-        float3 offsetPt = lightPos + sideOffset + upOffset;
-        float3 ptToOffset = offsetPt - hit.position;
-        float distanceToLight = length(ptToOffset);
-        ptToOffset = normalize(ptToOffset);
-        Ray rayToLight = CreateRay(hit.position + (hit.normal * 0.001f), ptToOffset);  
-        
-        int j;
-        for (j = 0; j < _NumSpheres; j++)
-        {	       
-            IntersectSphere(rayToLight, bestHit, _Spheres[j]);	    
-        }
-        
-        float3 lightColor = _Lights[i].emission;
-        float lightStrength = clamp(1.0f / (log2(max(1.0f, distanceToLight)) * 0.5f), 0, 1);                
-        float rayNormalDot = saturate(dot(ptToOffset, hit.normal));
-        float lightPercentageThatHits = rayNormalDot * lightStrength;
-        
-        if (bestHit.distance > distanceToLight)
-        {    
-            lightTotal += lightColor * lightPercentageThatHits;
-        }
-        else if (bestHit.opacity < 1.0f)
-        {
-            // Calculate distance through sphere
-            float3 halfway = GetClosestPointOnLineSegment(bestHit.position, bestHit.position + (2.0f * bestHit.obj_radius * rayToLight.direction), bestHit.obj_position);
-            float3 halfOffset = ((halfway - bestHit.position));                   
-            
-            bestHit.distanceThroughOpacity = length(halfOffset);
-
-            const float lightFocusAmount = max(0.9f, bestHit.distanceThroughOpacity * 2.0f / bestHit.obj_radius);
-        
-            transparentColor.xyz += (lightColor * lightPercentageThatHits) * bestHit.color * (1 - bestHit.opacity) * lightFocusAmount;
-        }
-		
-        combinedLightColor += lightTotal + transparentColor.xyz;
-    }
-	
-	return combinedLightColor;
+    float3 helper = abs(normal.y) < 0.999f ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f);
+    tangent = normalize(cross(helper, normal));
+    bitangent = cross(normal, tangent);
 }
 
-float3 GetLightHittingPoint(Ray ray, RayHit hit, inout uint rngState)
+float2 SampleDisk(inout uint rngState)
+{
+    float radius = sqrt(rand(rngState));
+    float angle = 2.0f * PI * rand(rngState);
+    return float2(cos(angle), sin(angle)) * radius;
+}
+
+float GetDirectLightFalloff(float distanceToLight, float lightRadius)
+{
+    float areaScale = max(1.0f, lightRadius * lightRadius);
+    float distanceScale = max(1.0f, distanceToLight * distanceToLight * 0.08f);
+    return saturate(areaScale / distanceScale);
+}
+
+float3 GetShadowTransmittance(Ray rayToLight, float distanceToLight)
+{
+    RayHit nearestTransparentHit = CreateRayHit();
+    nearestTransparentHit.distance = distanceToLight;
+
+    int j;
+    for (j = 0; j < _NumSpheres; j++)
+    {
+        RayHit blockerHit = CreateRayHit();
+        blockerHit.distance = distanceToLight;
+        IntersectSphere(rayToLight, blockerHit, _Spheres[j]);
+
+        if (blockerHit.distance >= distanceToLight)
+        {
+            continue;
+        }
+
+        if (blockerHit.opacity >= 1.0f)
+        {
+            return float3(0.0f, 0.0f, 0.0f);
+        }
+
+        if (blockerHit.distance < nearestTransparentHit.distance)
+        {
+            nearestTransparentHit = blockerHit;
+        }
+    }
+
+    if (nearestTransparentHit.distance >= distanceToLight)
+    {
+        return float3(1.0f, 1.0f, 1.0f);
+    }
+
+    float3 halfway = GetClosestPointOnLineSegment(
+        nearestTransparentHit.position,
+        nearestTransparentHit.position + (2.0f * nearestTransparentHit.obj_radius * rayToLight.direction),
+        nearestTransparentHit.obj_position);
+    float distanceThroughOpacity = length(halfway - nearestTransparentHit.position);
+    float lightFocusAmount = max(0.9f, distanceThroughOpacity * 2.0f / nearestTransparentHit.obj_radius);
+
+    return nearestTransparentHit.color * (1.0f - nearestTransparentHit.opacity) * lightFocusAmount;
+}
+
+float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight, inout uint rngState)
 {
     float3 combinedLightColor = float3(0.0f, 0.0f, 0.0f);
+    int sampleCount = max(1, samplesPerLight);
 
     int i;
-	for (i = 0; i < _NumLights; i++)
-	{
-        float3 transparentColor = float3(0.0f, 0.0f, 0.0f);	
-	
-	    float3 lightTotal = float3(0.0f, 0.0f, 0.0f);
-	    float3 lightPos = _Lights[i].position;
-		float3 ptToLight = lightPos - hit.position;
-		ptToLight = normalize(ptToLight);
-		
-		float3 sideDir = cross(float3(0.0f, 1.0f, 0.0f), ptToLight) * _Lights[i].radius;
-		float3 upDir = cross(sideDir, ptToLight) * _Lights[i].radius;
-		
-		int x;
-		int y;
-		for (x = -_ShadowQuality; x <= _ShadowQuality; x++)
-		{
-		    for (y = -_ShadowQuality; y <= _ShadowQuality; y++)
-		    {
-		        RayHit bestHit = CreateRayHit();
-		    
-		        float offsetAmount = (1.0f / max(1, _ShadowQuality)); 
-		        
-                float3 sideOffset = sideDir * (x + (offsetAmount + rand(rngState) * _ShadowRandomness - rand(rngState) * _ShadowRandomness));
-                float3 upOffset = upDir * (y + (offsetAmount + rand(rngState) * _ShadowRandomness - rand(rngState) * _ShadowRandomness));
-                float3 offsetPt = lightPos + sideOffset + upOffset;
-                float3 ptToOffset = offsetPt - hit.position;
-                float distanceToLight = length(ptToOffset);
-                ptToOffset = normalize(ptToOffset);
-                Ray rayToLight = CreateRay(hit.position + (hit.normal * 0.001f), ptToOffset);  
-                
-                int j;
-                for (j = 0; j < _NumSpheres; j++)
-                {	       
-                    IntersectSphere(rayToLight, bestHit, _Spheres[j]);	    
-                }
-                
-                float3 lightColor = _Lights[i].emission;
-                float lightStrength = clamp(1.0f / (log2(max(1.0f, distanceToLight)) * 0.5f), 0, 1);                
-                float rayNormalDot = saturate(dot(ptToOffset, hit.normal));
-                float lightPercentageThatHits = rayNormalDot * lightStrength;
-                
-                if (bestHit.distance > distanceToLight)
-                {    
-                    lightTotal += lightColor * lightPercentageThatHits;
-                }
-                else if (bestHit.opacity < 1.0f)
-                {
-                    // Calculate distance through sphere
-                    float3 halfway = GetClosestPointOnLineSegment(bestHit.position, bestHit.position + (2.0f * bestHit.obj_radius * rayToLight.direction), bestHit.obj_position);
-                    float3 halfOffset = ((halfway - bestHit.position));                   
-                    
-                    bestHit.distanceThroughOpacity = length(halfOffset);
-        
-                    const float lightFocusAmount = max(0.9f, bestHit.distanceThroughOpacity * 2.0f / bestHit.obj_radius);
-                
-                    transparentColor.xyz += (lightColor * lightPercentageThatHits) * bestHit.color * (1 - bestHit.opacity) * lightFocusAmount;
-                }
-		    }
-		}
-		
-		uint numLightSamples = pow((_ShadowQuality + _ShadowQuality + 1), 2);
-		float inverseNumLightSamples = min(1.0f, (1.0f / numLightSamples)); 
-        combinedLightColor += (lightTotal + transparentColor.xyz) * inverseNumLightSamples;
+    for (i = 0; i < _NumLights; i++)
+    {
+        float3 lightTotal = float3(0.0f, 0.0f, 0.0f);
+        float3 lightPos = _Lights[i].position;
+        float3 ptToLight = normalize(lightPos - hit.position);
+        float3 tangent;
+        float3 bitangent;
+        CreateBasisFromNormal(ptToLight, tangent, bitangent);
+
+        int sampleIndex;
+        for (sampleIndex = 0; sampleIndex < sampleCount; sampleIndex++)
+        {
+            float2 diskSample = SampleDisk(rngState) * _Lights[i].radius * max(0.0f, _ShadowRandomness);
+            float3 offsetPt = lightPos + tangent * diskSample.x + bitangent * diskSample.y;
+            float3 ptToOffset = offsetPt - hit.position;
+            float distanceToLight = length(ptToOffset);
+            ptToOffset = normalize(ptToOffset);
+            Ray rayToLight = CreateRay(hit.position + (hit.normal * 0.001f), ptToOffset);
+
+            float rayNormalDot = saturate(dot(ptToOffset, hit.normal));
+            if (rayNormalDot <= 0.0f)
+            {
+                continue;
+            }
+
+            float3 shadowTransmittance = GetShadowTransmittance(rayToLight, distanceToLight);
+            if (max(shadowTransmittance.x, max(shadowTransmittance.y, shadowTransmittance.z)) <= 0.001f)
+            {
+                continue;
+            }
+
+            float lightStrength = GetDirectLightFalloff(distanceToLight, _Lights[i].radius);
+            lightTotal += _Lights[i].emission * rayNormalDot * lightStrength * shadowTransmittance;
+        }
+
+        combinedLightColor += lightTotal / sampleCount;
     }
-	
-	return combinedLightColor;
+
+    return combinedLightColor;
 }
 
 float3 GetSkyboxColor(float3 direction)
@@ -509,17 +486,13 @@ float GetFresnelReflectance(Ray ray, RayHit hit)
 
 float3 GetDiffuseScatterDirection(float3 normal, inout uint rngState)
 {
-    float3 randomDirection = normalize(float3(
-        rand(rngState) * 2.0f - 1.0f,
-        rand(rngState) * 2.0f - 1.0f,
-        rand(rngState) * 2.0f - 1.0f));
+    float2 diskSample = SampleDisk(rngState);
+    float z = sqrt(max(0.0f, 1.0f - dot(diskSample, diskSample)));
+    float3 tangent;
+    float3 bitangent;
+    CreateBasisFromNormal(normal, tangent, bitangent);
 
-    if (dot(randomDirection, normal) < 0.0f)
-    {
-        randomDirection = -randomDirection;
-    }
-
-    return normalize(normal + randomDirection);
+    return normalize(tangent * diskSample.x + bitangent * diskSample.y + normal * z);
 }
 
 bool HasPathEnergy(float3 throughput)
@@ -570,7 +543,25 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
 
 float3 GetDirectLight(Ray ray, RayHit hit, bool softShadows, inout uint rngState)
 {
-    return softShadows ? GetLightHittingPoint(ray, hit, rngState) : GetLightHittingPointHardShadow(ray, hit, rngState);
+    int samplesPerLight = softShadows ? max(1, _ShadowQuality + 1) : 1;
+    return GetLightHittingPoint(ray, hit, samplesPerLight, rngState);
+}
+
+bool ApplyRussianRoulette(inout float3 throughput, int bounce, inout uint rngState)
+{
+    if (bounce < 2)
+    {
+        return true;
+    }
+
+    float survivalProbability = clamp(max(throughput.x, max(throughput.y, throughput.z)), 0.05f, 0.95f);
+    if (rand(rngState) > survivalProbability)
+    {
+        return false;
+    }
+
+    throughput /= survivalProbability;
+    return true;
 }
 
 float3 TracePath(Ray ray, inout uint rngState)
@@ -610,6 +601,11 @@ float3 TracePath(Ray ray, inout uint rngState)
         throughput *= scatter.attenuation;
 
         if (!HasPathEnergy(throughput))
+        {
+            break;
+        }
+
+        if (!ApplyRussianRoulette(throughput, bounce, rngState))
         {
             break;
         }
@@ -677,6 +673,11 @@ float3 GetDebugRenderColor(Ray ray, inout uint rngState)
             completedBounces++;
 
             if (!HasPathEnergy(throughput))
+            {
+                break;
+            }
+
+            if (!ApplyRussianRoulette(throughput, bounce, rngState))
             {
                 break;
             }

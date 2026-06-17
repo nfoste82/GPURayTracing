@@ -24,7 +24,7 @@ In the shader, material color is retrieved through `GetAlbedo(hit)`. Diffuse and
 
 Material behavior:
 
-- `Diffuse`: direct lighting at the first hit, with randomized hemisphere scattering for later bounces.
+- `Diffuse`: direct lighting with cosine-weighted hemisphere scattering for later bounces.
 - `Metal`: reflective scattering, with `Smoothness` controlling roughness.
 - `Glass`: Schlick Fresnel weights approximate sphere refraction/transmission.
 
@@ -38,7 +38,7 @@ Fields:
 
 Light objects are stored in `_Lights`, using the same `Sphere` data layout as regular spheres. When a camera/path ray directly hits a light sphere, `TracePath()` adds its emission and terminates the path.
 
-Direct lighting also samples `_Lights` explicitly in `GetLightHittingPoint()` and `GetLightHittingPointHardShadow()`. Sampled light contributions are accumulated additively.
+Direct lighting also samples `_Lights` explicitly in `GetLightHittingPoint()`. Bounce 0 uses multiple stochastic area-light samples per light, while later bounces use one sample per light. Sampled light contributions are accumulated additively.
 
 ## Ground Plane
 

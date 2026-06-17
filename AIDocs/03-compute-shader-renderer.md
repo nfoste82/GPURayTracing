@@ -15,8 +15,8 @@ Important shader globals:
 - `_NumberOfPasses`: per-frame samples per pixel.
 - `_NumBounces`: maximum bounces for `TracePath()`.
 - `_DebugRenderMode`: selects final path-traced color or a debug visualization.
-- `_ShadowQuality`: soft-shadow grid radius. Total samples per light are `(2 * _ShadowQuality + 1)^2`.
-- `_ShadowRandomness`: jitter amount for soft shadow samples.
+- `_ShadowQuality`: soft-shadow sample budget control. Bounce-0 direct lighting takes `max(1, _ShadowQuality + 1)` stochastic area-light samples per light.
+- `_ShadowRandomness`: area-light sampling radius multiplier for soft shadow samples.
 - `_FocalDistance`: depth-of-field focal distance.
 - `_GroundSmoothness`: smoothness for the implicit ground plane.
 - `_Seed`: integer seed used to initialize per-pixel/per-pass shader RNG state.
@@ -80,13 +80,13 @@ There is no acceleration structure. Every ray is `O(numSpheres + numLights)`.
 
 Direct lighting comes from emissive sphere lights.
 
-`GetLightHittingPoint()` computes soft shadows by sampling a grid of points around each light sphere. Shadow rays test blockers only against `_Spheres`, not `_Lights`.
+`GetLightHittingPoint()` computes direct lighting by taking stochastic disk samples across each emissive sphere light. Bounce 0 uses `max(1, _ShadowQuality + 1)` samples per light, while later bounces use one sample per light to reduce cost.
 
-`GetLightHittingPointHardShadow()` takes one jittered sample per light and is used for later bounces to reduce cost.
+Shadow rays test blockers only against `_Spheres`, not `_Lights`. Opaque blockers early-out immediately, while transparent blockers use the nearest transparent hit before the light distance to tint transmitted shadow light.
 
 Transparent blockers can tint shadow light by using the blocking sphere color and opacity.
 
-Direct light from sampled light points is accumulated additively rather than combined with a channel-wise max operation. This is closer to radiance accumulation, although the distance falloff and transparent shadow tinting are still stylized.
+Direct light from sampled light points is accumulated additively rather than combined with a channel-wise max operation. Light falloff now uses a clamped inverse-square-style distance term scaled by light radius, although transparent shadow tinting remains approximate.
 
 ## Path Tracing Loop
 
@@ -105,15 +105,16 @@ Per bounce:
 2. If it hits sky, add `throughput * skyColor` and stop.
 3. If it hits a light, add `throughput * emission` and stop.
 4. For non-diffuse materials, randomize the normal based on surface smoothness.
-5. Sample direct light. Bounce 0 uses soft shadows; later bounces use hard shadows.
+5. Sample direct light. Bounce 0 uses multiple stochastic soft-shadow samples; later bounces use one light sample.
 6. Add direct contribution: `throughput * albedo * directLight * hit.opacity`.
 7. Create the next ray using the hit material type.
 8. Update `throughput` with the scatter attenuation.
 9. Stop early when throughput is effectively black.
+10. Starting after the first few bounces, apply Russian roulette termination and scale surviving throughput by survival probability.
 
 Material scattering currently supports:
 
-- `Diffuse`: uses direct lighting at the first hit and randomized hemisphere scattering for later bounces, attenuated by albedo.
+- `Diffuse`: uses direct lighting and cosine-weighted hemisphere scattering on later bounces, attenuated by albedo.
 - `Metal`: reflects around the surface normal, with smoothness controlling rough normal randomization, and attenuates by albedo.
 - `Glass`: uses Schlick Fresnel reflectance to weight the existing approximate sphere refraction path. Transmitted paths are tinted by albedo and scaled by opacity-derived transmission.
 
@@ -149,7 +150,7 @@ Glass material scattering now uses Schlick Fresnel reflectance to weight transmi
 
 `CSMain` creates a local `uint rngState` for each pixel and sample pass using `_Seed`, pixel coordinates, and the sample index. `rand(inout rngState)` advances that local state through an integer hash and returns a normalized float in `[0, 1)`.
 
-The RNG is used for subpixel camera jitter, depth-of-field aperture jitter, soft shadow offsets, hard shadow jitter, and rough reflection normal randomization. When `randomNoise` is false, C# sends a fixed integer seed each frame for deterministic stable noise patterns. When `randomNoise` is true, C# sends a new random integer seed each frame.
+The RNG is used for subpixel camera jitter, depth-of-field aperture jitter, stochastic area-light samples, cosine-weighted diffuse bounce sampling, Russian roulette termination, and rough reflection normal randomization. When `randomNoise` is false, C# sends a fixed integer seed each frame for deterministic stable noise patterns. When `randomNoise` is true, C# sends a new random integer seed each frame.
 
 ## Unused Or Partial Shader Pieces
 
