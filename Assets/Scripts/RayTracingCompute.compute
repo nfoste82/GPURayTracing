@@ -68,8 +68,6 @@ struct Ray
 {
     float3 origin;
     float3 direction;
-    float3 color;
-    float energy;
 };
 
 Ray CreateRay(float3 origin, float3 direction)
@@ -77,8 +75,6 @@ Ray CreateRay(float3 origin, float3 direction)
     Ray ray;
     ray.origin = origin;
     ray.direction = direction;
-    ray.color = float3(0.0f, 0.0f, 0.0f);
-    ray.energy = 1.0f;
     return ray;
 }
 
@@ -436,6 +432,26 @@ float3 GetTerminalHitColor(Ray ray, RayHit hit)
     return float3(0.0f, 0.0f, 0.0f);
 }
 
+float3 GetAlbedo(RayHit hit)
+{
+    return hit.color;
+}
+
+float3 GetEmission(RayHit hit)
+{
+    return hit.emission;
+}
+
+float GetTransmissionAmount(RayHit hit)
+{
+    return clamp((1.0f - hit.opacity) * 1.333f, 0, 1);
+}
+
+bool HasPathEnergy(float3 throughput)
+{
+    return max(throughput.x, max(throughput.y, throughput.z)) > 0.001f;
+}
+
 void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit)
 {
     ray.direction = Refract(sourceRay.direction, 1.0f, hit.refraction, hit.normal);
@@ -452,53 +468,64 @@ void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit)
 Ray CreateScatteredRay(Ray sourceRay, inout RayHit hit)
 {
     Ray scatteredRay = CreateRay(hit.position + (hit.normal * 0.001f), reflect(sourceRay.direction, hit.normal));
-    scatteredRay.energy = sourceRay.energy;
 
     if (hit.opacity < 1.0f)
     {
         ApplySphereRefraction(scatteredRay, sourceRay, hit);
-        scatteredRay.energy *= clamp((1.0f - hit.opacity) * 1.333f, 0, 1);
     }
 
     return scatteredRay;
 }
 
-float3 GetDirectSurfaceColor(Ray ray, RayHit hit, bool softShadows)
+float3 GetDirectLight(Ray ray, RayHit hit, bool softShadows)
 {
-    float3 light = softShadows ? GetLightHittingPoint(ray, hit) : GetLightHittingPointHardShadow(ray, hit);
-    return light * hit.opacity * ray.energy;
+    return softShadows ? GetLightHittingPoint(ray, hit) : GetLightHittingPointHardShadow(ray, hit);
 }
 
 float3 TracePath(Ray ray)
 {
-    float3 result = float3(0.0f, 0.0f, 0.0f);
+    float3 radiance = float3(0.0f, 0.0f, 0.0f);
     float3 throughput = float3(1.0f, 1.0f, 1.0f);
 
     for (int bounce = 0; bounce < _NumBounces; bounce++)
     {
         RayHit hit = GetNearestIntersection(ray);
 
-        if (DidHitSky(hit) || DidHitLight(hit))
+        if (DidHitSky(hit))
         {
-            result += throughput * GetTerminalHitColor(ray, hit) * ray.energy;
+            radiance += throughput * GetTerminalHitColor(ray, hit);
             break;
         }
 
+        float3 emission = GetEmission(hit);
+        if (DidHitLight(hit))
+        {
+            radiance += throughput * emission;
+            break;
+        }
+
+        float3 albedo = GetAlbedo(hit);
         hit.normal = GetRandomizedNormalBasedOnAmount(hit.normal, hit.smoothness);
 
         bool softShadows = bounce == 0;
-        result += throughput * GetDirectSurfaceColor(ray, hit, softShadows);
+        float3 directLight = GetDirectLight(ray, hit, softShadows);
+        radiance += throughput * albedo * directLight * hit.opacity;
 
-        throughput *= hit.color;
         ray = CreateScatteredRay(ray, hit);
+        throughput *= albedo;
 
-        if (ray.energy <= 0.001f)
+        if (hit.opacity < 1.0f)
+        {
+            throughput *= GetTransmissionAmount(hit);
+        }
+
+        if (!HasPathEnergy(throughput))
         {
             break;
         }
     }
 
-    return result;
+    return radiance;
 }
 
 [numthreads(8,8,1)]
