@@ -49,11 +49,11 @@ public class GameManager : MonoBehaviour
     private Vector2Int _textureSize;
     
     private List<Sphere> _spheres = new List<Sphere>();
-    private List<GameObject> _sphereObjects = new List<GameObject>();
+    private readonly List<RayTracedSphere> _sphereObjects = new List<RayTracedSphere>();
     private ComputeBuffer _sphereBuffer;
 
     private List<Sphere> _lights = new List<Sphere>();
-    private List<GameObject> _lightObjects = new List<GameObject>();
+    private readonly List<RayTracedLight> _lightObjects = new List<RayTracedLight>();
     private ComputeBuffer _lightBuffer;
     
     [Header("Render single frame")] 
@@ -121,10 +121,32 @@ public class GameManager : MonoBehaviour
             return hitDistance;
         }
     }
-    
+
+    private struct RayTracedSphere
+    {
+        public RayTracingObject obj;
+        public Transform transform;
+        public RayMaterial material;
+        public SphereCollider collider;
+    }
+
+    private struct RayTracedLight
+    {
+        public RayTracingObject obj;
+        public Transform transform;
+        public RayLight light;
+        public SphereCollider collider;
+    }
+
     private void Start()
     {
-        _textureSize = new Vector2Int(Screen.width, Screen.height);
+        CreateOutputTexture(Screen.width, Screen.height);
+    }
+
+    private void CreateOutputTexture(int width, int height)
+    {
+        _outputTexture?.Release();
+        _textureSize = new Vector2Int(width, height);
         _outputTexture = new RenderTexture(_textureSize.x, _textureSize.y, 24)
         {
             enableRandomWrite = true,
@@ -219,8 +241,19 @@ public class GameManager : MonoBehaviour
     
     private void OnDestroy()
     {
+        _outputTexture?.Release();
         _sphereBuffer?.Release();
         _lightBuffer?.Release();
+    }
+
+    private void EnsureOutputTextureSize(int width, int height)
+    {
+        if (_outputTexture == null || width != _textureSize.x || height != _textureSize.y)
+        {
+            CreateOutputTexture(width, height);
+        }
+
+        renderTextureCamera.aspect = (float)_textureSize.x / _textureSize.y;
     }
 
     private void UpdateTextureFromCompute(int kernelHandle)
@@ -233,6 +266,8 @@ public class GameManager : MonoBehaviour
     
     private void OnRenderImage(RenderTexture src, RenderTexture dest)
     {
+        EnsureOutputTextureSize(src.width, src.height);
+
         if (_running)
         {
             var autoFocusDistance = (cameraAutoFocus)
@@ -286,12 +321,13 @@ public class GameManager : MonoBehaviour
         for (int i = 0; i < _spheres.Count; ++i)
         {
             var sphere = _spheres[i];
+            var sphereObject = _sphereObjects[i];
 
-            sphere.position = _sphereObjects[i].transform.position;
+            sphere.position = sphereObject.transform.position;
 
-            sphere.radius = _sphereObjects[i].GetComponent<SphereCollider>().radius;
-            
-            var material = _sphereObjects[i].GetComponent<RayMaterial>();
+            sphere.radius = sphereObject.collider.radius;
+
+            var material = sphereObject.material;
             sphere.color = material.Color.ToVector3();
             sphere.refraction = material.RefractionIndex;
             sphere.opacity = material.Opacity;
@@ -303,38 +339,48 @@ public class GameManager : MonoBehaviour
         for (int i = 0; i < _lights.Count; ++i)
         {
             var sphere = _lights[i];
+            var lightObject = _lightObjects[i];
 
-            sphere.position = _lightObjects[i].transform.position;
-            
-            sphere.radius = _lightObjects[i].GetComponent<SphereCollider>().radius;
-            
-            var light = _lightObjects[i].GetComponent<RayLight>();
+            sphere.position = lightObject.transform.position;
+
+            sphere.radius = lightObject.collider.radius;
+
+            var light = lightObject.light;
             sphere.emission = light.Color.ToVector3();
             
             _lights[i] = sphere;
         }
 
-        _sphereBuffer.SetData(_spheres);
-        _lightBuffer.SetData(_lights);
+        if (_sphereBuffer != null)
+        {
+            _sphereBuffer.SetData(_spheres);
+        }
+
+        if (_lightBuffer != null)
+        {
+            _lightBuffer.SetData(_lights);
+        }
     }
 
     public void RebuildBuffers()
     {
+        _buffersNeedRebuilding = false;
         _sphereBuffer?.Release();
         _lightBuffer?.Release();
+        _sphereBuffer = null;
+        _lightBuffer = null;
+
+        shader.SetInt("_NumSpheres", _spheres.Count);
+        shader.SetInt("_NumLights", _lights.Count);
 
         if (_spheres.Count > 0)
         {
-            shader.SetInt("_NumSpheres", _spheres.Count);
-            
             _sphereBuffer = new ComputeBuffer(_spheres.Count, 52);
             _sphereBuffer.SetData(_spheres);
         }
 
         if (_lights.Count > 0)
         {
-            shader.SetInt("_NumLights", _lights.Count);
-            
             _lightBuffer = new ComputeBuffer(_lights.Count, 52);
             _lightBuffer.SetData(_lights);
         }
@@ -342,10 +388,16 @@ public class GameManager : MonoBehaviour
 
     public void RegisterObject(RayTracingObject obj)
     {
+        if (_rayTracingObjects.Contains(obj))
+        {
+            return;
+        }
+
         _rayTracingObjects.Add(obj);
         _buffersNeedRebuilding = true;
 
         var material = obj.GetComponent<RayMaterial>();
+        var sphereCollider = obj.GetComponent<SphereCollider>();
 
         if (material != null)
         {
@@ -354,12 +406,18 @@ public class GameManager : MonoBehaviour
                 position = obj.transform.position,
                 color = material.Color.ToVector3(),
                 smoothness = material.Smoothness,
-                radius = obj.GetComponent<SphereCollider>().radius,
+                radius = sphereCollider.radius,
                 opacity = material.Opacity,
                 refraction = material.RefractionIndex,
             };
             _spheres.Add(sphere);
-            _sphereObjects.Add(obj.gameObject);
+            _sphereObjects.Add(new RayTracedSphere
+            {
+                obj = obj,
+                transform = obj.transform,
+                material = material,
+                collider = sphereCollider
+            });
         }
         else
         {
@@ -368,11 +426,17 @@ public class GameManager : MonoBehaviour
             var sphere = new Sphere
             {
                 position = obj.transform.position,
-                radius = obj.GetComponent<SphereCollider>().radius,
+                radius = sphereCollider.radius,
                 emission = rayLight.Color.ToVector3()
             };
             _lights.Add(sphere);
-            _lightObjects.Add(obj.gameObject);
+            _lightObjects.Add(new RayTracedLight
+            {
+                obj = obj,
+                transform = obj.transform,
+                light = rayLight,
+                collider = sphereCollider
+            });
         }
     }
     
@@ -380,9 +444,21 @@ public class GameManager : MonoBehaviour
     {
         _rayTracingObjects.Remove(obj);
         _buffersNeedRebuilding = true;
-        
-        // TODO: Implement me (need a mapping of GameObject -> Sphere/Light)
-        
+
+        var sphereIndex = _sphereObjects.FindIndex(sphere => sphere.obj == obj);
+        if (sphereIndex >= 0)
+        {
+            _sphereObjects.RemoveAt(sphereIndex);
+            _spheres.RemoveAt(sphereIndex);
+            return;
+        }
+
+        var lightIndex = _lightObjects.FindIndex(light => light.obj == obj);
+        if (lightIndex >= 0)
+        {
+            _lightObjects.RemoveAt(lightIndex);
+            _lights.RemoveAt(lightIndex);
+        }
     }
 
 //    private void RebuildMeshObjectBuffers()
