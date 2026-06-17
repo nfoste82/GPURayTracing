@@ -25,8 +25,7 @@ float _ShadowRandomness;
 float _FocalDistance;
 float _GroundSmoothness;
 
-float _Seed;
-float2 _Pixel;
+uint _Seed;
 
 int _NumSpheres;
 int _NumLights;
@@ -44,16 +43,34 @@ static const int DebugThroughput = 5;
 static const int DebugBounceCount = 6;
 static const int DebugHitDistance = 7;
 
-float rand()
+static const int MaterialDiffuse = 0;
+static const int MaterialMetal = 1;
+static const int MaterialGlass = 2;
+static const int MaterialEmissive = 3;
+
+uint Hash(uint value)
 {
-    float result = frac(sin(_Seed / 100.0f * dot(_Pixel, float2(12.9898f, 78.233f))) * 43758.5453f);
-    _Seed += 1.0f;
-    return result;
+    value ^= value >> 16;
+    value *= 0x7feb352d;
+    value ^= value >> 15;
+    value *= 0x846ca68b;
+    value ^= value >> 16;
+    return value;
 }
 
-float3 Combine(float3 a, float3 b)
+uint CreateRngState(uint2 pixel, uint sampleIndex)
 {
-    return float3(max(a.x, b.x), max(a.y, b.y), max(a.z, b.z));
+    uint state = _Seed;
+    state ^= pixel.x * 1973u;
+    state ^= pixel.y * 9277u;
+    state ^= sampleIndex * 26699u;
+    return Hash(state);
+}
+
+float rand(inout uint rngState)
+{
+    rngState = Hash(rngState);
+    return (rngState & 0x00ffffff) / 16777216.0f;
 }
 
 // =======================================================
@@ -67,6 +84,7 @@ struct Sphere
     float smoothness;
     float opacity;
     float refraction;
+    int materialType;
 };
 
 StructuredBuffer<Sphere> _Spheres;
@@ -86,6 +104,20 @@ Ray CreateRay(float3 origin, float3 direction)
     ray.origin = origin;
     ray.direction = direction;
     return ray;
+}
+
+struct ScatterResult
+{
+    Ray ray;
+    float3 attenuation;
+};
+
+ScatterResult CreateScatterResult(Ray ray, float3 attenuation)
+{
+    ScatterResult result;
+    result.ray = ray;
+    result.attenuation = attenuation;
+    return result;
 }
 
 Ray CreateCameraRay(float2 uv)
@@ -119,6 +151,7 @@ struct RayHit
     float opacity;
     float distanceThroughOpacity;
     float refraction;
+    int materialType;
 };
 
 RayHit CreateRayHit()
@@ -134,6 +167,7 @@ RayHit CreateRayHit()
     hit.smoothness = 0.0f;
     hit.opacity = 1.0f;
     hit.refraction = 1.0f;
+    hit.materialType = MaterialDiffuse;
 
     return hit;
 }
@@ -155,6 +189,8 @@ void IntersectGroundPlane(Ray ray, inout RayHit bestHit)
         bestHit.obj_radius = 0.0f;
         bestHit.opacity = 1.0f;
         bestHit.distanceThroughOpacity = 0.0f;
+        bestHit.refraction = 1.0f;
+        bestHit.materialType = MaterialDiffuse;
     }
 }
 
@@ -193,6 +229,7 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
         bestHit.opacity = sphere.opacity;
         bestHit.distanceThroughOpacity = 0.0f;
         bestHit.refraction = sphere.refraction;
+        bestHit.materialType = sphere.materialType;
     }
 }
 
@@ -250,7 +287,7 @@ float3 Refract(float3 sourceDirection, float sourceRefraction, float targetRefra
     return normalize((reflectAmount * targetNormal) + sourceDirection);
 }
 
-float3 GetLightHittingPointHardShadow(Ray ray, RayHit hit)
+float3 GetLightHittingPointHardShadow(Ray ray, RayHit hit, inout uint rngState)
 {
     float3 combinedLightColor = float3(0.0f, 0.0f, 0.0f);
 
@@ -269,8 +306,8 @@ float3 GetLightHittingPointHardShadow(Ray ray, RayHit hit)
 		
         RayHit bestHit = CreateRayHit();
         
-        float3 sideOffset = sideDir * ((rand() * _ShadowRandomness) - (rand() * _ShadowRandomness));
-        float3 upOffset = upDir * ((rand() * _ShadowRandomness) - (rand() * _ShadowRandomness));
+        float3 sideOffset = sideDir * ((rand(rngState) * _ShadowRandomness) - (rand(rngState) * _ShadowRandomness));
+        float3 upOffset = upDir * ((rand(rngState) * _ShadowRandomness) - (rand(rngState) * _ShadowRandomness));
         float3 offsetPt = lightPos + sideOffset + upOffset;
         float3 ptToOffset = offsetPt - hit.position;
         float distanceToLight = length(ptToOffset);
@@ -285,7 +322,7 @@ float3 GetLightHittingPointHardShadow(Ray ray, RayHit hit)
         
         float3 lightColor = _Lights[i].emission;
         float lightStrength = clamp(1.0f / (log2(max(1.0f, distanceToLight)) * 0.5f), 0, 1);                
-        float rayNormalDot = dot(ptToOffset, hit.normal);
+        float rayNormalDot = saturate(dot(ptToOffset, hit.normal));
         float lightPercentageThatHits = rayNormalDot * lightStrength;
         
         if (bestHit.distance > distanceToLight)
@@ -305,14 +342,13 @@ float3 GetLightHittingPointHardShadow(Ray ray, RayHit hit)
             transparentColor.xyz += (lightColor * lightPercentageThatHits) * bestHit.color * (1 - bestHit.opacity) * lightFocusAmount;
         }
 		
-		combinedLightColor = Combine(combinedLightColor, lightTotal);
-		combinedLightColor = Combine(combinedLightColor, transparentColor.xyz);
+        combinedLightColor += lightTotal + transparentColor.xyz;
     }
 	
 	return combinedLightColor;
 }
 
-float3 GetLightHittingPoint(Ray ray, RayHit hit)
+float3 GetLightHittingPoint(Ray ray, RayHit hit, inout uint rngState)
 {
     float3 combinedLightColor = float3(0.0f, 0.0f, 0.0f);
 
@@ -339,8 +375,8 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit)
 		    
 		        float offsetAmount = (1.0f / max(1, _ShadowQuality)); 
 		        
-                float3 sideOffset = sideDir * (x + (offsetAmount + rand() * _ShadowRandomness - rand() * _ShadowRandomness));
-                float3 upOffset = upDir * (y + (offsetAmount + rand() * _ShadowRandomness - rand() * _ShadowRandomness));
+                float3 sideOffset = sideDir * (x + (offsetAmount + rand(rngState) * _ShadowRandomness - rand(rngState) * _ShadowRandomness));
+                float3 upOffset = upDir * (y + (offsetAmount + rand(rngState) * _ShadowRandomness - rand(rngState) * _ShadowRandomness));
                 float3 offsetPt = lightPos + sideOffset + upOffset;
                 float3 ptToOffset = offsetPt - hit.position;
                 float distanceToLight = length(ptToOffset);
@@ -355,7 +391,7 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit)
                 
                 float3 lightColor = _Lights[i].emission;
                 float lightStrength = clamp(1.0f / (log2(max(1.0f, distanceToLight)) * 0.5f), 0, 1);                
-                float rayNormalDot = dot(ptToOffset, hit.normal);
+                float rayNormalDot = saturate(dot(ptToOffset, hit.normal));
                 float lightPercentageThatHits = rayNormalDot * lightStrength;
                 
                 if (bestHit.distance > distanceToLight)
@@ -379,8 +415,7 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit)
 		
 		uint numLightSamples = pow((_ShadowQuality + _ShadowQuality + 1), 2);
 		float inverseNumLightSamples = min(1.0f, (1.0f / numLightSamples)); 
-		combinedLightColor = Combine(combinedLightColor, lightTotal * inverseNumLightSamples);
-		combinedLightColor = Combine(combinedLightColor, transparentColor.xyz * inverseNumLightSamples);
+        combinedLightColor += (lightTotal + transparentColor.xyz) * inverseNumLightSamples;
     }
 	
 	return combinedLightColor;
@@ -408,12 +443,12 @@ float3 ModifyNormalByBumpColor(float3 normal, float3 bumpColor, float bumpiness)
     return (normal + bumpColor * bumpiness) * (1 - bumpiness * 0.5f);
 }
 
-float3 GetRandomizedNormalBasedOnAmount(float3 normal, float amount)
+float3 GetRandomizedNormalBasedOnAmount(float3 normal, float amount, inout uint rngState)
 {
     float3 normalWithRand = normalize( float3(
-                normal.x + rand() * (1 - amount) - rand() * (1 - amount),
-                normal.y + rand() * (1 - amount) - rand() * (1 - amount),
-                normal.z + rand() * (1 - amount) - rand() * (1 - amount)));
+                normal.x + rand(rngState) * (1 - amount) - rand(rngState) * (1 - amount),
+                normal.y + rand(rngState) * (1 - amount) - rand(rngState) * (1 - amount),
+                normal.z + rand(rngState) * (1 - amount) - rand(rngState) * (1 - amount)));
     return normalWithRand;
 }
 
@@ -457,6 +492,36 @@ float GetTransmissionAmount(RayHit hit)
     return clamp((1.0f - hit.opacity) * 1.333f, 0, 1);
 }
 
+bool IsGlassMaterial(RayHit hit)
+{
+    return hit.materialType == MaterialGlass || hit.opacity < 1.0f;
+}
+
+float GetFresnelReflectance(Ray ray, RayHit hit)
+{
+    float refraction = max(1.0f, hit.refraction);
+    float r0 = (1.0f - refraction) / (1.0f + refraction);
+    r0 *= r0;
+
+    float cosTheta = saturate(dot(-ray.direction, hit.normal));
+    return r0 + (1.0f - r0) * pow(1.0f - cosTheta, 5.0f);
+}
+
+float3 GetDiffuseScatterDirection(float3 normal, inout uint rngState)
+{
+    float3 randomDirection = normalize(float3(
+        rand(rngState) * 2.0f - 1.0f,
+        rand(rngState) * 2.0f - 1.0f,
+        rand(rngState) * 2.0f - 1.0f));
+
+    if (dot(randomDirection, normal) < 0.0f)
+    {
+        randomDirection = -randomDirection;
+    }
+
+    return normalize(normal + randomDirection);
+}
+
 bool HasPathEnergy(float3 throughput)
 {
     return max(throughput.x, max(throughput.y, throughput.z)) > 0.001f;
@@ -475,24 +540,40 @@ void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit)
     ray.direction = Refract(ray.direction, hit.refraction, 1.0f, exitPointNormal);
 }
 
-Ray CreateScatteredRay(Ray sourceRay, inout RayHit hit)
+ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, inout uint rngState)
 {
+    float3 albedo = GetAlbedo(hit);
     Ray scatteredRay = CreateRay(hit.position + (hit.normal * 0.001f), reflect(sourceRay.direction, hit.normal));
 
-    if (hit.opacity < 1.0f)
+    if (IsGlassMaterial(hit))
     {
-        ApplySphereRefraction(scatteredRay, sourceRay, hit);
+        float transmission = GetTransmissionAmount(hit);
+        float fresnelReflectance = GetFresnelReflectance(sourceRay, hit);
+
+        if (transmission > 0.0f)
+        {
+            ApplySphereRefraction(scatteredRay, sourceRay, hit);
+            float3 tint = lerp(float3(1.0f, 1.0f, 1.0f), albedo, 1.0f - hit.opacity);
+            return CreateScatterResult(scatteredRay, tint * transmission * (1.0f - fresnelReflectance));
+        }
+
+        return CreateScatterResult(scatteredRay, fresnelReflectance.xxx);
     }
 
-    return scatteredRay;
+    if (hit.materialType == MaterialDiffuse && bounce > 0)
+    {
+        scatteredRay.direction = GetDiffuseScatterDirection(hit.normal, rngState);
+    }
+
+    return CreateScatterResult(scatteredRay, albedo);
 }
 
-float3 GetDirectLight(Ray ray, RayHit hit, bool softShadows)
+float3 GetDirectLight(Ray ray, RayHit hit, bool softShadows, inout uint rngState)
 {
-    return softShadows ? GetLightHittingPoint(ray, hit) : GetLightHittingPointHardShadow(ray, hit);
+    return softShadows ? GetLightHittingPoint(ray, hit, rngState) : GetLightHittingPointHardShadow(ray, hit, rngState);
 }
 
-float3 TracePath(Ray ray)
+float3 TracePath(Ray ray, inout uint rngState)
 {
     float3 radiance = float3(0.0f, 0.0f, 0.0f);
     float3 throughput = float3(1.0f, 1.0f, 1.0f);
@@ -515,19 +596,18 @@ float3 TracePath(Ray ray)
         }
 
         float3 albedo = GetAlbedo(hit);
-        hit.normal = GetRandomizedNormalBasedOnAmount(hit.normal, hit.smoothness);
+        if (hit.materialType != MaterialDiffuse)
+        {
+            hit.normal = GetRandomizedNormalBasedOnAmount(hit.normal, hit.smoothness, rngState);
+        }
 
         bool softShadows = bounce == 0;
-        float3 directLight = GetDirectLight(ray, hit, softShadows);
+        float3 directLight = GetDirectLight(ray, hit, softShadows, rngState);
         radiance += throughput * albedo * directLight * hit.opacity;
 
-        ray = CreateScatteredRay(ray, hit);
-        throughput *= albedo;
-
-        if (hit.opacity < 1.0f)
-        {
-            throughput *= GetTransmissionAmount(hit);
-        }
+        ScatterResult scatter = CreateScatteredRay(ray, hit, bounce, rngState);
+        ray = scatter.ray;
+        throughput *= scatter.attenuation;
 
         if (!HasPathEnergy(throughput))
         {
@@ -538,7 +618,7 @@ float3 TracePath(Ray ray)
     return radiance;
 }
 
-float3 GetDebugRenderColor(Ray ray)
+float3 GetDebugRenderColor(Ray ray, inout uint rngState)
 {
     RayHit hit = GetNearestIntersection(ray);
 
@@ -564,7 +644,7 @@ float3 GetDebugRenderColor(Ray ray)
 
     if (_DebugRenderMode == DebugDirectLight)
     {
-        return saturate(GetDirectLight(ray, hit, true));
+        return saturate(GetDirectLight(ray, hit, true, rngState));
     }
 
     if (_DebugRenderMode == DebugHitDistance)
@@ -585,15 +665,14 @@ float3 GetDebugRenderColor(Ray ray)
                 break;
             }
 
-            float3 albedo = GetAlbedo(hit);
-            hit.normal = GetRandomizedNormalBasedOnAmount(hit.normal, hit.smoothness);
-            ray = CreateScatteredRay(ray, hit);
-            throughput *= albedo;
-
-            if (hit.opacity < 1.0f)
+            if (hit.materialType != MaterialDiffuse)
             {
-                throughput *= GetTransmissionAmount(hit);
+                hit.normal = GetRandomizedNormalBasedOnAmount(hit.normal, hit.smoothness, rngState);
             }
+
+            ScatterResult scatter = CreateScatteredRay(ray, hit, bounce, rngState);
+            ray = scatter.ray;
+            throughput *= scatter.attenuation;
 
             completedBounces++;
 
@@ -611,24 +690,22 @@ float3 GetDebugRenderColor(Ray ray)
         return saturate(throughput);
     }
 
-    return TracePath(ray);
+    return TracePath(ray, rngState);
 }
 
 [numthreads(8,8,1)]
 void CSMain (uint3 id : SV_DispatchThreadID)
 {
-    _Pixel = id.xy;
-    
     // Get the dimensions of the RenderTexture
     uint width, height;
     Result.GetDimensions(width, height);
 
     // Transform pixel to [-1,1] range
-    float2 uv = (id.xy / float2(width, height) * 2.0f - 1.0f) + float2(1/(float)width * rand(), 1/(float)height * rand());
-            
     float3 result = float3(0.0f, 0.0f, 0.0f);
     for (int i = 0; i < _NumberOfPasses; i++)
     {
+        uint rngState = CreateRngState(id.xy, i);
+        float2 uv = (id.xy / float2(width, height) * 2.0f - 1.0f) + float2(1/(float)width * rand(rngState), 1/(float)height * rand(rngState));
         Ray ray = CreateCameraRay(uv);
         
         // We find the camera focal point, then shift the ray origin, and find the adjusted ray
@@ -637,14 +714,14 @@ void CSMain (uint3 id : SV_DispatchThreadID)
             float3 focalPoint = ray.origin + ray.direction * _FocalDistance;
             
             float shiftAmount = 0.005f;
-            ray.origin.x += rand() * shiftAmount - rand() * shiftAmount;
-            ray.origin.y += rand() * shiftAmount - rand() * shiftAmount;
-            ray.origin.z += rand() * shiftAmount - rand() * shiftAmount;
+            ray.origin.x += rand(rngState) * shiftAmount - rand(rngState) * shiftAmount;
+            ray.origin.y += rand(rngState) * shiftAmount - rand(rngState) * shiftAmount;
+            ray.origin.z += rand(rngState) * shiftAmount - rand(rngState) * shiftAmount;
             
             ray.direction = normalize(focalPoint - ray.origin);
         } 
         
-        result += _DebugRenderMode == DebugFinalColor ? TracePath(ray) : GetDebugRenderColor(ray);
+        result += _DebugRenderMode == DebugFinalColor ? TracePath(ray, rngState) : GetDebugRenderColor(ray, rngState);
     }
    
     Result[id.xy] = float4(result / _NumberOfPasses, 1);

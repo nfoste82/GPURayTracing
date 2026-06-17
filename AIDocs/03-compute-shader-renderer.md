@@ -19,7 +19,7 @@ Important shader globals:
 - `_ShadowRandomness`: jitter amount for soft shadow samples.
 - `_FocalDistance`: depth-of-field focal distance.
 - `_GroundSmoothness`: smoothness for the implicit ground plane.
-- `_Seed` and `_Pixel`: shader-side random number state.
+- `_Seed`: integer seed used to initialize per-pixel/per-pass shader RNG state.
 - `_NumSpheres`, `_NumLights`: active buffer counts.
 - `_Spheres`, `_Lights`: structured buffers of `Sphere` data.
 
@@ -37,12 +37,13 @@ struct Sphere
     float smoothness;
     float opacity;
     float refraction;
+    int materialType;
 };
 ```
 
 `Ray` contains only origin and direction.
 
-`RayHit` stores hit position, object position/radius, normal, emission, color, distance, smoothness, opacity, transparent travel distance, and refraction index.
+`RayHit` stores hit position, object position/radius, normal, emission, color, distance, smoothness, opacity, transparent travel distance, refraction index, and material type.
 
 ## Ray Generation
 
@@ -85,7 +86,7 @@ Direct lighting comes from emissive sphere lights.
 
 Transparent blockers can tint shadow light by using the blocking sphere color and opacity.
 
-Both direct-light functions use `Combine()`, which is a channel-wise max operation. This keeps the existing stylized look but is not physically additive radiance.
+Direct light from sampled light points is accumulated additively rather than combined with a channel-wise max operation. This is closer to radiance accumulation, although the distance falloff and transparent shadow tinting are still stylized.
 
 ## Path Tracing Loop
 
@@ -103,13 +104,18 @@ Per bounce:
 1. Trace the ray with `GetNearestIntersection()`.
 2. If it hits sky, add `throughput * skyColor` and stop.
 3. If it hits a light, add `throughput * emission` and stop.
-4. Randomize the normal based on surface smoothness.
+4. For non-diffuse materials, randomize the normal based on surface smoothness.
 5. Sample direct light. Bounce 0 uses soft shadows; later bounces use hard shadows.
 6. Add direct contribution: `throughput * albedo * directLight * hit.opacity`.
-7. Create the next ray by reflection, or approximate refraction for transparent objects.
-8. Update `throughput *= albedo`.
-9. If transparent, also scale throughput by `GetTransmissionAmount()`.
-10. Stop early when throughput is effectively black.
+7. Create the next ray using the hit material type.
+8. Update `throughput` with the scatter attenuation.
+9. Stop early when throughput is effectively black.
+
+Material scattering currently supports:
+
+- `Diffuse`: uses direct lighting at the first hit and randomized hemisphere scattering for later bounces, attenuated by albedo.
+- `Metal`: reflects around the surface normal, with smoothness controlling rough normal randomization, and attenuates by albedo.
+- `Glass`: uses Schlick Fresnel reflectance to weight the existing approximate sphere refraction path. Transmitted paths are tinted by albedo and scaled by opacity-derived transmission.
 
 ## Debug Render Modes
 
@@ -130,18 +136,20 @@ Debug modes still use the normal camera ray generation and depth-of-field jitter
 
 ## Transparency And Refraction
 
-Transparent sphere refraction is approximate. `ApplySphereRefraction()`:
+Transparent/glass sphere refraction is approximate. `ApplySphereRefraction()`:
 
 1. Refracts from air into the sphere using `Refract()`.
 2. Estimates the exit point by finding a closest point across the sphere chord.
 3. Computes the exit normal.
 4. Refracts back out into air.
 
-This is not a full Snell-law/Fresnel model. It preserves the project’s existing look while fitting the iterative path tracing structure.
+Glass material scattering now uses Schlick Fresnel reflectance to weight transmission, but the transmitted ray still uses the project’s approximate sphere refraction helper rather than a full Snell-law volume traversal. This avoids the high variance of randomly choosing reflection or transmission per sample.
 
 ## Randomness
 
-`rand()` uses `_Seed`, `_Pixel`, and a sine/hash-style expression. `_Seed` is mutated during shader execution. When `randomNoise` is false, C# sends a deterministic seed each frame, giving stable noise patterns.
+`CSMain` creates a local `uint rngState` for each pixel and sample pass using `_Seed`, pixel coordinates, and the sample index. `rand(inout rngState)` advances that local state through an integer hash and returns a normalized float in `[0, 1)`.
+
+The RNG is used for subpixel camera jitter, depth-of-field aperture jitter, soft shadow offsets, hard shadow jitter, and rough reflection normal randomization. When `randomNoise` is false, C# sends a fixed integer seed each frame for deterministic stable noise patterns. When `randomNoise` is true, C# sends a new random integer seed each frame.
 
 ## Unused Or Partial Shader Pieces
 

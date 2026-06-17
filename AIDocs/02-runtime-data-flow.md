@@ -53,7 +53,7 @@ Graphics.Blit(_outputTexture, dest);
 
 `_buffersNeedRebuilding` is set when objects register or unregister. `Update()` calls `RebuildBuffers()` when this flag is true.
 
-`RebuildBuffers()` releases and recreates sphere/light buffers using stride `52`, matching the HLSL `Sphere` struct layout:
+`RebuildBuffers()` releases and recreates sphere/light buffers using stride `56`, matching the HLSL `Sphere` struct layout:
 
 - `float3 position`
 - `float3 color`
@@ -62,6 +62,7 @@ Graphics.Blit(_outputTexture, dest);
 - `float smoothness`
 - `float opacity`
 - `float refraction`
+- `int materialType`
 
 When object counts change, `RebuildBuffers()` also writes `_NumSpheres` and `_NumLights`, including zero counts, so the shader does not read stale buffer entries after unregistering objects.
 
@@ -88,7 +89,7 @@ When object counts change, `RebuildBuffers()` also writes `_NumSpheres` and `_Nu
 - `_Spheres`
 - `_Lights`
 
-`_PixelOffset` is currently set from C#, but the compute shader does not currently declare or use it.
+`_Seed` is uploaded as an integer. When `randomNoise` is enabled, C# uploads a new random seed each rendered frame. When `randomNoise` is disabled, C# uploads a fixed seed for stable deterministic sampling.
 
 `_AmbientLight` is declared in the compute shader but is not currently used by the renderer.
 

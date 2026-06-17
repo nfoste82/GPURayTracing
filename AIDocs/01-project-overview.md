@@ -31,4 +31,4 @@ The renderer currently ray traces spheres, emissive sphere lights, and an implic
 
 The renderer has been refactored into an iterative path tracing structure. `TracePath()` uses explicit `radiance`, `throughput`, `albedo`, and `emission` terms instead of a manually unrolled second/third-bounce color tree.
 
-The lighting model is still partly stylized. Direct lighting uses explicit light sampling each bounce, and shadow contribution still uses channel-wise `Combine()` inside the shadow functions. This is cleaner than the original layout, but it is not yet a fully physically based BRDF/path tracer.
+The lighting model is still partly stylized. Direct lighting uses explicit light sampling each bounce and now accumulates sampled light additively, but light falloff and transparent shadow tinting are not yet fully physically based. This is cleaner than the original layout, but it is not yet a fully physically based BRDF/path tracer.

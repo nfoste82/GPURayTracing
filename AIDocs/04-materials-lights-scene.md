@@ -14,12 +14,19 @@ Any object with `RayTracingObject` registers with `GameManager` when enabled.
 
 Fields:
 
+- `Type`: selects `Diffuse`, `Metal`, or `Glass` scattering in the compute shader.
 - `Color`: uploaded as normalized RGB and used as albedo/tint.
-- `Smoothness`: controls reflection roughness by randomizing the hit normal. Higher values preserve the normal more closely.
-- `Opacity`: `1` is opaque. Values below `1` trigger approximate refraction/transmission.
-- `RefractionIndex`: used by the custom approximate `Refract()` function.
+- `Smoothness`: controls metal/glass reflection roughness by randomizing the hit normal. Higher values preserve the normal more closely.
+- `Opacity`: `1` is opaque. Values below `1` allow glass/transparent transmission.
+- `RefractionIndex`: used by glass Fresnel reflectance and the custom approximate refraction path.
 
-In the shader, material color is retrieved through `GetAlbedo(hit)`. The path tracer multiplies path throughput by this albedo after each non-emissive hit.
+In the shader, material color is retrieved through `GetAlbedo(hit)`. Diffuse and metal paths attenuate throughput by albedo. Glass transmission is tinted by albedo based on opacity, while glass reflection keeps white reflective throughput.
+
+Material behavior:
+
+- `Diffuse`: direct lighting at the first hit, with randomized hemisphere scattering for later bounces.
+- `Metal`: reflective scattering, with `Smoothness` controlling roughness.
+- `Glass`: Schlick Fresnel weights approximate sphere refraction/transmission.
 
 ## Lights
 
@@ -31,7 +38,7 @@ Fields:
 
 Light objects are stored in `_Lights`, using the same `Sphere` data layout as regular spheres. When a camera/path ray directly hits a light sphere, `TracePath()` adds its emission and terminates the path.
 
-Direct lighting also samples `_Lights` explicitly in `GetLightHittingPoint()` and `GetLightHittingPointHardShadow()`.
+Direct lighting also samples `_Lights` explicitly in `GetLightHittingPoint()` and `GetLightHittingPointHardShadow()`. Sampled light contributions are accumulated additively.
 
 ## Ground Plane
 

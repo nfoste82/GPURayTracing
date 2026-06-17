@@ -102,6 +102,7 @@ public class GameManager : MonoBehaviour
         public float smoothness;
         public float opacity;
         public float refraction;
+        public int materialType;
         
         public float Intersect(Vector3 origin, Vector3 direction)
         {
@@ -347,6 +348,7 @@ public class GameManager : MonoBehaviour
             sphere.refraction = material.RefractionIndex;
             sphere.opacity = material.Opacity;
             sphere.smoothness = material.Smoothness;
+            sphere.materialType = (int)material.Type;
             
             _spheres[i] = sphere;
         }
@@ -390,13 +392,13 @@ public class GameManager : MonoBehaviour
 
         if (_spheres.Count > 0)
         {
-            _sphereBuffer = new ComputeBuffer(_spheres.Count, 52);
+            _sphereBuffer = new ComputeBuffer(_spheres.Count, 56);
             _sphereBuffer.SetData(_spheres);
         }
 
         if (_lights.Count > 0)
         {
-            _lightBuffer = new ComputeBuffer(_lights.Count, 52);
+            _lightBuffer = new ComputeBuffer(_lights.Count, 56);
             _lightBuffer.SetData(_lights);
         }
     }
@@ -424,6 +426,7 @@ public class GameManager : MonoBehaviour
                 radius = sphereCollider.radius,
                 opacity = material.Opacity,
                 refraction = material.RefractionIndex,
+                materialType = (int)material.Type,
             };
             _spheres.Add(sphere);
             _sphereObjects.Add(new RayTracedSphere
@@ -442,7 +445,8 @@ public class GameManager : MonoBehaviour
             {
                 position = obj.transform.position,
                 radius = sphereCollider.radius,
-                emission = rayLight.Color.ToVector3()
+                emission = rayLight.Color.ToVector3(),
+                materialType = 3
             };
             _lights.Add(sphere);
             _lightObjects.Add(new RayTracedLight
@@ -611,15 +615,13 @@ public class GameManager : MonoBehaviour
         _skyboxLightColorAsVector = new Vector4(_skyboxLightColor.r / 255f, _skyboxLightColor.g / 255f, _skyboxLightColor.b / 255f, 1.0f);
         shader.SetVector("_SkyboxLight", _skyboxLightColorAsVector);
         
-        shader.SetVector("_PixelOffset", new Vector2(UnityEngine.Random.value,UnityEngine.Random.value));
-
         if (randomNoise)
         {
-            shader.SetFloat("_Seed", UnityEngine.Random.value);
+            shader.SetInt("_Seed", UnityEngine.Random.Range(1, int.MaxValue));
         }
         else
         {
-            shader.SetFloat("_Seed", (float) (new System.Random(0).NextDouble()));
+            shader.SetInt("_Seed", 1);
         }
 
         shader.SetInt("_NumberOfPasses", numberOfPasses);

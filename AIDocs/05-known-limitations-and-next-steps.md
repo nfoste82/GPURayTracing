@@ -10,12 +10,11 @@ This document captures current implementation limits and likely future work area
 - `UpdateSpheres()` uploads all sphere/light data every rendered frame, even though component references are cached.
 - Mesh buffer fields and `RebuildMeshObjectBuffers()` are present but commented out/inactive.
 - `_AmbientLight` is uploaded and declared but unused.
-- `_PixelOffset` is uploaded from C# but not declared/used by the shader.
 - `GetTextureColorOnSphere()` and `ModifyNormalByBumpColor()` are unused.
 - Debug render modes are basic first-hit/path diagnostics and do not include UI overlays, legends, or configurable visualization ranges.
 - Shadow rays check regular spheres as blockers, but not light spheres.
-- Refraction/transparency are approximate and do not use Fresnel or physically accurate Snell-law handling.
-- Direct lighting still uses stylized channel-wise `Combine()` inside shadow-light helpers.
+- Refraction/transparency use Fresnel material selection, but transmitted paths still use approximate sphere refraction rather than physically accurate Snell-law volume traversal.
+- Direct lighting accumulates additively, but light falloff and transparent shadow tinting are still stylized rather than fully physically based.
 
 ## Good Near-Term Fixes
 
@@ -26,11 +25,8 @@ This document captures current implementation limits and likely future work area
 ## Rendering Improvements
 
 - Add frame accumulation for progressive refinement when camera and scene are static.
-- Replace sine/hash mutable RNG with a clearer hash-based per-pixel/per-frame random generator.
-- Add material types such as diffuse, metal, glass, and emissive.
-- Add Fresnel reflectance and better refraction/transmission handling.
 - Add diffuse hemisphere sampling for true indirect light and color bleeding.
-- Decide whether direct lighting should remain explicitly sampled every bounce or move toward next-event estimation with a more physically based formulation.
+- Improve direct lighting falloff, transparent absorption, and next-event estimation toward a more physically based formulation.
 
 ## Geometry Improvements
 
