@@ -878,7 +878,7 @@ void CSMain (uint3 id : SV_DispatchThreadID)
     for (int i = 0; i < _NumberOfPasses; i++)
     {
         uint rngState = CreateRngState(id.xy, i);
-        float2 uv = (id.xy / float2(width, height) * 2.0f - 1.0f) + float2(1/(float)width * rand(rngState), 1/(float)height * rand(rngState));
+        float2 uv = ((id.xy + float2(rand(rngState), rand(rngState))) / float2(width, height)) * 2.0f - 1.0f;
         Ray ray = CreateCameraRay(uv);
 
         // We find the camera focal point, then shift the ray origin, and find the adjusted ray

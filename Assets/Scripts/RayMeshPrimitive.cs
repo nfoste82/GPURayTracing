@@ -4,6 +4,7 @@ using UnityEngine;
 
 [RequireComponent(typeof(MeshFilter))]
 [RequireComponent(typeof(MeshRenderer))]
+[RequireComponent(typeof(MeshCollider))]
 [RequireComponent(typeof(RayMaterial))]
 [RequireComponent(typeof(RayTracingObject))]
 public class RayMeshPrimitive : MonoBehaviour
@@ -19,11 +20,21 @@ public class RayMeshPrimitive : MonoBehaviour
     public bool HideRasterizedRendererInPlayMode = true;
 
     private MeshFilter _meshFilter;
+    private MeshCollider _meshCollider;
 
     public void EnsureMesh()
     {
         _meshFilter = _meshFilter != null ? _meshFilter : GetComponent<MeshFilter>();
-        _meshFilter.sharedMesh = CreateMesh(Type);
+        _meshCollider = _meshCollider != null ? _meshCollider : GetComponent<MeshCollider>();
+        if (_meshCollider == null)
+        {
+            _meshCollider = gameObject.AddComponent<MeshCollider>();
+        }
+
+        var mesh = CreateMesh(Type);
+        _meshFilter.sharedMesh = mesh;
+        _meshCollider.sharedMesh = mesh;
+        _meshCollider.convex = false;
     }
 
     private void Awake()

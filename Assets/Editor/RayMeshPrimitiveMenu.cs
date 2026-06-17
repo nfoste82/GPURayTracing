@@ -28,6 +28,7 @@ public static class RayMeshPrimitiveMenu
 
         var meshFilter = gameObject.AddComponent<MeshFilter>();
         var meshRenderer = gameObject.AddComponent<MeshRenderer>();
+        var meshCollider = gameObject.AddComponent<MeshCollider>();
         var rayMaterial = gameObject.AddComponent<RayMaterial>();
         gameObject.AddComponent<RayTracingObject>();
         var rayMeshPrimitive = gameObject.AddComponent<RayMeshPrimitive>();
@@ -42,6 +43,8 @@ public static class RayMeshPrimitiveMenu
         rayMaterial.RefractionIndex = 1.5f;
 
         meshRenderer.sharedMaterial = CreatePreviewMaterial(color);
+        meshCollider.sharedMesh = meshFilter.sharedMesh;
+        meshCollider.convex = false;
 
         Undo.RegisterCreatedObjectUndo(gameObject, $"Create {name}");
         Selection.activeGameObject = gameObject;

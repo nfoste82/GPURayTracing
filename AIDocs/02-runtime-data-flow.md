@@ -4,7 +4,7 @@
 
 ## Render Texture Allocation
 
-On `Start()`, `GameManager` creates `_outputTexture` as a `RenderTexture` sized to the current screen dimensions with `enableRandomWrite = true`. This texture is bound as `Result` before dispatch and then blitted to the camera output.
+On `Start()`, `GameManager` creates `_outputTexture` as a `RenderTexture` sized to the current screen dimensions with `enableRandomWrite = true`. This texture is bound as `Result` before dispatch and then blitted to the camera output by `RayTracingCameraRenderer` on the same camera referenced by `GameManager.renderTextureCamera`.
 
 During `OnRenderImage()`, `GameManager` checks the source render target dimensions and recreates `_outputTexture` if the runtime render size changes. It also updates `renderTextureCamera.aspect` from the active output texture size so the camera projection used for ray generation matches the resized render target.
 
@@ -18,7 +18,7 @@ GetComponentInParent<GameManager>().RegisterObject(this);
 
 If the object has `RayMeshPrimitive`, `RayTracingObject.OnEnable()` first calls `RayMeshPrimitive.EnsureMesh()` so the procedural mesh exists before registration.
 
-`RegisterObject()` classifies the object by components:
+`RegisterObject()` classifies the object by rendering components:
 
 - If it has `RayMaterial` and `SphereCollider`, it becomes a ray-traced sphere in `_spheres` and `_sphereObjects`.
 - If it has `RayMaterial` and `MeshFilter`, but no `SphereCollider`, it becomes a triangle mesh in `_triangles` and `_meshObjects`.
@@ -26,13 +26,13 @@ If the object has `RayMeshPrimitive`, `RayTracingObject.OnEnable()` first calls 
 
 Sphere and light objects require a `SphereCollider`. The collider center is transformed to world space for the ray-traced sphere position, and the collider radius is scaled by the largest absolute axis of the object's lossy scale for the ray-traced sphere radius. Mesh objects require a `MeshFilter`; the shared mesh triangles are transformed to world space and uploaded directly.
 
-Registration caches the `Transform`, `SphereCollider`, shared `Mesh`, and either `RayMaterial` or `RayLight` references so per-frame updates do not repeatedly call `GetComponent<>()`.
+Registration caches the `Transform`, `SphereCollider`, shared `Mesh`, and either `RayMaterial` or `RayLight` references so per-frame updates do not repeatedly call `GetComponent<>()`. `MeshCollider` components are not used by the compute renderer; ray mesh primitives add them only so Unity physics can treat the rendered meshes as static collision geometry.
 
 `UnregisterObject()` removes the object from the CPU object cache and from the matching sphere/light data list, then marks buffers for rebuilding. This prevents disabled/destroyed ray-traced objects from leaving stale entries in the GPU buffers.
 
 ## Per-Frame Render Flow
 
-`OnRenderImage(RenderTexture src, RenderTexture dest)` is the render entry point.
+`RayTracingCameraRenderer.OnRenderImage(RenderTexture src, RenderTexture dest)` is the render entry point. It delegates to `GameManager.RenderImage()` so the enabled Unity camera used for Game view gizmos is also the camera whose transform/projection drives compute ray generation.
 
 When `_running` is true, it:
 
@@ -93,7 +93,7 @@ Unity requires referenced structured buffers to be bound even when their active 
 
 `GameManager.OnValidate()` and `Start()` call `SyncUnitySkyboxPreview()` when `syncUnitySkyboxToRayTracedSkybox` is enabled. It creates a transient `Skybox/Panoramic` material from `skyboxTexture`, applies `_skyboxLightColor` as the skybox tint, applies `unitySkyboxExposure` and `unitySkyboxRotation`, and assigns it to `RenderSettings.skybox`. This affects Unity's Scene/Game skybox preview only; ray-traced sky sampling still uses `_SkyboxTexture` and `_SkyboxLight` in the compute shader.
 
-`GameManager.OnDrawGizmos()`/`OnDrawGizmosSelected()` draws an editor ground preview for the implicit ground plane. In the editor it uses `Handles.DrawSolidRectangleWithOutline()` with depth testing so the opaque ground preview respects scene depth better than a filled `Gizmos.DrawCube()`.
+`GameManager.OnDrawGizmos()`/`OnDrawGizmosSelected()` draws a ground preview for the implicit ground plane. In the editor it uses `Handles.DrawSolidRectangleWithOutline()` with depth testing so the opaque ground preview respects scene depth better than a filled `Gizmos.DrawCube()`.
 
 `RayTracingObject.OnDrawGizmos()` draws sphere/light-sphere gizmos using the world-space collider center and scaled radius. Sphere gizmo alpha follows `RayMaterial.Opacity`; light-sphere gizmos use full opacity because `RayLight` has no opacity field.
 
@@ -133,3 +133,5 @@ Unity requires referenced structured buffers to be bound even when their active 
 Single-frame mode renders one frame, then stops compute dispatch while the camera continues to blit the last `_outputTexture` into the Game view. It lowers the target frame rate but does not set `Time.timeScale` to zero, so Unity keeps presenting the last ray-traced render instead of appearing to fall back to an editor/Scene view. Toggling it off in the inspector, pressing `T`, or pressing `Space` resumes real-time rendering and restores real-time presentation settings.
 
 Unity's editor toolbar Pause freezes the player loop, so runtime code cannot keep dispatching or blitting new frames while that pause is active. `Assets/Editor/GameViewPauseFocus.cs` listens for editor pause events and refocuses/repaints the Game view so the editor remains on the last presented render instead of switching to the Scene tab.
+
+`Assets/Editor/GameViewGizmoPlayModeState.cs` turns the Game view gizmo toggle off when entering Play mode so the ray-traced view starts uncluttered. Gizmos can still be manually enabled during Play mode. When returning to Edit mode, the toggle is restored only if it was enabled before Play mode and was not manually reenabled during Play mode.

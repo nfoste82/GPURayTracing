@@ -34,9 +34,9 @@ Material behavior:
 
 ## Ray Mesh Primitives
 
-`RayMeshPrimitive` procedurally generates simple mesh test objects for triangle rendering. It supports cube, pyramid, and dodecahedron shapes.
+`RayMeshPrimitive` procedurally generates simple mesh test objects for triangle rendering. It supports cube, pyramid, and dodecahedron shapes. It also ensures a `MeshCollider` exists and points at the generated mesh, so these primitives participate in Unity physics as static collision geometry by default.
 
-Editor menu entries under `GameObject > Ray Tracing` create these primitives with `MeshFilter`, `MeshRenderer`, `RayMaterial`, `RayMeshPrimitive`, and `RayTracingObject` components. They are visible in Scene view through the normal `MeshRenderer`, but `RayMeshPrimitive.HideRasterizedRendererInPlayMode` disables the rasterized renderer in Play mode by default so the Game view uses the compute ray tracer only.
+Editor menu entries under `GameObject > Ray Tracing` create these primitives with `MeshFilter`, `MeshRenderer`, `MeshCollider`, `RayMaterial`, `RayMeshPrimitive`, and `RayTracingObject` components. They are visible in Scene view through the normal `MeshRenderer`, but `RayMeshPrimitive.HideRasterizedRendererInPlayMode` disables the rasterized renderer in Play mode by default so the Game view uses the compute ray tracer only.
 
 The generated primitive material defaults are intended for glass/refraction testing: `Glass`, opacity `0.5`, smoothness `1.0`, and refraction index `1.5`.
 
@@ -90,3 +90,5 @@ The scene’s `Directional Light` is a Unity light and is not used by the comput
 Several spheres have `Rigidbody` and `SphereCollider`. Unity physics can move them. Each rendered frame, `GameManager.UpdateSpheres()` reads object transforms and uploads updated positions/radii/materials/lights to the GPU.
 
 This means the ray tracer can render dynamic physics-driven spheres even though it is not using Unity’s standard rendering path for the final image.
+
+Ray mesh primitives have `MeshCollider` but no `Rigidbody` by default. Unity treats those colliders as static obstacles, so dynamic spheres can collide with them without making the meshes dynamic physics bodies.

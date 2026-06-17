@@ -443,7 +443,7 @@ public class GameManager : MonoBehaviour
         shader.Dispatch(kernelHandle, threadGroupsX, threadGroupsY, 1);
     }
     
-    private void OnRenderImage(RenderTexture src, RenderTexture dest)
+    public void RenderImage(RenderTexture src, RenderTexture dest)
     {
         EnsureOutputTextureSize(src.width, src.height);
 
