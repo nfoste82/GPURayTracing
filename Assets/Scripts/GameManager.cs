@@ -19,8 +19,23 @@ public class GameManager : MonoBehaviour
     [Range(0, 5)]
     public int shadowQuality = 2;
 
-    [Range(0f, 1.5f)] 
+    [Range(0f, 1.5f)]
     public float shadowRandomness = 0.3f;
+
+    public enum DebugRenderMode
+    {
+        FinalColor = 0,
+        Normals = 1,
+        Albedo = 2,
+        Emission = 3,
+        DirectLight = 4,
+        Throughput = 5,
+        BounceCount = 6,
+        HitDistance = 7
+    }
+
+    [Header("Debug render modes")]
+    public DebugRenderMode debugRenderMode = DebugRenderMode.FinalColor;
 
     [Header("Misc settings")]
     public bool cameraAutoFocus = true;
@@ -609,6 +624,7 @@ public class GameManager : MonoBehaviour
 
         shader.SetInt("_NumberOfPasses", numberOfPasses);
         shader.SetInt("_NumBounces", numBounces);
+        shader.SetInt("_DebugRenderMode", (int)debugRenderMode);
         shader.SetInt("_ShadowQuality", shadowQuality);
         shader.SetFloat("_ShadowRandomness", shadowRandomness);
         shader.SetFloat("_FocalDistance", cameraFocalDistance);

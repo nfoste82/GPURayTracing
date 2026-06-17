@@ -14,6 +14,7 @@ Important shader globals:
 - `_SkyboxLight`: skybox lighting multiplier.
 - `_NumberOfPasses`: per-frame samples per pixel.
 - `_NumBounces`: maximum bounces for `TracePath()`.
+- `_DebugRenderMode`: selects final path-traced color or a debug visualization.
 - `_ShadowQuality`: soft-shadow grid radius. Total samples per light are `(2 * _ShadowQuality + 1)^2`.
 - `_ShadowRandomness`: jitter amount for soft shadow samples.
 - `_FocalDistance`: depth-of-field focal distance.
@@ -109,6 +110,23 @@ Per bounce:
 8. Update `throughput *= albedo`.
 9. If transparent, also scale throughput by `GetTransmissionAmount()`.
 10. Stop early when throughput is effectively black.
+
+## Debug Render Modes
+
+`GameManager.debugRenderMode` uploads `_DebugRenderMode` to the compute shader. `FinalColor` uses the normal `TracePath()` output. Other modes use `GetDebugRenderColor()` to visualize a single diagnostic quantity.
+
+Available modes:
+
+- `FinalColor`: normal path-traced render.
+- `Normals`: first-hit normal mapped from `[-1, 1]` to `[0, 1]`.
+- `Albedo`: first-hit surface color.
+- `Emission`: first-hit emission, clamped to displayable `[0, 1]` color.
+- `DirectLight`: first-hit direct light from soft light sampling, clamped to `[0, 1]`.
+- `Throughput`: remaining path throughput after iterative scattering, clamped to `[0, 1]`.
+- `BounceCount`: completed non-terminal bounces normalized by `_NumBounces`.
+- `HitDistance`: first-hit distance divided by `25`, clamped to grayscale `[0, 1]`; sky renders white.
+
+Debug modes still use the normal camera ray generation and depth-of-field jitter path, so high `numberOfPasses` can average noisy debug samples for modes involving randomized normals, direct light, or throughput.
 
 ## Transparency And Refraction
 

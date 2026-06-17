@@ -20,6 +20,7 @@ float4 _SkyboxLight;
 int _NumberOfPasses;
 int _ShadowQuality;
 int _NumBounces;
+int _DebugRenderMode;
 float _ShadowRandomness;
 float _FocalDistance;
 float _GroundSmoothness;
@@ -33,6 +34,15 @@ int _NumLights;
 static const float PI = 3.141593f;
 static const float MaxRefractionDiff = 4;
 static const float MaxReflect = 2;
+
+static const int DebugFinalColor = 0;
+static const int DebugNormals = 1;
+static const int DebugAlbedo = 2;
+static const int DebugEmission = 3;
+static const int DebugDirectLight = 4;
+static const int DebugThroughput = 5;
+static const int DebugBounceCount = 6;
+static const int DebugHitDistance = 7;
 
 float rand()
 {
@@ -528,6 +538,82 @@ float3 TracePath(Ray ray)
     return radiance;
 }
 
+float3 GetDebugRenderColor(Ray ray)
+{
+    RayHit hit = GetNearestIntersection(ray);
+
+    if (DidHitSky(hit))
+    {
+        return DebugHitDistance == _DebugRenderMode ? float3(1.0f, 1.0f, 1.0f) : float3(0.0f, 0.0f, 0.0f);
+    }
+
+    if (_DebugRenderMode == DebugNormals)
+    {
+        return hit.normal * 0.5f + 0.5f;
+    }
+
+    if (_DebugRenderMode == DebugAlbedo)
+    {
+        return GetAlbedo(hit);
+    }
+
+    if (_DebugRenderMode == DebugEmission)
+    {
+        return saturate(GetEmission(hit));
+    }
+
+    if (_DebugRenderMode == DebugDirectLight)
+    {
+        return saturate(GetDirectLight(ray, hit, true));
+    }
+
+    if (_DebugRenderMode == DebugHitDistance)
+    {
+        return saturate(hit.distance / 25.0f).xxx;
+    }
+
+    if (_DebugRenderMode == DebugBounceCount || _DebugRenderMode == DebugThroughput)
+    {
+        float3 throughput = float3(1.0f, 1.0f, 1.0f);
+        int completedBounces = 0;
+
+        for (int bounce = 0; bounce < _NumBounces; bounce++)
+        {
+            hit = GetNearestIntersection(ray);
+            if (DidHitSky(hit) || DidHitLight(hit))
+            {
+                break;
+            }
+
+            float3 albedo = GetAlbedo(hit);
+            hit.normal = GetRandomizedNormalBasedOnAmount(hit.normal, hit.smoothness);
+            ray = CreateScatteredRay(ray, hit);
+            throughput *= albedo;
+
+            if (hit.opacity < 1.0f)
+            {
+                throughput *= GetTransmissionAmount(hit);
+            }
+
+            completedBounces++;
+
+            if (!HasPathEnergy(throughput))
+            {
+                break;
+            }
+        }
+
+        if (_DebugRenderMode == DebugBounceCount)
+        {
+            return (completedBounces / (float)max(1, _NumBounces)).xxx;
+        }
+
+        return saturate(throughput);
+    }
+
+    return TracePath(ray);
+}
+
 [numthreads(8,8,1)]
 void CSMain (uint3 id : SV_DispatchThreadID)
 {
@@ -558,7 +644,7 @@ void CSMain (uint3 id : SV_DispatchThreadID)
             ray.direction = normalize(focalPoint - ray.origin);
         } 
         
-        result += TracePath(ray);
+        result += _DebugRenderMode == DebugFinalColor ? TracePath(ray) : GetDebugRenderColor(ray);
     }
    
     Result[id.xy] = float4(result / _NumberOfPasses, 1);

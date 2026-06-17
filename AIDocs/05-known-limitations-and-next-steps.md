@@ -12,6 +12,7 @@ This document captures current implementation limits and likely future work area
 - `_AmbientLight` is uploaded and declared but unused.
 - `_PixelOffset` is uploaded from C# but not declared/used by the shader.
 - `GetTextureColorOnSphere()` and `ModifyNormalByBumpColor()` are unused.
+- Debug render modes are basic first-hit/path diagnostics and do not include UI overlays, legends, or configurable visualization ranges.
 - Shadow rays check regular spheres as blockers, but not light spheres.
 - Refraction/transparency are approximate and do not use Fresnel or physically accurate Snell-law handling.
 - Direct lighting still uses stylized channel-wise `Combine()` inside shadow-light helpers.
@@ -20,7 +21,7 @@ This document captures current implementation limits and likely future work area
 
 - Release mesh buffers in `OnDestroy()` if mesh tracing is re-enabled.
 - Remove or wire up unused shader parameters and helpers.
-- Add debug render modes for normals, albedo, emission, direct light, throughput, bounce count, and hit distance.
+- Add UI overlays, legends, or configurable ranges for debug render modes if more detailed diagnostics are needed.
 
 ## Rendering Improvements
 
