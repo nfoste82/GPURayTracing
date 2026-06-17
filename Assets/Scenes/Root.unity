@@ -1151,13 +1151,12 @@ MonoBehaviour:
   cameraAutoFocus: 1
   cameraFocalDistance: 100
   groundSmoothness: 0.98
+  lightFalloffScale: 0.088
   randomNoise: 0
-  _ambientLightColor: {r: 1, g: 0.9918116, b: 0.7877358, a: 0}
   _skyboxLightColor:
     serializedVersion: 2
     rgba: 4282006091
   skyboxTexture: {fileID: 2800000, guid: 498101212922c43cb9800ac08f1737bd, type: 3}
-  checkerboardTexture: {fileID: 2800000, guid: 9b4cb99bb158f4b35b00452727466a77, type: 3}
   _singleFrame: 0
 --- !u!20 &1029813413
 Camera:
@@ -1256,7 +1255,7 @@ Transform:
   m_GameObject: {fileID: 1144479670}
   serializedVersion: 2
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: -3, y: 3, z: 5}
+  m_LocalPosition: {x: -3, y: 4, z: 5}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -1631,7 +1630,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 0
+  m_IsActive: 1
 --- !u!4 &1590280881
 Transform:
   m_ObjectHideFlags: 0

@@ -11,10 +11,6 @@ float4x4 _CameraInverseProjection;
 Texture2D<float4> _SkyboxTexture;
 SamplerState sampler_SkyboxTexture;
 
-Texture2D<float4> _CheckerboardTexture;
-SamplerState sampler_CheckerboardTexture;
-
-float4 _AmbientLight;
 float4 _SkyboxLight;
 
 int _NumberOfPasses;
@@ -404,21 +400,6 @@ float3 GetSkyboxColor(float3 direction)
     float theta = acos(direction.y) / -PI;
     float phi = atan2(direction.x, -direction.z) / -PI * 0.5f;
     return _SkyboxTexture.SampleLevel(sampler_SkyboxTexture, float2(phi, theta), 0).xyz;
-}
-
-float3 GetTextureColorOnSphere(float3 position, float3 center, float radius)
-{
-    float3 localPos = position - center;
-
-    float v = acos(localPos.z / radius) / PI;
-    float u = acos(localPos.x / (radius * sin(PI * v))) / 2.0f * radius;
-
-    return _CheckerboardTexture.SampleLevel(sampler_CheckerboardTexture, float2(u, v), 0).xyz;
-}
-
-float3 ModifyNormalByBumpColor(float3 normal, float3 bumpColor, float bumpiness)
-{
-    return (normal + bumpColor * bumpiness) * (1 - bumpiness * 0.5f);
 }
 
 float3 GetRandomizedNormalBasedOnAmount(float3 normal, float amount, inout uint rngState)

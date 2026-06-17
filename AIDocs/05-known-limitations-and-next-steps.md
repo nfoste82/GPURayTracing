@@ -8,9 +8,6 @@ This document captures current implementation limits and likely future work area
 - Unity scene meshes, box colliders, walls, and the scene `Directional Light` are not used by the compute shader renderer.
 - There is no acceleration structure. Every ray loops over all spheres and lights.
 - `UpdateSpheres()` uploads all sphere/light data every rendered frame, even though component references are cached.
-- Mesh buffer fields and `RebuildMeshObjectBuffers()` are present but commented out/inactive.
-- `_AmbientLight` is uploaded and declared but unused.
-- `GetTextureColorOnSphere()` and `ModifyNormalByBumpColor()` are unused.
 - Debug render modes are basic first-hit/path diagnostics and do not include UI overlays, legends, or configurable visualization ranges.
 - Shadow rays check regular spheres as blockers, but not light spheres.
 - Refraction/transparency use Fresnel material selection, but transmitted paths still use approximate sphere refraction rather than physically accurate Snell-law volume traversal.
@@ -34,11 +31,10 @@ This document captures current implementation limits and likely future work area
 - `GameManager.lightFalloffScale` exposes direct light falloff tuning to the inspector.
 - Ground smoothness affects the implicit ground plane's first continuation ray instead of always behaving like a mirror.
 - Single-frame mode can be disabled from the inspector, `T`, or `Space` to resume real-time rendering.
+- Unused ambient/checkerboard shader parameters, unused shader helpers, and inactive mesh-buffer scaffolding were removed.
 
 ## Good Near-Term Fixes
 
-- Release mesh buffers in `OnDestroy()` if mesh tracing is re-enabled.
-- Remove or wire up unused shader parameters and helpers.
 - Add UI overlays, legends, or configurable ranges for debug render modes if more detailed diagnostics are needed.
 - Add a simple material/debug preset workflow in the scene so material type changes can be compared quickly.
 

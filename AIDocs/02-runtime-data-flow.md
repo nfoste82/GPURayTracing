@@ -73,10 +73,8 @@ When object counts change, `RebuildBuffers()` also writes `_NumSpheres` and `_Nu
 `SetShaderParameters()` sends:
 
 - `_SkyboxTexture`
-- `_CheckerboardTexture`
 - `_CameraToWorld`
 - `_CameraInverseProjection`
-- `_AmbientLight`
 - `_SkyboxLight`
 - `_Seed`
 - `_NumberOfPasses`
@@ -91,8 +89,6 @@ When object counts change, `RebuildBuffers()` also writes `_NumSpheres` and `_Nu
 - `_Lights`
 
 `_Seed` is uploaded as an integer. When `randomNoise` is enabled, C# uploads a new random seed each rendered frame. When `randomNoise` is disabled, C# uploads a fixed seed for stable deterministic sampling.
-
-`_AmbientLight` is declared in the compute shader but is not currently used by the renderer.
 
 ## Controls And Modes
 
