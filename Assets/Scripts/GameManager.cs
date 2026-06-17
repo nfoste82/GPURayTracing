@@ -2,6 +2,10 @@
 using System.Collections.Generic;
 using DefaultNamespace;
 using UnityEngine;
+#if UNITY_EDITOR
+using UnityEditor;
+using UnityEngine.Rendering;
+#endif
 
 public class GameManager : MonoBehaviour
 {
@@ -58,7 +62,17 @@ public class GameManager : MonoBehaviour
 
     public Texture skyboxTexture;
 
+    [Header("Scene preview")]
+    public bool syncUnitySkyboxToRayTracedSkybox = true;
+
+    [Range(0.0f, 8.0f)]
+    public float unitySkyboxExposure = 1.0f;
+
+    [Range(0.0f, 360.0f)]
+    public float unitySkyboxRotation = 0.0f;
+
     private Vector4 _skyboxLightColorAsVector;
+    private Material _unitySkyboxMaterial;
 
     private RenderTexture _outputTexture;
     private Vector2Int _textureSize;
@@ -86,6 +100,7 @@ public class GameManager : MonoBehaviour
 
     private const int SphereStride = 56;
     private const int TriangleStride = 80;
+    private const float GroundPreviewSize = 40.0f;
 
     private struct Sphere
     {
@@ -211,8 +226,94 @@ public class GameManager : MonoBehaviour
 
     private void Start()
     {
+        SyncUnitySkyboxPreview();
         CreateOutputTexture(Screen.width, Screen.height);
         RebuildBuffers();
+    }
+
+    private void OnValidate()
+    {
+        SyncUnitySkyboxPreview();
+    }
+
+    private void OnDrawGizmos()
+    {
+        DrawGroundPreview();
+    }
+
+    private void OnDrawGizmosSelected()
+    {
+        DrawGroundPreview();
+    }
+
+    private static void DrawGroundPreview()
+    {
+#if UNITY_EDITOR
+        var vertices = new[]
+        {
+            new Vector3(-GroundPreviewSize * 0.5f, 0.0f, -GroundPreviewSize * 0.5f),
+            new Vector3(-GroundPreviewSize * 0.5f, 0.0f, GroundPreviewSize * 0.5f),
+            new Vector3(GroundPreviewSize * 0.5f, 0.0f, GroundPreviewSize * 0.5f),
+            new Vector3(GroundPreviewSize * 0.5f, 0.0f, -GroundPreviewSize * 0.5f)
+        };
+
+        var previousZTest = Handles.zTest;
+        Handles.zTest = CompareFunction.LessEqual;
+        Handles.DrawSolidRectangleWithOutline(vertices, new Color(0.8f, 0.8f, 0.8f, 1.0f), new Color(0.8f, 0.8f, 0.8f, 1.0f));
+
+        float halfSize = GroundPreviewSize * 0.5f;
+        const float gridSpacing = 2.0f;
+        Handles.color = new Color(0.55f, 0.55f, 0.55f, 1.0f);
+        for (float offset = -halfSize; offset <= halfSize; offset += gridSpacing)
+        {
+            Handles.DrawLine(new Vector3(-halfSize, 0.001f, offset), new Vector3(halfSize, 0.001f, offset));
+            Handles.DrawLine(new Vector3(offset, 0.001f, -halfSize), new Vector3(offset, 0.001f, halfSize));
+        }
+        Handles.zTest = previousZTest;
+#else
+        var center = new Vector3(0.0f, -0.001f, 0.0f);
+        var size = new Vector3(GroundPreviewSize, 0.02f, GroundPreviewSize);
+        float halfSize = GroundPreviewSize * 0.5f;
+        const float gridSpacing = 2.0f;
+
+        Gizmos.color = new Color(0.8f, 0.8f, 0.8f, 1.0f);
+        Gizmos.DrawWireCube(center, size);
+
+        for (float offset = -halfSize; offset <= halfSize; offset += gridSpacing)
+        {
+            Gizmos.DrawLine(new Vector3(-halfSize, 0.0f, offset), new Vector3(halfSize, 0.0f, offset));
+            Gizmos.DrawLine(new Vector3(offset, 0.0f, -halfSize), new Vector3(offset, 0.0f, halfSize));
+        }
+#endif
+    }
+
+    private void SyncUnitySkyboxPreview()
+    {
+        if (!syncUnitySkyboxToRayTracedSkybox || skyboxTexture == null)
+        {
+            return;
+        }
+
+        var skyboxShader = Shader.Find("Skybox/Panoramic");
+        if (skyboxShader == null)
+        {
+            return;
+        }
+
+        if (_unitySkyboxMaterial == null || _unitySkyboxMaterial.shader != skyboxShader)
+        {
+            _unitySkyboxMaterial = new Material(skyboxShader)
+            {
+                name = "Ray Traced Skybox Preview",
+                hideFlags = HideFlags.HideAndDontSave
+            };
+        }
+
+        _unitySkyboxMaterial.SetTexture("_MainTex", skyboxTexture);
+        _unitySkyboxMaterial.SetColor("_Tint", _skyboxLightColor);
+        _unitySkyboxMaterial.SetFloat("_Exposure", unitySkyboxExposure);
+        _unitySkyboxMaterial.SetFloat("_Rotation", unitySkyboxRotation);
+        RenderSettings.skybox = _unitySkyboxMaterial;
     }
 
     private void CreateOutputTexture(int width, int height)
@@ -403,9 +504,9 @@ public class GameManager : MonoBehaviour
             var sphere = _spheres[i];
             var sphereObject = _sphereObjects[i];
 
-            sphere.position = sphereObject.transform.position;
+            sphere.position = sphereObject.transform.TransformPoint(sphereObject.collider.center);
 
-            sphere.radius = sphereObject.collider.radius;
+            sphere.radius = GetWorldSphereRadius(sphereObject.collider, sphereObject.transform);
 
             var material = sphereObject.material;
             sphere.color = material.Color.ToVector3();
@@ -422,9 +523,9 @@ public class GameManager : MonoBehaviour
             var sphere = _lights[i];
             var lightObject = _lightObjects[i];
 
-            sphere.position = lightObject.transform.position;
+            sphere.position = lightObject.transform.TransformPoint(lightObject.collider.center);
 
-            sphere.radius = lightObject.collider.radius;
+            sphere.radius = GetWorldSphereRadius(lightObject.collider, lightObject.transform);
 
             var light = lightObject.light;
             sphere.emission = light.Color.ToVector3();
@@ -596,10 +697,10 @@ public class GameManager : MonoBehaviour
         {
             var sphere = new Sphere
             {
-                position = obj.transform.position,
+                position = obj.transform.TransformPoint(sphereCollider.center),
                 color = material.Color.ToVector3(),
                 smoothness = material.Smoothness,
-                radius = sphereCollider.radius,
+                radius = GetWorldSphereRadius(sphereCollider, obj.transform),
                 opacity = material.Opacity,
                 refraction = material.RefractionIndex,
                 materialType = (int)material.Type,
@@ -640,8 +741,8 @@ public class GameManager : MonoBehaviour
         {
             var sphere = new Sphere
             {
-                position = obj.transform.position,
-                radius = sphereCollider.radius,
+                position = obj.transform.TransformPoint(sphereCollider.center),
+                radius = GetWorldSphereRadius(sphereCollider, obj.transform),
                 emission = rayLight.Color.ToVector3(),
                 materialType = 3
             };
@@ -694,6 +795,13 @@ public class GameManager : MonoBehaviour
         {
             shader.SetBuffer(kernelHandle, name, buffer);
         }
+    }
+
+    private static float GetWorldSphereRadius(SphereCollider sphereCollider, Transform sphereTransform)
+    {
+        var scale = sphereTransform.lossyScale;
+        float largestAxisScale = Mathf.Max(Mathf.Abs(scale.x), Mathf.Abs(scale.y), Mathf.Abs(scale.z));
+        return sphereCollider.radius * largestAxisScale;
     }
     
     private float GetNearestIntersectionDistanceForAutoFocus(Ray ray)
