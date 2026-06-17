@@ -1,12 +1,15 @@
 using UnityEngine;
 
-// [RequireComponent(typeof(MeshRenderer))]
-// [RequireComponent(typeof(MeshFilter))]
-[RequireComponent(typeof(SphereCollider))]
 public class RayTracingObject : MonoBehaviour
 {
     private void OnEnable()
     {
+        var meshPrimitive = GetComponent<RayMeshPrimitive>();
+        if (meshPrimitive != null)
+        {
+            meshPrimitive.EnsureMesh();
+        }
+
         GetComponentInParent<GameManager>().RegisterObject(this);
     }
 

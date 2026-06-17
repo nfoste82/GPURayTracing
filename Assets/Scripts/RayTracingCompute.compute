@@ -26,6 +26,7 @@ uint _Seed;
 
 int _NumSpheres;
 int _NumLights;
+int _NumTriangles;
 
 static const float PI = 3.141593f;
 static const float MaxRefractionDiff = 4;
@@ -44,6 +45,8 @@ static const int MaterialDiffuse = 0;
 static const int MaterialMetal = 1;
 static const int MaterialGlass = 2;
 static const int MaterialEmissive = 3;
+
+static const float MinDirectLightThroughput = 0.01f;
 
 uint Hash(uint value)
 {
@@ -86,6 +89,22 @@ struct Sphere
 
 StructuredBuffer<Sphere> _Spheres;
 StructuredBuffer<Sphere> _Lights;
+
+struct MeshTriangle
+{
+    float3 vertex0;
+    float3 vertex1;
+    float3 vertex2;
+    float3 normal;
+    float3 color;
+    float smoothness;
+    float opacity;
+    float refraction;
+    int materialType;
+    int meshIndex;
+};
+
+StructuredBuffer<MeshTriangle> _Triangles;
 
 // =======================================================
 // Ray
@@ -149,6 +168,7 @@ struct RayHit
     float distanceThroughOpacity;
     float refraction;
     int materialType;
+    int meshIndex;
 };
 
 RayHit CreateRayHit()
@@ -165,6 +185,7 @@ RayHit CreateRayHit()
     hit.opacity = 1.0f;
     hit.refraction = 1.0f;
     hit.materialType = MaterialDiffuse;
+    hit.meshIndex = -1;
 
     return hit;
 }
@@ -188,6 +209,7 @@ void IntersectGroundPlane(Ray ray, inout RayHit bestHit)
         bestHit.distanceThroughOpacity = 0.0f;
         bestHit.refraction = 1.0f;
         bestHit.materialType = MaterialDiffuse;
+        bestHit.meshIndex = -1;
     }
 }
 
@@ -227,6 +249,75 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
         bestHit.distanceThroughOpacity = 0.0f;
         bestHit.refraction = sphere.refraction;
         bestHit.materialType = sphere.materialType;
+        bestHit.meshIndex = -1;
+    }
+}
+
+bool IntersectTriangleRaw(Ray ray, MeshTriangle meshTriangle, out float hitDistance, out float3 normal)
+{
+    float3 edge1 = meshTriangle.vertex1 - meshTriangle.vertex0;
+    float3 edge2 = meshTriangle.vertex2 - meshTriangle.vertex0;
+    float3 p = cross(ray.direction, edge2);
+    float determinant = dot(edge1, p);
+
+    hitDistance = 1.#INF;
+    normal = meshTriangle.normal;
+
+    if (abs(determinant) < 0.000001f)
+    {
+        return false;
+    }
+
+    float inverseDeterminant = 1.0f / determinant;
+    float3 t = ray.origin - meshTriangle.vertex0;
+    float u = dot(t, p) * inverseDeterminant;
+
+    if (u < 0.0f || u > 1.0f)
+    {
+        return false;
+    }
+
+    float3 q = cross(t, edge1);
+    float v = dot(ray.direction, q) * inverseDeterminant;
+
+    if (v < 0.0f || u + v > 1.0f)
+    {
+        return false;
+    }
+
+    hitDistance = dot(edge2, q) * inverseDeterminant;
+    return hitDistance > 0.001f;
+}
+
+void IntersectTriangle(Ray ray, inout RayHit bestHit, MeshTriangle meshTriangle)
+{
+    float hitDistance;
+    float3 normal;
+    if (!IntersectTriangleRaw(ray, meshTriangle, hitDistance, normal))
+    {
+        return;
+    }
+
+    if (hitDistance > 0.001f && hitDistance < bestHit.distance)
+    {
+        if (dot(normal, ray.direction) > 0.0f)
+        {
+            normal = -normal;
+        }
+
+        bestHit.position = ray.origin + hitDistance * ray.direction;
+        bestHit.obj_position = bestHit.position;
+        bestHit.normal = normal;
+        bestHit.emission = float3(0.0f, 0.0f, 0.0f);
+        bestHit.color = meshTriangle.color;
+        bestHit.obj_radius = 0.0f;
+        bestHit.distance = hitDistance;
+        bestHit.smoothness = meshTriangle.smoothness;
+        bestHit.opacity = meshTriangle.opacity;
+        bestHit.distanceThroughOpacity = 0.0f;
+        bestHit.refraction = meshTriangle.refraction;
+        bestHit.materialType = meshTriangle.materialType;
+        bestHit.meshIndex = meshTriangle.meshIndex;
     }
 }
 
@@ -245,6 +336,11 @@ RayHit GetNearestIntersection(Ray ray)
 	for (i = 0; i < _NumLights; i++)
 	{
 		IntersectSphere(ray, bestHit, _Lights[i]);
+	}
+
+	for (i = 0; i < _NumTriangles; i++)
+	{
+		IntersectTriangle(ray, bestHit, _Triangles[i]);
 	}
 
 	return bestHit;
@@ -333,9 +429,37 @@ float3 GetShadowTransmittance(Ray rayToLight, float distanceToLight)
         }
     }
 
+    for (j = 0; j < _NumTriangles; j++)
+    {
+        RayHit blockerHit = CreateRayHit();
+        blockerHit.distance = distanceToLight;
+        IntersectTriangle(rayToLight, blockerHit, _Triangles[j]);
+
+        if (blockerHit.distance >= distanceToLight)
+        {
+            continue;
+        }
+
+        if (blockerHit.opacity >= 1.0f)
+        {
+            return float3(0.0f, 0.0f, 0.0f);
+        }
+
+        if (blockerHit.distance < nearestTransparentHit.distance)
+        {
+            nearestTransparentHit = blockerHit;
+        }
+    }
+
     if (nearestTransparentHit.distance >= distanceToLight)
     {
         return float3(1.0f, 1.0f, 1.0f);
+    }
+
+    if (nearestTransparentHit.obj_radius <= 0.0f)
+    {
+        float opacity = saturate(nearestTransparentHit.opacity);
+        return lerp(float3(1.0f, 1.0f, 1.0f), nearestTransparentHit.color, opacity) * (1.0f - opacity);
     }
 
     float3 halfway = GetClosestPointOnLineSegment(
@@ -482,6 +606,11 @@ bool HasPathEnergy(float3 throughput)
     return max(throughput.x, max(throughput.y, throughput.z)) > 0.001f;
 }
 
+bool ShouldSampleDirectLight(float3 throughput)
+{
+    return max(throughput.x, max(throughput.y, throughput.z)) > MinDirectLightThroughput;
+}
+
 void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit)
 {
     ray.direction = Refract(sourceRay.direction, 1.0f, hit.refraction, hit.normal);
@@ -493,6 +622,62 @@ void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit)
 
     hit.distanceThroughOpacity = length(offset);
     ray.direction = Refract(ray.direction, hit.refraction, 1.0f, exitPointNormal);
+}
+
+void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, RayHit hit)
+{
+    float3 normal = hit.normal;
+    float targetRefraction = max(1.0f, hit.refraction);
+
+    float3 entryDirection = Refract(sourceRay.direction, 1.0f, targetRefraction, normal);
+    if (dot(entryDirection, entryDirection) <= 0.0f)
+    {
+        ray.direction = reflect(sourceRay.direction, normal);
+        ray.origin = hit.position + (ray.direction * 0.001f);
+        return;
+    }
+
+    entryDirection = normalize(entryDirection);
+    Ray insideRay = CreateRay(hit.position + entryDirection * 0.001f, entryDirection);
+    float exitDistance = 1.#INF;
+    float3 exitNormal = normal;
+
+    int i;
+    for (i = 0; i < _NumTriangles; i++)
+    {
+        MeshTriangle meshTriangle = _Triangles[i];
+        if (meshTriangle.meshIndex != hit.meshIndex)
+        {
+            continue;
+        }
+
+        float triangleDistance;
+        float3 triangleNormal;
+        if (IntersectTriangleRaw(insideRay, meshTriangle, triangleDistance, triangleNormal) && triangleDistance < exitDistance)
+        {
+            exitDistance = triangleDistance;
+            exitNormal = triangleNormal;
+        }
+    }
+
+    if (exitDistance >= 1.#INF)
+    {
+        ray.direction = entryDirection;
+        ray.origin = insideRay.origin;
+        return;
+    }
+
+    if (dot(exitNormal, entryDirection) < 0.0f)
+    {
+        exitNormal = -exitNormal;
+    }
+
+    float3 exitPoint = insideRay.origin + entryDirection * exitDistance;
+    float3 exitDirection = Refract(entryDirection, targetRefraction, 1.0f, -exitNormal);
+    ray.direction = dot(exitDirection, exitDirection) > 0.0f
+        ? normalize(exitDirection)
+        : reflect(entryDirection, -exitNormal);
+    ray.origin = exitPoint + (ray.direction * 0.001f);
 }
 
 ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, inout uint rngState)
@@ -508,9 +693,18 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
 
         if (transmission > 0.0f)
         {
-            ApplySphereRefraction(scatteredRay, sourceRay, hit);
-            float3 tint = lerp(float3(1.0f, 1.0f, 1.0f), albedo, 1.0f - hit.opacity);
-            return CreateScatterResult(scatteredRay, tint * transmission * (1.0f - fresnelReflectance));
+            if (hit.obj_radius > 0.0f)
+            {
+                ApplySphereRefraction(scatteredRay, sourceRay, hit);
+            }
+            else
+            {
+                ApplyPlanarTransmission(scatteredRay, sourceRay, hit);
+            }
+
+            float3 tint = lerp(float3(1.0f, 1.0f, 1.0f), albedo, hit.opacity);
+            float transparentEnergy = hit.obj_radius > 0.0f ? transmission * (1.0f - fresnelReflectance) : transmission;
+            return CreateScatterResult(scatteredRay, tint * transparentEnergy);
         }
 
         return CreateScatterResult(scatteredRay, fresnelReflectance.xxx);
@@ -572,9 +766,12 @@ float3 TracePath(Ray ray, inout uint rngState)
         }
 
         float3 albedo = GetAlbedo(hit);
-        bool softShadows = bounce == 0;
-        float3 directLight = GetDirectLight(ray, hit, softShadows, rngState);
-        radiance += throughput * albedo * directLight * hit.opacity;
+        if (ShouldSampleDirectLight(throughput))
+        {
+            bool softShadows = bounce == 0;
+            float3 directLight = GetDirectLight(ray, hit, softShadows, rngState);
+            radiance += throughput * albedo * directLight * hit.opacity;
+        }
 
         ScatterResult scatter = CreateScatteredRay(ray, hit, bounce, rngState);
         ray = scatter.ray;

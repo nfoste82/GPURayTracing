@@ -6,11 +6,15 @@ The compute renderer does not use Unity materials, mesh renderers, or built-in l
 
 Any object with `RayTracingObject` registers with `GameManager` when enabled.
 
-`RayTracingObject` requires a `SphereCollider`. The collider radius becomes the ray-traced sphere radius. The object transform position becomes the sphere center.
+`RayTracingObject` can represent a sphere, light sphere, or triangle mesh depending on attached components.
+
+Sphere and light objects use a `SphereCollider`; the collider radius becomes the ray-traced sphere radius and the object transform position becomes the sphere center.
+
+Mesh objects use `RayMaterial` plus `MeshFilter` and should not have a `SphereCollider`, because sphere registration takes priority. The shared mesh triangles are transformed to world space and uploaded directly.
 
 ## Materials
 
-`RayMaterial` marks a `RayTracingObject` as a regular renderable sphere.
+`RayMaterial` marks a `RayTracingObject` as regular renderable geometry. With a `SphereCollider`, the object renders as a sphere. With a `MeshFilter` and no `SphereCollider`, the object renders as uploaded triangles.
 
 Fields:
 
@@ -26,7 +30,15 @@ Material behavior:
 
 - `Diffuse`: direct lighting with cosine-weighted hemisphere scattering for later bounces.
 - `Metal`: reflective scattering, with `Smoothness` controlling roughness.
-- `Glass`: Schlick Fresnel weights approximate sphere refraction/transmission.
+- `Glass`: Schlick Fresnel weights approximate sphere refraction/transmission. Triangle meshes use approximate closed-mesh entry/exit refraction.
+
+## Ray Mesh Primitives
+
+`RayMeshPrimitive` procedurally generates simple mesh test objects for triangle rendering. It supports cube, pyramid, and dodecahedron shapes.
+
+Editor menu entries under `GameObject > Ray Tracing` create these primitives with `MeshFilter`, `MeshRenderer`, `RayMaterial`, `RayMeshPrimitive`, and `RayTracingObject` components. They are visible in Scene view through the normal `MeshRenderer`, but `RayMeshPrimitive.HideRasterizedRendererInPlayMode` disables the rasterized renderer in Play mode by default so the Game view uses the compute ray tracer only.
+
+The generated primitive material defaults are intended for glass/refraction testing: `Glass`, opacity `0.5`, smoothness `1.0`, and refraction index `1.5`.
 
 ## Lights
 
@@ -53,7 +65,7 @@ Ground properties:
 
 ## Unity Scene Objects
 
-The root scene contains Unity meshes/colliders for walls and ground. These are not traced by the compute shader. They can still affect Unity physics, scene editing, and visual editor context.
+Unity meshes are traced by the compute shader only when they are registered through `RayTracingObject` plus `RayMaterial` and `MeshFilter`, without being registered as spheres through `SphereCollider`. Other Unity meshes/colliders can still affect Unity physics, scene editing, and visual editor context without being ray traced.
 
 The scene’s `Directional Light` is a Unity light and is not used by the compute shader lighting model.
 

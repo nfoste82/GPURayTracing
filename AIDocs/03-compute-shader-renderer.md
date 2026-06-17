@@ -20,8 +20,9 @@ Important shader globals:
 - `_FocalDistance`: depth-of-field focal distance.
 - `_GroundSmoothness`: smoothness for the implicit ground plane.
 - `_Seed`: integer seed used to initialize per-pixel/per-pass shader RNG state.
-- `_NumSpheres`, `_NumLights`: active buffer counts.
+- `_NumSpheres`, `_NumLights`, `_NumTriangles`: active buffer counts.
 - `_Spheres`, `_Lights`: structured buffers of `Sphere` data.
+- `_Triangles`: structured buffer of `MeshTriangle` data.
 
 ## Data Structures
 
@@ -43,7 +44,27 @@ struct Sphere
 
 `Ray` contains only origin and direction.
 
-`RayHit` stores hit position, object position/radius, normal, emission, color, distance, smoothness, opacity, transparent travel distance, refraction index, and material type.
+Triangle meshes are uploaded as world-space triangles:
+
+```hlsl
+struct MeshTriangle
+{
+    float3 vertex0;
+    float3 vertex1;
+    float3 vertex2;
+    float3 normal;
+    float3 color;
+    float smoothness;
+    float opacity;
+    float refraction;
+    int materialType;
+    int meshIndex;
+};
+```
+
+`meshIndex` identifies which uploaded triangles belong to the same mesh object. It is used by approximate closed-mesh refraction to find the exit face.
+
+`RayHit` stores hit position, object position/radius, normal, emission, color, distance, smoothness, opacity, transparent travel distance, refraction index, material type, and mesh index.
 
 ## Ray Generation
 
@@ -73,8 +94,9 @@ It jitters the ray origin by a small fixed amount and re-aims the ray at the foc
 1. `IntersectGroundPlane()` for an infinite plane at world `y = 0`.
 2. Every sphere in `_Spheres`.
 3. Every emissive sphere in `_Lights`.
+4. Every triangle in `_Triangles`.
 
-There is no acceleration structure. Every ray is `O(numSpheres + numLights)`.
+There is no acceleration structure. Every ray is `O(numSpheres + numLights + numTriangles)`.
 
 ## Lighting And Shadows
 
@@ -82,7 +104,7 @@ Direct lighting comes from emissive sphere lights.
 
 `GetLightHittingPoint()` computes direct lighting by taking stochastic disk samples across each emissive sphere light. Bounce 0 uses `max(1, _ShadowQuality + 1)` samples per light, while later bounces use one sample per light to reduce cost.
 
-Shadow rays test blockers only against `_Spheres`, not `_Lights`. Opaque blockers early-out immediately, while transparent blockers use the nearest transparent hit before the light distance to tint transmitted shadow light.
+Shadow rays test blockers against `_Spheres` and `_Triangles`, but not `_Lights`. Opaque blockers early-out immediately, while transparent blockers use the nearest transparent hit before the light distance to tint transmitted shadow light.
 
 Transparent blockers can tint shadow light by using the blocking sphere color and opacity.
 
@@ -105,7 +127,7 @@ Per bounce:
 2. If it hits sky, add `throughput * skyColor` and stop.
 3. If it hits a light, add `throughput * emission` and stop.
 4. For non-diffuse materials, randomize the normal based on surface smoothness.
-5. Sample direct light. Bounce 0 uses multiple stochastic soft-shadow samples; later bounces use one light sample.
+5. Sample direct light if the path throughput is above `MinDirectLightThroughput`. Bounce 0 uses multiple stochastic soft-shadow samples; later bounces use one light sample.
 6. Add direct contribution: `throughput * albedo * directLight * hit.opacity`.
 7. Create the next ray using the hit material type.
 8. Update `throughput` with the scatter attenuation.
@@ -116,7 +138,7 @@ Material scattering currently supports:
 
 - `Diffuse`: uses direct lighting and cosine-weighted hemisphere scattering on later bounces, attenuated by albedo. On bounce 0, smoothness blends the continuation ray between diffuse scattering and reflection, which allows the implicit ground plane's `_GroundSmoothness` to affect visible reflections.
 - `Metal`: reflects around the surface normal, with smoothness controlling rough reflection direction randomization, and attenuates by albedo.
-- `Glass`: uses Schlick Fresnel reflectance to weight the existing approximate sphere refraction path. Transmitted paths are tinted by albedo and scaled by opacity-derived transmission.
+- `Glass`: uses Schlick Fresnel reflectance to weight the existing approximate sphere refraction path for spheres. For mesh triangles, it uses an approximate closed-mesh entry/exit path that refracts into the mesh, intersects the nearest exit triangle with the same `meshIndex`, refracts back out, and continues from the exit point.
 
 ## Debug Render Modes
 
@@ -145,6 +167,16 @@ Transparent/glass sphere refraction is approximate. `ApplySphereRefraction()`:
 4. Refracts back out into air.
 
 Glass material scattering now uses Schlick Fresnel reflectance to weight transmission, but the transmitted ray still uses the project’s approximate sphere refraction helper rather than a full Snell-law volume traversal. This avoids the high variance of randomly choosing reflection or transmission per sample.
+
+Triangle mesh refraction uses `ApplyPlanarTransmission()` rather than the sphere helper:
+
+1. Refract from air into the hit triangle using the project `Refract()` helper.
+2. Cast an internal ray against triangles with the same `meshIndex`.
+3. Use the nearest internal triangle hit as the exit face.
+4. Refract from material back into air.
+5. Continue the path from the exit point.
+
+This gives visible prism-like behavior for simple closed meshes such as pyramids. It is still approximate: it assumes a mostly closed/convex mesh, does not handle nested media, and does not model distance-based absorption.
 
 ## Randomness
 

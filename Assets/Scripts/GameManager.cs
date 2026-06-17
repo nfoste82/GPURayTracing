@@ -70,6 +70,10 @@ public class GameManager : MonoBehaviour
     private List<Sphere> _lights = new List<Sphere>();
     private readonly List<RayTracedLight> _lightObjects = new List<RayTracedLight>();
     private ComputeBuffer _lightBuffer;
+
+    private List<Triangle> _triangles = new List<Triangle>();
+    private readonly List<RayTracedMesh> _meshObjects = new List<RayTracedMesh>();
+    private ComputeBuffer _triangleBuffer;
     
     [Header("Render single frame")] 
     public bool _singleFrame = false;
@@ -79,6 +83,9 @@ public class GameManager : MonoBehaviour
 
     private static bool _buffersNeedRebuilding = false;
     private static readonly List<RayTracingObject> _rayTracingObjects = new List<RayTracingObject>();
+
+    private const int SphereStride = 56;
+    private const int TriangleStride = 80;
 
     private struct Sphere
     {
@@ -141,9 +148,71 @@ public class GameManager : MonoBehaviour
         public SphereCollider collider;
     }
 
+    private struct Triangle
+    {
+        public Vector3 vertex0;
+        public Vector3 vertex1;
+        public Vector3 vertex2;
+        public Vector3 normal;
+        public Vector3 color;
+        public float smoothness;
+        public float opacity;
+        public float refraction;
+        public int materialType;
+        public int meshIndex;
+
+        public float Intersect(Vector3 origin, Vector3 direction)
+        {
+            var edge1 = vertex1 - vertex0;
+            var edge2 = vertex2 - vertex0;
+            var p = Vector3.Cross(direction, edge2);
+            var determinant = Vector3.Dot(edge1, p);
+
+            if (Mathf.Abs(determinant) < 0.000001f)
+            {
+                return -1.0f;
+            }
+
+            var inverseDeterminant = 1.0f / determinant;
+            var t = origin - vertex0;
+            var u = Vector3.Dot(t, p) * inverseDeterminant;
+
+            if (u < 0.0f || u > 1.0f)
+            {
+                return -1.0f;
+            }
+
+            var q = Vector3.Cross(t, edge1);
+            var v = Vector3.Dot(direction, q) * inverseDeterminant;
+
+            if (v < 0.0f || u + v > 1.0f)
+            {
+                return -1.0f;
+            }
+
+            var hitDistance = Vector3.Dot(edge2, q) * inverseDeterminant;
+            return hitDistance > 0.001f ? hitDistance : -1.0f;
+        }
+    }
+
+    private struct RayTracedMesh
+    {
+        public RayTracingObject obj;
+        public Transform transform;
+        public RayMaterial material;
+        public Mesh mesh;
+        public Matrix4x4 previousLocalToWorld;
+        public Vector3 previousColor;
+        public float previousSmoothness;
+        public float previousOpacity;
+        public float previousRefraction;
+        public int previousMaterialType;
+    }
+
     private void Start()
     {
         CreateOutputTexture(Screen.width, Screen.height);
+        RebuildBuffers();
     }
 
     private void CreateOutputTexture(int width, int height)
@@ -253,6 +322,7 @@ public class GameManager : MonoBehaviour
         _outputTexture?.Release();
         _sphereBuffer?.Release();
         _lightBuffer?.Release();
+        _triangleBuffer?.Release();
     }
 
     private void EnsureOutputTextureSize(int width, int height)
@@ -309,6 +379,7 @@ public class GameManager : MonoBehaviour
             cameraFocalDistance = autoFocusDistance;
 
             UpdateSpheres();
+            UpdateTriangles();
 
             var kernelHandle = shader.FindKernel("CSMain");
 
@@ -361,14 +432,114 @@ public class GameManager : MonoBehaviour
             _lights[i] = sphere;
         }
 
-        if (_sphereBuffer != null)
+        if (_sphereBuffer != null && _spheres.Count > 0)
         {
             _sphereBuffer.SetData(_spheres);
         }
 
-        if (_lightBuffer != null)
+        if (_lightBuffer != null && _lights.Count > 0)
         {
             _lightBuffer.SetData(_lights);
+        }
+    }
+
+    private void UpdateTriangles()
+    {
+        if (_meshObjects.Count == 0)
+        {
+            return;
+        }
+
+        if (!UpdateMeshChangeCache())
+        {
+            return;
+        }
+
+        RebuildTriangleData();
+
+        if (_triangleBuffer != null && _triangles.Count > 0)
+        {
+            _triangleBuffer.SetData(_triangles);
+        }
+    }
+
+    private bool UpdateMeshChangeCache()
+    {
+        bool changed = false;
+
+        for (int i = 0; i < _meshObjects.Count; i++)
+        {
+            var meshObject = _meshObjects[i];
+            var material = meshObject.material;
+            var localToWorld = meshObject.transform.localToWorldMatrix;
+            var color = material.Color.ToVector3();
+            var smoothness = material.Smoothness;
+            var opacity = Mathf.Clamp01(material.Opacity);
+            var refraction = material.RefractionIndex;
+            var materialType = (int)material.Type;
+
+            if (meshObject.previousLocalToWorld == localToWorld
+                && meshObject.previousColor == color
+                && Mathf.Approximately(meshObject.previousSmoothness, smoothness)
+                && Mathf.Approximately(meshObject.previousOpacity, opacity)
+                && Mathf.Approximately(meshObject.previousRefraction, refraction)
+                && meshObject.previousMaterialType == materialType)
+            {
+                continue;
+            }
+
+            meshObject.previousLocalToWorld = localToWorld;
+            meshObject.previousColor = color;
+            meshObject.previousSmoothness = smoothness;
+            meshObject.previousOpacity = opacity;
+            meshObject.previousRefraction = refraction;
+            meshObject.previousMaterialType = materialType;
+            _meshObjects[i] = meshObject;
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    private void RebuildTriangleData()
+    {
+        _triangles.Clear();
+
+        for (int meshIndex = 0; meshIndex < _meshObjects.Count; meshIndex++)
+        {
+            var meshObject = _meshObjects[meshIndex];
+            var mesh = meshObject.mesh;
+            if (mesh == null)
+            {
+                continue;
+            }
+
+            var vertices = mesh.vertices;
+            var indices = mesh.triangles;
+            var localToWorld = meshObject.transform.localToWorldMatrix;
+            var material = meshObject.material;
+
+            for (int i = 0; i + 2 < indices.Length; i += 3)
+            {
+                var vertex0 = localToWorld.MultiplyPoint3x4(vertices[indices[i]]);
+                var vertex1 = localToWorld.MultiplyPoint3x4(vertices[indices[i + 1]]);
+                var vertex2 = localToWorld.MultiplyPoint3x4(vertices[indices[i + 2]]);
+                var normal = Vector3.Cross(vertex1 - vertex0, vertex2 - vertex0).normalized;
+
+                _triangles.Add(new Triangle
+                {
+                    vertex0 = vertex0,
+                    vertex1 = vertex1,
+                    vertex2 = vertex2,
+                    normal = normal,
+                    color = material.Color.ToVector3(),
+                    smoothness = material.Smoothness,
+                    opacity = Mathf.Clamp01(material.Opacity),
+                    refraction = material.RefractionIndex,
+                    materialType = (int)material.Type,
+                    meshIndex = meshIndex
+                });
+            }
         }
     }
 
@@ -377,23 +548,35 @@ public class GameManager : MonoBehaviour
         _buffersNeedRebuilding = false;
         _sphereBuffer?.Release();
         _lightBuffer?.Release();
+        _triangleBuffer?.Release();
         _sphereBuffer = null;
         _lightBuffer = null;
+        _triangleBuffer = null;
+
+        RebuildTriangleData();
 
         shader.SetInt("_NumSpheres", _spheres.Count);
         shader.SetInt("_NumLights", _lights.Count);
+        shader.SetInt("_NumTriangles", _triangles.Count);
 
-        if (_spheres.Count > 0)
+        _sphereBuffer = CreateComputeBuffer(_spheres, SphereStride);
+        _lightBuffer = CreateComputeBuffer(_lights, SphereStride);
+        _triangleBuffer = CreateComputeBuffer(_triangles, TriangleStride);
+    }
+
+    private static ComputeBuffer CreateComputeBuffer<T>(List<T> data, int stride) where T : struct
+    {
+        var buffer = new ComputeBuffer(Mathf.Max(1, data.Count), stride);
+        if (data.Count > 0)
         {
-            _sphereBuffer = new ComputeBuffer(_spheres.Count, 56);
-            _sphereBuffer.SetData(_spheres);
+            buffer.SetData(data);
+        }
+        else
+        {
+            buffer.SetData(new[] { default(T) });
         }
 
-        if (_lights.Count > 0)
-        {
-            _lightBuffer = new ComputeBuffer(_lights.Count, 56);
-            _lightBuffer.SetData(_lights);
-        }
+        return buffer;
     }
 
     public void RegisterObject(RayTracingObject obj)
@@ -409,7 +592,7 @@ public class GameManager : MonoBehaviour
         var material = obj.GetComponent<RayMaterial>();
         var sphereCollider = obj.GetComponent<SphereCollider>();
 
-        if (material != null)
+        if (material != null && sphereCollider != null)
         {
             var sphere = new Sphere
             {
@@ -429,11 +612,32 @@ public class GameManager : MonoBehaviour
                 material = material,
                 collider = sphereCollider
             });
+            return;
         }
-        else
+
+        var meshFilter = obj.GetComponent<MeshFilter>();
+        if (material != null && meshFilter != null && meshFilter.sharedMesh != null)
         {
-            var rayLight = obj.GetComponent<RayLight>();
-            
+            _meshObjects.Add(new RayTracedMesh
+            {
+                obj = obj,
+                transform = obj.transform,
+                material = material,
+                mesh = meshFilter.sharedMesh,
+                previousLocalToWorld = obj.transform.localToWorldMatrix,
+                previousColor = material.Color.ToVector3(),
+                previousSmoothness = material.Smoothness,
+                previousOpacity = Mathf.Clamp01(material.Opacity),
+                previousRefraction = material.RefractionIndex,
+                previousMaterialType = (int)material.Type
+            });
+            RebuildTriangleData();
+            return;
+        }
+
+        var rayLight = obj.GetComponent<RayLight>();
+        if (rayLight != null && sphereCollider != null)
+        {
             var sphere = new Sphere
             {
                 position = obj.transform.position,
@@ -449,7 +653,10 @@ public class GameManager : MonoBehaviour
                 light = rayLight,
                 collider = sphereCollider
             });
+            return;
         }
+
+        Debug.LogWarning($"RayTracingObject '{obj.name}' needs RayMaterial with SphereCollider or MeshFilter, or RayLight with SphereCollider.", obj);
     }
     
     public void UnregisterObject(RayTracingObject obj)
@@ -470,6 +677,14 @@ public class GameManager : MonoBehaviour
         {
             _lightObjects.RemoveAt(lightIndex);
             _lights.RemoveAt(lightIndex);
+            return;
+        }
+
+        var meshIndex = _meshObjects.FindIndex(mesh => mesh.obj == obj);
+        if (meshIndex >= 0)
+        {
+            _meshObjects.RemoveAt(meshIndex);
+            RebuildTriangleData();
         }
     }
 
@@ -502,6 +717,16 @@ public class GameManager : MonoBehaviour
         foreach (var sphere in _lights)
         {
             var hitDistance = sphere.Intersect(ray.origin, ray.direction);
+
+            if (hitDistance >= 0.0f && hitDistance < nearestDistance)
+            {
+                nearestDistance = hitDistance;
+            }
+        }
+
+        foreach (var triangle in _triangles)
+        {
+            var hitDistance = triangle.Intersect(ray.origin, ray.direction);
 
             if (hitDistance >= 0.0f && hitDistance < nearestDistance)
             {
@@ -552,5 +777,6 @@ public class GameManager : MonoBehaviour
 
         SetComputeBuffer("_Spheres", _sphereBuffer, kernelHandle);
         SetComputeBuffer("_Lights", _lightBuffer, kernelHandle);
+        SetComputeBuffer("_Triangles", _triangleBuffer, kernelHandle);
     }
 }

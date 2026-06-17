@@ -16,14 +16,17 @@ During `OnRenderImage()`, `GameManager` checks the source render target dimensio
 GetComponentInParent<GameManager>().RegisterObject(this);
 ```
 
+If the object has `RayMeshPrimitive`, `RayTracingObject.OnEnable()` first calls `RayMeshPrimitive.EnsureMesh()` so the procedural mesh exists before registration.
+
 `RegisterObject()` classifies the object by components:
 
-- If it has `RayMaterial`, it becomes a ray-traced sphere in `_spheres` and `_sphereObjects`.
-- Otherwise, it is expected to have `RayLight` and becomes an emissive sphere light in `_lights` and `_lightObjects`.
+- If it has `RayMaterial` and `SphereCollider`, it becomes a ray-traced sphere in `_spheres` and `_sphereObjects`.
+- If it has `RayMaterial` and `MeshFilter`, but no `SphereCollider`, it becomes a triangle mesh in `_triangles` and `_meshObjects`.
+- If it has `RayLight` and `SphereCollider`, it becomes an emissive sphere light in `_lights` and `_lightObjects`.
 
-Each registered object requires a `SphereCollider`. The collider radius is used as the ray-traced sphere radius.
+Sphere and light objects require a `SphereCollider`. The collider radius is used as the ray-traced sphere radius. Mesh objects require a `MeshFilter`; the shared mesh triangles are transformed to world space and uploaded directly.
 
-Registration caches the `Transform`, `SphereCollider`, and either `RayMaterial` or `RayLight` references so per-frame sphere updates do not repeatedly call `GetComponent<>()`.
+Registration caches the `Transform`, `SphereCollider`, shared `Mesh`, and either `RayMaterial` or `RayLight` references so per-frame updates do not repeatedly call `GetComponent<>()`.
 
 `UnregisterObject()` removes the object from the CPU object cache and from the matching sphere/light data list, then marks buffers for rebuilding. This prevents disabled/destroyed ray-traced objects from leaving stale entries in the GPU buffers.
 
@@ -38,10 +41,11 @@ When `_running` is true, it:
 3. Computes autofocus distance if `cameraAutoFocus` is enabled.
 4. Writes the resulting focal distance to `cameraFocalDistance`.
 5. Calls `UpdateSpheres()` to refresh CPU sphere/light structs from cached Unity object references.
-6. Finds the compute kernel `CSMain`.
-7. Calls `SetShaderParameters()`.
-8. Dispatches the compute shader through `UpdateTextureFromCompute()`.
-9. Stops rendering again if single-frame mode is enabled.
+6. Calls `UpdateTriangles()` to refresh registered mesh triangle data only if a cached mesh transform or material value changed.
+7. Finds the compute kernel `CSMain`.
+8. Calls `SetShaderParameters()`.
+9. Dispatches the compute shader through `UpdateTextureFromCompute()`.
+10. Stops rendering again if single-frame mode is enabled.
 
 After dispatch, it always calls:
 
@@ -64,9 +68,26 @@ Graphics.Blit(_outputTexture, dest);
 - `float refraction`
 - `int materialType`
 
-When object counts change, `RebuildBuffers()` also writes `_NumSpheres` and `_NumLights`, including zero counts, so the shader does not read stale buffer entries after unregistering objects.
+`RebuildBuffers()` also releases and recreates a triangle buffer using stride `80`, matching the HLSL `MeshTriangle` struct layout:
+
+- `float3 vertex0`
+- `float3 vertex1`
+- `float3 vertex2`
+- `float3 normal`
+- `float3 color`
+- `float smoothness`
+- `float opacity`
+- `float refraction`
+- `int materialType`
+- `int meshIndex`
+
+When object counts change, `RebuildBuffers()` also writes `_NumSpheres`, `_NumLights`, and `_NumTriangles`, including zero counts, so the shader does not read stale buffer entries after unregistering objects.
+
+Unity requires referenced structured buffers to be bound even when their active count is zero. `RebuildBuffers()` therefore creates sphere, light, and triangle buffers with at least one dummy element, while the `_Num*` shader counts still contain the real active counts.
 
 `UpdateSpheres()` then calls `SetData()` every rendered frame for existing sphere and light buffers so dynamic transforms/material values are reflected on the GPU.
+
+`UpdateTriangles()` rebuilds world-space triangle data and uploads `_Triangles` only when a mesh object's transform, color, smoothness, opacity, refraction index, or material type changes.
 
 ## Shader Parameters
 
@@ -87,6 +108,7 @@ When object counts change, `RebuildBuffers()` also writes `_NumSpheres` and `_Nu
 - `_GroundSmoothness`
 - `_Spheres`
 - `_Lights`
+- `_Triangles`
 
 `_Seed` is uploaded as an integer. When `randomNoise` is enabled, C# uploads a new random seed each rendered frame. When `randomNoise` is disabled, C# uploads a fixed seed for stable deterministic sampling.
 
