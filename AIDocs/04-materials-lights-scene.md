@@ -48,7 +48,7 @@ Ground properties:
 
 - Color is hard-coded to `float3(0.8f, 0.8f, 0.8f)`.
 - Normal is hard-coded to `float3(0.0f, 1.0f, 0.0f)`.
-- Smoothness comes from `_GroundSmoothness`.
+- Smoothness comes from `_GroundSmoothness` and blends the first continuation ray between diffuse scatter and reflection.
 - Opacity is always `1`.
 
 ## Unity Scene Objects

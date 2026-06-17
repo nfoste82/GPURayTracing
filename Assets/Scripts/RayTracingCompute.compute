@@ -22,6 +22,7 @@ int _ShadowQuality;
 int _NumBounces;
 int _DebugRenderMode;
 float _ShadowRandomness;
+float _LightFalloffScale;
 float _FocalDistance;
 float _GroundSmoothness;
 
@@ -124,10 +125,10 @@ Ray CreateCameraRay(float2 uv)
 {
     // Transform the camera origin to world space
     float3 origin = mul(_CameraToWorld, float4(0.0f, 0.0f, 0.0f, 1.0f)).xyz;
-    
+
     // Invert the perspective projection of the view-space position
     float3 direction = mul(_CameraInverseProjection, float4(uv, 0.0f, 1.0f)).xyz;
-    
+
     // Transform the direction from camera to world space and normalize
     direction = mul(_CameraToWorld, float4(direction, 0.0f)).xyz;
     direction = normalize(direction);
@@ -199,21 +200,21 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
     // Calculate distance along the ray where the sphere is intersected
     float3 d = sphere.position - ray.origin;
     float p1 = dot(ray.direction, d);
-    
+
     // Ray is pointing away from sphere
     if (p1 < 0)
     {
         return;
     }
-    
+
     float p2sqr = p1 * p1 - dot(d, d) + sphere.radius * sphere.radius;
-    
+
     // Ray missed the sphere
     if (p2sqr < 0)
     {
         return;
     }
-    
+
     float p2 = sqrt(p2sqr);
     float t = p1 - p2 > 0 ? p1 - p2 : p1 + p2;
     if (t > 0 && t < bestHit.distance)
@@ -236,20 +237,20 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
 RayHit GetNearestIntersection(Ray ray)
 {
 	RayHit bestHit = CreateRayHit();
-	
+
 	IntersectGroundPlane(ray, bestHit);
-	
+
 	int i;
 	for (i = 0; i < _NumSpheres; i++)
 	{
 		IntersectSphere(ray, bestHit, _Spheres[i]);
 	}
-	
+
 	for (i = 0; i < _NumLights; i++)
 	{
 		IntersectSphere(ray, bestHit, _Lights[i]);
 	}
-	
+
 	return bestHit;
 }
 
@@ -257,7 +258,7 @@ float3 GetClosestPointOnLineSegment(float3 linePointStart, float3 linePointEnd, 
 {
     float3 lineDiff = linePointEnd - linePointStart;
     float lineSegSqrLength = dot(lineDiff, lineDiff);
- 
+
     float3 lineToPoint = testPoint - linePointStart;
     float dotProduct = dot(lineDiff, lineToPoint);
 
@@ -282,7 +283,7 @@ float3 Refract(float3 sourceDirection, float sourceRefraction, float targetRefra
     // 0 no refraction
     // -2 (-90 degrees)
     // 2 (90 degrees)
-    
+
     reflectAmount = reflectAmount * dot(targetNormal, sourceDirection);
     return normalize((reflectAmount * targetNormal) + sourceDirection);
 }
@@ -304,7 +305,7 @@ float2 SampleDisk(inout uint rngState)
 float GetDirectLightFalloff(float distanceToLight, float lightRadius)
 {
     float areaScale = max(1.0f, lightRadius * lightRadius);
-    float distanceScale = max(1.0f, distanceToLight * distanceToLight * 0.08f);
+    float distanceScale = max(1.0f, distanceToLight * distanceToLight * max(0.001f, _LightFalloffScale));
     return saturate(areaScale / distanceScale);
 }
 
@@ -408,10 +409,10 @@ float3 GetSkyboxColor(float3 direction)
 float3 GetTextureColorOnSphere(float3 position, float3 center, float radius)
 {
     float3 localPos = position - center;
-    
+
     float v = acos(localPos.z / radius) / PI;
     float u = acos(localPos.x / (radius * sin(PI * v))) / 2.0f * radius;
-    
+
     return _CheckerboardTexture.SampleLevel(sampler_CheckerboardTexture, float2(u, v), 0).xyz;
 }
 
@@ -516,7 +517,8 @@ void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit)
 ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, inout uint rngState)
 {
     float3 albedo = GetAlbedo(hit);
-    Ray scatteredRay = CreateRay(hit.position + (hit.normal * 0.001f), reflect(sourceRay.direction, hit.normal));
+    float3 roughNormal = GetRandomizedNormalBasedOnAmount(hit.normal, hit.smoothness, rngState);
+    Ray scatteredRay = CreateRay(hit.position + (hit.normal * 0.001f), reflect(sourceRay.direction, roughNormal));
 
     if (IsGlassMaterial(hit))
     {
@@ -533,9 +535,11 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
         return CreateScatterResult(scatteredRay, fresnelReflectance.xxx);
     }
 
-    if (hit.materialType == MaterialDiffuse && bounce > 0)
+    if (hit.materialType == MaterialDiffuse)
     {
-        scatteredRay.direction = GetDiffuseScatterDirection(hit.normal, rngState);
+        scatteredRay.direction = bounce == 0
+            ? normalize(lerp(GetDiffuseScatterDirection(hit.normal, rngState), reflect(sourceRay.direction, roughNormal), hit.smoothness))
+            : GetDiffuseScatterDirection(hit.normal, rngState);
     }
 
     return CreateScatterResult(scatteredRay, albedo);
@@ -587,11 +591,6 @@ float3 TracePath(Ray ray, inout uint rngState)
         }
 
         float3 albedo = GetAlbedo(hit);
-        if (hit.materialType != MaterialDiffuse)
-        {
-            hit.normal = GetRandomizedNormalBasedOnAmount(hit.normal, hit.smoothness, rngState);
-        }
-
         bool softShadows = bounce == 0;
         float3 directLight = GetDirectLight(ray, hit, softShadows, rngState);
         radiance += throughput * albedo * directLight * hit.opacity;
@@ -661,11 +660,6 @@ float3 GetDebugRenderColor(Ray ray, inout uint rngState)
                 break;
             }
 
-            if (hit.materialType != MaterialDiffuse)
-            {
-                hit.normal = GetRandomizedNormalBasedOnAmount(hit.normal, hit.smoothness, rngState);
-            }
-
             ScatterResult scatter = CreateScatteredRay(ray, hit, bounce, rngState);
             ray = scatter.ray;
             throughput *= scatter.attenuation;
@@ -708,22 +702,22 @@ void CSMain (uint3 id : SV_DispatchThreadID)
         uint rngState = CreateRngState(id.xy, i);
         float2 uv = (id.xy / float2(width, height) * 2.0f - 1.0f) + float2(1/(float)width * rand(rngState), 1/(float)height * rand(rngState));
         Ray ray = CreateCameraRay(uv);
-        
+
         // We find the camera focal point, then shift the ray origin, and find the adjusted ray
         // direction after that shift. This gives us depth of field.
         {
             float3 focalPoint = ray.origin + ray.direction * _FocalDistance;
-            
+
             float shiftAmount = 0.005f;
             ray.origin.x += rand(rngState) * shiftAmount - rand(rngState) * shiftAmount;
             ray.origin.y += rand(rngState) * shiftAmount - rand(rngState) * shiftAmount;
             ray.origin.z += rand(rngState) * shiftAmount - rand(rngState) * shiftAmount;
-            
+
             ray.direction = normalize(focalPoint - ray.origin);
-        } 
-        
+        }
+
         result += _DebugRenderMode == DebugFinalColor ? TracePath(ray, rngState) : GetDebugRenderColor(ray, rngState);
     }
-   
+
     Result[id.xy] = float4(result / _NumberOfPasses, 1);
 }

@@ -31,6 +31,9 @@ This document captures current implementation limits and likely future work area
 - Diffuse bounce sampling uses cosine-weighted hemisphere sampling.
 - Deeper paths use Russian roulette termination once throughput is low enough.
 - Direct lighting uses clamped inverse-square-style falloff scaled by light radius.
+- `GameManager.lightFalloffScale` exposes direct light falloff tuning to the inspector.
+- Ground smoothness affects the implicit ground plane's first continuation ray instead of always behaving like a mirror.
+- Single-frame mode can be disabled from the inspector, `T`, or `Space` to resume real-time rendering.
 
 ## Good Near-Term Fixes
 

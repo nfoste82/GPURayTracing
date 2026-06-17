@@ -17,6 +17,7 @@ Important shader globals:
 - `_DebugRenderMode`: selects final path-traced color or a debug visualization.
 - `_ShadowQuality`: soft-shadow sample budget control. Bounce-0 direct lighting takes `max(1, _ShadowQuality + 1)` stochastic area-light samples per light.
 - `_ShadowRandomness`: area-light sampling radius multiplier for soft shadow samples.
+- `_LightFalloffScale`: distance falloff scale for direct light. Higher values make light intensity decrease faster with distance.
 - `_FocalDistance`: depth-of-field focal distance.
 - `_GroundSmoothness`: smoothness for the implicit ground plane.
 - `_Seed`: integer seed used to initialize per-pixel/per-pass shader RNG state.
@@ -86,7 +87,7 @@ Shadow rays test blockers only against `_Spheres`, not `_Lights`. Opaque blocker
 
 Transparent blockers can tint shadow light by using the blocking sphere color and opacity.
 
-Direct light from sampled light points is accumulated additively rather than combined with a channel-wise max operation. Light falloff now uses a clamped inverse-square-style distance term scaled by light radius, although transparent shadow tinting remains approximate.
+Direct light from sampled light points is accumulated additively rather than combined with a channel-wise max operation. Light falloff now uses a clamped inverse-square-style distance term scaled by light radius and `_LightFalloffScale`, although transparent shadow tinting remains approximate.
 
 ## Path Tracing Loop
 
@@ -114,8 +115,8 @@ Per bounce:
 
 Material scattering currently supports:
 
-- `Diffuse`: uses direct lighting and cosine-weighted hemisphere scattering on later bounces, attenuated by albedo.
-- `Metal`: reflects around the surface normal, with smoothness controlling rough normal randomization, and attenuates by albedo.
+- `Diffuse`: uses direct lighting and cosine-weighted hemisphere scattering on later bounces, attenuated by albedo. On bounce 0, smoothness blends the continuation ray between diffuse scattering and reflection, which allows the implicit ground plane's `_GroundSmoothness` to affect visible reflections.
+- `Metal`: reflects around the surface normal, with smoothness controlling rough reflection direction randomization, and attenuates by albedo.
 - `Glass`: uses Schlick Fresnel reflectance to weight the existing approximate sphere refraction path. Transmitted paths are tinted by albedo and scaled by opacity-derived transmission.
 
 ## Debug Render Modes

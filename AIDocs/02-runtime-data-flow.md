@@ -84,6 +84,7 @@ When object counts change, `RebuildBuffers()` also writes `_NumSpheres` and `_Nu
 - `_DebugRenderMode`
 - `_ShadowQuality`
 - `_ShadowRandomness`
+- `_LightFalloffScale`
 - `_FocalDistance`
 - `_GroundSmoothness`
 - `_Spheres`
@@ -101,4 +102,4 @@ When object counts change, `RebuildBuffers()` also writes `_NumSpheres` and `_Nu
 - `Space` resumes real-time rendering.
 - `debugRenderMode` is exposed in the `GameManager` inspector and selects final color or one of the shader debug visualizations.
 
-Single-frame mode lowers target framerate and freezes `Time.timeScale`. Real-time mode restores target framerate and `Time.timeScale`.
+Single-frame mode renders one frame, then freezes rendering and `Time.timeScale`. Toggling it off in the inspector, pressing `T`, or pressing `Space` resumes real-time rendering and restores `Time.timeScale`.

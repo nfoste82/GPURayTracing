@@ -43,8 +43,12 @@ public class GameManager : MonoBehaviour
     [Range(0.1f, 100f)]
     public float cameraFocalDistance = 100f;
 
-    [Range(0.6f, 1.0f)]
+    [Range(0.0f, 1.0f)]
     public float groundSmoothness = 0.98f;
+
+    [Tooltip("Higher values make direct light fall off faster with distance.")]
+    [Range(0.001f, 1.0f)]
+    public float lightFalloffScale = 0.16f;
 
     private float previousFocalDistance = 100f;
     private float timeSincePreviousFocusDistance = 1f;
@@ -75,6 +79,7 @@ public class GameManager : MonoBehaviour
     public bool _singleFrame = false;
 
     private bool _running = true;
+    private bool _previousSingleFrame;
     
     private static bool _buffersNeedRebuilding = false;
     private static readonly List<RayTracingObject> _rayTracingObjects = new List<RayTracingObject>();
@@ -177,27 +182,33 @@ public class GameManager : MonoBehaviour
         {
             RebuildBuffers();
         }
-        
+
+        if (_singleFrame != _previousSingleFrame)
+        {
+            SetSingleFrameMode(_singleFrame);
+        }
+
         HandleInputForCamera(renderTextureCamera);
 
         if (Input.GetKeyDown(KeyCode.T))
         {
-            _singleFrame = !_singleFrame;
-            if (!_singleFrame)
-            {
-                _running = true;
-                EnableRealtimeSettings();
-            }
-            else
-            {
-                _running = false;
-                EnableSingleFrameSettings();
-            }
+            SetSingleFrameMode(!_singleFrame);
         }
 
         if (Input.GetKeyDown(KeyCode.Space))
         {
-            _running = true;
+            SetSingleFrameMode(false);
+        }
+    }
+
+    private void SetSingleFrameMode(bool enabled)
+    {
+        _singleFrame = enabled;
+        _previousSingleFrame = enabled;
+        _running = true;
+
+        if (!enabled)
+        {
             EnableRealtimeSettings();
         }
     }
@@ -629,6 +640,7 @@ public class GameManager : MonoBehaviour
         shader.SetInt("_DebugRenderMode", (int)debugRenderMode);
         shader.SetInt("_ShadowQuality", shadowQuality);
         shader.SetFloat("_ShadowRandomness", shadowRandomness);
+        shader.SetFloat("_LightFalloffScale", lightFalloffScale);
         shader.SetFloat("_FocalDistance", cameraFocalDistance);
         shader.SetFloat("_GroundSmoothness", groundSmoothness);
 
