@@ -24,7 +24,7 @@ If the object has `RayMeshPrimitive`, `RayTracingObject.OnEnable()` first calls 
 - If it has `RayMaterial` and `MeshFilter`, but no `SphereCollider`, it becomes a triangle mesh in `_triangles` and `_meshObjects`.
 - If it has `RayLight` and `SphereCollider`, it becomes an emissive sphere light in `_lights` and `_lightObjects`.
 
-Sphere and light objects require a `SphereCollider`. The collider radius is used as the ray-traced sphere radius. Mesh objects require a `MeshFilter`; the shared mesh triangles are transformed to world space and uploaded directly.
+Sphere and light objects require a `SphereCollider`. The collider center is transformed to world space for the ray-traced sphere position, and the collider radius is scaled by the largest absolute axis of the object's lossy scale for the ray-traced sphere radius. Mesh objects require a `MeshFilter`; the shared mesh triangles are transformed to world space and uploaded directly.
 
 Registration caches the `Transform`, `SphereCollider`, shared `Mesh`, and either `RayMaterial` or `RayLight` references so per-frame updates do not repeatedly call `GetComponent<>()`.
 
@@ -89,6 +89,16 @@ Unity requires referenced structured buffers to be bound even when their active 
 
 `UpdateTriangles()` rebuilds world-space triangle data and uploads `_Triangles` only when a mesh object's transform, color, smoothness, opacity, refraction index, or material type changes.
 
+## Scene View Preview Flow
+
+`GameManager.OnValidate()` and `Start()` call `SyncUnitySkyboxPreview()` when `syncUnitySkyboxToRayTracedSkybox` is enabled. It creates a transient `Skybox/Panoramic` material from `skyboxTexture`, applies `_skyboxLightColor` as the skybox tint, applies `unitySkyboxExposure` and `unitySkyboxRotation`, and assigns it to `RenderSettings.skybox`. This affects Unity's Scene/Game skybox preview only; ray-traced sky sampling still uses `_SkyboxTexture` and `_SkyboxLight` in the compute shader.
+
+`GameManager.OnDrawGizmos()`/`OnDrawGizmosSelected()` draws an editor ground preview for the implicit ground plane. In the editor it uses `Handles.DrawSolidRectangleWithOutline()` with depth testing so the opaque ground preview respects scene depth better than a filled `Gizmos.DrawCube()`.
+
+`RayTracingObject.OnDrawGizmos()` draws sphere/light-sphere gizmos using the world-space collider center and scaled radius. Sphere gizmo alpha follows `RayMaterial.Opacity`; light-sphere gizmos use full opacity because `RayLight` has no opacity field.
+
+`RayObjectPreview` can be attached to sphere/light objects to add a rasterized sphere mesh preview and, for `RayLight`, an optional Unity point-light preview. Its `MeshRenderer` is visible outside Play mode and hidden during Play mode by default, so the Game view remains compute-rendered.
+
 ## Shader Parameters
 
 `SetShaderParameters()` sends:
@@ -120,4 +130,6 @@ Unity requires referenced structured buffers to be bound even when their active 
 - `Space` resumes real-time rendering.
 - `debugRenderMode` is exposed in the `GameManager` inspector and selects final color or one of the shader debug visualizations.
 
-Single-frame mode renders one frame, then freezes rendering and `Time.timeScale`. Toggling it off in the inspector, pressing `T`, or pressing `Space` resumes real-time rendering and restores `Time.timeScale`.
+Single-frame mode renders one frame, then stops compute dispatch while the camera continues to blit the last `_outputTexture` into the Game view. It lowers the target frame rate but does not set `Time.timeScale` to zero, so Unity keeps presenting the last ray-traced render instead of appearing to fall back to an editor/Scene view. Toggling it off in the inspector, pressing `T`, or pressing `Space` resumes real-time rendering and restores real-time presentation settings.
+
+Unity's editor toolbar Pause freezes the player loop, so runtime code cannot keep dispatching or blitting new frames while that pause is active. `Assets/Editor/GameViewPauseFocus.cs` listens for editor pause events and refocuses/repaints the Game view so the editor remains on the last presented render instead of switching to the Scene tab.

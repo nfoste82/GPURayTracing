@@ -369,7 +369,6 @@ public class GameManager : MonoBehaviour
     {
         QualitySettings.vSyncCount = 0;
         Application.targetFrameRate = 10;
-        Time.timeScale = 0.0f;
     }
 
     private void EnableRealtimeSettings()

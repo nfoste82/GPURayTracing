@@ -15,6 +15,7 @@ This document captures current implementation limits and likely future work area
 - Diffuse scattering uses cosine-weighted hemisphere sampling on later bounces, but there is no denoising/accumulation to control variance.
 - Mesh triangle normals are flat face normals; imported vertex normals, smoothing groups, UVs, and textures are not used.
 - Mesh refraction assumes a mostly closed/convex mesh and uses the nearest same-mesh triangle as the exit face. It does not handle nested media, multi-hit internal reflections, or distance-based absorption.
+- Scene-view sphere, light, ground, and skybox previews are composition aids. They approximate the ray-traced result but are not guaranteed to match all compute shader shading, reflection, refraction, exposure, or sampling behavior exactly.
 
 ## Recently Completed
 
@@ -32,7 +33,7 @@ This document captures current implementation limits and likely future work area
 - Direct lighting uses clamped inverse-square-style falloff scaled by light radius.
 - `GameManager.lightFalloffScale` exposes direct light falloff tuning to the inspector.
 - Ground smoothness affects the implicit ground plane's first continuation ray instead of always behaving like a mirror.
-- Single-frame mode can be disabled from the inspector, `T`, or `Space` to resume real-time rendering.
+- Single-frame mode can be disabled from the inspector, `T`, or `Space` to resume real-time rendering, and it keeps blitting the last compute output in the Game view while dispatch is paused.
 - Unused ambient/checkerboard shader parameters, unused shader helpers, and inactive mesh-buffer scaffolding were removed.
 - Direct light sampling is skipped when path throughput is below `MinDirectLightThroughput`.
 - Triangle mesh upload from Unity `MeshFilter` components was added for registered mesh objects.
@@ -40,6 +41,9 @@ This document captures current implementation limits and likely future work area
 - `RayMeshPrimitive` and `GameObject > Ray Tracing` editor menu items were added for cube, pyramid, and dodecahedron mesh test objects.
 - Mesh triangle uploads now rebuild only when registered mesh transforms or ray material values change.
 - Mesh glass refraction now approximates entry and exit through closed triangle meshes using per-object `meshIndex` values.
+- `RayObjectPreview` and additional `GameObject > Ray Tracing` menu items were added for visible ray-traced sphere/light composition in Scene view.
+- `GameManager` now draws a depth-tested editor preview for the implicit ground plane and can sync Unity's skybox preview from the ray tracer's skybox texture/tint settings.
+- Editor pause now refocuses/repaints the Game view through an editor-only callback so the last presented compute render remains visible when the Unity toolbar Pause button is used.
 
 ## Good Near-Term Fixes
 

@@ -8,7 +8,7 @@ Any object with `RayTracingObject` registers with `GameManager` when enabled.
 
 `RayTracingObject` can represent a sphere, light sphere, or triangle mesh depending on attached components.
 
-Sphere and light objects use a `SphereCollider`; the collider radius becomes the ray-traced sphere radius and the object transform position becomes the sphere center.
+Sphere and light objects use a `SphereCollider`; the collider center is transformed to world space for the ray-traced sphere center, and the collider radius is scaled by the largest absolute object scale axis for the ray-traced radius.
 
 Mesh objects use `RayMaterial` plus `MeshFilter` and should not have a `SphereCollider`, because sphere registration takes priority. The shared mesh triangles are transformed to world space and uploaded directly.
 
@@ -40,6 +40,14 @@ Editor menu entries under `GameObject > Ray Tracing` create these primitives wit
 
 The generated primitive material defaults are intended for glass/refraction testing: `Glass`, opacity `0.5`, smoothness `1.0`, and refraction index `1.5`.
 
+## Scene View Previews
+
+`RayTracingObject.OnDrawGizmos()` draws Scene view gizmos for sphere and light-sphere objects. Regular sphere gizmo color comes from `RayMaterial.Color` and alpha comes from `RayMaterial.Opacity`. Light-sphere gizmo color comes from `RayLight.Color` and uses full alpha because lights do not expose opacity.
+
+`RayObjectPreview` is an optional preview helper for ray-traced sphere and light-sphere objects. It requires a `SphereCollider`, creates/adds a `MeshFilter` and `MeshRenderer` using a generated sphere mesh sized from the collider, and hides the rasterized mesh in Play mode by default. For `RayLight` objects it can also add/update a Unity point light so light positions are visible and useful while composing the scene. These preview renderers/lights are editor/Unity-scene aids; they are not used by the compute shader for ray-traced shading.
+
+`GameObject > Ray Tracing > Sphere` and `GameObject > Ray Tracing > Light Sphere` create objects with the ray-tracing components plus `RayObjectPreview`. `GameObject > Ray Tracing > Ground Preview Plane` creates a rasterized scene-building reference plane; the actual ray-traced ground remains implicit.
+
 ## Lights
 
 `RayLight` marks a `RayTracingObject` as an emissive sphere light.
@@ -62,6 +70,14 @@ Ground properties:
 - Normal is hard-coded to `float3(0.0f, 1.0f, 0.0f)`.
 - Smoothness comes from `_GroundSmoothness` and blends the first continuation ray between diffuse scatter and reflection.
 - Opacity is always `1`.
+
+`GameManager` draws an opaque Scene view preview for the implicit ground plane. In the editor this preview is drawn with depth-tested `Handles` to avoid the transparent gizmo draw-order problems that can otherwise make the ground appear in front of sphere gizmos.
+
+## Skybox Preview
+
+The compute shader samples `GameManager.skyboxTexture` through `_SkyboxTexture` and multiplies it by `_SkyboxLight`, which is derived from `GameManager._skyboxLightColor`.
+
+For scene composition, `GameManager.syncUnitySkyboxToRayTracedSkybox` can create a transient Unity `Skybox/Panoramic` material from the same `skyboxTexture`, tint it with `_skyboxLightColor`, and assign it to `RenderSettings.skybox`. `unitySkyboxExposure` and `unitySkyboxRotation` tune this Unity preview. This makes the Scene view skybox closer to Play mode, but it does not affect compute-shader lighting beyond the existing `_SkyboxTexture` and `_SkyboxLight` parameters.
 
 ## Unity Scene Objects
 
