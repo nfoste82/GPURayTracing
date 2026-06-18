@@ -770,7 +770,7 @@ float GetFresnelReflectance(Ray ray, RayHit hit)
     float r0 = (1.0f - refraction) / (1.0f + refraction);
     r0 *= r0;
 
-    float cosTheta = saturate(dot(-ray.direction, hit.normal));
+    float cosTheta = saturate(abs(dot(-ray.direction, hit.normal)));
     return r0 + (1.0f - r0) * pow(1.0f - cosTheta, 5.0f);
 }
 
@@ -797,6 +797,14 @@ bool ShouldSampleDirectLight(float3 throughput)
 
 void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit)
 {
+    if (dot(sourceRay.direction, hit.normal) > 0.0f)
+    {
+        ray.direction = Refract(sourceRay.direction, hit.refraction, 1.0f, hit.normal);
+        ray.origin = hit.position + (ray.direction * 0.001f);
+        hit.distanceThroughOpacity = hit.distance;
+        return;
+    }
+
     ray.direction = Refract(sourceRay.direction, 1.0f, hit.refraction, hit.normal);
 
     float3 halfway = GetClosestPointOnLineSegment(ray.origin, ray.origin + (2.0f * hit.obj_radius * ray.direction), hit.obj_position);

@@ -38,7 +38,7 @@ When `_running` is true, it:
 
 1. Ensures `_outputTexture` matches the current source render target dimensions.
 2. Updates `renderTextureCamera.aspect` to match `_outputTexture`.
-3. Computes autofocus distance if `cameraAutoFocus` is enabled.
+3. Computes autofocus distance if `cameraAutoFocus` is enabled, ignoring ray-traced objects whose opacity is at or below `autoFocusTransparentOpacityThreshold` so focus can pass through mostly transparent glass.
 4. Writes the resulting focal distance to `cameraFocalDistance`.
 5. Calls `UpdateSpheres()` to refresh CPU sphere/light structs from cached Unity object references.
 6. Calls `UpdateTriangles()` to refresh registered mesh triangle data only if a cached mesh transform or material value changed.

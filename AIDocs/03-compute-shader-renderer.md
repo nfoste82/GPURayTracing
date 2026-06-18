@@ -165,7 +165,7 @@ Debug modes still use the normal camera ray generation and depth-of-field jitter
 
 Transparent/glass sphere refraction is approximate. `ApplySphereRefraction()`:
 
-1. Refracts from air into the sphere using `Refract()`.
+1. Refracts from air into the sphere using `Refract()`, or from sphere material back into air when the ray starts inside the sphere.
 2. Estimates the exit point by finding a closest point across the sphere chord.
 3. Computes the exit normal.
 4. Refracts back out into air.

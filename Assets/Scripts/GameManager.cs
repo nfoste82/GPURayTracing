@@ -42,6 +42,10 @@ public class GameManager : MonoBehaviour
 
     [Header("Misc settings")]
     public bool cameraAutoFocus = true;
+
+    [Tooltip("Autofocus ignores ray-traced objects with opacity at or below this value, allowing focus through mostly transparent glass.")]
+    [Range(0.0f, 1.0f)]
+    public float autoFocusTransparentOpacityThreshold = 0.5f;
     
     [Range(0.1f, 100f)]
     public float cameraFocalDistance = 100f;
@@ -856,7 +860,13 @@ public class GameManager : MonoBehaviour
             {
                 for (int i = 0; i < node.triangleCount; i++)
                 {
-                    var hitDistance = _triangles[node.triangleStart + i].Intersect(ray.origin, ray.direction);
+                    var triangle = _triangles[node.triangleStart + i];
+                    if (ShouldAutoFocusIgnoreObject(triangle.opacity))
+                    {
+                        continue;
+                    }
+
+                    var hitDistance = triangle.Intersect(ray.origin, ray.direction);
                     if (hitDistance >= 0.0f && hitDistance < nearestDistance)
                     {
                         nearestDistance = hitDistance;
@@ -878,6 +888,11 @@ public class GameManager : MonoBehaviour
         }
 
         return nearestDistance;
+    }
+
+    private bool ShouldAutoFocusIgnoreObject(float opacity)
+    {
+        return opacity <= autoFocusTransparentOpacityThreshold;
     }
 
     public void RebuildBuffers()
@@ -1057,6 +1072,11 @@ public class GameManager : MonoBehaviour
 
         foreach (var sphere in _spheres)
         {
+            if (ShouldAutoFocusIgnoreObject(sphere.opacity))
+            {
+                continue;
+            }
+
             var hitDistance = sphere.Intersect(ray.origin, ray.direction);
 
             if (hitDistance >= 0.0f && hitDistance < nearestDistance)
