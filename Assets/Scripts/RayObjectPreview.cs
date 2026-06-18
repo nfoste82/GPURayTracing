@@ -70,7 +70,7 @@ public class RayObjectPreview : MonoBehaviour
             _previewCenter = _sphereCollider.center;
         }
 
-        if (_meshRenderer.sharedMaterial == null)
+        if (!IsUsablePreviewMaterial(_meshRenderer.sharedMaterial))
         {
             _meshRenderer.sharedMaterial = GetPreviewMaterial(_rayMaterial, _rayLight);
         }
@@ -106,7 +106,7 @@ public class RayObjectPreview : MonoBehaviour
         _meshRenderer.enabled = !Application.isPlaying || !hideMeshRendererInPlayMode;
 
         var material = _meshRenderer.sharedMaterial;
-        if (material != null)
+        if (IsUsablePreviewMaterial(material))
         {
             material.color = GetPreviewColor(_rayMaterial, _rayLight);
         }
@@ -128,10 +128,14 @@ public class RayObjectPreview : MonoBehaviour
         var material = new Material(shader)
         {
             name = "Ray Object Preview Material",
-            color = GetPreviewColor(rayMaterial, rayLight),
-            hideFlags = HideFlags.HideAndDontSave
+            color = GetPreviewColor(rayMaterial, rayLight)
         };
         return material;
+    }
+
+    private static bool IsUsablePreviewMaterial(Material material)
+    {
+        return material != null && material.shader != null;
     }
 
     private static Color GetPreviewColor(RayMaterial rayMaterial, RayLight rayLight)

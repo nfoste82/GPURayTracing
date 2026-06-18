@@ -27,6 +27,7 @@ uint _Seed;
 int _NumSpheres;
 int _NumLights;
 int _NumTriangles;
+int _NumMeshes;
 
 static const float PI = 3.141593f;
 static const float MaxRefractionDiff = 4;
@@ -47,6 +48,7 @@ static const int MaterialGlass = 2;
 static const int MaterialEmissive = 3;
 
 static const float MinDirectLightThroughput = 0.01f;
+static const int BvhStackSize = 64;
 
 uint Hash(uint value)
 {
@@ -105,6 +107,33 @@ struct MeshTriangle
 };
 
 StructuredBuffer<MeshTriangle> _Triangles;
+
+struct MeshInfo
+{
+    float3 boundsMin;
+    int rootNodeIndex;
+    float3 boundsMax;
+    int triangleStart;
+    int triangleCount;
+    int meshIndex;
+    int padding0;
+    int padding1;
+};
+
+struct BvhNode
+{
+    float3 boundsMin;
+    int leftChildIndex;
+    float3 boundsMax;
+    int rightChildIndex;
+    int triangleStart;
+    int triangleCount;
+    int padding0;
+    int padding1;
+};
+
+StructuredBuffer<MeshInfo> _Meshes;
+StructuredBuffer<BvhNode> _BvhNodes;
 
 // =======================================================
 // Ray
@@ -321,6 +350,175 @@ void IntersectTriangle(Ray ray, inout RayHit bestHit, MeshTriangle meshTriangle)
     }
 }
 
+bool IntersectAabb(Ray ray, float3 boundsMin, float3 boundsMax, float maxDistance)
+{
+    float3 inverseDirection = 1.0f / ray.direction;
+    float3 t0 = (boundsMin - ray.origin) * inverseDirection;
+    float3 t1 = (boundsMax - ray.origin) * inverseDirection;
+    float3 tMin3 = min(t0, t1);
+    float3 tMax3 = max(t0, t1);
+    float tMin = max(max(tMin3.x, tMin3.y), tMin3.z);
+    float tMax = min(min(tMax3.x, tMax3.y), tMax3.z);
+
+    return tMax >= max(0.0f, tMin) && tMin < maxDistance;
+}
+
+void IntersectMeshBvh(Ray ray, inout RayHit bestHit, MeshInfo meshInfo)
+{
+    if (meshInfo.triangleCount <= 0 || !IntersectAabb(ray, meshInfo.boundsMin, meshInfo.boundsMax, bestHit.distance))
+    {
+        return;
+    }
+
+    int stack[BvhStackSize];
+    int stackCount = 0;
+    stack[stackCount++] = meshInfo.rootNodeIndex;
+
+    while (stackCount > 0)
+    {
+        int nodeIndex = stack[--stackCount];
+        BvhNode node = _BvhNodes[nodeIndex];
+
+        if (!IntersectAabb(ray, node.boundsMin, node.boundsMax, bestHit.distance))
+        {
+            continue;
+        }
+
+        if (node.triangleCount > 0)
+        {
+            for (int i = 0; i < node.triangleCount; i++)
+            {
+                IntersectTriangle(ray, bestHit, _Triangles[node.triangleStart + i]);
+            }
+            continue;
+        }
+
+        if (node.leftChildIndex >= 0 && stackCount < BvhStackSize)
+        {
+            stack[stackCount++] = node.leftChildIndex;
+        }
+
+        if (node.rightChildIndex >= 0 && stackCount < BvhStackSize)
+        {
+            stack[stackCount++] = node.rightChildIndex;
+        }
+    }
+}
+
+bool IntersectMeshBvhForShadow(Ray ray, float maxDistance, inout RayHit nearestTransparentHit, MeshInfo meshInfo)
+{
+    if (meshInfo.triangleCount <= 0 || !IntersectAabb(ray, meshInfo.boundsMin, meshInfo.boundsMax, maxDistance))
+    {
+        return false;
+    }
+
+    int stack[BvhStackSize];
+    int stackCount = 0;
+    stack[stackCount++] = meshInfo.rootNodeIndex;
+
+    while (stackCount > 0)
+    {
+        int nodeIndex = stack[--stackCount];
+        BvhNode node = _BvhNodes[nodeIndex];
+
+        if (!IntersectAabb(ray, node.boundsMin, node.boundsMax, maxDistance))
+        {
+            continue;
+        }
+
+        if (node.triangleCount > 0)
+        {
+            for (int i = 0; i < node.triangleCount; i++)
+            {
+                RayHit blockerHit = CreateRayHit();
+                blockerHit.distance = maxDistance;
+                IntersectTriangle(ray, blockerHit, _Triangles[node.triangleStart + i]);
+
+                if (blockerHit.distance >= maxDistance)
+                {
+                    continue;
+                }
+
+                if (blockerHit.opacity >= 1.0f)
+                {
+                    return true;
+                }
+
+                if (blockerHit.distance < nearestTransparentHit.distance)
+                {
+                    nearestTransparentHit = blockerHit;
+                }
+            }
+            continue;
+        }
+
+        if (node.leftChildIndex >= 0 && stackCount < BvhStackSize)
+        {
+            stack[stackCount++] = node.leftChildIndex;
+        }
+
+        if (node.rightChildIndex >= 0 && stackCount < BvhStackSize)
+        {
+            stack[stackCount++] = node.rightChildIndex;
+        }
+    }
+
+    return false;
+}
+
+bool IntersectMeshBvhForExit(Ray ray, MeshInfo meshInfo, out float exitDistance, out float3 exitNormal)
+{
+    exitDistance = 1.#INF;
+    exitNormal = float3(0.0f, 1.0f, 0.0f);
+
+    if (meshInfo.triangleCount <= 0 || !IntersectAabb(ray, meshInfo.boundsMin, meshInfo.boundsMax, exitDistance))
+    {
+        return false;
+    }
+
+    int stack[BvhStackSize];
+    int stackCount = 0;
+    stack[stackCount++] = meshInfo.rootNodeIndex;
+
+    while (stackCount > 0)
+    {
+        int nodeIndex = stack[--stackCount];
+        BvhNode node = _BvhNodes[nodeIndex];
+
+        if (!IntersectAabb(ray, node.boundsMin, node.boundsMax, exitDistance))
+        {
+            continue;
+        }
+
+        if (node.triangleCount > 0)
+        {
+            for (int i = 0; i < node.triangleCount; i++)
+            {
+                float triangleDistance;
+                float3 triangleNormal;
+                if (IntersectTriangleRaw(ray, _Triangles[node.triangleStart + i], triangleDistance, triangleNormal) && triangleDistance < exitDistance)
+                {
+                    exitDistance = triangleDistance;
+                    exitNormal = triangleNormal;
+                }
+            }
+            continue;
+        }
+
+        if (node.leftChildIndex >= 0 && stackCount < BvhStackSize)
+        {
+            stack[stackCount++] = node.leftChildIndex;
+        }
+
+        if (node.rightChildIndex >= 0 && stackCount < BvhStackSize)
+        {
+            stack[stackCount++] = node.rightChildIndex;
+        }
+    }
+
+    return exitDistance < 1.#INF;
+}
+
 RayHit GetNearestIntersection(Ray ray)
 {
 	RayHit bestHit = CreateRayHit();
@@ -338,9 +536,9 @@ RayHit GetNearestIntersection(Ray ray)
 		IntersectSphere(ray, bestHit, _Lights[i]);
 	}
 
-	for (i = 0; i < _NumTriangles; i++)
+	for (i = 0; i < _NumMeshes; i++)
 	{
-		IntersectTriangle(ray, bestHit, _Triangles[i]);
+		IntersectMeshBvh(ray, bestHit, _Meshes[i]);
 	}
 
 	return bestHit;
@@ -429,25 +627,11 @@ float3 GetShadowTransmittance(Ray rayToLight, float distanceToLight)
         }
     }
 
-    for (j = 0; j < _NumTriangles; j++)
+    for (j = 0; j < _NumMeshes; j++)
     {
-        RayHit blockerHit = CreateRayHit();
-        blockerHit.distance = distanceToLight;
-        IntersectTriangle(rayToLight, blockerHit, _Triangles[j]);
-
-        if (blockerHit.distance >= distanceToLight)
-        {
-            continue;
-        }
-
-        if (blockerHit.opacity >= 1.0f)
+        if (IntersectMeshBvhForShadow(rayToLight, distanceToLight, nearestTransparentHit, _Meshes[j]))
         {
             return float3(0.0f, 0.0f, 0.0f);
-        }
-
-        if (blockerHit.distance < nearestTransparentHit.distance)
-        {
-            nearestTransparentHit = blockerHit;
         }
     }
 
@@ -643,20 +827,20 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, RayHit hit)
     float3 exitNormal = normal;
 
     int i;
-    for (i = 0; i < _NumTriangles; i++)
+    for (i = 0; i < _NumMeshes; i++)
     {
-        MeshTriangle meshTriangle = _Triangles[i];
-        if (meshTriangle.meshIndex != hit.meshIndex)
+        MeshInfo meshInfo = _Meshes[i];
+        if (meshInfo.meshIndex != hit.meshIndex)
         {
             continue;
         }
 
-        float triangleDistance;
-        float3 triangleNormal;
-        if (IntersectTriangleRaw(insideRay, meshTriangle, triangleDistance, triangleNormal) && triangleDistance < exitDistance)
+        float meshExitDistance;
+        float3 meshExitNormal;
+        if (IntersectMeshBvhForExit(insideRay, meshInfo, meshExitDistance, meshExitNormal) && meshExitDistance < exitDistance)
         {
-            exitDistance = triangleDistance;
-            exitNormal = triangleNormal;
+            exitDistance = meshExitDistance;
+            exitNormal = meshExitNormal;
         }
     }
 

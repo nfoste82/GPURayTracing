@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 
+[ExecuteAlways]
 [RequireComponent(typeof(MeshFilter))]
 [RequireComponent(typeof(MeshRenderer))]
 [RequireComponent(typeof(MeshCollider))]
@@ -21,11 +22,13 @@ public class RayMeshPrimitive : MonoBehaviour
 
     private MeshFilter _meshFilter;
     private MeshCollider _meshCollider;
+    private MeshRenderer _meshRenderer;
 
     public void EnsureMesh()
     {
         _meshFilter = _meshFilter != null ? _meshFilter : GetComponent<MeshFilter>();
         _meshCollider = _meshCollider != null ? _meshCollider : GetComponent<MeshCollider>();
+        _meshRenderer = _meshRenderer != null ? _meshRenderer : GetComponent<MeshRenderer>();
         if (_meshCollider == null)
         {
             _meshCollider = gameObject.AddComponent<MeshCollider>();
@@ -35,15 +38,24 @@ public class RayMeshPrimitive : MonoBehaviour
         _meshFilter.sharedMesh = mesh;
         _meshCollider.sharedMesh = mesh;
         _meshCollider.convex = false;
+        EnsurePreviewMaterial();
     }
 
     private void Awake()
     {
         EnsureMesh();
 
-        if (HideRasterizedRendererInPlayMode)
+        if (Application.isPlaying && HideRasterizedRendererInPlayMode)
         {
-            GetComponent<MeshRenderer>().enabled = false;
+            _meshRenderer.enabled = false;
+        }
+    }
+
+    private void OnEnable()
+    {
+        if (!Application.isPlaying)
+        {
+            EnsureMesh();
         }
     }
 
@@ -65,6 +77,28 @@ public class RayMeshPrimitive : MonoBehaviour
         {
             EnsureMesh();
         }
+    }
+
+    private void EnsurePreviewMaterial()
+    {
+        if (_meshRenderer == null || IsUsablePreviewMaterial(_meshRenderer.sharedMaterial))
+        {
+            return;
+        }
+
+        var rayMaterial = GetComponent<RayMaterial>();
+        var color = rayMaterial != null ? rayMaterial.Color : new Color32(180, 205, 255, 255);
+        var shader = Shader.Find("Standard") ?? Shader.Find("Diffuse");
+        _meshRenderer.sharedMaterial = new Material(shader)
+        {
+            name = "Ray Mesh Preview Material",
+            color = color
+        };
+    }
+
+    private static bool IsUsablePreviewMaterial(Material material)
+    {
+        return material != null && material.shader != null;
     }
 
     private static Mesh CreateMesh(PrimitiveType type)

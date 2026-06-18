@@ -20,9 +20,11 @@ Important shader globals:
 - `_FocalDistance`: depth-of-field focal distance.
 - `_GroundSmoothness`: smoothness for the implicit ground plane.
 - `_Seed`: integer seed used to initialize per-pixel/per-pass shader RNG state.
-- `_NumSpheres`, `_NumLights`, `_NumTriangles`: active buffer counts.
+- `_NumSpheres`, `_NumLights`, `_NumTriangles`, `_NumMeshes`: active buffer counts.
 - `_Spheres`, `_Lights`: structured buffers of `Sphere` data.
 - `_Triangles`: structured buffer of `MeshTriangle` data.
+- `_Meshes`: structured buffer of per-mesh AABBs, triangle ranges, root BVH node indices, and mesh indices.
+- `_BvhNodes`: structured buffer of per-mesh BVH nodes.
 
 ## Data Structures
 
@@ -64,6 +66,8 @@ struct MeshTriangle
 
 `meshIndex` identifies which uploaded triangles belong to the same mesh object. It is used by approximate closed-mesh refraction to find the exit face.
 
+Triangle meshes also upload `MeshInfo` and `BvhNode` data. Each mesh has an object-level AABB in `_Meshes`, and its triangles are arranged into a binary BVH whose leaf nodes contain small contiguous triangle ranges in `_Triangles`.
+
 `RayHit` stores hit position, object position/radius, normal, emission, color, distance, smoothness, opacity, transparent travel distance, refraction index, material type, and mesh index.
 
 ## Ray Generation
@@ -94,9 +98,9 @@ It jitters the ray origin by a small fixed amount and re-aims the ray at the foc
 1. `IntersectGroundPlane()` for an infinite plane at world `y = 0`.
 2. Every sphere in `_Spheres`.
 3. Every emissive sphere in `_Lights`.
-4. Every triangle in `_Triangles`.
+4. Every mesh AABB in `_Meshes`, then only the intersected BVH nodes and leaf triangles for that mesh.
 
-There is no acceleration structure. Every ray is `O(numSpheres + numLights + numTriangles)`.
+Spheres and lights are still traced with flat loops. Triangle meshes use a per-mesh AABB plus BVH traversal, so rays can skip whole meshes and large triangle groups before running expensive triangle tests.
 
 ## Lighting And Shadows
 
@@ -104,7 +108,7 @@ Direct lighting comes from emissive sphere lights.
 
 `GetLightHittingPoint()` computes direct lighting by taking stochastic disk samples across each emissive sphere light. Bounce 0 uses `max(1, _ShadowQuality + 1)` samples per light, while later bounces use one sample per light to reduce cost.
 
-Shadow rays test blockers against `_Spheres` and `_Triangles`, but not `_Lights`. Opaque blockers early-out immediately, while transparent blockers use the nearest transparent hit before the light distance to tint transmitted shadow light.
+Shadow rays test blockers against `_Spheres` and mesh BVHs, but not `_Lights`. Opaque blockers early-out immediately, while transparent blockers use the nearest transparent hit before the light distance to tint transmitted shadow light.
 
 Transparent blockers can tint shadow light by using the blocking sphere color and opacity.
 

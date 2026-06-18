@@ -86,8 +86,12 @@ public class GameManager : MonoBehaviour
     private ComputeBuffer _lightBuffer;
 
     private List<Triangle> _triangles = new List<Triangle>();
+    private readonly List<MeshInfo> _meshInfos = new List<MeshInfo>();
+    private readonly List<BvhNode> _bvhNodes = new List<BvhNode>();
     private readonly List<RayTracedMesh> _meshObjects = new List<RayTracedMesh>();
     private ComputeBuffer _triangleBuffer;
+    private ComputeBuffer _meshBuffer;
+    private ComputeBuffer _bvhNodeBuffer;
     
     [Header("Render single frame")] 
     public bool _singleFrame = false;
@@ -100,6 +104,11 @@ public class GameManager : MonoBehaviour
 
     private const int SphereStride = 56;
     private const int TriangleStride = 80;
+    private const int MeshInfoStride = 48;
+    private const int BvhNodeStride = 48;
+    private const int BvhLeafTriangleCount = 4;
+    private const int BvhStackSize = 64;
+    private const float BvhBoundsPadding = 0.0001f;
     private const float GroundPreviewSize = 40.0f;
 
     private struct Sphere
@@ -208,6 +217,30 @@ public class GameManager : MonoBehaviour
             var hitDistance = Vector3.Dot(edge2, q) * inverseDeterminant;
             return hitDistance > 0.001f ? hitDistance : -1.0f;
         }
+    }
+
+    private struct MeshInfo
+    {
+        public Vector3 boundsMin;
+        public int rootNodeIndex;
+        public Vector3 boundsMax;
+        public int triangleStart;
+        public int triangleCount;
+        public int meshIndex;
+        public int padding0;
+        public int padding1;
+    }
+
+    private struct BvhNode
+    {
+        public Vector3 boundsMin;
+        public int leftChildIndex;
+        public Vector3 boundsMax;
+        public int rightChildIndex;
+        public int triangleStart;
+        public int triangleCount;
+        public int padding0;
+        public int padding1;
     }
 
     private struct RayTracedMesh
@@ -423,6 +456,8 @@ public class GameManager : MonoBehaviour
         _sphereBuffer?.Release();
         _lightBuffer?.Release();
         _triangleBuffer?.Release();
+        _meshBuffer?.Release();
+        _bvhNodeBuffer?.Release();
     }
 
     private void EnsureOutputTextureSize(int width, int height)
@@ -561,6 +596,16 @@ public class GameManager : MonoBehaviour
         {
             _triangleBuffer.SetData(_triangles);
         }
+
+        if (_meshBuffer != null && _meshInfos.Count > 0)
+        {
+            _meshBuffer.SetData(_meshInfos);
+        }
+
+        if (_bvhNodeBuffer != null && _bvhNodes.Count > 0)
+        {
+            _bvhNodeBuffer.SetData(_bvhNodes);
+        }
     }
 
     private bool UpdateMeshChangeCache()
@@ -604,6 +649,8 @@ public class GameManager : MonoBehaviour
     private void RebuildTriangleData()
     {
         _triangles.Clear();
+        _meshInfos.Clear();
+        _bvhNodes.Clear();
 
         for (int meshIndex = 0; meshIndex < _meshObjects.Count; meshIndex++)
         {
@@ -618,6 +665,7 @@ public class GameManager : MonoBehaviour
             var indices = mesh.triangles;
             var localToWorld = meshObject.transform.localToWorldMatrix;
             var material = meshObject.material;
+            var meshTriangles = new List<Triangle>(indices.Length / 3);
 
             for (int i = 0; i + 2 < indices.Length; i += 3)
             {
@@ -626,7 +674,7 @@ public class GameManager : MonoBehaviour
                 var vertex2 = localToWorld.MultiplyPoint3x4(vertices[indices[i + 2]]);
                 var normal = Vector3.Cross(vertex1 - vertex0, vertex2 - vertex0).normalized;
 
-                _triangles.Add(new Triangle
+                meshTriangles.Add(new Triangle
                 {
                     vertex0 = vertex0,
                     vertex1 = vertex1,
@@ -640,7 +688,196 @@ public class GameManager : MonoBehaviour
                     meshIndex = meshIndex
                 });
             }
+
+            if (meshTriangles.Count == 0)
+            {
+                continue;
+            }
+
+            var triangleStart = _triangles.Count;
+            var rootNodeIndex = BuildBvhNode(meshTriangles, 0, meshTriangles.Count);
+            _meshInfos.Add(new MeshInfo
+            {
+                boundsMin = _bvhNodes[rootNodeIndex].boundsMin,
+                rootNodeIndex = rootNodeIndex,
+                boundsMax = _bvhNodes[rootNodeIndex].boundsMax,
+                triangleStart = triangleStart,
+                triangleCount = _triangles.Count - triangleStart,
+                meshIndex = meshIndex
+            });
         }
+    }
+
+    private int BuildBvhNode(List<Triangle> meshTriangles, int start, int count)
+    {
+        var nodeIndex = _bvhNodes.Count;
+        var boundsMin = GetTriangleBoundsMin(meshTriangles[start]);
+        var boundsMax = GetTriangleBoundsMax(meshTriangles[start]);
+
+        for (int i = start + 1; i < start + count; i++)
+        {
+            Encapsulate(meshTriangles[i], ref boundsMin, ref boundsMax);
+        }
+
+        var padding = Vector3.one * BvhBoundsPadding;
+        boundsMin -= padding;
+        boundsMax += padding;
+
+        _bvhNodes.Add(new BvhNode
+        {
+            boundsMin = boundsMin,
+            boundsMax = boundsMax,
+            leftChildIndex = -1,
+            rightChildIndex = -1,
+            triangleStart = -1,
+            triangleCount = 0
+        });
+
+        if (count <= BvhLeafTriangleCount)
+        {
+            var triangleStart = _triangles.Count;
+            for (int i = start; i < start + count; i++)
+            {
+                _triangles.Add(meshTriangles[i]);
+            }
+
+            _bvhNodes[nodeIndex] = new BvhNode
+            {
+                boundsMin = boundsMin,
+                boundsMax = boundsMax,
+                leftChildIndex = -1,
+                rightChildIndex = -1,
+                triangleStart = triangleStart,
+                triangleCount = count
+            };
+            return nodeIndex;
+        }
+
+        int axis = GetLongestAxis(boundsMax - boundsMin);
+        meshTriangles.Sort(start, count, Comparer<Triangle>.Create((a, b) =>
+            GetTriangleCentroid(a)[axis].CompareTo(GetTriangleCentroid(b)[axis])));
+
+        int leftCount = count / 2;
+        int rightCount = count - leftCount;
+        int leftChildIndex = BuildBvhNode(meshTriangles, start, leftCount);
+        int rightChildIndex = BuildBvhNode(meshTriangles, start + leftCount, rightCount);
+
+        _bvhNodes[nodeIndex] = new BvhNode
+        {
+            boundsMin = boundsMin,
+            boundsMax = boundsMax,
+            leftChildIndex = leftChildIndex,
+            rightChildIndex = rightChildIndex,
+            triangleStart = -1,
+            triangleCount = 0
+        };
+
+        return nodeIndex;
+    }
+
+    private static Vector3 GetTriangleCentroid(Triangle triangle)
+    {
+        return (triangle.vertex0 + triangle.vertex1 + triangle.vertex2) / 3.0f;
+    }
+
+    private static Vector3 GetTriangleBoundsMin(Triangle triangle)
+    {
+        return Vector3.Min(triangle.vertex0, Vector3.Min(triangle.vertex1, triangle.vertex2));
+    }
+
+    private static Vector3 GetTriangleBoundsMax(Triangle triangle)
+    {
+        return Vector3.Max(triangle.vertex0, Vector3.Max(triangle.vertex1, triangle.vertex2));
+    }
+
+    private static void Encapsulate(Triangle triangle, ref Vector3 boundsMin, ref Vector3 boundsMax)
+    {
+        boundsMin = Vector3.Min(boundsMin, GetTriangleBoundsMin(triangle));
+        boundsMax = Vector3.Max(boundsMax, GetTriangleBoundsMax(triangle));
+    }
+
+    private static int GetLongestAxis(Vector3 size)
+    {
+        if (size.x >= size.y && size.x >= size.z)
+        {
+            return 0;
+        }
+
+        return size.y >= size.z ? 1 : 2;
+    }
+
+    private static bool IntersectAabb(Ray ray, Vector3 boundsMin, Vector3 boundsMax, float maxDistance)
+    {
+        var inverseDirection = new Vector3(
+            1.0f / GetSafeDirectionComponent(ray.direction.x),
+            1.0f / GetSafeDirectionComponent(ray.direction.y),
+            1.0f / GetSafeDirectionComponent(ray.direction.z));
+
+        var t0 = Vector3.Scale(boundsMin - ray.origin, inverseDirection);
+        var t1 = Vector3.Scale(boundsMax - ray.origin, inverseDirection);
+        var tMin3 = Vector3.Min(t0, t1);
+        var tMax3 = Vector3.Max(t0, t1);
+        float tMin = Mathf.Max(tMin3.x, Mathf.Max(tMin3.y, tMin3.z));
+        float tMax = Mathf.Min(tMax3.x, Mathf.Min(tMax3.y, tMax3.z));
+
+        return tMax >= Mathf.Max(0.0f, tMin) && tMin < maxDistance;
+    }
+
+    private static float GetSafeDirectionComponent(float value)
+    {
+        if (Mathf.Abs(value) >= 0.00000001f)
+        {
+            return value;
+        }
+
+        return value < 0.0f ? -0.00000001f : 0.00000001f;
+    }
+
+    private float GetNearestMeshIntersectionDistance(Ray ray, MeshInfo meshInfo, float nearestDistance)
+    {
+        if (meshInfo.triangleCount <= 0 || !IntersectAabb(ray, meshInfo.boundsMin, meshInfo.boundsMax, nearestDistance))
+        {
+            return nearestDistance;
+        }
+
+        var stack = new int[BvhStackSize];
+        int stackCount = 0;
+        stack[stackCount++] = meshInfo.rootNodeIndex;
+
+        while (stackCount > 0)
+        {
+            var node = _bvhNodes[stack[--stackCount]];
+            if (!IntersectAabb(ray, node.boundsMin, node.boundsMax, nearestDistance))
+            {
+                continue;
+            }
+
+            if (node.triangleCount > 0)
+            {
+                for (int i = 0; i < node.triangleCount; i++)
+                {
+                    var hitDistance = _triangles[node.triangleStart + i].Intersect(ray.origin, ray.direction);
+                    if (hitDistance >= 0.0f && hitDistance < nearestDistance)
+                    {
+                        nearestDistance = hitDistance;
+                    }
+                }
+
+                continue;
+            }
+
+            if (node.leftChildIndex >= 0 && stackCount < BvhStackSize)
+            {
+                stack[stackCount++] = node.leftChildIndex;
+            }
+
+            if (node.rightChildIndex >= 0 && stackCount < BvhStackSize)
+            {
+                stack[stackCount++] = node.rightChildIndex;
+            }
+        }
+
+        return nearestDistance;
     }
 
     public void RebuildBuffers()
@@ -649,19 +886,26 @@ public class GameManager : MonoBehaviour
         _sphereBuffer?.Release();
         _lightBuffer?.Release();
         _triangleBuffer?.Release();
+        _meshBuffer?.Release();
+        _bvhNodeBuffer?.Release();
         _sphereBuffer = null;
         _lightBuffer = null;
         _triangleBuffer = null;
+        _meshBuffer = null;
+        _bvhNodeBuffer = null;
 
         RebuildTriangleData();
 
         shader.SetInt("_NumSpheres", _spheres.Count);
         shader.SetInt("_NumLights", _lights.Count);
         shader.SetInt("_NumTriangles", _triangles.Count);
+        shader.SetInt("_NumMeshes", _meshInfos.Count);
 
         _sphereBuffer = CreateComputeBuffer(_spheres, SphereStride);
         _lightBuffer = CreateComputeBuffer(_lights, SphereStride);
         _triangleBuffer = CreateComputeBuffer(_triangles, TriangleStride);
+        _meshBuffer = CreateComputeBuffer(_meshInfos, MeshInfoStride);
+        _bvhNodeBuffer = CreateComputeBuffer(_bvhNodes, BvhNodeStride);
     }
 
     private static ComputeBuffer CreateComputeBuffer<T>(List<T> data, int stride) where T : struct
@@ -831,14 +1075,9 @@ public class GameManager : MonoBehaviour
             }
         }
 
-        foreach (var triangle in _triangles)
+        foreach (var meshInfo in _meshInfos)
         {
-            var hitDistance = triangle.Intersect(ray.origin, ray.direction);
-
-            if (hitDistance >= 0.0f && hitDistance < nearestDistance)
-            {
-                nearestDistance = hitDistance;
-            }
+            nearestDistance = GetNearestMeshIntersectionDistance(ray, meshInfo, nearestDistance);
         }
         
         // Ground plane
@@ -885,5 +1124,7 @@ public class GameManager : MonoBehaviour
         SetComputeBuffer("_Spheres", _sphereBuffer, kernelHandle);
         SetComputeBuffer("_Lights", _lightBuffer, kernelHandle);
         SetComputeBuffer("_Triangles", _triangleBuffer, kernelHandle);
+        SetComputeBuffer("_Meshes", _meshBuffer, kernelHandle);
+        SetComputeBuffer("_BvhNodes", _bvhNodeBuffer, kernelHandle);
     }
 }

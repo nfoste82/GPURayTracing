@@ -73,8 +73,7 @@ public static class RaySceneObjectMenu
         var material = new Material(shader)
         {
             name = "Ray Preview Material",
-            color = color,
-            hideFlags = HideFlags.HideAndDontSave
+            color = color
         };
         return material;
     }

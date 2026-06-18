@@ -21,10 +21,10 @@ If the object has `RayMeshPrimitive`, `RayTracingObject.OnEnable()` first calls 
 `RegisterObject()` classifies the object by rendering components:
 
 - If it has `RayMaterial` and `SphereCollider`, it becomes a ray-traced sphere in `_spheres` and `_sphereObjects`.
-- If it has `RayMaterial` and `MeshFilter`, but no `SphereCollider`, it becomes a triangle mesh in `_triangles` and `_meshObjects`.
+- If it has `RayMaterial` and `MeshFilter`, but no `SphereCollider`, it becomes a triangle mesh in `_triangles`, `_meshInfos`, `_bvhNodes`, and `_meshObjects`.
 - If it has `RayLight` and `SphereCollider`, it becomes an emissive sphere light in `_lights` and `_lightObjects`.
 
-Sphere and light objects require a `SphereCollider`. The collider center is transformed to world space for the ray-traced sphere position, and the collider radius is scaled by the largest absolute axis of the object's lossy scale for the ray-traced sphere radius. Mesh objects require a `MeshFilter`; the shared mesh triangles are transformed to world space and uploaded directly.
+Sphere and light objects require a `SphereCollider`. The collider center is transformed to world space for the ray-traced sphere position, and the collider radius is scaled by the largest absolute axis of the object's lossy scale for the ray-traced sphere radius. Mesh objects require a `MeshFilter`; the shared mesh triangles are transformed to world space, sorted into a per-mesh BVH, and uploaded with mesh and BVH node metadata.
 
 Registration caches the `Transform`, `SphereCollider`, shared `Mesh`, and either `RayMaterial` or `RayLight` references so per-frame updates do not repeatedly call `GetComponent<>()`. `MeshCollider` components are not used by the compute renderer; ray mesh primitives add them only so Unity physics can treat the rendered meshes as static collision geometry.
 
@@ -68,7 +68,7 @@ Graphics.Blit(_outputTexture, dest);
 - `float refraction`
 - `int materialType`
 
-`RebuildBuffers()` also releases and recreates a triangle buffer using stride `80`, matching the HLSL `MeshTriangle` struct layout:
+`RebuildBuffers()` also releases and recreates triangle, mesh-info, and BVH-node buffers. The triangle buffer uses stride `80`, matching the HLSL `MeshTriangle` struct layout:
 
 - `float3 vertex0`
 - `float3 vertex1`
@@ -81,13 +81,15 @@ Graphics.Blit(_outputTexture, dest);
 - `int materialType`
 - `int meshIndex`
 
-When object counts change, `RebuildBuffers()` also writes `_NumSpheres`, `_NumLights`, and `_NumTriangles`, including zero counts, so the shader does not read stale buffer entries after unregistering objects.
+The mesh-info buffer uses stride `48` and stores each mesh AABB, root BVH node index, triangle range, and mesh index. The BVH-node buffer also uses stride `48` and stores each node AABB, child indices, and leaf triangle range.
 
-Unity requires referenced structured buffers to be bound even when their active count is zero. `RebuildBuffers()` therefore creates sphere, light, and triangle buffers with at least one dummy element, while the `_Num*` shader counts still contain the real active counts.
+When object counts change, `RebuildBuffers()` also writes `_NumSpheres`, `_NumLights`, `_NumTriangles`, and `_NumMeshes`, including zero counts, so the shader does not read stale buffer entries after unregistering objects.
+
+Unity requires referenced structured buffers to be bound even when their active count is zero. `RebuildBuffers()` therefore creates sphere, light, triangle, mesh-info, and BVH-node buffers with at least one dummy element, while the `_Num*` shader counts still contain the real active counts.
 
 `UpdateSpheres()` then calls `SetData()` every rendered frame for existing sphere and light buffers so dynamic transforms/material values are reflected on the GPU.
 
-`UpdateTriangles()` rebuilds world-space triangle data and uploads `_Triangles` only when a mesh object's transform, color, smoothness, opacity, refraction index, or material type changes.
+`UpdateTriangles()` rebuilds world-space triangle data, mesh AABBs, and BVH nodes, then uploads `_Triangles`, `_Meshes`, and `_BvhNodes` only when a mesh object's transform, color, smoothness, opacity, refraction index, or material type changes.
 
 ## Scene View Preview Flow
 
@@ -119,6 +121,8 @@ Unity requires referenced structured buffers to be bound even when their active 
 - `_Spheres`
 - `_Lights`
 - `_Triangles`
+- `_Meshes`
+- `_BvhNodes`
 
 `_Seed` is uploaded as an integer. When `randomNoise` is enabled, C# uploads a new random seed each rendered frame. When `randomNoise` is disabled, C# uploads a fixed seed for stable deterministic sampling.
 

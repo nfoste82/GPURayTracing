@@ -6,7 +6,7 @@ This document captures current implementation limits and likely future work area
 
 - Spheres, emissive sphere lights, registered triangle meshes, and an implicit infinite ground plane are ray traced.
 - Unity meshes are traced only when registered through `RayTracingObject` plus `RayMaterial` and `MeshFilter`; box colliders and the scene `Directional Light` are not used by the compute shader renderer.
-- There is no acceleration structure. Every ray loops over all spheres, lights, and triangles.
+- Spheres and lights still use flat intersection loops. Triangle meshes use per-mesh AABB culling and per-mesh BVHs to skip most triangle tests.
 - `UpdateSpheres()` uploads all sphere/light data every rendered frame, even though component references are cached.
 - Debug render modes are basic first-hit/path diagnostics and do not include UI overlays, legends, or configurable visualization ranges.
 - Shadow rays check regular spheres and triangles as blockers, but not light spheres.
@@ -41,6 +41,7 @@ This document captures current implementation limits and likely future work area
 - `RayMeshPrimitive` and `GameObject > Ray Tracing` editor menu items were added for cube, pyramid, and dodecahedron mesh test objects.
 - Mesh triangle uploads now rebuild only when registered mesh transforms or ray material values change.
 - Mesh glass refraction now approximates entry and exit through closed triangle meshes using per-object `meshIndex` values.
+- Triangle meshes now build and upload per-mesh AABBs and BVH nodes so first-hit, shadow, and mesh-refraction rays do not need to test every triangle.
 - `RayObjectPreview` and additional `GameObject > Ray Tracing` menu items were added for visible ray-traced sphere/light composition in Scene view.
 - `GameManager` now draws a depth-tested editor preview for the implicit ground plane and can sync Unity's skybox preview from the ray tracer's skybox texture/tint settings.
 - Editor pause now refocuses/repaints the Game view through an editor-only callback so the last presented compute render remains visible when the Unity toolbar Pause button is used.
@@ -79,7 +80,7 @@ These options should improve perceived quality with little or no extra ray-inter
 
 ## Geometry Improvements
 
-- Add a BVH or other acceleration structure before supporting large meshes.
+- Consider a top-level scene BVH if scenes grow to many separate objects; mesh triangles already use per-mesh BVHs.
 - Add imported vertex normal support for smoother mesh shading.
 - Add texture/UV support if mesh materials need more than flat `RayMaterial` colors.
 - Improve mesh refraction with robust closed-volume traversal, nested media support, internal reflection handling, and distance-based absorption.
@@ -87,8 +88,8 @@ These options should improve perceived quality with little or no extra ray-inter
 
 ## Performance Hotspots
 
-- Soft shadows scale with lights, shadow quality, and blocker count.
-- Path tracing cost scales with `_NumberOfPasses * _NumBounces * geometryCount`, where geometry now includes triangles.
+- Soft shadows scale with lights, shadow quality, sphere count, and intersected mesh BVH nodes/leaves.
+- Path tracing cost scales with `_NumberOfPasses * _NumBounces * geometryCount`; triangle meshes are accelerated, but spheres, lights, BVH traversal, and leaf triangle tests still contribute.
 - Transparent shadows and transparent ray paths add extra math and intersection tests.
 - Mesh refraction adds internal same-mesh triangle intersection work for transmitted glass paths.
 - Without accumulation, increasing `numberOfPasses` is the main anti-aliasing/noise reduction path and directly increases per-frame cost.

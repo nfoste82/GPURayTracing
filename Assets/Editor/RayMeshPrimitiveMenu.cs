@@ -58,7 +58,6 @@ public static class RayMeshPrimitiveMenu
             name = "Ray Mesh Preview Material",
             color = color
         };
-        material.hideFlags = HideFlags.HideAndDontSave;
         return material;
     }
 }
