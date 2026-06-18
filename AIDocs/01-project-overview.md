@@ -6,8 +6,11 @@ The renderer currently ray traces spheres, emissive sphere lights, registered tr
 
 ## Key Files
 
-- `Assets/Scripts/GameManager.cs`: Main Unity-side controller. Owns render texture creation, compute shader dispatch, quality settings, camera controls, autofocus, object buffers, shader parameter uploads, implicit ground preview drawing, and optional Unity skybox preview sync.
+- `Assets/Scripts/GameManager.cs`: Main Unity-side controller. Owns render texture creation, compute shader dispatch, quality settings, camera controls, autofocus, object buffers, shader parameter uploads, implicit ground preview drawing, and optional Unity skybox preview sync. It does not implement `OnRenderImage()` itself; it exposes `RenderImage(src, dest)`, which is called by `RayTracingCameraRenderer`.
+- `Assets/Scripts/RayTracingCameraRenderer.cs`: Camera component whose `OnRenderImage()` delegates to `GameManager.RenderImage()`. It runs on whatever camera holds this component (typically the same camera wired into `GameManager.renderTextureCamera`, but that link is only inspector wiring, not enforced in code).
 - `Assets/Scripts/RayTracingCompute.compute`: Main GPU renderer. Generates camera rays, performs intersections, computes lighting/shadows/reflections/refraction, and writes the final pixel color.
+- `Assets/Scripts/RayTracingBenchmarkOverlay.cs`: Runtime benchmark overlay for frame timing, geometry counts, BVH status, and quality settings.
+- `Assets/Scripts/BenchmarkOrbitMover.cs`: Simple deterministic movement helper for dynamic benchmark scenes.
 - `Assets/Scripts/RayTracingObject.cs`: Registers and unregisters ray-traced scene objects with the nearest parent `GameManager`.
 - `Assets/Scripts/RayMaterial.cs`: Per-object render material data: material type, color, smoothness, opacity, and refraction index.
 - `Assets/Scripts/RayMeshPrimitive.cs`: Procedural mesh primitive helper for ray-traced cube, pyramid, and dodecahedron test objects.
@@ -16,11 +19,13 @@ The renderer currently ray traces spheres, emissive sphere lights, registered tr
 - `Assets/Scripts/ColorExtensions.cs`: Converts `Color32` to normalized `Vector3` values for GPU upload.
 - `Assets/Editor/RayMeshPrimitiveMenu.cs`: Adds `GameObject > Ray Tracing` menu entries for creating ray-traced mesh primitive test objects in the hierarchy.
 - `Assets/Editor/RaySceneObjectMenu.cs`: Adds `GameObject > Ray Tracing` menu entries for ray-traced spheres, light spheres, and a ground preview plane.
+- `Assets/Editor/RayTracingBenchmarkSceneGenerator.cs`: Adds `Tools > Ray Tracing > Generate Benchmark Scenes` for creating focused performance scenes.
 - `Assets/Scenes/Root.unity`: Main scene with the camera, game manager, ray-traced spheres, light spheres, physics objects, and visual scene geometry.
+- `Assets/Scenes/Benchmarks/*.unity`: Generated benchmark scenes for stressing specific renderer paths.
 
 ## Runtime Feature Set
 
-- Real-time compute-shader rendering through `OnRenderImage()`.
+- Real-time compute-shader rendering driven through `RayTracingCameraRenderer.OnRenderImage()`, which calls `GameManager.RenderImage()`.
 - Dynamic sphere transforms and physics-driven sphere movement.
 - Registered triangle mesh objects through `RayTracingObject` + `RayMaterial` + `MeshFilter`.
 - Editor-created ray-traced cube, pyramid, and dodecahedron primitives that remain visible in Scene view but hide their rasterized `MeshRenderer` in Play mode by default.
@@ -32,9 +37,11 @@ The renderer currently ray traces spheres, emissive sphere lights, registered tr
 - Transparent/glass objects with approximate sphere refraction and approximate closed-mesh entry/exit refraction for triangle meshes.
 - Colored shadows through transparent blockers.
 - Surface reflections with roughness approximated by randomized normals.
-- Depth of field with optional CPU-side autofocus.
+- Depth of field with optional CPU-side autofocus. The aperture jitter is a hard-coded `0.005` world-space ray-origin offset in the shader and is not currently exposed as a configurable aperture.
 - Configurable samples per pixel via `numberOfPasses`.
 - Configurable bounce count via `numBounces` / `_NumBounces`.
+- Optional top-level object BVH and separate shadow-blocker BVH, each controlled by runtime thresholds so small scenes can stay on cheaper flat loops.
+- Benchmark overlay and generated benchmark scenes for comparing optimization behavior across different workloads.
 
 ## Current Renderer Shape
 

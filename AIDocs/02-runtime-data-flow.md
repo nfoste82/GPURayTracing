@@ -4,9 +4,9 @@
 
 ## Render Texture Allocation
 
-On `Start()`, `GameManager` creates `_outputTexture` as a `RenderTexture` sized to the current screen dimensions with `enableRandomWrite = true`. This texture is bound as `Result` before dispatch and then blitted to the camera output by `RayTracingCameraRenderer` on the same camera referenced by `GameManager.renderTextureCamera`.
+On `Start()`, `GameManager` creates `_outputTexture` as a `RenderTexture` sized to the current screen dimensions with `enableRandomWrite = true`. This texture is bound as `Result` before dispatch and then blitted to the camera output. The blit is performed by `GameManager.RenderImage()`, which is invoked from `RayTracingCameraRenderer.OnRenderImage()`. The blit therefore happens on whichever camera holds the `RayTracingCameraRenderer` component; that is normally the camera wired into `GameManager.renderTextureCamera`, but the code does not enforce that they are the same camera.
 
-During `OnRenderImage()`, `GameManager` checks the source render target dimensions and recreates `_outputTexture` if the runtime render size changes. It also updates `renderTextureCamera.aspect` from the active output texture size so the camera projection used for ray generation matches the resized render target.
+During `RenderImage()`, `GameManager` calls `EnsureOutputTextureSize(src.width, src.height)` to check the source render target dimensions and recreate `_outputTexture` if the runtime render size changes. This runs every call, even when `_running` is false. It also updates `renderTextureCamera.aspect` from the active output texture size so the camera projection used for ray generation matches the resized render target.
 
 ## Object Registration
 
@@ -32,20 +32,21 @@ Registration caches the `Transform`, `SphereCollider`, shared `Mesh`, and either
 
 ## Per-Frame Render Flow
 
-`RayTracingCameraRenderer.OnRenderImage(RenderTexture src, RenderTexture dest)` is the render entry point. It delegates to `GameManager.RenderImage()` so the enabled Unity camera used for Game view gizmos is also the camera whose transform/projection drives compute ray generation.
+`RayTracingCameraRenderer.OnRenderImage(RenderTexture src, RenderTexture dest)` is the render entry point. It delegates to `GameManager.RenderImage()`. This means the Unity camera that owns the `RayTracingCameraRenderer` component (the one whose `OnRenderImage` fires and is used for Game view gizmos) is intended to also be the camera whose transform/projection drives compute ray generation. In practice that camera should be the same object assigned to `GameManager.renderTextureCamera`, since `RenderImage()` reads camera matrices from `renderTextureCamera`, but nothing in code links the two automatically.
 
 When `_running` is true, it:
 
-1. Ensures `_outputTexture` matches the current source render target dimensions.
+1. Ensures `_outputTexture` matches the current source render target dimensions (this `EnsureOutputTextureSize` call actually runs before the `_running` check).
 2. Updates `renderTextureCamera.aspect` to match `_outputTexture`.
-3. Computes autofocus distance if `cameraAutoFocus` is enabled, ignoring ray-traced objects whose opacity is at or below `autoFocusTransparentOpacityThreshold` so focus can pass through mostly transparent glass.
+3. Computes autofocus distance if `cameraAutoFocus` is enabled, ignoring ray-traced objects whose opacity is at or below `autoFocusTransparentOpacityThreshold` so focus can pass through mostly transparent glass. The autofocus search starts from a `numberOfPasses`-derived near distance (`12 - min(8, numberOfPasses * 1.75)`) rather than a fixed near plane, and very close hits (under `1.0`) are remapped by an additional close-focus modifier and smoothed toward the previous focal distance over time.
 4. Writes the resulting focal distance to `cameraFocalDistance`.
 5. Calls `UpdateSpheres()` to refresh CPU sphere/light structs from cached Unity object references.
 6. Calls `UpdateTriangles()` to refresh registered mesh triangle data only if a cached mesh transform or material value changed.
-7. Finds the compute kernel `CSMain`.
-8. Calls `SetShaderParameters()`.
-9. Dispatches the compute shader through `UpdateTextureFromCompute()`.
-10. Stops rendering again if single-frame mode is enabled.
+7. Calls `UpdateTopLevelBvh()` and `UpdateShadowBvh()` to refresh acceleration structures if their runtime thresholds are met.
+8. Finds the compute kernel `CSMain`.
+9. Calls `SetShaderParameters()`.
+10. Dispatches the compute shader through `UpdateTextureFromCompute()`.
+11. Stops rendering again if single-frame mode is enabled.
 
 After dispatch, it always calls:
 
@@ -68,7 +69,7 @@ Graphics.Blit(_outputTexture, dest);
 - `float refraction`
 - `int materialType`
 
-`RebuildBuffers()` also releases and recreates triangle, mesh-info, and BVH-node buffers. The triangle buffer uses stride `80`, matching the HLSL `MeshTriangle` struct layout:
+`RebuildBuffers()` also releases and recreates triangle, mesh-info, per-mesh BVH-node, and top-level BVH-node buffers. The triangle buffer uses stride `80`, matching the HLSL `MeshTriangle` struct layout:
 
 - `float3 vertex0`
 - `float3 vertex1`
@@ -81,15 +82,23 @@ Graphics.Blit(_outputTexture, dest);
 - `int materialType`
 - `int meshIndex`
 
-The mesh-info buffer uses stride `48` and stores each mesh AABB, root BVH node index, triangle range, and mesh index. The BVH-node buffer also uses stride `48` and stores each node AABB, child indices, and leaf triangle range.
+The mesh-info buffer uses stride `48` and stores each mesh AABB, root BVH node index, triangle range, and mesh index. The per-mesh BVH-node buffer also uses stride `48` and stores each node AABB, child indices, and leaf triangle range. The top-level BVH-node buffer uses stride `48` and stores AABBs over sphere, light, and mesh objects, plus child indices or object type/index metadata. The shadow BVH-node buffer uses the same stride/layout but only includes shadow blockers: regular spheres and meshes, not light spheres.
 
-When object counts change, `RebuildBuffers()` also writes `_NumSpheres`, `_NumLights`, `_NumTriangles`, and `_NumMeshes`, including zero counts, so the shader does not read stale buffer entries after unregistering objects.
+When object counts change, `RebuildBuffers()` also writes `_NumSpheres`, `_NumLights`, `_NumTriangles`, `_NumMeshes`, `_NumTopLevelBvhNodes`, and `_NumShadowBvhNodes`, including zero counts, so the shader does not read stale buffer entries after unregistering objects.
 
-Unity requires referenced structured buffers to be bound even when their active count is zero. `RebuildBuffers()` therefore creates sphere, light, triangle, mesh-info, and BVH-node buffers with at least one dummy element, while the `_Num*` shader counts still contain the real active counts.
+Unity requires referenced structured buffers to be bound even when their active count is zero. `RebuildBuffers()` therefore creates sphere, light, triangle, mesh-info, per-mesh BVH-node, top-level BVH-node, and shadow BVH-node buffers with at least one dummy element, while the `_Num*` shader counts still contain the real active counts.
 
 `UpdateSpheres()` then calls `SetData()` every rendered frame for existing sphere and light buffers so dynamic transforms/material values are reflected on the GPU.
 
-`UpdateTriangles()` rebuilds world-space triangle data, mesh AABBs, and BVH nodes, then uploads `_Triangles`, `_Meshes`, and `_BvhNodes` only when a mesh object's transform, color, smoothness, opacity, refraction index, or material type changes.
+`UpdateTriangles()` rebuilds world-space triangle data, mesh AABBs, and per-mesh BVH nodes, then uploads `_Triangles`, `_Meshes`, and `_BvhNodes` only when a mesh object's transform, color, smoothness, opacity, refraction index, or material type changes. `UpdateTopLevelBvh()` rebuilds and uploads the top-level object BVH every rendered frame after sphere/light and mesh updates, so dynamic objects keep correct top-level bounds. `UpdateShadowBvh()` does the same for the shadow-only blocker BVH.
+
+`topLevelBvhMinObjectCount` and `shadowBvhMinObjectCount` are runtime thresholds. If the relevant object count is below the threshold, the matching BVH list is left empty, `_NumTopLevelBvhNodes` or `_NumShadowBvhNodes` is uploaded as `0`, and the compute shader uses lower-overhead flat object loops. Set a threshold to `0` to force that BVH on. Set it above the scene's object/blocker count, such as `1024`, to force flat loops. The benchmark overlay reports whether each BVH is active, object counts, node counts, and thresholds.
+
+Profiling in the current scenes showed that the shadow-blocker BVH can improve `Benchmark_ShadowBlockers`, while the general top-level BVH has little effect there because that benchmark is dominated by shadow rays rather than first-hit object lookup. Use `Benchmark_ManySpheres` or `Benchmark_ManyMeshes` to evaluate `topLevelBvhMinObjectCount`; use `Benchmark_ShadowBlockers` to evaluate `shadowBvhMinObjectCount`.
+
+## Benchmarking Flow
+
+Benchmark scene generation and overlay behavior are documented in `10-benchmarking-and-performance.md` so runtime orchestration tasks do not need to load benchmark methodology by default.
 
 ## Scene View Preview Flow
 
@@ -123,8 +132,10 @@ Unity requires referenced structured buffers to be bound even when their active 
 - `_Triangles`
 - `_Meshes`
 - `_BvhNodes`
+- `_TopLevelBvhNodes`
+- `_ShadowBvhNodes`
 
-`_Seed` is uploaded as an integer. When `randomNoise` is enabled, C# uploads a new random seed each rendered frame. When `randomNoise` is disabled, C# uploads a fixed seed for stable deterministic sampling.
+`_Seed` is uploaded as an integer. When `randomNoise` is enabled, C# uploads a new random seed (`Random.Range(1, int.MaxValue)`) each rendered frame. When `randomNoise` is disabled, C# uploads the fixed literal value `1` every frame for stable deterministic sampling.
 
 ## Controls And Modes
 
@@ -134,7 +145,7 @@ Unity requires referenced structured buffers to be bound even when their active 
 - `Space` resumes real-time rendering.
 - `debugRenderMode` is exposed in the `GameManager` inspector and selects final color or one of the shader debug visualizations.
 
-Single-frame mode renders one frame, then stops compute dispatch while the camera continues to blit the last `_outputTexture` into the Game view. It lowers the target frame rate but does not set `Time.timeScale` to zero, so Unity keeps presenting the last ray-traced render instead of appearing to fall back to an editor/Scene view. Toggling it off in the inspector, pressing `T`, or pressing `Space` resumes real-time rendering and restores real-time presentation settings.
+Single-frame mode is exposed in the inspector through the serialized public field `_singleFrame` (under the "Render single frame" header). It renders one frame, then stops compute dispatch while the camera continues to blit the last `_outputTexture` into the Game view. `EnableSingleFrameSettings()` sets `Application.targetFrameRate = 10` and disables vSync, so the player loop slows down but does not set `Time.timeScale` to zero; Unity keeps presenting the last ray-traced render instead of appearing to fall back to an editor/Scene view. Toggling it off in the inspector, pressing `T`, or pressing `Space` resumes real-time rendering and restores real-time presentation settings (`targetFrameRate = 60`, vSync re-enabled).
 
 Unity's editor toolbar Pause freezes the player loop, so runtime code cannot keep dispatching or blitting new frames while that pause is active. `Assets/Editor/GameViewPauseFocus.cs` listens for editor pause events and refocuses/repaints the Game view so the editor remains on the last presented render instead of switching to the Scene tab.
 

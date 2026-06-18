@@ -9,7 +9,7 @@ Important shader globals:
 - `Result`: writable output texture.
 - `_CameraToWorld`: camera transform matrix.
 - `_CameraInverseProjection`: inverse projection matrix for camera ray generation.
-- `_SkyboxTexture`: sampled when rays miss all geometry.
+- `_SkyboxTexture`: sampled when rays miss all geometry. Sampling in `GetSkyboxColor()` uses a non-standard equirectangular mapping with negated axes (`theta = acos(dir.y) / -PI`, `phi = atan2(dir.x, -dir.z) / -PI * 0.5`), so skybox orientation/handedness is not obvious; expect to flip or rotate textures when swapping them in.
 - `_SkyboxLight`: skybox lighting multiplier.
 - `_NumberOfPasses`: per-frame samples per pixel.
 - `_NumBounces`: maximum bounces for `TracePath()`.
@@ -21,10 +21,14 @@ Important shader globals:
 - `_GroundSmoothness`: smoothness for the implicit ground plane.
 - `_Seed`: integer seed used to initialize per-pixel/per-pass shader RNG state.
 - `_NumSpheres`, `_NumLights`, `_NumTriangles`, `_NumMeshes`: active buffer counts.
+- `_NumTopLevelBvhNodes`: active top-level object BVH node count; `0` means first-hit traversal uses flat object loops.
+- `_NumShadowBvhNodes`: active shadow-only BVH node count; `0` means shadow traversal uses flat blocker loops.
 - `_Spheres`, `_Lights`: structured buffers of `Sphere` data.
 - `_Triangles`: structured buffer of `MeshTriangle` data.
 - `_Meshes`: structured buffer of per-mesh AABBs, triangle ranges, root BVH node indices, and mesh indices.
 - `_BvhNodes`: structured buffer of per-mesh BVH nodes.
+- `_TopLevelBvhNodes`: structured buffer of top-level BVH nodes over sphere, light, and mesh objects.
+- `_ShadowBvhNodes`: structured buffer of top-level BVH nodes over shadow blockers only: regular spheres and mesh objects.
 
 ## Data Structures
 
@@ -66,7 +70,20 @@ struct MeshTriangle
 
 `meshIndex` identifies which uploaded triangles belong to the same mesh object. It is used by approximate closed-mesh refraction to find the exit face.
 
+## Material Type Constants
+
+The shader defines four material type constants:
+
+- `MaterialDiffuse = 0`
+- `MaterialMetal = 1`
+- `MaterialGlass = 2`
+- `MaterialEmissive = 3`
+
+`RayMaterial` only exposes `Diffuse`, `Metal`, and `Glass` (0-2). The `MaterialEmissive = 3` value is assigned by `GameManager.RegisterObject()` to emissive light spheres (it is not selectable in `RayMaterial`). The shader does not branch on `MaterialEmissive` in scatter logic; lights are detected by nonzero emission via `DidHitLight()` instead.
+
 Triangle meshes also upload `MeshInfo` and `BvhNode` data. Each mesh has an object-level AABB in `_Meshes`, and its triangles are arranged into a binary BVH whose leaf nodes contain small contiguous triangle ranges in `_Triangles`.
+
+The scene also uploads a top-level BVH over ray-traced spheres, emissive light spheres, and registered mesh AABBs. First-hit traversal uses this BVH to skip whole objects before testing sphere intersections or entering a mesh's per-mesh BVH. Shadow traversal uses a separate shadow-only BVH over regular spheres and mesh AABBs, excluding light spheres because lights are not shadow blockers.
 
 `RayHit` stores hit position, object position/radius, normal, emission, color, distance, smoothness, opacity, transparent travel distance, refraction index, material type, and mesh index.
 
@@ -89,32 +106,9 @@ For each pass, `CSMain` computes a focal point:
 float3 focalPoint = ray.origin + ray.direction * _FocalDistance;
 ```
 
-It jitters the ray origin by a small fixed amount and re-aims the ray at the focal point. This approximates lens aperture blur.
+It jitters the ray origin by a small fixed amount and re-aims the ray at the focal point. This approximates lens aperture blur. The jitter magnitude is a hard-coded `0.005` world-space offset applied independently to each ray-origin axis; there is no configurable aperture/f-stop parameter.
 
-## Intersections
-
-`GetNearestIntersection()` checks:
-
-1. `IntersectGroundPlane()` for an infinite plane at world `y = 0`.
-2. Every sphere in `_Spheres`.
-3. Every emissive sphere in `_Lights`.
-4. Every mesh AABB in `_Meshes`, then only the intersected BVH nodes and leaf triangles for that mesh.
-
-Spheres and lights are still traced with flat loops. Triangle meshes use a per-mesh AABB plus BVH traversal, so rays can skip whole meshes and large triangle groups before running expensive triangle tests.
-
-## Lighting And Shadows
-
-Direct lighting comes from emissive sphere lights.
-
-`GetLightHittingPoint()` computes direct lighting by taking stochastic disk samples across each emissive sphere light. Bounce 0 uses `max(1, _ShadowQuality + 1)` samples per light, while later bounces use one sample per light to reduce cost.
-
-Shadow rays test blockers against `_Spheres` and mesh BVHs, but not `_Lights`. Opaque blockers early-out immediately, while transparent blockers use the nearest transparent hit before the light distance to tint transmitted shadow light.
-
-Transparent blockers can tint shadow light by using the blocking sphere color and opacity.
-
-Direct light from sampled light points is accumulated additively rather than combined with a channel-wise max operation. Light falloff now uses a clamped inverse-square-style distance term scaled by light radius and `_LightFalloffScale`, although transparent shadow tinting remains approximate.
-
-## Path Tracing Loop
+## Core Path Tracing Loop
 
 `TracePath()` is the main iterative renderer.
 
@@ -144,50 +138,6 @@ Material scattering currently supports:
 - `Metal`: reflects around the surface normal, with smoothness controlling rough reflection direction randomization, and attenuates by albedo.
 - `Glass`: uses Schlick Fresnel reflectance to weight the existing approximate sphere refraction path for spheres. For mesh triangles, it uses an approximate closed-mesh entry/exit path that refracts into the mesh, intersects the nearest exit triangle with the same `meshIndex`, refracts back out, and continues from the exit point.
 
-## Debug Render Modes
+Note: the glass/refraction path is selected by `IsGlassMaterial(hit)`, which returns true when `materialType == Glass` **or** when `hit.opacity < 1.0`. A `Diffuse` or `Metal` object with opacity below `1` therefore takes the glass transmission/Fresnel path regardless of its declared material type.
 
-`GameManager.debugRenderMode` uploads `_DebugRenderMode` to the compute shader. `FinalColor` uses the normal `TracePath()` output. Other modes use `GetDebugRenderColor()` to visualize a single diagnostic quantity.
-
-Available modes:
-
-- `FinalColor`: normal path-traced render.
-- `Normals`: first-hit normal mapped from `[-1, 1]` to `[0, 1]`.
-- `Albedo`: first-hit surface color.
-- `Emission`: first-hit emission, clamped to displayable `[0, 1]` color.
-- `DirectLight`: first-hit direct light from soft light sampling, clamped to `[0, 1]`.
-- `Throughput`: remaining path throughput after iterative scattering, clamped to `[0, 1]`.
-- `BounceCount`: completed non-terminal bounces normalized by `_NumBounces`.
-- `HitDistance`: first-hit distance divided by `25`, clamped to grayscale `[0, 1]`; sky renders white.
-
-Debug modes still use the normal camera ray generation and depth-of-field jitter path, so high `numberOfPasses` can average noisy debug samples for modes involving randomized normals, direct light, or throughput.
-
-## Transparency And Refraction
-
-Transparent/glass sphere refraction is approximate. `ApplySphereRefraction()`:
-
-1. Refracts from air into the sphere using `Refract()`, or from sphere material back into air when the ray starts inside the sphere.
-2. Estimates the exit point by finding a closest point across the sphere chord.
-3. Computes the exit normal.
-4. Refracts back out into air.
-
-Glass material scattering now uses Schlick Fresnel reflectance to weight transmission, but the transmitted ray still uses the project’s approximate sphere refraction helper rather than a full Snell-law volume traversal. This avoids the high variance of randomly choosing reflection or transmission per sample.
-
-Triangle mesh refraction uses `ApplyPlanarTransmission()` rather than the sphere helper:
-
-1. Refract from air into the hit triangle using the project `Refract()` helper.
-2. Cast an internal ray against triangles with the same `meshIndex`.
-3. Use the nearest internal triangle hit as the exit face.
-4. Refract from material back into air.
-5. Continue the path from the exit point.
-
-This gives visible prism-like behavior for simple closed meshes such as pyramids. It is still approximate: it assumes a mostly closed/convex mesh, does not handle nested media, and does not model distance-based absorption.
-
-## Randomness
-
-`CSMain` creates a local `uint rngState` for each pixel and sample pass using `_Seed`, pixel coordinates, and the sample index. `rand(inout rngState)` advances that local state through an integer hash and returns a normalized float in `[0, 1)`.
-
-The RNG is used for subpixel camera jitter, depth-of-field aperture jitter, stochastic area-light samples, cosine-weighted diffuse bounce sampling, Russian roulette termination, and rough reflection normal randomization. When `randomNoise` is false, C# sends a fixed integer seed each frame for deterministic stable noise patterns. When `randomNoise` is true, C# sends a new random integer seed each frame.
-
-## Partial Shader Pieces
-
-- `distanceThroughOpacity` is written for transparent/refraction calculations and transparent shadow logic, but is not part of a full absorption model.
+For intersection, BVH, lighting, refraction, debugging, and randomness details, see the focused shader docs listed in `00-index.md`.

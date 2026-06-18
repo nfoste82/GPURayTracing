@@ -1,24 +1,28 @@
-# Known Limitations And Next Steps
+# Known Limitations
 
-This document captures current implementation limits and likely future work areas.
+This document captures current implementation limits and broad architectural direction. For future work lists, see `09-roadmap-and-improvements.md`. For performance hotspots and benchmark guidance, see `10-benchmarking-and-performance.md`.
 
 ## Known Limitations
 
 - Spheres, emissive sphere lights, registered triangle meshes, and an implicit infinite ground plane are ray traced.
 - Unity meshes are traced only when registered through `RayTracingObject` plus `RayMaterial` and `MeshFilter`; box colliders and the scene `Directional Light` are not used by the compute shader renderer.
-- Spheres and lights still use flat intersection loops. Triangle meshes use per-mesh AABB culling and per-mesh BVHs to skip most triangle tests.
+- First-hit rays use a top-level BVH over spheres, emissive light spheres, and registered mesh AABBs once the scene has enough objects to amortize traversal overhead. Shadow rays use a separate top-level BVH over blocker objects only: regular spheres and meshes. Smaller scenes use flat object loops. Triangle meshes also use per-mesh AABB culling and per-mesh BVHs to skip most triangle tests. Current default BVH thresholds are conservative so benchmark scenes can opt into BVHs deliberately.
 - `UpdateSpheres()` uploads all sphere/light data every rendered frame, even though component references are cached.
-- Debug render modes are basic first-hit/path diagnostics and do not include UI overlays, legends, or configurable visualization ranges.
+- Debug render modes are basic first-hit/path diagnostics and do not include legends or configurable visualization ranges. `AccelerationStructures` is available for checking whether the general top-level BVH and shadow BVH are active.
 - Shadow rays check regular spheres and triangles as blockers, but not light spheres.
 - Refraction/transparency use Fresnel material selection, but sphere and mesh transmitted paths are still approximate rather than a full physically accurate volume traversal.
 - Direct lighting accumulates additively and uses clamped inverse-square-style falloff, but transparent shadow tinting is still approximate rather than fully physically based.
 - Diffuse scattering uses cosine-weighted hemisphere sampling on later bounces, but there is no denoising/accumulation to control variance.
 - Mesh triangle normals are flat face normals; imported vertex normals, smoothing groups, UVs, and textures are not used.
 - Mesh refraction assumes a mostly closed/convex mesh and uses the nearest same-mesh triangle as the exit face. It does not handle nested media, multi-hit internal reflections, or distance-based absorption.
+- BVH traversal (per-mesh, top-level, and shadow, on both GPU and the CPU autofocus path) uses a fixed-size stack of `64`. If a node's children would overflow the stack, those children are silently dropped rather than handled, which could in theory miss intersections for pathologically deep trees. The current median-split builds make this unlikely, but it is not guarded.
 - Scene-view sphere, light, ground, and skybox previews are composition aids. They approximate the ray-traced result but are not guaranteed to match all compute shader shading, reflection, refraction, exposure, or sampling behavior exactly.
 
 ## Recently Completed
 
+- `RayTracingBenchmarkOverlay` and `Tools > Ray Tracing > Generate Benchmark Scenes` were added to create benchmark scenes for many spheres, shadow blockers, many lights, dense meshes, many mesh objects, glass, sparse scenes, and dynamic transforms.
+- The `AccelerationStructures` debug render mode was added to visualize active general and shadow BVHs. This helped confirm that shadow BVH threshold values must exceed the blocker count to force flat shadow loops.
+- `topLevelBvhMinObjectCount` and `shadowBvhMinObjectCount` were expanded to support high thresholds such as `1024`, making it easy to force BVH-on versus flat-loop comparisons at runtime.
 - `UnregisterObject()` removes disabled/destroyed ray-traced objects from CPU sphere/light lists and marks GPU buffers for rebuild.
 - `_outputTexture` is recreated when the runtime render size changes, and `renderTextureCamera.aspect` is updated to match the active render target.
 - `RayMaterial`, `RayLight`, `SphereCollider`, and `Transform` references are cached at registration time instead of fetched every rendered frame.
@@ -42,57 +46,10 @@ This document captures current implementation limits and likely future work area
 - Mesh triangle uploads now rebuild only when registered mesh transforms or ray material values change.
 - Mesh glass refraction now approximates entry and exit through closed triangle meshes using per-object `meshIndex` values.
 - Triangle meshes now build and upload per-mesh AABBs and BVH nodes so first-hit, shadow, and mesh-refraction rays do not need to test every triangle.
+- First-hit and shadow rays now traverse a top-level scene BVH so they can skip groups of spheres, lights, and meshes before object-specific tests.
 - `RayObjectPreview` and additional `GameObject > Ray Tracing` menu items were added for visible ray-traced sphere/light composition in Scene view.
 - `GameManager` now draws a depth-tested editor preview for the implicit ground plane and can sync Unity's skybox preview from the ray tracer's skybox texture/tint settings.
 - Editor pause now refocuses/repaints the Game view through an editor-only callback so the last presented compute render remains visible when the Unity toolbar Pause button is used.
-
-## Good Near-Term Fixes
-
-- Add UI overlays, legends, or configurable ranges for debug render modes if more detailed diagnostics are needed.
-- Add a simple material/debug preset workflow in the scene so material type changes can be compared quickly.
-
-## Cheap Rendering Improvements
-
-These options should improve perceived quality with little or no extra ray-intersection cost. Most are better sampling, better parameter mapping, or cheap per-pixel math rather than more rays.
-
-- Add tone mapping and exposure controls so bright lighting rolls off more pleasantly instead of clipping harshly.
-- Add an optional firefly/outlier clamp to reduce rare bright speckles in single-frame renders.
-- Improve `Smoothness` to roughness mapping, such as using a perceptual squared roughness curve, so material controls feel more predictable.
-- Improve rough metal reflection sampling by sampling around the ideal reflection lobe instead of randomizing the normal with axis-aligned noise.
-- Refine diffuse sampling basis construction and below-surface rejection to avoid unstable or invalid sample directions.
-- Tune direct light defaults, including `lightFalloffScale`, light radius/intensity expectations, and scene light colors.
-- Consider adding a global light intensity or exposure scale if light setup remains hard to balance.
-- Skip work that cannot contribute much, such as direct lighting for nearly black throughput, roughness randomization when smoothness is effectively `1`, or continuation work when `_NumBounces <= 1`.
-- Review default inspector values for `groundSmoothness`, `shadowRandomness`, `numberOfPasses`, `shadowQuality`, and `randomNoise` after visual testing.
-- Add UI overlays, legends, or configurable ranges for debug render modes if more detailed diagnostics are needed.
-- Add a simple material/debug preset workflow in the scene so material type and smoothness changes can be compared quickly.
-
-## More Expensive Rendering Improvements
-
-- Add frame accumulation for progressive refinement when camera and scene are static.
-- Reset accumulation when camera, focus, quality settings, material values, object transforms, or render size change.
-- Further improve diffuse indirect lighting with lower-variance sampling and material-specific BRDF/PDF handling as new materials are added.
-- Improve transparent absorption and next-event estimation toward a more physically based formulation.
-- Accumulate transmittance through multiple transparent shadow blockers instead of only using the nearest transparent blocker.
-- Improve glass refraction with proper sphere entry/exit traversal, Snell-law behavior, and distance-based absorption.
-- Improve direct light sampling by sampling sphere lights by visible solid angle instead of approximate disk samples.
-- Consider a lightweight denoising or temporal stability pass after accumulation is in place.
-
-## Geometry Improvements
-
-- Consider a top-level scene BVH if scenes grow to many separate objects; mesh triangles already use per-mesh BVHs.
-- Add imported vertex normal support for smoother mesh shading.
-- Add texture/UV support if mesh materials need more than flat `RayMaterial` colors.
-- Improve mesh refraction with robust closed-volume traversal, nested media support, internal reflection handling, and distance-based absorption.
-- Keep the data model generic enough that spheres and mesh triangles can share the same material/emission shading path.
-
-## Performance Hotspots
-
-- Soft shadows scale with lights, shadow quality, sphere count, and intersected mesh BVH nodes/leaves.
-- Path tracing cost scales with `_NumberOfPasses * _NumBounces * geometryCount`; triangle meshes are accelerated, but spheres, lights, BVH traversal, and leaf triangle tests still contribute.
-- Transparent shadows and transparent ray paths add extra math and intersection tests.
-- Mesh refraction adds internal same-mesh triangle intersection work for transmitted glass paths.
-- Without accumulation, increasing `numberOfPasses` is the main anti-aliasing/noise reduction path and directly increases per-frame cost.
 
 ## Architectural Direction
 

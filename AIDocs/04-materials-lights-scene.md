@@ -18,13 +18,17 @@ Mesh objects use `RayMaterial` plus `MeshFilter` and should not have a `SphereCo
 
 Fields:
 
-- `Type`: selects `Diffuse`, `Metal`, or `Glass` scattering in the compute shader.
+- `Type`: selects `Diffuse`, `Metal`, or `Glass` scattering in the compute shader. Defaults to `Metal`. (Mesh primitives created via `RayMeshPrimitive` override this to `Glass` in `Reset()`.)
 - `Color`: uploaded as normalized RGB and used as albedo/tint.
 - `Smoothness`: controls metal/glass reflection roughness by randomizing the hit normal. Higher values preserve the normal more closely.
-- `Opacity`: `1` is opaque. Values below `1` allow glass/transparent transmission.
+- `Opacity`: `1` is opaque. Values below `1` allow glass/transparent transmission. Note that any opacity below `1` makes the shader treat the hit as glass (see below), regardless of `Type`.
 - `RefractionIndex`: used by glass Fresnel reflectance and the custom approximate refraction path.
 
+The emissive material constant (`MaterialEmissive = 3` in the shader) is not selectable here. It is assigned internally to `RayLight` sphere lights during registration.
+
 In the shader, material color is retrieved through `GetAlbedo(hit)`. Diffuse and metal paths attenuate throughput by albedo. Glass transmission is tinted by albedo based on opacity, while glass reflection keeps white reflective throughput.
+
+The glass/refraction path is selected by `IsGlassMaterial(hit)`, which is true when `materialType == Glass` **or** when `hit.opacity < 1.0`. So a `Diffuse` or `Metal` object with opacity under `1` will render through the glass transmission/Fresnel path.
 
 Material behavior:
 
@@ -75,7 +79,7 @@ Ground properties:
 
 ## Skybox Preview
 
-The compute shader samples `GameManager.skyboxTexture` through `_SkyboxTexture` and multiplies it by `_SkyboxLight`, which is derived from `GameManager._skyboxLightColor`.
+The compute shader samples `GameManager.skyboxTexture` through `_SkyboxTexture` and multiplies it by `_SkyboxLight`, which is derived from `GameManager._skyboxLightColor`. The equirectangular lookup in `GetSkyboxColor()` uses negated axes, so swapped skybox textures may need to be flipped/rotated to appear correctly.
 
 For scene composition, `GameManager.syncUnitySkyboxToRayTracedSkybox` can create a transient Unity `Skybox/Panoramic` material from the same `skyboxTexture`, tint it with `_skyboxLightColor`, and assign it to `RenderSettings.skybox`. `unitySkyboxExposure` and `unitySkyboxRotation` tune this Unity preview. This makes the Scene view skybox closer to Play mode, but it does not affect compute-shader lighting beyond the existing `_SkyboxTexture` and `_SkyboxLight` parameters.
 

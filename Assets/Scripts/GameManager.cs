@@ -22,6 +22,14 @@ public class GameManager : MonoBehaviour
     [Range(0, 5)]
     public int shadowQuality = 2;
 
+    [Tooltip("Use flat object loops below this count; set above the scene object count to force flat loops.")]
+    [Range(0, 1024)]
+    public int topLevelBvhMinObjectCount = 1024;
+
+    [Tooltip("Use flat shadow blocker loops below this count; set above the blocker count to force flat shadow loops.")]
+    [Range(0, 1024)]
+    public int shadowBvhMinObjectCount = 1024;
+
     [Range(0f, 1.5f)]
     public float shadowRandomness = 0.3f;
 
@@ -34,7 +42,8 @@ public class GameManager : MonoBehaviour
         DirectLight = 4,
         Throughput = 5,
         BounceCount = 6,
-        HitDistance = 7
+        HitDistance = 7,
+        AccelerationStructures = 8
     }
 
     [Header("Debug render modes")]
@@ -92,16 +101,35 @@ public class GameManager : MonoBehaviour
     private List<Triangle> _triangles = new List<Triangle>();
     private readonly List<MeshInfo> _meshInfos = new List<MeshInfo>();
     private readonly List<BvhNode> _bvhNodes = new List<BvhNode>();
+    private readonly List<TopLevelBvhNode> _topLevelBvhNodes = new List<TopLevelBvhNode>();
+    private readonly List<TopLevelBvhNode> _shadowBvhNodes = new List<TopLevelBvhNode>();
+    private readonly List<TopLevelBvhBuildItem> _topLevelBvhBuildItems = new List<TopLevelBvhBuildItem>();
+    private readonly List<TopLevelBvhBuildItem> _shadowBvhBuildItems = new List<TopLevelBvhBuildItem>();
+    private readonly TopLevelBvhBuildItemComparer _topLevelBvhBuildItemComparer = new TopLevelBvhBuildItemComparer();
     private readonly List<RayTracedMesh> _meshObjects = new List<RayTracedMesh>();
     private ComputeBuffer _triangleBuffer;
     private ComputeBuffer _meshBuffer;
     private ComputeBuffer _bvhNodeBuffer;
+    private ComputeBuffer _topLevelBvhNodeBuffer;
+    private ComputeBuffer _shadowBvhNodeBuffer;
     
     [Header("Render single frame")] 
     public bool _singleFrame = false;
 
     private bool _running = true;
     private bool _previousSingleFrame;
+
+    public int SphereCount => _spheres.Count;
+    public int LightCount => _lights.Count;
+    public int MeshCount => _meshInfos.Count;
+    public int TriangleCount => _triangles.Count;
+    public int TopLevelBvhNodeCount => _topLevelBvhNodes.Count;
+    public int ShadowBvhNodeCount => _shadowBvhNodes.Count;
+    public int TopLevelBvhObjectCount => _topLevelBvhBuildItems.Count;
+    public int ShadowBvhObjectCount => _shadowBvhBuildItems.Count;
+    public bool IsTopLevelBvhActive => _topLevelBvhNodes.Count > 0;
+    public bool IsShadowBvhActive => _shadowBvhNodes.Count > 0;
+    public Vector2Int TextureSize => _textureSize;
 
     private static bool _buffersNeedRebuilding = false;
     private static readonly List<RayTracingObject> _rayTracingObjects = new List<RayTracingObject>();
@@ -110,10 +138,15 @@ public class GameManager : MonoBehaviour
     private const int TriangleStride = 80;
     private const int MeshInfoStride = 48;
     private const int BvhNodeStride = 48;
+    private const int TopLevelBvhNodeStride = 48;
     private const int BvhLeafTriangleCount = 4;
     private const int BvhStackSize = 64;
     private const float BvhBoundsPadding = 0.0001f;
     private const float GroundPreviewSize = 40.0f;
+    private const int TopLevelObjectTypeInternal = -1;
+    private const int TopLevelObjectTypeSphere = 0;
+    private const int TopLevelObjectTypeLight = 1;
+    private const int TopLevelObjectTypeMesh = 2;
 
     private struct Sphere
     {
@@ -245,6 +278,36 @@ public class GameManager : MonoBehaviour
         public int triangleCount;
         public int padding0;
         public int padding1;
+    }
+
+    private struct TopLevelBvhNode
+    {
+        public Vector3 boundsMin;
+        public int leftChildIndex;
+        public Vector3 boundsMax;
+        public int rightChildIndex;
+        public int objectType;
+        public int objectIndex;
+        public int padding0;
+        public int padding1;
+    }
+
+    private struct TopLevelBvhBuildItem
+    {
+        public Vector3 boundsMin;
+        public Vector3 boundsMax;
+        public int objectType;
+        public int objectIndex;
+    }
+
+    private class TopLevelBvhBuildItemComparer : IComparer<TopLevelBvhBuildItem>
+    {
+        public int axis;
+
+        public int Compare(TopLevelBvhBuildItem x, TopLevelBvhBuildItem y)
+        {
+            return GetTopLevelBvhItemCentroid(x)[axis].CompareTo(GetTopLevelBvhItemCentroid(y)[axis]);
+        }
     }
 
     private struct RayTracedMesh
@@ -462,6 +525,8 @@ public class GameManager : MonoBehaviour
         _triangleBuffer?.Release();
         _meshBuffer?.Release();
         _bvhNodeBuffer?.Release();
+        _topLevelBvhNodeBuffer?.Release();
+        _shadowBvhNodeBuffer?.Release();
     }
 
     private void EnsureOutputTextureSize(int width, int height)
@@ -519,6 +584,8 @@ public class GameManager : MonoBehaviour
 
             UpdateSpheres();
             UpdateTriangles();
+            UpdateTopLevelBvh();
+            UpdateShadowBvh();
 
             var kernelHandle = shader.FindKernel("CSMain");
 
@@ -609,6 +676,38 @@ public class GameManager : MonoBehaviour
         if (_bvhNodeBuffer != null && _bvhNodes.Count > 0)
         {
             _bvhNodeBuffer.SetData(_bvhNodes);
+        }
+    }
+
+    private void UpdateTopLevelBvh()
+    {
+        RebuildTopLevelBvh();
+
+        int requiredBufferCount = Mathf.Max(1, _topLevelBvhNodes.Count);
+        if (_topLevelBvhNodeBuffer == null || _topLevelBvhNodeBuffer.count < requiredBufferCount)
+        {
+            _topLevelBvhNodeBuffer?.Release();
+            _topLevelBvhNodeBuffer = CreateComputeBuffer(_topLevelBvhNodes, TopLevelBvhNodeStride);
+        }
+        else if (_topLevelBvhNodes.Count > 0)
+        {
+            _topLevelBvhNodeBuffer.SetData(_topLevelBvhNodes);
+        }
+    }
+
+    private void UpdateShadowBvh()
+    {
+        RebuildShadowBvh();
+
+        int requiredBufferCount = Mathf.Max(1, _shadowBvhNodes.Count);
+        if (_shadowBvhNodeBuffer == null || _shadowBvhNodeBuffer.count < requiredBufferCount)
+        {
+            _shadowBvhNodeBuffer?.Release();
+            _shadowBvhNodeBuffer = CreateComputeBuffer(_shadowBvhNodes, TopLevelBvhNodeStride);
+        }
+        else if (_shadowBvhNodes.Count > 0)
+        {
+            _shadowBvhNodeBuffer.SetData(_shadowBvhNodes);
         }
     }
 
@@ -710,6 +809,149 @@ public class GameManager : MonoBehaviour
                 meshIndex = meshIndex
             });
         }
+    }
+
+    private void RebuildTopLevelBvh()
+    {
+        _topLevelBvhNodes.Clear();
+        _topLevelBvhBuildItems.Clear();
+
+        for (int i = 0; i < _spheres.Count; i++)
+        {
+            AddSphereTopLevelBvhItem(_topLevelBvhBuildItems, _spheres[i], TopLevelObjectTypeSphere, i);
+        }
+
+        for (int i = 0; i < _lights.Count; i++)
+        {
+            AddSphereTopLevelBvhItem(_topLevelBvhBuildItems, _lights[i], TopLevelObjectTypeLight, i);
+        }
+
+        for (int i = 0; i < _meshInfos.Count; i++)
+        {
+            _topLevelBvhBuildItems.Add(new TopLevelBvhBuildItem
+            {
+                boundsMin = _meshInfos[i].boundsMin,
+                boundsMax = _meshInfos[i].boundsMax,
+                objectType = TopLevelObjectTypeMesh,
+                objectIndex = i
+            });
+        }
+
+        if (_topLevelBvhBuildItems.Count < topLevelBvhMinObjectCount)
+        {
+            return;
+        }
+
+        if (_topLevelBvhBuildItems.Count > 0)
+        {
+            BuildTopLevelBvhNode(_topLevelBvhBuildItems, _topLevelBvhNodes, 0, _topLevelBvhBuildItems.Count);
+        }
+    }
+
+    private void RebuildShadowBvh()
+    {
+        _shadowBvhNodes.Clear();
+        _shadowBvhBuildItems.Clear();
+
+        for (int i = 0; i < _spheres.Count; i++)
+        {
+            AddSphereTopLevelBvhItem(_shadowBvhBuildItems, _spheres[i], TopLevelObjectTypeSphere, i);
+        }
+
+        for (int i = 0; i < _meshInfos.Count; i++)
+        {
+            _shadowBvhBuildItems.Add(new TopLevelBvhBuildItem
+            {
+                boundsMin = _meshInfos[i].boundsMin,
+                boundsMax = _meshInfos[i].boundsMax,
+                objectType = TopLevelObjectTypeMesh,
+                objectIndex = i
+            });
+        }
+
+        if (_shadowBvhBuildItems.Count < shadowBvhMinObjectCount)
+        {
+            return;
+        }
+
+        if (_shadowBvhBuildItems.Count > 0)
+        {
+            BuildTopLevelBvhNode(_shadowBvhBuildItems, _shadowBvhNodes, 0, _shadowBvhBuildItems.Count);
+        }
+    }
+
+    private static void AddSphereTopLevelBvhItem(List<TopLevelBvhBuildItem> items, Sphere sphere, int objectType, int objectIndex)
+    {
+        var radius = Vector3.one * (sphere.radius + BvhBoundsPadding);
+        items.Add(new TopLevelBvhBuildItem
+        {
+            boundsMin = sphere.position - radius,
+            boundsMax = sphere.position + radius,
+            objectType = objectType,
+            objectIndex = objectIndex
+        });
+    }
+
+    private int BuildTopLevelBvhNode(List<TopLevelBvhBuildItem> items, List<TopLevelBvhNode> nodes, int start, int count)
+    {
+        var nodeIndex = nodes.Count;
+        var boundsMin = items[start].boundsMin;
+        var boundsMax = items[start].boundsMax;
+
+        for (int i = start + 1; i < start + count; i++)
+        {
+            boundsMin = Vector3.Min(boundsMin, items[i].boundsMin);
+            boundsMax = Vector3.Max(boundsMax, items[i].boundsMax);
+        }
+
+        nodes.Add(new TopLevelBvhNode
+        {
+            boundsMin = boundsMin,
+            boundsMax = boundsMax,
+            leftChildIndex = -1,
+            rightChildIndex = -1,
+            objectType = TopLevelObjectTypeInternal,
+            objectIndex = -1
+        });
+
+        if (count == 1)
+        {
+            nodes[nodeIndex] = new TopLevelBvhNode
+            {
+                boundsMin = boundsMin,
+                boundsMax = boundsMax,
+                leftChildIndex = -1,
+                rightChildIndex = -1,
+                objectType = items[start].objectType,
+                objectIndex = items[start].objectIndex
+            };
+            return nodeIndex;
+        }
+
+        _topLevelBvhBuildItemComparer.axis = GetLongestAxis(boundsMax - boundsMin);
+        items.Sort(start, count, _topLevelBvhBuildItemComparer);
+
+        int leftCount = count / 2;
+        int rightCount = count - leftCount;
+        int leftChildIndex = BuildTopLevelBvhNode(items, nodes, start, leftCount);
+        int rightChildIndex = BuildTopLevelBvhNode(items, nodes, start + leftCount, rightCount);
+
+        nodes[nodeIndex] = new TopLevelBvhNode
+        {
+            boundsMin = boundsMin,
+            boundsMax = boundsMax,
+            leftChildIndex = leftChildIndex,
+            rightChildIndex = rightChildIndex,
+            objectType = TopLevelObjectTypeInternal,
+            objectIndex = -1
+        };
+
+        return nodeIndex;
+    }
+
+    private static Vector3 GetTopLevelBvhItemCentroid(TopLevelBvhBuildItem item)
+    {
+        return (item.boundsMin + item.boundsMax) * 0.5f;
     }
 
     private int BuildBvhNode(List<Triangle> meshTriangles, int start, int count)
@@ -903,24 +1145,34 @@ public class GameManager : MonoBehaviour
         _triangleBuffer?.Release();
         _meshBuffer?.Release();
         _bvhNodeBuffer?.Release();
+        _topLevelBvhNodeBuffer?.Release();
+        _shadowBvhNodeBuffer?.Release();
         _sphereBuffer = null;
         _lightBuffer = null;
         _triangleBuffer = null;
         _meshBuffer = null;
         _bvhNodeBuffer = null;
+        _topLevelBvhNodeBuffer = null;
+        _shadowBvhNodeBuffer = null;
 
         RebuildTriangleData();
+        RebuildTopLevelBvh();
+        RebuildShadowBvh();
 
         shader.SetInt("_NumSpheres", _spheres.Count);
         shader.SetInt("_NumLights", _lights.Count);
         shader.SetInt("_NumTriangles", _triangles.Count);
         shader.SetInt("_NumMeshes", _meshInfos.Count);
+        shader.SetInt("_NumTopLevelBvhNodes", _topLevelBvhNodes.Count);
+        shader.SetInt("_NumShadowBvhNodes", _shadowBvhNodes.Count);
 
         _sphereBuffer = CreateComputeBuffer(_spheres, SphereStride);
         _lightBuffer = CreateComputeBuffer(_lights, SphereStride);
         _triangleBuffer = CreateComputeBuffer(_triangles, TriangleStride);
         _meshBuffer = CreateComputeBuffer(_meshInfos, MeshInfoStride);
         _bvhNodeBuffer = CreateComputeBuffer(_bvhNodes, BvhNodeStride);
+        _topLevelBvhNodeBuffer = CreateComputeBuffer(_topLevelBvhNodes, TopLevelBvhNodeStride);
+        _shadowBvhNodeBuffer = CreateComputeBuffer(_shadowBvhNodes, TopLevelBvhNodeStride);
     }
 
     private static ComputeBuffer CreateComputeBuffer<T>(List<T> data, int stride) where T : struct
@@ -1140,11 +1392,15 @@ public class GameManager : MonoBehaviour
         shader.SetFloat("_LightFalloffScale", lightFalloffScale);
         shader.SetFloat("_FocalDistance", cameraFocalDistance);
         shader.SetFloat("_GroundSmoothness", groundSmoothness);
+        shader.SetInt("_NumTopLevelBvhNodes", _topLevelBvhNodes.Count);
+        shader.SetInt("_NumShadowBvhNodes", _shadowBvhNodes.Count);
 
         SetComputeBuffer("_Spheres", _sphereBuffer, kernelHandle);
         SetComputeBuffer("_Lights", _lightBuffer, kernelHandle);
         SetComputeBuffer("_Triangles", _triangleBuffer, kernelHandle);
         SetComputeBuffer("_Meshes", _meshBuffer, kernelHandle);
         SetComputeBuffer("_BvhNodes", _bvhNodeBuffer, kernelHandle);
+        SetComputeBuffer("_TopLevelBvhNodes", _topLevelBvhNodeBuffer, kernelHandle);
+        SetComputeBuffer("_ShadowBvhNodes", _shadowBvhNodeBuffer, kernelHandle);
     }
 }

@@ -28,6 +28,8 @@ int _NumSpheres;
 int _NumLights;
 int _NumTriangles;
 int _NumMeshes;
+int _NumTopLevelBvhNodes;
+int _NumShadowBvhNodes;
 
 static const float PI = 3.141593f;
 static const float MaxRefractionDiff = 4;
@@ -41,11 +43,17 @@ static const int DebugDirectLight = 4;
 static const int DebugThroughput = 5;
 static const int DebugBounceCount = 6;
 static const int DebugHitDistance = 7;
+static const int DebugAccelerationStructures = 8;
 
 static const int MaterialDiffuse = 0;
 static const int MaterialMetal = 1;
 static const int MaterialGlass = 2;
 static const int MaterialEmissive = 3;
+
+static const int TopLevelObjectTypeInternal = -1;
+static const int TopLevelObjectTypeSphere = 0;
+static const int TopLevelObjectTypeLight = 1;
+static const int TopLevelObjectTypeMesh = 2;
 
 static const float MinDirectLightThroughput = 0.01f;
 static const int BvhStackSize = 64;
@@ -134,6 +142,21 @@ struct BvhNode
 
 StructuredBuffer<MeshInfo> _Meshes;
 StructuredBuffer<BvhNode> _BvhNodes;
+
+struct TopLevelBvhNode
+{
+    float3 boundsMin;
+    int leftChildIndex;
+    float3 boundsMax;
+    int rightChildIndex;
+    int objectType;
+    int objectIndex;
+    int padding0;
+    int padding1;
+};
+
+StructuredBuffer<TopLevelBvhNode> _TopLevelBvhNodes;
+StructuredBuffer<TopLevelBvhNode> _ShadowBvhNodes;
 
 // =======================================================
 // Ray
@@ -525,20 +548,68 @@ RayHit GetNearestIntersection(Ray ray)
 
 	IntersectGroundPlane(ray, bestHit);
 
-	int i;
-	for (i = 0; i < _NumSpheres; i++)
+	if (_NumTopLevelBvhNodes <= 0)
 	{
-		IntersectSphere(ray, bestHit, _Spheres[i]);
+		int i;
+		for (i = 0; i < _NumSpheres; i++)
+		{
+			IntersectSphere(ray, bestHit, _Spheres[i]);
+		}
+
+		for (i = 0; i < _NumLights; i++)
+		{
+			IntersectSphere(ray, bestHit, _Lights[i]);
+		}
+
+		for (i = 0; i < _NumMeshes; i++)
+		{
+			IntersectMeshBvh(ray, bestHit, _Meshes[i]);
+		}
+
+		return bestHit;
 	}
 
-	for (i = 0; i < _NumLights; i++)
-	{
-		IntersectSphere(ray, bestHit, _Lights[i]);
-	}
+	int stack[BvhStackSize];
+	int stackCount = 0;
+	stack[stackCount++] = 0;
 
-	for (i = 0; i < _NumMeshes; i++)
+	while (stackCount > 0)
 	{
-		IntersectMeshBvh(ray, bestHit, _Meshes[i]);
+		int nodeIndex = stack[--stackCount];
+		TopLevelBvhNode node = _TopLevelBvhNodes[nodeIndex];
+
+		if (!IntersectAabb(ray, node.boundsMin, node.boundsMax, bestHit.distance))
+		{
+			continue;
+		}
+
+		if (node.objectType == TopLevelObjectTypeSphere)
+		{
+			IntersectSphere(ray, bestHit, _Spheres[node.objectIndex]);
+			continue;
+		}
+
+		if (node.objectType == TopLevelObjectTypeLight)
+		{
+			IntersectSphere(ray, bestHit, _Lights[node.objectIndex]);
+			continue;
+		}
+
+		if (node.objectType == TopLevelObjectTypeMesh)
+		{
+			IntersectMeshBvh(ray, bestHit, _Meshes[node.objectIndex]);
+			continue;
+		}
+
+		if (node.leftChildIndex >= 0 && stackCount < BvhStackSize)
+		{
+			stack[stackCount++] = node.leftChildIndex;
+		}
+
+		if (node.rightChildIndex >= 0 && stackCount < BvhStackSize)
+		{
+			stack[stackCount++] = node.rightChildIndex;
+		}
 	}
 
 	return bestHit;
@@ -604,34 +675,98 @@ float3 GetShadowTransmittance(Ray rayToLight, float distanceToLight)
     RayHit nearestTransparentHit = CreateRayHit();
     nearestTransparentHit.distance = distanceToLight;
 
-    int j;
-    for (j = 0; j < _NumSpheres; j++)
+    if (_NumShadowBvhNodes <= 0)
     {
-        RayHit blockerHit = CreateRayHit();
-        blockerHit.distance = distanceToLight;
-        IntersectSphere(rayToLight, blockerHit, _Spheres[j]);
-
-        if (blockerHit.distance >= distanceToLight)
+        int j;
+        for (j = 0; j < _NumSpheres; j++)
         {
-            continue;
+            RayHit blockerHit = CreateRayHit();
+            blockerHit.distance = distanceToLight;
+            IntersectSphere(rayToLight, blockerHit, _Spheres[j]);
+
+            if (blockerHit.distance >= distanceToLight)
+            {
+                continue;
+            }
+
+            if (blockerHit.opacity >= 1.0f)
+            {
+                return float3(0.0f, 0.0f, 0.0f);
+            }
+
+            if (blockerHit.distance < nearestTransparentHit.distance)
+            {
+                nearestTransparentHit = blockerHit;
+            }
         }
 
-        if (blockerHit.opacity >= 1.0f)
+        for (j = 0; j < _NumMeshes; j++)
         {
-            return float3(0.0f, 0.0f, 0.0f);
-        }
-
-        if (blockerHit.distance < nearestTransparentHit.distance)
-        {
-            nearestTransparentHit = blockerHit;
+            if (IntersectMeshBvhForShadow(rayToLight, distanceToLight, nearestTransparentHit, _Meshes[j]))
+            {
+                return float3(0.0f, 0.0f, 0.0f);
+            }
         }
     }
-
-    for (j = 0; j < _NumMeshes; j++)
+    else
     {
-        if (IntersectMeshBvhForShadow(rayToLight, distanceToLight, nearestTransparentHit, _Meshes[j]))
+        int stack[BvhStackSize];
+        int stackCount = 0;
+        stack[stackCount++] = 0;
+
+        while (stackCount > 0)
         {
-            return float3(0.0f, 0.0f, 0.0f);
+            int nodeIndex = stack[--stackCount];
+            TopLevelBvhNode node = _ShadowBvhNodes[nodeIndex];
+
+            if (!IntersectAabb(rayToLight, node.boundsMin, node.boundsMax, distanceToLight))
+            {
+                continue;
+            }
+
+            if (node.objectType == TopLevelObjectTypeSphere)
+            {
+                RayHit blockerHit = CreateRayHit();
+                blockerHit.distance = distanceToLight;
+                IntersectSphere(rayToLight, blockerHit, _Spheres[node.objectIndex]);
+
+                if (blockerHit.distance >= distanceToLight)
+                {
+                    continue;
+                }
+
+                if (blockerHit.opacity >= 1.0f)
+                {
+                    return float3(0.0f, 0.0f, 0.0f);
+                }
+
+                if (blockerHit.distance < nearestTransparentHit.distance)
+                {
+                    nearestTransparentHit = blockerHit;
+                }
+
+                continue;
+            }
+
+            if (node.objectType == TopLevelObjectTypeMesh)
+            {
+                if (IntersectMeshBvhForShadow(rayToLight, distanceToLight, nearestTransparentHit, _Meshes[node.objectIndex]))
+                {
+                    return float3(0.0f, 0.0f, 0.0f);
+                }
+
+                continue;
+            }
+
+            if (node.leftChildIndex >= 0 && stackCount < BvhStackSize)
+            {
+                stack[stackCount++] = node.leftChildIndex;
+            }
+
+            if (node.rightChildIndex >= 0 && stackCount < BvhStackSize)
+            {
+                stack[stackCount++] = node.rightChildIndex;
+            }
         }
     }
 
@@ -986,6 +1121,36 @@ float3 TracePath(Ray ray, inout uint rngState)
 float3 GetDebugRenderColor(Ray ray, inout uint rngState)
 {
     RayHit hit = GetNearestIntersection(ray);
+
+    if (_DebugRenderMode == DebugAccelerationStructures)
+    {
+        float topLevelActive = _NumTopLevelBvhNodes > 0 ? 1.0f : 0.0f;
+        float shadowActive = _NumShadowBvhNodes > 0 ? 1.0f : 0.0f;
+        float shadowScale = saturate(_NumShadowBvhNodes / 255.0f);
+        float topLevelScale = saturate(_NumTopLevelBvhNodes / 255.0f);
+
+        if (DidHitSky(hit))
+        {
+            return float3(topLevelScale, shadowScale, 0.0f);
+        }
+
+        if (DidHitLight(hit))
+        {
+            return float3(1.0f, shadowActive * 0.5f, 0.0f);
+        }
+
+        if (IsGlassMaterial(hit))
+        {
+            return float3(topLevelActive * 0.2f, 0.25f + shadowActive * 0.75f, 1.0f);
+        }
+
+        if (hit.meshIndex >= 0)
+        {
+            return float3(1.0f, 0.2f + shadowActive * 0.8f, topLevelActive * 0.2f);
+        }
+
+        return float3(topLevelActive, shadowActive, 0.15f);
+    }
 
     if (DidHitSky(hit))
     {
