@@ -19,6 +19,10 @@ Important shader globals:
 - `_LightFalloffScale`: distance falloff scale for direct light. Higher values make light intensity decrease faster with distance.
 - `_FocalDistance`: depth-of-field focal distance.
 - `_GroundSmoothness`: smoothness for the implicit ground plane.
+- `_Exposure`: master brightness multiplier applied before tone mapping. Acts like a camera exposure dial.
+- `_LightSamplingStrategy`: selects how `GetLightHittingPoint()` samples scene lights (`0` = all lights, `1` = uniform random pick, `2` = importance-sampled pick). See `07-shader-lighting-and-materials.md`.
+- `_LightSampleCount`: for the random/importance strategies, how many lights each shading point draws per hit. Ignored by the all-lights strategy.
+- `_MaxLightSamples`: diagnostic cap on how many lights any strategy considers. `0` means no cap (use the real light count); a positive value clamps the considered light count to confirm the per-hit light loop is the bottleneck.
 - `_Seed`: integer seed used to initialize per-pixel/per-pass shader RNG state.
 - `_NumSpheres`, `_NumLights`, `_NumTriangles`, `_NumMeshes`: active buffer counts.
 - `_NumTopLevelBvhNodes`: active top-level object BVH node count; `0` means first-hit traversal uses flat object loops.
@@ -97,6 +101,10 @@ The scene also uploads a top-level BVH over ray-traced spheres, emissive light s
 4. Normalizing the result.
 
 `CSMain` maps each pixel to `[-1, 1]` UV space with subpixel jitter from `rand()`.
+
+## Tone Mapping And Exposure
+
+After all passes are averaged, `CSMain` applies exposure and tone mapping **only when `_DebugRenderMode == DebugFinalColor`**, so debug visualizations are written with their raw diagnostic values. The final color is computed as `ACESFilmicToneMap(color * _Exposure)`, where `ACESFilmicToneMap()` is the Narkowicz 2015 ACES filmic approximation. This maps open-ended HDR radiance into `[0, 1]` so bright values roll off smoothly instead of clipping hard to white. `_Exposure` comes from `GameManager.exposure`.
 
 ## Depth Of Field
 

@@ -122,11 +122,15 @@ Benchmark scene generation and overlay behavior are documented in `10-benchmarki
 - `_NumberOfPasses`
 - `_NumBounces`
 - `_DebugRenderMode`
+- `_MaxLightSamples`
+- `_LightSamplingStrategy`
+- `_LightSampleCount`
 - `_ShadowQuality`
 - `_ShadowRandomness`
 - `_LightFalloffScale`
 - `_FocalDistance`
 - `_GroundSmoothness`
+- `_Exposure`
 - `_Spheres`
 - `_Lights`
 - `_Triangles`
@@ -136,6 +140,8 @@ Benchmark scene generation and overlay behavior are documented in `10-benchmarki
 - `_ShadowBvhNodes`
 
 `_Seed` is uploaded as an integer. When `randomNoise` is enabled, C# uploads a new random seed (`Random.Range(1, int.MaxValue)`) each rendered frame. When `randomNoise` is disabled, C# uploads the fixed literal value `1` every frame for stable deterministic sampling.
+
+`SetShaderParameters()` also logs a one-time warning when `lightSamplingStrategy == ImportanceSampled` and the active light count exceeds `MaxImportanceLights` (`128`), since lights beyond that count are dropped from importance weighting in the shader. The C# `MaxImportanceLights` constant must stay in sync with the shader's `MaxImportanceLights`.
 
 ## Controls And Modes
 

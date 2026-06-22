@@ -20,6 +20,7 @@ The renderer currently ray traces spheres, emissive sphere lights, registered tr
 - `Assets/Editor/RayMeshPrimitiveMenu.cs`: Adds `GameObject > Ray Tracing` menu entries for creating ray-traced mesh primitive test objects in the hierarchy.
 - `Assets/Editor/RaySceneObjectMenu.cs`: Adds `GameObject > Ray Tracing` menu entries for ray-traced spheres, light spheres, and a ground preview plane.
 - `Assets/Editor/RayTracingBenchmarkSceneGenerator.cs`: Adds `Tools > Ray Tracing > Generate Benchmark Scenes` for creating focused performance scenes.
+- `Assets/Editor/RayTracingShaderPrecompiler.cs`: Adds `Tools > Ray Tracing > Precompile Compute Shader`. Forces the compute shader to compile and dispatch once from edit mode (with timing and surfaced compile messages) so a slow or failing kernel shows up here instead of stalling Unity on first Play. Unity compiles compute kernels lazily on first `Dispatch`, which is why pathological kernels previously only hung when entering Play mode.
 - `Assets/Scenes/Root.unity`: Main scene with the camera, game manager, ray-traced spheres, light spheres, physics objects, and visual scene geometry.
 - `Assets/Scenes/Benchmarks/*.unity`: Generated benchmark scenes for stressing specific renderer paths.
 
@@ -34,6 +35,8 @@ The renderer currently ray traces spheres, emissive sphere lights, registered tr
 - Optional Unity skybox preview synced from `GameManager.skyboxTexture` and tinted by `_skyboxLightColor`.
 - Emissive sphere lights.
 - Direct lighting with hard/soft shadow sampling.
+- Selectable direct-light sampling strategy (all lights, uniform random, or importance-sampled) with a configurable per-hit light sample count, for trading noise against cost in many-light scenes.
+- ACES filmic tone mapping with a configurable `exposure` control, applied to the final color (debug modes are left untone-mapped).
 - Transparent/glass objects with approximate sphere refraction and approximate closed-mesh entry/exit refraction for triangle meshes.
 - Colored shadows through transparent blockers.
 - Surface reflections with roughness approximated by randomized normals.

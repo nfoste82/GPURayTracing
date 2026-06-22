@@ -17,10 +17,14 @@ int _NumberOfPasses;
 int _ShadowQuality;
 int _NumBounces;
 int _DebugRenderMode;
+int _MaxLightSamples;
+int _LightSamplingStrategy;
+int _LightSampleCount;
 float _ShadowRandomness;
 float _LightFalloffScale;
 float _FocalDistance;
 float _GroundSmoothness;
+float _Exposure;
 
 uint _Seed;
 
@@ -54,6 +58,14 @@ static const int TopLevelObjectTypeInternal = -1;
 static const int TopLevelObjectTypeSphere = 0;
 static const int TopLevelObjectTypeLight = 1;
 static const int TopLevelObjectTypeMesh = 2;
+
+static const int LightSamplingAllLights = 0;
+static const int LightSamplingUniformRandom = 1;
+static const int LightSamplingImportance = 2;
+
+// Max lights the importance-sampling weight cache can hold. Lights beyond this are ignored
+// by importance sampling. GameManager warns if the scene exceeds this count.
+static const int MaxImportanceLights = 128;
 
 static const float MinDirectLightThroughput = 0.01f;
 static const int BvhStackSize = 64;
@@ -791,51 +803,212 @@ float3 GetShadowTransmittance(Ray rayToLight, float distanceToLight)
     return nearestTransparentHit.color * (1.0f - nearestTransparentHit.opacity) * lightFocusAmount;
 }
 
-float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight, inout uint rngState)
+float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount, inout uint rngState)
 {
-    float3 combinedLightColor = float3(0.0f, 0.0f, 0.0f);
-    int sampleCount = max(1, samplesPerLight);
+    float3 lightTotal = float3(0.0f, 0.0f, 0.0f);
+    float3 lightPos = _Lights[lightIndex].position;
+    float3 ptToLight = normalize(lightPos - hit.position);
+    float3 tangent;
+    float3 bitangent;
+    CreateBasisFromNormal(ptToLight, tangent, bitangent);
 
-    int i;
-    for (i = 0; i < _NumLights; i++)
+    int sampleIndex;
+    for (sampleIndex = 0; sampleIndex < sampleCount; sampleIndex++)
     {
-        float3 lightTotal = float3(0.0f, 0.0f, 0.0f);
-        float3 lightPos = _Lights[i].position;
-        float3 ptToLight = normalize(lightPos - hit.position);
-        float3 tangent;
-        float3 bitangent;
-        CreateBasisFromNormal(ptToLight, tangent, bitangent);
+        float2 diskSample = SampleDisk(rngState) * _Lights[lightIndex].radius * max(0.0f, _ShadowRandomness);
+        float3 offsetPt = lightPos + tangent * diskSample.x + bitangent * diskSample.y;
+        float3 ptToOffset = offsetPt - hit.position;
+        float distanceToLight = length(ptToOffset);
+        ptToOffset = normalize(ptToOffset);
+        Ray rayToLight = CreateRay(hit.position + (hit.normal * 0.001f), ptToOffset);
 
-        int sampleIndex;
-        for (sampleIndex = 0; sampleIndex < sampleCount; sampleIndex++)
+        float rayNormalDot = saturate(dot(ptToOffset, hit.normal));
+        if (rayNormalDot <= 0.0f)
         {
-            float2 diskSample = SampleDisk(rngState) * _Lights[i].radius * max(0.0f, _ShadowRandomness);
-            float3 offsetPt = lightPos + tangent * diskSample.x + bitangent * diskSample.y;
-            float3 ptToOffset = offsetPt - hit.position;
-            float distanceToLight = length(ptToOffset);
-            ptToOffset = normalize(ptToOffset);
-            Ray rayToLight = CreateRay(hit.position + (hit.normal * 0.001f), ptToOffset);
-
-            float rayNormalDot = saturate(dot(ptToOffset, hit.normal));
-            if (rayNormalDot <= 0.0f)
-            {
-                continue;
-            }
-
-            float3 shadowTransmittance = GetShadowTransmittance(rayToLight, distanceToLight);
-            if (max(shadowTransmittance.x, max(shadowTransmittance.y, shadowTransmittance.z)) <= 0.001f)
-            {
-                continue;
-            }
-
-            float lightStrength = GetDirectLightFalloff(distanceToLight, _Lights[i].radius);
-            lightTotal += _Lights[i].emission * rayNormalDot * lightStrength * shadowTransmittance;
+            continue;
         }
 
-        combinedLightColor += lightTotal / sampleCount;
+        float3 shadowTransmittance = GetShadowTransmittance(rayToLight, distanceToLight);
+        if (max(shadowTransmittance.x, max(shadowTransmittance.y, shadowTransmittance.z)) <= 0.001f)
+        {
+            continue;
+        }
+
+        float lightStrength = GetDirectLightFalloff(distanceToLight, _Lights[lightIndex].radius);
+        lightTotal += _Lights[lightIndex].emission * rayNormalDot * lightStrength * shadowTransmittance;
     }
 
-    return combinedLightColor;
+    return lightTotal / sampleCount;
+}
+
+// Cheap per-hit estimate of how much a light is likely to contribute, used to bias
+// importance sampling toward nearby/bright lights. Intentionally ignores shadows and the
+// surface normal (too expensive to evaluate before picking), so it is only an estimate;
+// the 1/pdf correction keeps the final result unbiased regardless of estimate accuracy.
+// Uses squared distance directly to avoid a sqrt; mirrors GetDirectLightFalloff's math.
+float LightImportanceWeight(int lightIndex, RayHit hit)
+{
+    float3 toLight = _Lights[lightIndex].position - hit.position;
+    float distSq = dot(toLight, toLight);
+
+    float lightRadius = _Lights[lightIndex].radius;
+    float areaScale = max(1.0f, lightRadius * lightRadius);
+    float distanceScale = max(1.0f, distSq * max(0.001f, _LightFalloffScale));
+    float falloff = saturate(areaScale / distanceScale);
+
+    float3 emission = _Lights[lightIndex].emission;
+    float luminance = max(emission.x, max(emission.y, emission.z));
+    // Keep a small floor so every light retains a nonzero pick probability (required for
+    // the estimator to stay unbiased).
+    return max(1e-6f, luminance * falloff);
+}
+
+// Picks which light index to shade this iteration and returns the scalar weight to apply to
+// its contribution. This isolates the (cheap) per-strategy selection logic from the
+// (expensive, BVH-traversing) SampleSingleLight body so the latter can be inlined at a single
+// call site. Inlining SampleSingleLight at multiple sites previously made the Metal/HLSL
+// compiler duplicate the BVH-traversal loop many times, causing multi-minute shader compiles
+// that hung Unity on "Importing Assets".
+//
+//  iteration   : current draw index in [0, drawCount)
+//  drawCount   : total draws this hit (1 for AllLights-per-index, else _LightSampleCount)
+//  lightCount  : number of lights under consideration (after the diagnostic cap)
+//  outWeight   : multiplier for this draw's contribution (Monte Carlo / pdf correction)
+//  returns     : the light index to sample
+int SelectLightForDraw(int iteration, int drawCount, int lightCount, RayHit hit,
+                       inout uint rngState, out float outWeight)
+{
+    if (_LightSamplingStrategy == LightSamplingUniformRandom)
+    {
+        // Uniform pick: each draw is sum*(lightCount/drawCount)/drawCount summed over draws,
+        // i.e. per-draw weight = lightCount / drawCount.
+        outWeight = (float)lightCount / drawCount;
+        return min(lightCount - 1, (int)(rand(rngState) * lightCount));
+    }
+
+    if (_LightSamplingStrategy == LightSamplingImportance)
+    {
+        int weightedCount = min(lightCount, MaxImportanceLights);
+
+        // Accumulate total importance weight (cheap, no BVH traversal, no large array).
+        float totalWeight = 0.0f;
+        int w;
+        for (w = 0; w < weightedCount; w++)
+        {
+            totalWeight += LightImportanceWeight(w, hit);
+        }
+
+        if (totalWeight <= 0.0f)
+        {
+            outWeight = 0.0f;
+            return 0;
+        }
+
+        // Walk the weighted CDF on the fly to select a light proportional to its weight.
+        float target = rand(rngState) * totalWeight;
+        float cumulative = 0.0f;
+        int chosen = weightedCount - 1;
+        float chosenWeight = LightImportanceWeight(chosen, hit);
+        int c;
+        for (c = 0; c < weightedCount; c++)
+        {
+            float weight = LightImportanceWeight(c, hit);
+            cumulative += weight;
+            if (target <= cumulative)
+            {
+                chosen = c;
+                chosenWeight = weight;
+                break;
+            }
+        }
+
+        // pdf for one draw = chosenWeight / totalWeight. Average over draws => /drawCount.
+        // weight = 1 / (drawCount * pdf) = totalWeight / (drawCount * chosenWeight).
+        outWeight = totalWeight / (drawCount * max(1e-6f, chosenWeight));
+        return chosen;
+    }
+
+    // AllLights: one draw per light index, weight 1. The caller iterates every light.
+    outWeight = 1.0f;
+    return iteration;
+}
+
+float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight, inout uint rngState)
+{
+    int sampleCount = max(1, samplesPerLight);
+
+    int lightCount = _NumLights;
+    // Diagnostic cap: when _MaxLightSamples > 0, only consider the first N lights.
+    // Used to confirm the per-hit light loop is the performance bottleneck.
+    if (_MaxLightSamples > 0 && _MaxLightSamples < lightCount)
+    {
+        lightCount = _MaxLightSamples;
+    }
+
+    if (lightCount <= 0)
+    {
+        return float3(0.0f, 0.0f, 0.0f);
+    }
+
+    // Determine how many draws to take this hit:
+    //  - AllLights: one draw per light (drawCount = lightCount), each weight 1.
+    //  - UniformRandom / Importance: _LightSampleCount draws, clamped to the light count.
+    //    If that would cover (nearly) every light anyway, fall back to AllLights behaviour to
+    //    avoid selection variance at the same cost.
+    int drawCount;
+    bool sampleAllLights =
+        _LightSamplingStrategy != LightSamplingUniformRandom &&
+        _LightSamplingStrategy != LightSamplingImportance;
+
+    if (sampleAllLights)
+    {
+        drawCount = lightCount;
+    }
+    else
+    {
+        int requested = clamp(_LightSampleCount, 1, lightCount);
+        if (requested >= lightCount)
+        {
+            // Cover every light: cheaper to treat as AllLights (weight 1, no 1/pdf scaling).
+            sampleAllLights = true;
+            drawCount = lightCount;
+        }
+        else
+        {
+            drawCount = requested;
+        }
+    }
+
+    // SINGLE inlined SampleSingleLight call site. Each iteration selects a light index and a
+    // contribution weight via SelectLightForDraw (cheap), then shades it once here (expensive).
+    float3 accumulated = float3(0.0f, 0.0f, 0.0f);
+    int d;
+    [loop]
+    for (d = 0; d < drawCount; d++)
+    {
+        float weight;
+        int lightIndex;
+        if (sampleAllLights)
+        {
+            lightIndex = d;
+            weight = 1.0f;
+        }
+        else
+        {
+            lightIndex = SelectLightForDraw(d, drawCount, lightCount, hit, rngState, weight);
+        }
+
+        if (weight <= 0.0f)
+        {
+            continue;
+        }
+
+        accumulated += SampleSingleLight(lightIndex, ray, hit, sampleCount, rngState) * weight;
+    }
+
+    // For random strategies the per-draw weights already include the 1/drawCount averaging,
+    // so no extra division is needed here.
+    return accumulated;
 }
 
 float3 GetSkyboxColor(float3 direction)
@@ -1223,6 +1396,19 @@ float3 GetDebugRenderColor(Ray ray, inout uint rngState)
     return TracePath(ray, rngState);
 }
 
+// Narkowicz 2015 ACES filmic tone mapping approximation. Maps the open-ended
+// HDR radiance range into [0,1] so bright values roll off smoothly instead of
+// clipping hard to white.
+float3 ACESFilmicToneMap(float3 color)
+{
+    const float a = 2.51f;
+    const float b = 0.03f;
+    const float c = 2.43f;
+    const float d = 0.59f;
+    const float e = 0.14f;
+    return saturate((color * (a * color + b)) / (color * (c * color + d) + e));
+}
+
 [numthreads(8,8,1)]
 void CSMain (uint3 id : SV_DispatchThreadID)
 {
@@ -1254,5 +1440,14 @@ void CSMain (uint3 id : SV_DispatchThreadID)
         result += _DebugRenderMode == DebugFinalColor ? TracePath(ray, rngState) : GetDebugRenderColor(ray, rngState);
     }
 
-    Result[id.xy] = float4(result / _NumberOfPasses, 1);
+    float3 color = result / _NumberOfPasses;
+
+    // Only tone map the final path-traced color. Debug visualizations are written
+    // as-is so their values stay readable/diagnostic.
+    if (_DebugRenderMode == DebugFinalColor)
+    {
+        color = ACESFilmicToneMap(color * _Exposure);
+    }
+
+    Result[id.xy] = float4(color, 1);
 }

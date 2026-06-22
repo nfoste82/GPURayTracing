@@ -33,6 +33,33 @@ public class GameManager : MonoBehaviour
     [Range(0f, 1.5f)]
     public float shadowRandomness = 0.3f;
 
+    [Tooltip("Diagnostic: cap how many lights each shading point samples. 0 = sample all lights (normal). Lower values confirm the per-hit light loop is the bottleneck.")]
+    [Range(0, 256)]
+    public int maxLightSamples = 0;
+
+    public enum LightSamplingStrategy
+    {
+        // Sample every light at each shading point. Most accurate per frame, cost scales with light count.
+        AllLights = 0,
+        // Pick one light at random per shading point, weighted by light count. O(1) lights per hit, noisier per frame.
+        UniformRandom = 1,
+        // Pick lights weighted by a cheap power/distance estimate, then divide by selection probability.
+        // Unbiased like UniformRandom but concentrates samples on lights that matter, so much less noise per sample.
+        ImportanceSampled = 2
+    }
+
+    [Tooltip("How direct lighting samples scene lights. AllLights is accurate but scales with light count; UniformRandom is much faster in many-light scenes but noisy; ImportanceSampled favors bright/nearby lights for much less noise per sample.")]
+    public LightSamplingStrategy lightSamplingStrategy = LightSamplingStrategy.AllLights;
+
+    [Tooltip("UniformRandom/ImportanceSampled only: how many lights each shading point samples per pass. 1 is fastest/noisiest; higher values reduce noise toward AllLights quality at proportional cost.")]
+    [Range(1, 64)]
+    public int lightSampleCount = 1;
+
+    // Must match MaxImportanceLights in RayTracingCompute.compute. Lights beyond this count
+    // are ignored by the ImportanceSampled strategy.
+    private const int MaxImportanceLights = 128;
+    private bool _warnedImportanceLightOverflow = false;
+
     public enum DebugRenderMode
     {
         FinalColor = 0,
@@ -65,6 +92,10 @@ public class GameManager : MonoBehaviour
     [Tooltip("Higher values make direct light fall off faster with distance.")]
     [Range(0.001f, 1.0f)]
     public float lightFalloffScale = 0.16f;
+
+    [Tooltip("Master brightness applied before ACES tone mapping. Acts like a camera exposure dial.")]
+    [Range(0.0f, 8.0f)]
+    public float exposure = 1.0f;
 
     private float previousFocalDistance = 100f;
     private float timeSincePreviousFocusDistance = 1f;
@@ -1387,11 +1418,35 @@ public class GameManager : MonoBehaviour
         shader.SetInt("_NumberOfPasses", numberOfPasses);
         shader.SetInt("_NumBounces", numBounces);
         shader.SetInt("_DebugRenderMode", (int)debugRenderMode);
+        shader.SetInt("_MaxLightSamples", maxLightSamples);
+        shader.SetInt("_LightSamplingStrategy", (int)lightSamplingStrategy);
+        shader.SetInt("_LightSampleCount", lightSampleCount);
+
+        // Importance sampling can only weight up to MaxImportanceLights; warn once when the
+        // scene exceeds that so the dropped lights are not a silent surprise.
+        if (lightSamplingStrategy == LightSamplingStrategy.ImportanceSampled
+            && _lights.Count > MaxImportanceLights)
+        {
+            if (!_warnedImportanceLightOverflow)
+            {
+                Debug.LogWarning(
+                    $"ImportanceSampled light strategy supports up to {MaxImportanceLights} lights, " +
+                    $"but the scene has {_lights.Count}. Lights beyond {MaxImportanceLights} are ignored " +
+                    "for importance weighting. Raise MaxImportanceLights in RayTracingCompute.compute " +
+                    "(and the matching constant in GameManager) or use a different light sampling strategy.");
+                _warnedImportanceLightOverflow = true;
+            }
+        }
+        else
+        {
+            _warnedImportanceLightOverflow = false;
+        }
         shader.SetInt("_ShadowQuality", shadowQuality);
         shader.SetFloat("_ShadowRandomness", shadowRandomness);
         shader.SetFloat("_LightFalloffScale", lightFalloffScale);
         shader.SetFloat("_FocalDistance", cameraFocalDistance);
         shader.SetFloat("_GroundSmoothness", groundSmoothness);
+        shader.SetFloat("_Exposure", exposure);
         shader.SetInt("_NumTopLevelBvhNodes", _topLevelBvhNodes.Count);
         shader.SetInt("_NumShadowBvhNodes", _shadowBvhNodes.Count);
 

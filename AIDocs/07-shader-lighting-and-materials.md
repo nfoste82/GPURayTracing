@@ -6,11 +6,29 @@ This document covers direct lighting, shadow behavior, material scattering, and 
 
 Direct lighting comes from emissive sphere lights.
 
-`GetLightHittingPoint()` computes direct lighting by taking stochastic disk samples across each emissive sphere light. Bounce 0 uses `max(1, _ShadowQuality + 1)` samples per light, while later bounces use one sample per light to reduce cost.
+`GetLightHittingPoint()` computes direct lighting by drawing one or more lights per shading point and shading each with stochastic disk samples across the emissive sphere. Bounce 0 uses `max(1, _ShadowQuality + 1)` disk samples per shaded light, while later bounces use one sample per shaded light to reduce cost. The actual per-light shading work lives in `SampleSingleLight()`.
 
-Each sample is weighted by `saturate(dot(directionToLight, hit.normal))` and samples whose direction is at or behind the surface (N·L <= 0) are skipped entirely, so back-facing light directions contribute nothing. Shadow rays are spawned from `hit.position` offset along the surface normal (`hit.normal * 0.001`), not along the light direction.
+Each disk sample is weighted by `saturate(dot(directionToLight, hit.normal))` and samples whose direction is at or behind the surface (N·L <= 0) are skipped entirely, so back-facing light directions contribute nothing. Shadow rays are spawned from `hit.position` offset along the surface normal (`hit.normal * 0.001`), not along the light direction.
 
 Direct light from sampled light points is accumulated additively rather than combined with a channel-wise max operation. Light falloff uses a clamped inverse-square-style distance term scaled by light radius and `_LightFalloffScale`, although transparent shadow tinting remains approximate.
+
+### Light Sampling Strategies
+
+`_LightSamplingStrategy` (from `GameManager.lightSamplingStrategy`) selects which lights each hit shades. All three strategies are unbiased estimators of the same total direct light; they trade per-frame noise for cost.
+
+- **AllLights (0)**: shades every light each hit. Most accurate per frame; cost scales linearly with light count. This is the most expensive strategy in many-light scenes.
+- **UniformRandom (1)**: draws `_LightSampleCount` lights uniformly at random and applies a `lightCount / drawCount` Monte Carlo correction. Cheapest, but noisiest, because samples swing between near-black distant lights and bright nearby ones.
+- **ImportanceSampled (2)**: draws `_LightSampleCount` lights with probability proportional to a cheap `luminance(emission) * falloff(distanceSquared, radius)` weight (`LightImportanceWeight()`), then divides each contribution by its selection probability. Far less noise per sample than UniformRandom because samples concentrate on bright/nearby lights, while distant lights keep a nonzero pick probability so the result stays unbiased. The weight uses squared distance directly (no `sqrt`) and mirrors `GetDirectLightFalloff()` math.
+
+For the random/importance strategies, if `_LightSampleCount` would cover (nearly) every light anyway, `GetLightHittingPoint()` falls back to all-lights behavior (weight `1`, no `1/pdf` scaling) to avoid needless selection variance at the same cost.
+
+`_MaxLightSamples` is a separate diagnostic cap: when positive, it clamps how many lights any strategy considers, which was used to confirm the per-hit light loop is the dominant cost in `Benchmark_ManyLights`.
+
+ImportanceSampled only weights up to `MaxImportanceLights` (`128`) lights; lights beyond that are ignored for importance weighting. `GameManager` logs a one-time warning when the scene exceeds this count while ImportanceSampled is active.
+
+### Light Sampling Structure And Compile-Time Constraint
+
+`GetLightHittingPoint()` is deliberately written with a **single** inlined `SampleSingleLight()` call site inside one `[loop]`. A helper, `SelectLightForDraw()`, isolates the cheap per-strategy light selection and weighting, while the expensive, BVH-traversing `SampleSingleLight()` body is called once. Inlining `SampleSingleLight()` at multiple call sites (one per strategy branch) previously made the Metal/HLSL compiler duplicate the shadow BVH traversal loop many times, causing multi-minute shader compiles that hung Unity on "Importing Assets". Keep direct-light changes within this single-call-site shape. See `Tools > Ray Tracing > Precompile Compute Shader` for surfacing compile time/errors from edit mode.
 
 ## Shadows
 

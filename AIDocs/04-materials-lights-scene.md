@@ -62,7 +62,7 @@ Fields:
 
 Light objects are stored in `_Lights`, using the same `Sphere` data layout as regular spheres. When a camera/path ray directly hits a light sphere, `TracePath()` adds its emission and terminates the path.
 
-Direct lighting also samples `_Lights` explicitly in `GetLightHittingPoint()`. Bounce 0 uses multiple stochastic area-light samples per light, while later bounces use one sample per light. Sampled light contributions are accumulated additively.
+Direct lighting also samples `_Lights` explicitly in `GetLightHittingPoint()`. Bounce 0 uses multiple stochastic area-light samples per shaded light, while later bounces use one sample per shaded light. Sampled light contributions are accumulated additively. How many lights are shaded per hit depends on `GameManager.lightSamplingStrategy` (all lights, uniform random, or importance-sampled) and `lightSampleCount`; see `07-shader-lighting-and-materials.md`.
 
 ## Ground Plane
 

@@ -13,7 +13,6 @@ This document captures likely future work areas. For current implementation limi
 
 These options should improve perceived quality with little or no extra ray-intersection cost. Most are better sampling, better parameter mapping, or cheap per-pixel math rather than more rays.
 
-- Add tone mapping and exposure controls so bright lighting rolls off more pleasantly instead of clipping harshly.
 - Expose the depth-of-field aperture/lens radius as a parameter; it is currently a hard-coded `0.005` world-space ray-origin jitter in the shader.
 - Add an optional firefly/outlier clamp to reduce rare bright speckles in single-frame renders.
 - Improve `Smoothness` to roughness mapping, such as using a perceptual squared roughness curve, so material controls feel more predictable.
@@ -32,6 +31,8 @@ These options should improve perceived quality with little or no extra ray-inter
 - Reset accumulation when camera, focus, quality settings, material values, object transforms, or render size change.
 - Further improve diffuse indirect lighting with lower-variance sampling and material-specific BRDF/PDF handling as new materials are added.
 - Improve transparent absorption and next-event estimation toward a more physically based formulation.
+- Improve importance-sampled light selection further: fold the surface normal (N·L) and a coarse visibility estimate into `LightImportanceWeight`, and consider a precomputed/global light CDF or a spatial light structure so many-light scenes scale beyond the current `MaxImportanceLights` (`128`) cap without the per-hit weight pass. Raising the cap is cheap but increases the per-hit weight loop cost.
+- Pair the random/importance light strategies with frame accumulation so their per-frame noise averages out on static views; without accumulation, the noise must be reduced by raising `lightSampleCount` or `numberOfPasses`.
 - Accumulate transmittance through multiple transparent shadow blockers instead of only using the nearest transparent blocker.
 - Improve glass refraction with proper sphere entry/exit traversal, Snell-law behavior, and distance-based absorption.
 - Improve direct light sampling by sampling sphere lights by visible solid angle instead of approximate disk samples.

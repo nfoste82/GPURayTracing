@@ -10,6 +10,8 @@ This document captures current implementation limits and broad architectural dir
 - `UpdateSpheres()` uploads all sphere/light data every rendered frame, even though component references are cached.
 - Debug render modes are basic first-hit/path diagnostics and do not include legends or configurable visualization ranges. `AccelerationStructures` is available for checking whether the general top-level BVH and shadow BVH are active.
 - Shadow rays check regular spheres and triangles as blockers, but not light spheres.
+- Direct light sampling supports three strategies (all lights, uniform random, importance-sampled). The random and importance strategies are unbiased but noisier per frame, and there is still no accumulation/denoising to control that variance. ImportanceSampled only weights up to `MaxImportanceLights` (`128`) lights; lights beyond that count are ignored for importance weighting (a one-time warning is logged), and its importance weight ignores shadows and the surface normal, so it is an estimate rather than the true contribution.
+- `GetLightHittingPoint()` must keep a single inlined `SampleSingleLight()` call site. Duplicating that BVH-traversing body across multiple call sites caused the Metal/HLSL compiler to expand the shadow traversal loop many times, producing multi-minute shader compiles that hung Unity on "Importing Assets". `Tools > Ray Tracing > Precompile Compute Shader` exists to surface compile time and errors from edit mode instead of stalling on first Play.
 - Refraction/transparency use Fresnel material selection, but sphere and mesh transmitted paths are still approximate rather than a full physically accurate volume traversal.
 - Direct lighting accumulates additively and uses clamped inverse-square-style falloff, but transparent shadow tinting is still approximate rather than fully physically based.
 - Diffuse scattering uses cosine-weighted hemisphere sampling on later bounces, but there is no denoising/accumulation to control variance.
@@ -20,6 +22,11 @@ This document captures current implementation limits and broad architectural dir
 
 ## Recently Completed
 
+- ACES filmic tone mapping and a `GameManager.exposure` control were added. Exposure-scaled tone mapping is applied to the final color in `CSMain`, while debug render modes are written untone-mapped.
+- Direct lighting gained selectable sampling strategies via `GameManager.lightSamplingStrategy`: all lights (original behavior), uniform random pick, and importance-sampled pick, with a configurable `lightSampleCount` for the random/importance strategies. All three are unbiased estimators; the random/importance strategies trade per-frame noise for much lower cost in many-light scenes (e.g. `Benchmark_ManyLights`).
+- `GetLightHittingPoint()` was refactored to a single inlined `SampleSingleLight()` call site with a cheap `SelectLightForDraw()` selection helper, fixing multi-minute shader compiles caused by inlining the BVH-traversing shading body at multiple strategy call sites.
+- `RayTracingShaderPrecompiler` (`Tools > Ray Tracing > Precompile Compute Shader`) was added to force-compile and dispatch the compute shader from edit mode with timing and surfaced compile messages, so slow/failing kernels appear there instead of hanging Unity on first Play.
+- A `maxLightSamples` diagnostic cap was added to clamp how many lights any strategy considers, which confirmed the per-hit light loop dominates cost in many-light scenes.
 - `RayTracingBenchmarkOverlay` and `Tools > Ray Tracing > Generate Benchmark Scenes` were added to create benchmark scenes for many spheres, shadow blockers, many lights, dense meshes, many mesh objects, glass, sparse scenes, and dynamic transforms.
 - The `AccelerationStructures` debug render mode was added to visualize active general and shadow BVHs. This helped confirm that shadow BVH threshold values must exceed the blocker count to force flat shadow loops.
 - `topLevelBvhMinObjectCount` and `shadowBvhMinObjectCount` were expanded to support high thresholds such as `1024`, making it easy to force BVH-on versus flat-loop comparisons at runtime.

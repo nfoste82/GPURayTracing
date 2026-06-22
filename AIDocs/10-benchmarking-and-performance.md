@@ -20,6 +20,8 @@ This document covers runtime benchmark tooling, performance hotspots, and benchm
 ## Performance Hotspots
 
 - Soft shadows scale with lights, shadow quality, sphere count, and intersected mesh BVH nodes/leaves.
+- Direct lighting cost scales with how many lights each hit shades. With the `AllLights` strategy this is the per-hit light count, so many-light scenes (`Benchmark_ManyLights`) are dominated by the per-hit light loop, not first-hit object lookup. This is why toggling the top-level BVH does not move `Benchmark_ManyLights` performance. Measured on an Apple M3 Max, `Benchmark_ManyLights` with `AllLights` scaled roughly linearly at ~2 ms per light (about 6 ms at 2 lights, ~150 ms at 72 lights).
+- The `UniformRandom` and `ImportanceSampled` light strategies cut this cost dramatically by shading only `lightSampleCount` lights per hit instead of all of them, at the cost of more per-frame noise. `ImportanceSampled` adds a cheap `O(lightCount)` weight pass per hit (no shadow rays) but produces much less noise per sample than `UniformRandom`, so it costs a little more than `UniformRandom` at the same `lightSampleCount` while looking cleaner.
 - Path tracing cost scales with `_NumberOfPasses * _NumBounces * geometryCount`; triangle meshes are accelerated, but spheres, lights, BVH traversal, and leaf triangle tests still contribute.
 - Transparent shadows and transparent ray paths add extra math and intersection tests.
 - Mesh refraction adds internal same-mesh triangle intersection work for transmitted glass paths.
@@ -33,3 +35,8 @@ This document covers runtime benchmark tooling, performance hotspots, and benchm
 - Keep `shadowBvhMinObjectCount` fixed while evaluating `topLevelBvhMinObjectCount`, and keep `topLevelBvhMinObjectCount` fixed while evaluating `shadowBvhMinObjectCount`, otherwise the results are hard to interpret.
 - Use `DebugRenderMode.AccelerationStructures` and the overlay to confirm the intended BVH path is actually active before comparing frame times.
 - In shadow-heavy scenes, the shadow-only BVH has shown measurable benefit. In `Benchmark_ShadowBlockers`, the general top-level BVH is not expected to move performance much because the workload is dominated by shadow rays, not first-hit object lookup.
+- Use `Benchmark_ManyLights` to evaluate `lightSamplingStrategy` and `lightSampleCount`. Acceleration-structure thresholds (`topLevelBvhMinObjectCount`, `shadowBvhMinObjectCount`) are not expected to help here because the cost is the per-hit light loop, not object lookup. Compare `AllLights` against `UniformRandom`/`ImportanceSampled` at matched `lightSampleCount`, and compare `UniformRandom` against `ImportanceSampled` at the same `lightSampleCount` to weigh noise versus the extra weight-pass cost. The `maxLightSamples` diagnostic cap can clamp the considered light count to confirm the light loop is the bottleneck.
+
+## Compile-Time Notes
+
+The compute shader's lights are shaded through a single inlined `SampleSingleLight()` call site inside `GetLightHittingPoint()`. Duplicating that BVH-traversing body across multiple call sites previously caused the Metal/HLSL compiler to expand the shadow traversal loop many times, producing multi-minute shader compiles that hung Unity on "Importing Assets". Keep direct-light changes within that single-call-site shape, and use `Tools > Ray Tracing > Precompile Compute Shader` to compile and dispatch the shader from edit mode with timing and surfaced compile messages, so slow or failing kernels appear there instead of stalling on first Play.
