@@ -64,6 +64,11 @@ public class RayTracingBenchmarkOverlay : MonoBehaviour
         _builder.Append("Frame avg: ").Append(_averageFrameMs.ToString("0.00")).AppendLine(" ms");
         _builder.Append("Resolution: ").Append(gameManager.TextureSize.x).Append('x').AppendLine(gameManager.TextureSize.y.ToString());
         _builder.Append("Passes: ").Append(gameManager.numberOfPasses).Append("  Bounces: ").Append(gameManager.numBounces).Append("  Shadow quality: ").AppendLine(gameManager.shadowQuality.ToString());
+        _builder.Append("Light sampling: ").Append(gameManager.lightSamplingStrategy)
+            .Append("  Samples: ").AppendLine(gameManager.lightSampleCount.ToString());
+        _builder.Append("Dynamic quality: ").Append(gameManager.enableDynamicQuality ? "on" : "off")
+            .Append("  Target: ").Append(gameManager.dynamicQualityTargetFrameRate).Append(" FPS")
+            .Append("  Avg: ").Append(gameManager.DynamicQualityAverageFrameMs.ToString("0.00")).AppendLine(" ms");
         _builder.Append("Accumulation: ").Append(gameManager.enableFrameAccumulation ? "on" : "off")
             .Append("  Frames: ").AppendLine(gameManager.AccumulatedFrameCount.ToString());
         _builder.Append("Spheres: ").Append(gameManager.SphereCount).Append("  Lights: ").Append(gameManager.LightCount).Append("  Meshes: ").Append(gameManager.MeshCount).AppendLine();
@@ -78,6 +83,6 @@ public class RayTracingBenchmarkOverlay : MonoBehaviour
             .Append("  Threshold: ").AppendLine(gameManager.shadowBvhMinObjectCount.ToString());
         _builder.Append("Toggle: ").Append(toggleKey);
 
-        GUI.Box(new Rect(12, 12, 370, 210), _builder.ToString(), _style);
+        GUI.Box(new Rect(12, 12, 410, 250), _builder.ToString(), _style);
     }
 }

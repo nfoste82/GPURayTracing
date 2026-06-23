@@ -19,6 +19,22 @@ public class GameManager : MonoBehaviour
     [Tooltip("Progressively averages final-color renders while the camera, scene, and quality settings are unchanged. Debug render modes are not accumulated.")]
     public bool enableFrameAccumulation = true;
 
+    [Header("Dynamic quality")]
+    [Tooltip("Dynamically adjusts passes, light sampling, shadow quality, and bounces to approach the target frame rate. BVH thresholds are never changed.")]
+    public bool enableDynamicQuality = false;
+
+    [Tooltip("Target frame rate used as the dynamic-quality frame-time budget.")]
+    [Range(15, 240)]
+    public int dynamicQualityTargetFrameRate = 60;
+
+    [Tooltip("Allowed over-budget frame-time error before dynamic quality reduces a setting.")]
+    [Range(0.05f, 0.5f)]
+    public float dynamicQualityTolerance = 0.15f;
+
+    [Tooltip("Required under-budget headroom before dynamic quality increases a setting. Larger values reduce oscillation.")]
+    [Range(0.1f, 0.75f)]
+    public float dynamicQualityIncreaseHeadroom = 0.25f;
+
     [Range(1, 16)]
     public int numBounces = 3;
 
@@ -127,6 +143,9 @@ public class GameManager : MonoBehaviour
     private int _accumulatedFrameCount;
     private int _accumulationStateHash;
     private bool _hasAccumulationStateHash;
+    private float _dynamicQualityAverageFrameMs;
+    private float _dynamicQualityTimeSinceAdjustment;
+    private bool _previousDynamicQualityEnabled;
 
     private List<Sphere> _spheres = new List<Sphere>();
     private readonly List<RayTracedSphere> _sphereObjects = new List<RayTracedSphere>();
@@ -195,11 +214,23 @@ public class GameManager : MonoBehaviour
     public bool IsShadowBvhActive => _shadowBvhNodes.Count > 0;
     public Vector2Int TextureSize => _textureSize;
     public int AccumulatedFrameCount => _accumulatedFrameCount;
+    public float DynamicQualityAverageFrameMs => _dynamicQualityAverageFrameMs;
 
     private static bool _buffersNeedRebuilding = false;
     private static readonly List<RayTracingObject> _rayTracingObjects = new List<RayTracingObject>();
 
     private const int SphereStride = 56;
+    private const int MinNumberOfPasses = 1;
+    private const int MaxNumberOfPasses = 32;
+    private const int MinNumBounces = 1;
+    private const int MaxNumBounces = 16;
+    private const int MinShadowQuality = 0;
+    private const int MaxShadowQuality = 5;
+    private const int MinDynamicLightSampleCount = 1;
+    private const int MaxDynamicLightSampleCount = 64;
+    private const int DynamicLightSampleDivisor = 10;
+    private const float DynamicQualitySmoothing = 0.08f;
+    private const float DynamicQualityAdjustmentInterval = 0.75f;
     private const int TriangleStride = 80;
     private const int MeshInfoStride = 48;
     private const int BvhNodeStride = 48;
@@ -514,6 +545,14 @@ public class GameManager : MonoBehaviour
             SetSingleFrameMode(_singleFrame);
         }
 
+        if (enableDynamicQuality != _previousDynamicQualityEnabled)
+        {
+            ResetDynamicQualityState();
+            _previousDynamicQualityEnabled = enableDynamicQuality;
+        }
+
+        UpdateDynamicQuality();
+
         HandleInputForCamera(renderTextureCamera);
 
         if (Input.GetKeyDown(KeyCode.T))
@@ -670,7 +709,208 @@ public class GameManager : MonoBehaviour
     {
         return enableFrameAccumulation && debugRenderMode == DebugRenderMode.FinalColor;
     }
-    
+
+    private void ResetDynamicQualityState()
+    {
+        _dynamicQualityAverageFrameMs = Time.unscaledDeltaTime > 0.0f
+            ? Time.unscaledDeltaTime * 1000.0f
+            : GetDynamicQualityTargetFrameMs();
+        _dynamicQualityTimeSinceAdjustment = 0.0f;
+    }
+
+    private void UpdateDynamicQuality()
+    {
+        if (!enableDynamicQuality || (_singleFrame && !_running))
+        {
+            return;
+        }
+
+        float frameMs = Time.unscaledDeltaTime * 1000.0f;
+        if (frameMs <= 0.0f)
+        {
+            return;
+        }
+
+        if (_dynamicQualityAverageFrameMs <= 0.0f)
+        {
+            _dynamicQualityAverageFrameMs = frameMs;
+        }
+        else
+        {
+            _dynamicQualityAverageFrameMs = Mathf.Lerp(
+                _dynamicQualityAverageFrameMs,
+                frameMs,
+                DynamicQualitySmoothing);
+        }
+
+        _dynamicQualityTimeSinceAdjustment += Time.unscaledDeltaTime;
+        if (_dynamicQualityTimeSinceAdjustment < DynamicQualityAdjustmentInterval)
+        {
+            return;
+        }
+
+        float targetFrameMs = GetDynamicQualityTargetFrameMs();
+        float tolerance = Mathf.Clamp(dynamicQualityTolerance, 0.01f, 1.0f);
+        float increaseHeadroom = Mathf.Clamp(dynamicQualityIncreaseHeadroom, tolerance, 0.95f);
+        float slowThresholdMs = targetFrameMs * (1.0f + tolerance);
+        float fastThresholdMs = targetFrameMs * (1.0f - increaseHeadroom);
+        bool changed = false;
+
+        if (_dynamicQualityAverageFrameMs > slowThresholdMs)
+        {
+            changed = DecreaseDynamicQuality(_dynamicQualityAverageFrameMs / targetFrameMs);
+        }
+        else if (_dynamicQualityAverageFrameMs < fastThresholdMs)
+        {
+            changed = IncreaseDynamicQuality();
+        }
+
+        if (changed)
+        {
+            ResetFrameAccumulation();
+            _dynamicQualityTimeSinceAdjustment = 0.0f;
+        }
+    }
+
+    private float GetDynamicQualityTargetFrameMs()
+    {
+        return 1000.0f / Mathf.Max(1, dynamicQualityTargetFrameRate);
+    }
+
+    private bool DecreaseDynamicQuality(float costRatio)
+    {
+        if (numberOfPasses > MinNumberOfPasses)
+        {
+            int targetPasses = Mathf.Max(
+                MinNumberOfPasses,
+                Mathf.FloorToInt(numberOfPasses / Mathf.Max(1.0f, costRatio)));
+            numberOfPasses = Mathf.Min(numberOfPasses - 1, targetPasses);
+            return true;
+        }
+
+        if (TryDecreaseDynamicLightSampling())
+        {
+            return true;
+        }
+
+        if (shadowQuality > MinShadowQuality)
+        {
+            shadowQuality--;
+            return true;
+        }
+
+        if (numBounces > MinNumBounces)
+        {
+            numBounces--;
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool TryDecreaseDynamicLightSampling()
+    {
+        if (_lights.Count <= 1)
+        {
+            return false;
+        }
+
+        int targetLightSamples = GetDynamicInitialLightSampleCount();
+        if (lightSamplingStrategy == LightSamplingStrategy.AllLights)
+        {
+            lightSamplingStrategy = LightSamplingStrategy.ImportanceSampled;
+            lightSampleCount = targetLightSamples;
+            return true;
+        }
+
+        if (lightSamplingStrategy == LightSamplingStrategy.ImportanceSampled && lightSampleCount > MinDynamicLightSampleCount)
+        {
+            lightSampleCount--;
+            return true;
+        }
+
+        if (lightSamplingStrategy == LightSamplingStrategy.UniformRandom && lightSampleCount > MinDynamicLightSampleCount)
+        {
+            lightSampleCount--;
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool IncreaseDynamicQuality()
+    {
+        if (numberOfPasses < MaxNumberOfPasses)
+        {
+            numberOfPasses++;
+            return true;
+        }
+
+        if (TryIncreaseDynamicLightSampling())
+        {
+            return true;
+        }
+
+        if (shadowQuality < MaxShadowQuality)
+        {
+            shadowQuality++;
+            return true;
+        }
+
+        if (numBounces < MaxNumBounces)
+        {
+            numBounces++;
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool TryIncreaseDynamicLightSampling()
+    {
+        if (_lights.Count <= 1 || lightSamplingStrategy == LightSamplingStrategy.AllLights)
+        {
+            return false;
+        }
+
+        int targetLightSamples = GetDynamicInitialLightSampleCount();
+        int activeLightCount = GetActiveLightCountForSampling();
+        if (lightSampleCount < targetLightSamples)
+        {
+            lightSampleCount++;
+            return true;
+        }
+
+        if (lightSampleCount < activeLightCount)
+        {
+            lightSampleCount++;
+            return true;
+        }
+
+        lightSamplingStrategy = LightSamplingStrategy.AllLights;
+        lightSampleCount = Mathf.Max(MinDynamicLightSampleCount, targetLightSamples);
+        return true;
+    }
+
+    private int GetDynamicInitialLightSampleCount()
+    {
+        return Mathf.Clamp(
+            Mathf.CeilToInt(GetActiveLightCountForSampling() / (float)DynamicLightSampleDivisor),
+            MinDynamicLightSampleCount,
+            MaxDynamicLightSampleCount);
+    }
+
+    private int GetActiveLightCountForSampling()
+    {
+        int activeLightCount = _lights.Count;
+        if (maxLightSamples > 0)
+        {
+            activeLightCount = Mathf.Min(activeLightCount, maxLightSamples);
+        }
+
+        return Mathf.Max(0, activeLightCount);
+    }
+
     public void RenderImage(RenderTexture src, RenderTexture dest)
     {
         EnsureOutputTextureSize(src.width, src.height);

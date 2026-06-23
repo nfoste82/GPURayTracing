@@ -4,7 +4,7 @@ This document covers runtime benchmark tooling, performance hotspots, and benchm
 
 ## Benchmarking Flow
 
-`Assets/Scripts/RayTracingBenchmarkOverlay.cs` can be attached to the camera and references the active `GameManager`. It shows averaged frame time, render size, quality settings, sphere/light/mesh/triangle counts, top-level BVH status, shadow BVH status, and thresholds. Press `F3` to toggle the overlay.
+`Assets/Scripts/RayTracingBenchmarkOverlay.cs` can be attached to the camera and references the active `GameManager`. It shows averaged frame time, render size, quality settings, dynamic-quality status, accumulated frame count, sphere/light/mesh/triangle counts, top-level BVH status, shadow BVH status, and thresholds. Press `F3` to toggle the overlay.
 
 `Tools > Ray Tracing > Generate Benchmark Scenes` runs `RayTracingBenchmarkSceneGenerator` and creates focused scenes under `Assets/Scenes/Benchmarks/`:
 
@@ -27,6 +27,14 @@ This document covers runtime benchmark tooling, performance hotspots, and benchm
 - BVH traversal (top-level, shadow, and per-mesh) visits children near-first and reuses a precomputed inverse ray direction, and all three BVHs build with a SAH split, so first-hit and shadow traversal skip more subtrees than the previous median-split/no-ordering build. These help most in high-object-count and deep-mesh scenes (`Benchmark_ManySpheres`, `Benchmark_ManyMeshes`, `Benchmark_DenseMesh`, `Benchmark_ShadowBlockers`).
 - Mesh refraction adds internal same-mesh triangle intersection work for transmitted glass paths.
 - Frame accumulation reduces static-view noise over multiple frames without increasing per-dispatch path tracing work. Increasing `numberOfPasses` still directly increases per-frame cost and remains the main noise reduction path when accumulation is disabled, the scene is moving, or debug modes are active.
+- Dynamic quality, when enabled, adjusts only `numberOfPasses`, `lightSamplingStrategy`, `lightSampleCount`, `shadowQuality`, and `numBounces` to approach `dynamicQualityTargetFrameRate`. It never changes BVH thresholds. Because `numberOfPasses` has the most predictable cost, it is the first setting reduced under pressure and the first setting increased when there is headroom. In many-light scenes, the next dynamic step switches `AllLights` to `ImportanceSampled` at about one tenth of the active light count, then reduces `lightSampleCount` if more performance is needed.
+
+## Dynamic Quality Recommendations
+
+- Use dynamic quality when you care about holding an approximate presentation frame rate while spending spare frame budget on cleaner sampling.
+- Leave dynamic quality disabled when collecting fixed-setting benchmark numbers, otherwise it will change the workload during the measurement.
+- Prefer tuning `dynamicQualityTargetFrameRate`, `dynamicQualityTolerance`, and `dynamicQualityIncreaseHeadroom` before changing the quality ladder. A wider tolerance changes settings less often; a larger increase headroom requires more spare budget before raising quality and reduces oscillation near setting boundaries.
+- Do not compare BVH thresholds while dynamic quality is enabled. Keep `numberOfPasses`, `lightSamplingStrategy`, `lightSampleCount`, `shadowQuality`, and `numBounces` fixed for those tests.
 
 ## Benchmark Recommendations
 

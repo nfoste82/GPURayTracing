@@ -8,6 +8,7 @@ This document captures likely future work areas. For current implementation limi
 - Add a simple material/debug preset workflow in the scene so material type changes can be compared quickly.
 - Add optional benchmark logging to CSV/JSON so frame-time comparisons can be captured without manual note-taking.
 - Add GPU timing instrumentation if feasible; Unity's profiler often collapses compute shader time into `Rendering`, so Xcode GPU Frame Capture remains useful on macOS.
+- Consider adding dynamic-quality presets or priorities if users want to favor shadows/bounces over per-frame sample count or light-sampling quality. The current dynamic-quality ladder changes passes first, then light sampling, then shadow quality, then bounces, and intentionally leaves BVH thresholds fixed.
 
 ## Cheap Rendering Improvements
 

@@ -38,18 +38,19 @@ When `_running` is true, it:
 
 1. Ensures `_outputTexture` matches the current source render target dimensions (this `EnsureOutputTextureSize` call actually runs before the `_running` check).
 2. Updates `renderTextureCamera.aspect` to match `_outputTexture`.
-3. Computes autofocus distance if `cameraAutoFocus` is enabled, ignoring ray-traced objects whose opacity is at or below `autoFocusTransparentOpacityThreshold` so focus can pass through mostly transparent glass. The autofocus search starts from a `numberOfPasses`-derived near distance (`12 - min(8, numberOfPasses * 1.75)`) rather than a fixed near plane, and very close hits (under `1.0`) are remapped by an additional close-focus modifier and smoothed toward the previous focal distance over time.
-4. Writes the resulting focal distance to `cameraFocalDistance`.
-5. Calls `UpdateSpheres()` to refresh CPU sphere/light structs from cached Unity object references.
-6. Calls `UpdateTriangles()` to refresh registered mesh triangle data only if a cached mesh transform or material value changed.
-7. Calls `UpdateTopLevelBvh()` and `UpdateShadowBvh()` to refresh acceleration structures if their runtime thresholds are met.
-8. Checks whether final-color frame accumulation can continue. Accumulation resets when the render size, camera matrices, focus distance, quality settings, random-noise setting, skybox texture/tint, sphere/light data, mesh object transforms/materials, or relevant object counts change. Debug render modes and `enableFrameAccumulation == false` disable accumulation.
-9. Finds the compute kernel `CSMain`.
-10. Calls `SetShaderParameters()`.
-11. Dispatches the compute shader through `UpdateTextureFromCompute()`.
-12. Increments `AccumulatedFrameCount` when accumulation is active.
-13. Marks the active `debugRenderMode` as warmed and clears the variant-warmup flag.
-14. In single-frame mode, keeps dispatching at the reduced single-frame presentation rate while accumulation is active; otherwise it stops rendering again after one dispatch.
+3. `Update()` may adjust dynamic quality before render dispatch when `enableDynamicQuality` is enabled. It tracks an exponentially averaged unscaled frame time against `dynamicQualityTargetFrameRate`, waits at least `0.75` seconds between adjustments, and changes only `numberOfPasses`, `lightSamplingStrategy`, `lightSampleCount`, `shadowQuality`, or `numBounces` within their existing inspector slider ranges. It never changes `topLevelBvhMinObjectCount` or `shadowBvhMinObjectCount`.
+4. Computes autofocus distance if `cameraAutoFocus` is enabled, ignoring ray-traced objects whose opacity is at or below `autoFocusTransparentOpacityThreshold` so focus can pass through mostly transparent glass. The autofocus search starts from a `numberOfPasses`-derived near distance (`12 - min(8, numberOfPasses * 1.75)`) rather than a fixed near plane, and very close hits (under `1.0`) are remapped by an additional close-focus modifier and smoothed toward the previous focal distance over time.
+5. Writes the resulting focal distance to `cameraFocalDistance`.
+6. Calls `UpdateSpheres()` to refresh CPU sphere/light structs from cached Unity object references.
+7. Calls `UpdateTriangles()` to refresh registered mesh triangle data only if a cached mesh transform or material value changed.
+8. Calls `UpdateTopLevelBvh()` and `UpdateShadowBvh()` to refresh acceleration structures if their runtime thresholds are met.
+9. Checks whether final-color frame accumulation can continue. Accumulation resets when the render size, camera matrices, focus distance, quality settings, random-noise setting, skybox texture/tint, sphere/light data, mesh object transforms/materials, or relevant object counts change. Debug render modes and `enableFrameAccumulation == false` disable accumulation.
+10. Finds the compute kernel `CSMain`.
+11. Calls `SetShaderParameters()`.
+12. Dispatches the compute shader through `UpdateTextureFromCompute()`.
+13. Increments `AccumulatedFrameCount` when accumulation is active.
+14. Marks the active `debugRenderMode` as warmed and clears the variant-warmup flag.
+15. In single-frame mode, keeps dispatching at the reduced single-frame presentation rate while accumulation is active; otherwise it stops rendering again after one dispatch.
 
 The dispatch block also runs when `_pendingVariantWarmup` is set, not only when `_running` is true, so an on-demand debug-variant compile happens even in single-frame mode.
 
@@ -161,6 +162,16 @@ Alongside `_DebugRenderMode`, `SetShaderParameters()` toggles the `DEBUG_RENDER`
 
 `SetShaderParameters()` also logs a one-time warning when `lightSamplingStrategy == ImportanceSampled` and the active light count exceeds `MaxImportanceLights` (`128`), since lights beyond that count are dropped from importance weighting in the shader. The C# `MaxImportanceLights` constant must stay in sync with the shader's `MaxImportanceLights`.
 
+## Dynamic Quality
+
+`GameManager.enableDynamicQuality` is an optional CPU-side controller. It does not add shader variants or shader branches. Each `Update()` call folds `Time.unscaledDeltaTime` into `_dynamicQualityAverageFrameMs`; after the cooldown interval, it compares that average to `1000 / dynamicQualityTargetFrameRate`. It uses asymmetric thresholds: `dynamicQualityTolerance` controls how far over budget frame time can go before reducing quality, while `dynamicQualityIncreaseHeadroom` controls how far under budget frame time must be before increasing quality.
+
+When frame time is too high, dynamic quality reduces settings in this order: `numberOfPasses`, then light sampling, then `shadowQuality`, then `numBounces`. If the frame is far over budget, `numberOfPasses` can drop by more than one step based on the measured cost ratio. The light-sampling step switches `AllLights` to `ImportanceSampled` when there are multiple active lights, initializes `lightSampleCount` to roughly one tenth of the active light count (respecting `maxLightSamples` and the `1..64` slider range), then reduces `lightSampleCount` toward `1` if more performance is needed. Existing `UniformRandom` scenes keep their strategy and reduce `lightSampleCount` directly.
+
+When frame time has enough headroom, dynamic quality increases settings in this order: `numberOfPasses`, then light sample count / all-lights restoration, then `shadowQuality`, then `numBounces`. The existing `[Range]` slider limits are used as bounds: passes `1..32`, light sample count `1..64`, shadow quality `0..5`, and bounces `1..16`.
+
+Dynamic quality resets frame accumulation whenever it changes a setting. It is skipped while single-frame mode is fully paused (`_singleFrame && !_running`) so an idle single-frame view does not incorrectly appear to have huge performance headroom.
+
 ## Controls And Modes
 
 - WASD moves `renderTextureCamera`.
@@ -168,6 +179,7 @@ Alongside `_DebugRenderMode`, `SetShaderParameters()` toggles the `DEBUG_RENDER`
 - `T` toggles single-frame mode.
 - `Space` resumes real-time rendering.
 - `debugRenderMode` is exposed in the `GameManager` inspector and selects final color or one of the shader debug visualizations.
+- `enableDynamicQuality` and `dynamicQualityTargetFrameRate` are exposed in the inspector for optional adaptive quality scaling.
 
 Single-frame mode is exposed in the inspector through the serialized public field `_singleFrame` (under the "Render single frame" header). With frame accumulation disabled or unavailable, it renders one frame, then stops compute dispatch while the camera continues to blit the last `_outputTexture` into the Game view. With final-color frame accumulation enabled, single-frame mode keeps dispatching at the reduced single-frame presentation rate so the still image progressively refines. `EnableSingleFrameSettings()` sets `Application.targetFrameRate = 10` and disables vSync, so the player loop slows down but does not set `Time.timeScale` to zero; Unity keeps presenting the last ray-traced render instead of appearing to fall back to an editor/Scene view. Toggling it off in the inspector, pressing `T`, or pressing `Space` resumes real-time rendering and restores real-time presentation settings (`targetFrameRate = 60`, vSync re-enabled).
 

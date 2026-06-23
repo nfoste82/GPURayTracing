@@ -26,7 +26,7 @@ RenderSettings:
   m_AmbientIntensity: 1
   m_AmbientMode: 0
   m_SubtractiveShadowColor: {r: 0.42, g: 0.478, b: 0.627, a: 1}
-  m_SkyboxMaterial: {fileID: 10304, guid: 0000000000000000f000000000000000, type: 0}
+  m_SkyboxMaterial: {fileID: 0}
   m_HaloStrength: 0.5
   m_FlareStrength: 1
   m_FlareFadeSpeed: 3
@@ -4924,17 +4924,26 @@ MonoBehaviour:
   shader: {fileID: 7200000, guid: adaed5b09d5374556b1cda0917c8f291, type: 3}
   renderTextureCamera: {fileID: 1974346961}
   numberOfPasses: 1
+  enableFrameAccumulation: 1
+  enableDynamicQuality: 1
+  dynamicQualityTargetFrameRate: 60
+  dynamicQualityTolerance: 0.15
+  dynamicQualityIncreaseHeadroom: 0.5
   numBounces: 3
   shadowQuality: 1
   topLevelBvhMinObjectCount: 64
   shadowBvhMinObjectCount: 64
   shadowRandomness: 0.65
+  maxLightSamples: 0
+  lightSamplingStrategy: 2
+  lightSampleCount: 1
   debugRenderMode: 0
   cameraAutoFocus: 0
   autoFocusTransparentOpacityThreshold: 0.5
   cameraFocalDistance: 18
   groundSmoothness: 0.5
   lightFalloffScale: 0.08
+  exposure: 1
   randomNoise: 0
   _skyboxLightColor:
     serializedVersion: 2
