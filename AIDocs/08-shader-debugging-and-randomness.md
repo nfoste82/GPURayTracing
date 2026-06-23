@@ -6,6 +6,8 @@ This document covers compute-shader debug render modes and random sampling behav
 
 `GameManager.debugRenderMode` uploads `_DebugRenderMode` to the compute shader. `FinalColor` uses the normal `TracePath()` output. Other modes use `GetDebugRenderColor()` to visualize a single diagnostic quantity.
 
+`GetDebugRenderColor()` and its `CSMain` call site are compiled behind a `#pragma multi_compile _ DEBUG_RENDER` keyword. The default (non-debug) variant compiles only the `TracePath()` path, so the large debug intersection/scatter code is kept out of the hot kernel; this was a major shader compile-time reduction. `GameManager.SetShaderParameters()` calls `EnableKeyword("DEBUG_RENDER")` whenever `debugRenderMode != FinalColor` and `DisableKeyword("DEBUG_RENDER")` for `FinalColor`. Because the keyword switch produces a separate shader variant, the first time each debug mode is selected at runtime Unity compiles that variant synchronously on its first `Dispatch`, which briefly freezes the main thread. See `10-benchmarking-and-performance.md` for how `GameManager` defers that dispatch by one frame and shows a "Compiling shader variant" overlay so the stall is not mistaken for a hang.
+
 Available modes:
 
 - `FinalColor`: normal path-traced render.

@@ -13,7 +13,7 @@ Use this folder as focused context for LLM-assisted work on the Unity GPU ray tr
 - `07-shader-lighting-and-materials.md`: Direct lighting, shadow tinting, material scattering, and sphere/mesh transparency/refraction behavior.
 - `08-shader-debugging-and-randomness.md`: Debug render modes and shader random sampling behavior.
 - `09-roadmap-and-improvements.md`: Near-term fixes and likely rendering, geometry, and quality improvements.
-- `10-benchmarking-and-performance.md`: Benchmark overlay, generated benchmark scenes, performance hotspots, and benchmark recommendations.
+- `10-benchmarking-and-performance.md`: Benchmark overlay, generated benchmark scenes, performance hotspots, benchmark recommendations, shader compile-time techniques, and the debug-variant compile stall handling.
 
 ## Fast Context Selection
 
@@ -24,4 +24,5 @@ Use this folder as focused context for LLM-assisted work on the Unity GPU ray tr
 - To change Unity orchestration, object registration, buffers, camera controls, or render dispatch, read `02-runtime-data-flow.md`.
 - To add features such as meshes, BVH, accumulation, material types, or better physical lighting, read the relevant shader doc plus `05-known-limitations.md` and `09-roadmap-and-improvements.md`.
 - To benchmark or tune performance, read `10-benchmarking-and-performance.md`, plus `06-shader-intersections-and-bvh.md` for BVH-specific work.
+- To reduce shader compile time, change the `DEBUG_RENDER` variant split, `[loop]` usage, or the debug-variant compile stall/overlay, read `10-benchmarking-and-performance.md` and `08-shader-debugging-and-randomness.md`.
 - To understand the project quickly before making broad changes, read `01-project-overview.md` first.

@@ -16,6 +16,9 @@ public class GameManager : MonoBehaviour
     [Range(1, 32)]
     public int numberOfPasses = 1;
 
+    [Tooltip("Progressively averages final-color renders while the camera, scene, and quality settings are unchanged. Debug render modes are not accumulated.")]
+    public bool enableFrameAccumulation = true;
+
     [Range(1, 16)]
     public int numBounces = 3;
 
@@ -119,7 +122,11 @@ public class GameManager : MonoBehaviour
     private Material _unitySkyboxMaterial;
 
     private RenderTexture _outputTexture;
+    private RenderTexture _accumulationTexture;
     private Vector2Int _textureSize;
+    private int _accumulatedFrameCount;
+    private int _accumulationStateHash;
+    private bool _hasAccumulationStateHash;
 
     private List<Sphere> _spheres = new List<Sphere>();
     private readonly List<RayTracedSphere> _sphereObjects = new List<RayTracedSphere>();
@@ -143,12 +150,38 @@ public class GameManager : MonoBehaviour
     private ComputeBuffer _bvhNodeBuffer;
     private ComputeBuffer _topLevelBvhNodeBuffer;
     private ComputeBuffer _shadowBvhNodeBuffer;
+
+    // Tracks whether any shadow-casting blocker (regular sphere or mesh triangle) is transparent
+    // (opacity < 1). When false, shadow rays in the shader take a cheaper pure-occlusion path that
+    // early-outs on the first opaque blocker without the nearest-transparent-blocker bookkeeping.
+    // Recomputed each frame in UpdateSpheres()/UpdateTriangles().
+    private bool _hasTransparentSphereBlockers;
+    private bool _hasTransparentMeshBlockers;
+    private const float ShadowBlockerOpaqueThreshold = 1.0f;
+
+    // Reusable suffix surface-area scratch for the SAH BVH split sweep, grown on demand so each
+    // build does not allocate per node.
+    private float[] _sahSuffixArea = new float[0];
     
     [Header("Render single frame")] 
     public bool _singleFrame = false;
 
     private bool _running = true;
     private bool _previousSingleFrame;
+
+    // Compute-shader variants compile synchronously on their first Dispatch, which freezes the
+    // main thread (the spinning-wheel stall) the first time a debug render mode is selected. We
+    // track which debug variants have already been dispatched, and when a new one is requested we
+    // show an on-screen overlay for one frame BEFORE running the stalling dispatch, so the user
+    // sees a "compiling" message instead of an apparently locked-up app.
+    private readonly HashSet<DebugRenderMode> _warmedDebugModes = new HashSet<DebugRenderMode>();
+    private DebugRenderMode _appliedDebugRenderMode = DebugRenderMode.FinalColor;
+    private bool _pendingVariantWarmup;
+
+    // True for the single frame where the "Compiling shader variant" overlay should be shown
+    // before the blocking compile happens. Read by RayTracingBenchmarkOverlay.
+    public bool IsCompilingShaderVariant => _pendingVariantWarmup;
+
 
     public int SphereCount => _spheres.Count;
     public int LightCount => _lights.Count;
@@ -161,6 +194,7 @@ public class GameManager : MonoBehaviour
     public bool IsTopLevelBvhActive => _topLevelBvhNodes.Count > 0;
     public bool IsShadowBvhActive => _shadowBvhNodes.Count > 0;
     public Vector2Int TextureSize => _textureSize;
+    public int AccumulatedFrameCount => _accumulatedFrameCount;
 
     private static bool _buffersNeedRebuilding = false;
     private static readonly List<RayTracingObject> _rayTracingObjects = new List<RayTracingObject>();
@@ -450,6 +484,7 @@ public class GameManager : MonoBehaviour
     private void CreateOutputTexture(int width, int height)
     {
         _outputTexture?.Release();
+        _accumulationTexture?.Release();
         _textureSize = new Vector2Int(width, height);
         _outputTexture = new RenderTexture(_textureSize.x, _textureSize.y, 24)
         {
@@ -457,6 +492,14 @@ public class GameManager : MonoBehaviour
             filterMode = FilterMode.Point
         };
         _outputTexture.Create();
+
+        _accumulationTexture = new RenderTexture(_textureSize.x, _textureSize.y, 0, RenderTextureFormat.ARGBFloat)
+        {
+            enableRandomWrite = true,
+            filterMode = FilterMode.Point
+        };
+        _accumulationTexture.Create();
+        ResetFrameAccumulation();
     }
 
     private void Update()
@@ -482,6 +525,43 @@ public class GameManager : MonoBehaviour
         {
             SetSingleFrameMode(false);
         }
+    }
+
+    private GUIStyle _compileNoticeStyle;
+
+    // Shows a centered notice during the single frame before a debug shader variant's first
+    // (blocking) Dispatch. The notice is painted this frame; the actual compile stall happens next
+    // frame with this message still on screen, so the user sees an explanation instead of an
+    // apparently frozen application.
+    private void OnGUI()
+    {
+        if (!_pendingVariantWarmup)
+        {
+            return;
+        }
+
+        if (_compileNoticeStyle == null)
+        {
+            _compileNoticeStyle = new GUIStyle(GUI.skin.box)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = 20,
+                fontStyle = FontStyle.Bold,
+                wordWrap = true,
+                padding = new RectOffset(20, 20, 20, 20)
+            };
+            _compileNoticeStyle.normal.textColor = Color.white;
+        }
+
+        const float boxWidth = 520f;
+        const float boxHeight = 120f;
+        var rect = new Rect(
+            (Screen.width - boxWidth) * 0.5f,
+            (Screen.height - boxHeight) * 0.5f,
+            boxWidth,
+            boxHeight);
+
+        GUI.Box(rect, "Compiling shader variant, this may take a minute...", _compileNoticeStyle);
     }
 
     private void SetSingleFrameMode(bool enabled)
@@ -551,6 +631,7 @@ public class GameManager : MonoBehaviour
     private void OnDestroy()
     {
         _outputTexture?.Release();
+        _accumulationTexture?.Release();
         _sphereBuffer?.Release();
         _lightBuffer?.Release();
         _triangleBuffer?.Release();
@@ -573,16 +654,43 @@ public class GameManager : MonoBehaviour
     private void UpdateTextureFromCompute(int kernelHandle)
     {
         shader.SetTexture(kernelHandle, "Result", _outputTexture);
+        shader.SetTexture(kernelHandle, "AccumulationResult", _accumulationTexture);
         int threadGroupsX = Mathf.CeilToInt(_textureSize.x / 8.0f);
         int threadGroupsY = Mathf.CeilToInt(_textureSize.y / 8.0f);
         shader.Dispatch(kernelHandle, threadGroupsX, threadGroupsY, 1);
+    }
+
+    private void ResetFrameAccumulation()
+    {
+        _accumulatedFrameCount = 0;
+        _hasAccumulationStateHash = false;
+    }
+
+    private bool ShouldUseFrameAccumulation()
+    {
+        return enableFrameAccumulation && debugRenderMode == DebugRenderMode.FinalColor;
     }
     
     public void RenderImage(RenderTexture src, RenderTexture dest)
     {
         EnsureOutputTextureSize(src.width, src.height);
 
-        if (_running)
+        // Detect a switch to a debug variant that has not been compiled yet. The first Dispatch of
+        // a new variant blocks the main thread while the GPU backend compiles it. To avoid an
+        // apparently frozen app, we defer that blocking dispatch by one frame: this frame we set the
+        // overlay flag and re-show the previous output (no heavy dispatch), so OnGUI can paint the
+        // "Compiling shader variant" message; next frame we run the stalling dispatch with that
+        // message already on screen.
+        if (!_pendingVariantWarmup
+            && debugRenderMode != _appliedDebugRenderMode
+            && !_warmedDebugModes.Contains(debugRenderMode))
+        {
+            _pendingVariantWarmup = true;
+            Graphics.Blit(_outputTexture, dest);
+            return;
+        }
+
+        if (_running || _pendingVariantWarmup)
         {
             var autoFocusDistance = (cameraAutoFocus)
                 ? GetNearestIntersectionDistanceForAutoFocus(new Ray(renderTextureCamera.transform.position,
@@ -618,14 +726,42 @@ public class GameManager : MonoBehaviour
             UpdateTopLevelBvh();
             UpdateShadowBvh();
 
+            bool useFrameAccumulation = ShouldUseFrameAccumulation();
+            if (useFrameAccumulation)
+            {
+                int stateHash = CalculateAccumulationStateHash();
+                if (!_hasAccumulationStateHash || stateHash != _accumulationStateHash)
+                {
+                    _accumulatedFrameCount = 0;
+                    _accumulationStateHash = stateHash;
+                    _hasAccumulationStateHash = true;
+                }
+            }
+            else
+            {
+                ResetFrameAccumulation();
+            }
+
             var kernelHandle = shader.FindKernel("CSMain");
 
             SetShaderParameters(kernelHandle);
             UpdateTextureFromCompute(kernelHandle);
-            
+
+            if (useFrameAccumulation)
+            {
+                _accumulatedFrameCount++;
+            }
+
+            // The dispatch above triggered (and blocked on) any first-time variant compile. Record
+            // that this debug mode is now warm so future switches to it are instant, and clear the
+            // overlay flag.
+            _warmedDebugModes.Add(debugRenderMode);
+            _appliedDebugRenderMode = debugRenderMode;
+            _pendingVariantWarmup = false;
+
             if (_singleFrame)
             {
-                _running = false;
+                _running = useFrameAccumulation;
                 EnableSingleFrameSettings();
             }
         }
@@ -635,6 +771,7 @@ public class GameManager : MonoBehaviour
 
     private void UpdateSpheres()
     {
+        _hasTransparentSphereBlockers = false;
         for (int i = 0; i < _spheres.Count; ++i)
         {
             var sphere = _spheres[i];
@@ -650,7 +787,12 @@ public class GameManager : MonoBehaviour
             sphere.opacity = material.Opacity;
             sphere.smoothness = material.Smoothness;
             sphere.materialType = (int)material.Type;
-            
+
+            if (sphere.opacity < ShadowBlockerOpaqueThreshold)
+            {
+                _hasTransparentSphereBlockers = true;
+            }
+
             _spheres[i] = sphere;
         }
         
@@ -684,6 +826,7 @@ public class GameManager : MonoBehaviour
     {
         if (_meshObjects.Count == 0)
         {
+            _hasTransparentMeshBlockers = false;
             return;
         }
 
@@ -745,6 +888,7 @@ public class GameManager : MonoBehaviour
     private bool UpdateMeshChangeCache()
     {
         bool changed = false;
+        _hasTransparentMeshBlockers = false;
 
         for (int i = 0; i < _meshObjects.Count; i++)
         {
@@ -756,6 +900,11 @@ public class GameManager : MonoBehaviour
             var opacity = Mathf.Clamp01(material.Opacity);
             var refraction = material.RefractionIndex;
             var materialType = (int)material.Type;
+
+            if (opacity < ShadowBlockerOpaqueThreshold)
+            {
+                _hasTransparentMeshBlockers = true;
+            }
 
             if (meshObject.previousLocalToWorld == localToWorld
                 && meshObject.previousColor == color
@@ -960,9 +1109,8 @@ public class GameManager : MonoBehaviour
         }
 
         _topLevelBvhBuildItemComparer.axis = GetLongestAxis(boundsMax - boundsMin);
-        items.Sort(start, count, _topLevelBvhBuildItemComparer);
+        int leftCount = FindTopLevelSahSplit(items, start, count);
 
-        int leftCount = count / 2;
         int rightCount = count - leftCount;
         int leftChildIndex = BuildTopLevelBvhNode(items, nodes, start, leftCount);
         int rightChildIndex = BuildTopLevelBvhNode(items, nodes, start + leftCount, rightCount);
@@ -983,6 +1131,63 @@ public class GameManager : MonoBehaviour
     private static Vector3 GetTopLevelBvhItemCentroid(TopLevelBvhBuildItem item)
     {
         return (item.boundsMin + item.boundsMax) * 0.5f;
+    }
+
+    // Top-level / shadow BVH equivalent of FindTriangleSahSplit. Scores candidate splits across
+    // all three axes by SAH and leaves items sorted on the winning axis so the chosen split is
+    // contiguous. Falls back to a longest-axis median split if no positive-area split is found.
+    private int FindTopLevelSahSplit(List<TopLevelBvhBuildItem> items, int start, int count)
+    {
+        int bestAxis = -1;
+        int bestSplit = count / 2;
+        float bestCost = float.MaxValue;
+
+        EnsureSahScratch(count);
+
+        for (int axis = 0; axis < 3; axis++)
+        {
+            _topLevelBvhBuildItemComparer.axis = axis;
+            items.Sort(start, count, _topLevelBvhBuildItemComparer);
+
+            var suffixMin = items[start + count - 1].boundsMin;
+            var suffixMax = items[start + count - 1].boundsMax;
+            _sahSuffixArea[count - 1] = HalfSurfaceArea(suffixMax - suffixMin);
+            for (int i = count - 2; i >= 0; i--)
+            {
+                suffixMin = Vector3.Min(suffixMin, items[start + i].boundsMin);
+                suffixMax = Vector3.Max(suffixMax, items[start + i].boundsMax);
+                _sahSuffixArea[i] = HalfSurfaceArea(suffixMax - suffixMin);
+            }
+
+            var prefixMin = items[start].boundsMin;
+            var prefixMax = items[start].boundsMax;
+            for (int leftCount = 1; leftCount < count; leftCount++)
+            {
+                float leftArea = HalfSurfaceArea(prefixMax - prefixMin);
+                float rightArea = _sahSuffixArea[leftCount];
+                float cost = leftArea * leftCount + rightArea * (count - leftCount);
+                if (cost < bestCost)
+                {
+                    bestCost = cost;
+                    bestAxis = axis;
+                    bestSplit = leftCount;
+                }
+
+                prefixMin = Vector3.Min(prefixMin, items[start + leftCount].boundsMin);
+                prefixMax = Vector3.Max(prefixMax, items[start + leftCount].boundsMax);
+            }
+        }
+
+        if (bestAxis < 0)
+        {
+            bestAxis = GetLongestAxis(items[start].boundsMax - items[start].boundsMin);
+            bestSplit = count / 2;
+        }
+
+        _topLevelBvhBuildItemComparer.axis = bestAxis;
+        items.Sort(start, count, _topLevelBvhBuildItemComparer);
+
+        return Mathf.Clamp(bestSplit, 1, count - 1);
     }
 
     private int BuildBvhNode(List<Triangle> meshTriangles, int start, int count)
@@ -1030,11 +1235,8 @@ public class GameManager : MonoBehaviour
             return nodeIndex;
         }
 
-        int axis = GetLongestAxis(boundsMax - boundsMin);
-        meshTriangles.Sort(start, count, Comparer<Triangle>.Create((a, b) =>
-            GetTriangleCentroid(a)[axis].CompareTo(GetTriangleCentroid(b)[axis])));
+        int leftCount = FindTriangleSahSplit(meshTriangles, start, count);
 
-        int leftCount = count / 2;
         int rightCount = count - leftCount;
         int leftChildIndex = BuildBvhNode(meshTriangles, start, leftCount);
         int rightChildIndex = BuildBvhNode(meshTriangles, start + leftCount, rightCount);
@@ -1050,6 +1252,72 @@ public class GameManager : MonoBehaviour
         };
 
         return nodeIndex;
+    }
+
+    // Chooses how many triangles go to the left child using the surface area heuristic (SAH).
+    // For each axis it sorts by centroid, sweeps every candidate split, and scores it as
+    // SA(left)*leftCount + SA(right)*rightCount. The lowest-scoring split across all axes wins,
+    // leaving meshTriangles sorted on the winning axis so [start, start+leftCount) is the left set.
+    // Falls back to a median split if no positive-area split is found. This replaces the old
+    // longest-axis median split with a quality-aware split that produces tighter, less overlapping
+    // child bounds, so traversal skips more triangles.
+    private int FindTriangleSahSplit(List<Triangle> meshTriangles, int start, int count)
+    {
+        int bestAxis = -1;
+        int bestSplit = count / 2;
+        float bestCost = float.MaxValue;
+
+        EnsureSahScratch(count);
+
+        for (int axis = 0; axis < 3; axis++)
+        {
+            int sortAxis = axis;
+            meshTriangles.Sort(start, count, Comparer<Triangle>.Create((a, b) =>
+                GetTriangleCentroid(a)[sortAxis].CompareTo(GetTriangleCentroid(b)[sortAxis])));
+
+            // Suffix bounds: _sahSuffixArea[i] = half surface area of triangles [start+i, start+count).
+            var suffixMin = GetTriangleBoundsMin(meshTriangles[start + count - 1]);
+            var suffixMax = GetTriangleBoundsMax(meshTriangles[start + count - 1]);
+            _sahSuffixArea[count - 1] = HalfSurfaceArea(suffixMax - suffixMin);
+            for (int i = count - 2; i >= 0; i--)
+            {
+                Encapsulate(meshTriangles[start + i], ref suffixMin, ref suffixMax);
+                _sahSuffixArea[i] = HalfSurfaceArea(suffixMax - suffixMin);
+            }
+
+            // Sweep left-to-right, growing the prefix bounds and combining with the suffix.
+            var prefixMin = GetTriangleBoundsMin(meshTriangles[start]);
+            var prefixMax = GetTriangleBoundsMax(meshTriangles[start]);
+            for (int leftCount = 1; leftCount < count; leftCount++)
+            {
+                float leftArea = HalfSurfaceArea(prefixMax - prefixMin);
+                float rightArea = _sahSuffixArea[leftCount];
+                float cost = leftArea * leftCount + rightArea * (count - leftCount);
+                if (cost < bestCost)
+                {
+                    bestCost = cost;
+                    bestAxis = sortAxis;
+                    bestSplit = leftCount;
+                }
+
+                Encapsulate(meshTriangles[start + leftCount], ref prefixMin, ref prefixMax);
+            }
+        }
+
+        if (bestAxis < 0)
+        {
+            // No usable split found; fall back to longest-axis median split.
+            bestAxis = GetLongestAxis(
+                GetTriangleBoundsMax(meshTriangles[start]) - GetTriangleBoundsMin(meshTriangles[start]));
+            bestSplit = count / 2;
+        }
+
+        // Re-sort on the winning axis so the chosen split is contiguous in the list.
+        int finalAxis = bestAxis;
+        meshTriangles.Sort(start, count, Comparer<Triangle>.Create((a, b) =>
+            GetTriangleCentroid(a)[finalAxis].CompareTo(GetTriangleCentroid(b)[finalAxis])));
+
+        return Mathf.Clamp(bestSplit, 1, count - 1);
     }
 
     private static Vector3 GetTriangleCentroid(Triangle triangle)
@@ -1081,6 +1349,30 @@ public class GameManager : MonoBehaviour
         }
 
         return size.y >= size.z ? 1 : 2;
+    }
+
+    // Half the surface area of an AABB (the SA term used in the surface area heuristic). Half is
+    // fine because the SAH compares ratios, so the constant factor cancels. Returns 0 for empty
+    // or inverted bounds so degenerate nodes do not dominate the cost.
+    private static float HalfSurfaceArea(Vector3 size)
+    {
+        if (size.x <= 0f && size.y <= 0f && size.z <= 0f)
+        {
+            return 0f;
+        }
+
+        float x = Mathf.Max(0f, size.x);
+        float y = Mathf.Max(0f, size.y);
+        float z = Mathf.Max(0f, size.z);
+        return x * y + y * z + z * x;
+    }
+
+    private void EnsureSahScratch(int count)
+    {
+        if (_sahSuffixArea.Length < count)
+        {
+            _sahSuffixArea = new float[count];
+        }
     }
 
     private static bool IntersectAabb(Ray ray, Vector3 boundsMin, Vector3 boundsMax, float maxDistance)
@@ -1171,6 +1463,7 @@ public class GameManager : MonoBehaviour
     public void RebuildBuffers()
     {
         _buffersNeedRebuilding = false;
+        ResetFrameAccumulation();
         _sphereBuffer?.Release();
         _lightBuffer?.Release();
         _triangleBuffer?.Release();
@@ -1230,6 +1523,7 @@ public class GameManager : MonoBehaviour
 
         _rayTracingObjects.Add(obj);
         _buffersNeedRebuilding = true;
+        ResetFrameAccumulation();
 
         var material = obj.GetComponent<RayMaterial>();
         var sphereCollider = obj.GetComponent<SphereCollider>();
@@ -1305,6 +1599,7 @@ public class GameManager : MonoBehaviour
     {
         _rayTracingObjects.Remove(obj);
         _buffersNeedRebuilding = true;
+        ResetFrameAccumulation();
 
         var sphereIndex = _sphereObjects.FindIndex(sphere => sphere.obj == obj);
         if (sphereIndex >= 0)
@@ -1418,6 +1713,21 @@ public class GameManager : MonoBehaviour
         shader.SetInt("_NumberOfPasses", numberOfPasses);
         shader.SetInt("_NumBounces", numBounces);
         shader.SetInt("_DebugRenderMode", (int)debugRenderMode);
+        shader.SetInt("_UseFrameAccumulation", ShouldUseFrameAccumulation() ? 1 : 0);
+        shader.SetInt("_AccumulatedFrameCount", _accumulatedFrameCount);
+        shader.SetInt("_SampleOffset", CalculateSampleOffset());
+
+        // The shader splits its debug render path behind the DEBUG_RENDER keyword so the default
+        // final-color variant compiles without any debug intersection/scatter code (a large shader
+        // compile-time saving). Only enable the debug variant when a debug mode is actually active.
+        if (debugRenderMode == DebugRenderMode.FinalColor)
+        {
+            shader.DisableKeyword("DEBUG_RENDER");
+        }
+        else
+        {
+            shader.EnableKeyword("DEBUG_RENDER");
+        }
         shader.SetInt("_MaxLightSamples", maxLightSamples);
         shader.SetInt("_LightSamplingStrategy", (int)lightSamplingStrategy);
         shader.SetInt("_LightSampleCount", lightSampleCount);
@@ -1450,6 +1760,10 @@ public class GameManager : MonoBehaviour
         shader.SetInt("_NumTopLevelBvhNodes", _topLevelBvhNodes.Count);
         shader.SetInt("_NumShadowBvhNodes", _shadowBvhNodes.Count);
 
+        // When no shadow-casting blocker is transparent, the shader can use a cheaper
+        // pure-occlusion shadow path that early-outs on the first opaque blocker.
+        bool hasTransparentShadowBlockers = _hasTransparentSphereBlockers || _hasTransparentMeshBlockers;
+        shader.SetInt("_HasTransparentShadowBlockers", hasTransparentShadowBlockers ? 1 : 0);
         SetComputeBuffer("_Spheres", _sphereBuffer, kernelHandle);
         SetComputeBuffer("_Lights", _lightBuffer, kernelHandle);
         SetComputeBuffer("_Triangles", _triangleBuffer, kernelHandle);
@@ -1457,5 +1771,117 @@ public class GameManager : MonoBehaviour
         SetComputeBuffer("_BvhNodes", _bvhNodeBuffer, kernelHandle);
         SetComputeBuffer("_TopLevelBvhNodes", _topLevelBvhNodeBuffer, kernelHandle);
         SetComputeBuffer("_ShadowBvhNodes", _shadowBvhNodeBuffer, kernelHandle);
+    }
+
+    private int CalculateSampleOffset()
+    {
+        if (!ShouldUseFrameAccumulation())
+        {
+            return 0;
+        }
+
+        long sampleOffset = (long)_accumulatedFrameCount * Mathf.Max(1, numberOfPasses);
+        return (int)Math.Min(int.MaxValue, sampleOffset);
+    }
+
+    private int CalculateAccumulationStateHash()
+    {
+        unchecked
+        {
+            int hash = 17;
+            hash = AddHash(hash, _textureSize.x);
+            hash = AddHash(hash, _textureSize.y);
+            hash = AddHash(hash, numberOfPasses);
+            hash = AddHash(hash, numBounces);
+            hash = AddHash(hash, shadowQuality);
+            hash = AddHash(hash, topLevelBvhMinObjectCount);
+            hash = AddHash(hash, shadowBvhMinObjectCount);
+            hash = AddHash(hash, maxLightSamples);
+            hash = AddHash(hash, (int)lightSamplingStrategy);
+            hash = AddHash(hash, lightSampleCount);
+            hash = AddHash(hash, shadowRandomness);
+            hash = AddHash(hash, lightFalloffScale);
+            hash = AddHash(hash, cameraFocalDistance);
+            hash = AddHash(hash, groundSmoothness);
+            hash = AddHash(hash, randomNoise ? 1 : 0);
+            hash = AddHash(hash, skyboxTexture != null ? skyboxTexture.GetInstanceID() : 0);
+            hash = AddHash(hash, _skyboxLightColor.r);
+            hash = AddHash(hash, _skyboxLightColor.g);
+            hash = AddHash(hash, _skyboxLightColor.b);
+            hash = AddHash(hash, renderTextureCamera.cameraToWorldMatrix);
+            hash = AddHash(hash, renderTextureCamera.projectionMatrix);
+            hash = AddHash(hash, _spheres.Count);
+            for (int i = 0; i < _spheres.Count; i++)
+            {
+                hash = AddHash(hash, _spheres[i]);
+            }
+
+            hash = AddHash(hash, _lights.Count);
+            for (int i = 0; i < _lights.Count; i++)
+            {
+                hash = AddHash(hash, _lights[i]);
+            }
+
+            hash = AddHash(hash, _triangles.Count);
+            hash = AddHash(hash, _meshInfos.Count);
+            for (int i = 0; i < _meshObjects.Count; i++)
+            {
+                hash = AddHash(hash, _meshObjects[i]);
+            }
+
+            return hash;
+        }
+    }
+
+    private static int AddHash(int hash, int value)
+    {
+        unchecked
+        {
+            return hash * 31 + value;
+        }
+    }
+
+    private static int AddHash(int hash, float value)
+    {
+        return AddHash(hash, value.GetHashCode());
+    }
+
+    private static int AddHash(int hash, Vector3 value)
+    {
+        hash = AddHash(hash, value.x);
+        hash = AddHash(hash, value.y);
+        return AddHash(hash, value.z);
+    }
+
+    private static int AddHash(int hash, Matrix4x4 value)
+    {
+        for (int i = 0; i < 16; i++)
+        {
+            hash = AddHash(hash, value[i]);
+        }
+
+        return hash;
+    }
+
+    private static int AddHash(int hash, Sphere value)
+    {
+        hash = AddHash(hash, value.position);
+        hash = AddHash(hash, value.color);
+        hash = AddHash(hash, value.emission);
+        hash = AddHash(hash, value.radius);
+        hash = AddHash(hash, value.smoothness);
+        hash = AddHash(hash, value.opacity);
+        hash = AddHash(hash, value.refraction);
+        return AddHash(hash, value.materialType);
+    }
+
+    private static int AddHash(int hash, RayTracedMesh value)
+    {
+        hash = AddHash(hash, value.transform.localToWorldMatrix);
+        hash = AddHash(hash, value.previousColor);
+        hash = AddHash(hash, value.previousSmoothness);
+        hash = AddHash(hash, value.previousOpacity);
+        hash = AddHash(hash, value.previousRefraction);
+        return AddHash(hash, value.previousMaterialType);
     }
 }

@@ -6,7 +6,7 @@
 
 On `Start()`, `GameManager` creates `_outputTexture` as a `RenderTexture` sized to the current screen dimensions with `enableRandomWrite = true`. This texture is bound as `Result` before dispatch and then blitted to the camera output. The blit is performed by `GameManager.RenderImage()`, which is invoked from `RayTracingCameraRenderer.OnRenderImage()`. The blit therefore happens on whichever camera holds the `RayTracingCameraRenderer` component; that is normally the camera wired into `GameManager.renderTextureCamera`, but the code does not enforce that they are the same camera.
 
-During `RenderImage()`, `GameManager` calls `EnsureOutputTextureSize(src.width, src.height)` to check the source render target dimensions and recreate `_outputTexture` if the runtime render size changes. This runs every call, even when `_running` is false. It also updates `renderTextureCamera.aspect` from the active output texture size so the camera projection used for ray generation matches the resized render target.
+During `RenderImage()`, `GameManager` calls `EnsureOutputTextureSize(src.width, src.height)` to check the source render target dimensions and recreate `_outputTexture` and the HDR `_accumulationTexture` if the runtime render size changes. This runs every call, even when `_running` is false. It also updates `renderTextureCamera.aspect` from the active output texture size so the camera projection used for ray generation matches the resized render target.
 
 ## Object Registration
 
@@ -43,10 +43,19 @@ When `_running` is true, it:
 5. Calls `UpdateSpheres()` to refresh CPU sphere/light structs from cached Unity object references.
 6. Calls `UpdateTriangles()` to refresh registered mesh triangle data only if a cached mesh transform or material value changed.
 7. Calls `UpdateTopLevelBvh()` and `UpdateShadowBvh()` to refresh acceleration structures if their runtime thresholds are met.
-8. Finds the compute kernel `CSMain`.
-9. Calls `SetShaderParameters()`.
-10. Dispatches the compute shader through `UpdateTextureFromCompute()`.
-11. Stops rendering again if single-frame mode is enabled.
+8. Checks whether final-color frame accumulation can continue. Accumulation resets when the render size, camera matrices, focus distance, quality settings, random-noise setting, skybox texture/tint, sphere/light data, mesh object transforms/materials, or relevant object counts change. Debug render modes and `enableFrameAccumulation == false` disable accumulation.
+9. Finds the compute kernel `CSMain`.
+10. Calls `SetShaderParameters()`.
+11. Dispatches the compute shader through `UpdateTextureFromCompute()`.
+12. Increments `AccumulatedFrameCount` when accumulation is active.
+13. Marks the active `debugRenderMode` as warmed and clears the variant-warmup flag.
+14. In single-frame mode, keeps dispatching at the reduced single-frame presentation rate while accumulation is active; otherwise it stops rendering again after one dispatch.
+
+The dispatch block also runs when `_pendingVariantWarmup` is set, not only when `_running` is true, so an on-demand debug-variant compile happens even in single-frame mode.
+
+### Debug Variant Warmup Deferral
+
+Before the `_running`/dispatch block, `RenderImage()` checks for a switch to a `debugRenderMode` whose `DEBUG_RENDER` shader variant has not been compiled yet (tracked in `_warmedDebugModes`, compared against `_appliedDebugRenderMode`). The first variant `Dispatch` compiles synchronously and freezes the main thread, so on detection `RenderImage()` sets `_pendingVariantWarmup`, re-blits the previous `_outputTexture`, and returns without the heavy dispatch. That extra frame lets `GameManager.OnGUI()` paint a centered "Compiling shader variant" notice; the next frame runs the stalling dispatch with the notice already on screen, then marks the mode warmed. See `10-benchmarking-and-performance.md` for the full rationale and `08-shader-debugging-and-randomness.md` for the variant split.
 
 After dispatch, it always calls:
 
@@ -92,6 +101,8 @@ Unity requires referenced structured buffers to be bound even when their active 
 
 `UpdateTriangles()` rebuilds world-space triangle data, mesh AABBs, and per-mesh BVH nodes, then uploads `_Triangles`, `_Meshes`, and `_BvhNodes` only when a mesh object's transform, color, smoothness, opacity, refraction index, or material type changes. `UpdateTopLevelBvh()` rebuilds and uploads the top-level object BVH every rendered frame after sphere/light and mesh updates, so dynamic objects keep correct top-level bounds. `UpdateShadowBvh()` does the same for the shadow-only blocker BVH.
 
+`UpdateSpheres()` and `UpdateMeshChangeCache()` also recompute whether any shadow-casting blocker (regular sphere or mesh triangle) has opacity `< 1`. `SetShaderParameters()` uploads the combined result as the `_HasTransparentShadowBlockers` int so the shader can take its cheaper pure-occlusion shadow path when no transparent blockers exist (see `06-shader-intersections-and-bvh.md`).
+
 `topLevelBvhMinObjectCount` and `shadowBvhMinObjectCount` are runtime thresholds. If the relevant object count is below the threshold, the matching BVH list is left empty, `_NumTopLevelBvhNodes` or `_NumShadowBvhNodes` is uploaded as `0`, and the compute shader uses lower-overhead flat object loops. Set a threshold to `0` to force that BVH on. Set it above the scene's object/blocker count, such as `1024`, to force flat loops. The benchmark overlay reports whether each BVH is active, object counts, node counts, and thresholds.
 
 Profiling in the current scenes showed that the shadow-blocker BVH can improve `Benchmark_ShadowBlockers`, while the general top-level BVH has little effect there because that benchmark is dominated by shadow rays rather than first-hit object lookup. Use `Benchmark_ManySpheres` or `Benchmark_ManyMeshes` to evaluate `topLevelBvhMinObjectCount`; use `Benchmark_ShadowBlockers` to evaluate `shadowBvhMinObjectCount`.
@@ -119,9 +130,12 @@ Benchmark scene generation and overlay behavior are documented in `10-benchmarki
 - `_CameraInverseProjection`
 - `_SkyboxLight`
 - `_Seed`
+- `_SampleOffset`
 - `_NumberOfPasses`
 - `_NumBounces`
 - `_DebugRenderMode`
+- `_UseFrameAccumulation`
+- `_AccumulatedFrameCount`
 - `_MaxLightSamples`
 - `_LightSamplingStrategy`
 - `_LightSampleCount`
@@ -141,6 +155,10 @@ Benchmark scene generation and overlay behavior are documented in `10-benchmarki
 
 `_Seed` is uploaded as an integer. When `randomNoise` is enabled, C# uploads a new random seed (`Random.Range(1, int.MaxValue)`) each rendered frame. When `randomNoise` is disabled, C# uploads the fixed literal value `1` every frame for stable deterministic sampling.
 
+When frame accumulation is active, `_SampleOffset` advances by `AccumulatedFrameCount * numberOfPasses` so deterministic sampling still generates new samples across accumulated frames. `_AccumulatedFrameCount` tells the shader how many previous HDR final-color frames are stored in `AccumulationResult`. Accumulation is applied before exposure/tone mapping, and debug render modes are not accumulated.
+
+Alongside `_DebugRenderMode`, `SetShaderParameters()` toggles the `DEBUG_RENDER` shader keyword: `EnableKeyword("DEBUG_RENDER")` when `debugRenderMode != FinalColor`, otherwise `DisableKeyword("DEBUG_RENDER")`. This selects the shader variant that includes or excludes the debug render path; see `08-shader-debugging-and-randomness.md` and `10-benchmarking-and-performance.md`.
+
 `SetShaderParameters()` also logs a one-time warning when `lightSamplingStrategy == ImportanceSampled` and the active light count exceeds `MaxImportanceLights` (`128`), since lights beyond that count are dropped from importance weighting in the shader. The C# `MaxImportanceLights` constant must stay in sync with the shader's `MaxImportanceLights`.
 
 ## Controls And Modes
@@ -151,7 +169,7 @@ Benchmark scene generation and overlay behavior are documented in `10-benchmarki
 - `Space` resumes real-time rendering.
 - `debugRenderMode` is exposed in the `GameManager` inspector and selects final color or one of the shader debug visualizations.
 
-Single-frame mode is exposed in the inspector through the serialized public field `_singleFrame` (under the "Render single frame" header). It renders one frame, then stops compute dispatch while the camera continues to blit the last `_outputTexture` into the Game view. `EnableSingleFrameSettings()` sets `Application.targetFrameRate = 10` and disables vSync, so the player loop slows down but does not set `Time.timeScale` to zero; Unity keeps presenting the last ray-traced render instead of appearing to fall back to an editor/Scene view. Toggling it off in the inspector, pressing `T`, or pressing `Space` resumes real-time rendering and restores real-time presentation settings (`targetFrameRate = 60`, vSync re-enabled).
+Single-frame mode is exposed in the inspector through the serialized public field `_singleFrame` (under the "Render single frame" header). With frame accumulation disabled or unavailable, it renders one frame, then stops compute dispatch while the camera continues to blit the last `_outputTexture` into the Game view. With final-color frame accumulation enabled, single-frame mode keeps dispatching at the reduced single-frame presentation rate so the still image progressively refines. `EnableSingleFrameSettings()` sets `Application.targetFrameRate = 10` and disables vSync, so the player loop slows down but does not set `Time.timeScale` to zero; Unity keeps presenting the last ray-traced render instead of appearing to fall back to an editor/Scene view. Toggling it off in the inspector, pressing `T`, or pressing `Space` resumes real-time rendering and restores real-time presentation settings (`targetFrameRate = 60`, vSync re-enabled).
 
 Unity's editor toolbar Pause freezes the player loop, so runtime code cannot keep dispatching or blitting new frames while that pause is active. `Assets/Editor/GameViewPauseFocus.cs` listens for editor pause events and refocuses/repaints the Game view so the editor remains on the last presented render instead of switching to the Scene tab.
 

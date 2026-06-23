@@ -20,7 +20,9 @@ Registered triangle meshes upload world-space triangles into `_Triangles`, objec
 
 Each mesh has an object-level AABB in `_Meshes`. Once a ray enters a mesh, traversal walks that mesh's binary BVH and tests only leaf triangle ranges that survive AABB checks.
 
-All BVHs in this project (per-mesh, top-level, and shadow) are built CPU-side with a simple median split: items are sorted along the longest axis of the node bounds and split in half by count. There is no SAH cost model. Leaf nodes hold up to `BvhLeafTriangleCount` (4) triangles for per-mesh BVHs. Traversal pushes both children without near-first ordering, so closer hits do not necessarily prune farther nodes early (see the roadmap for the proposed ordering improvement). The traversal stack is fixed at 64 entries.
+All BVHs in this project (per-mesh, top-level, and shadow) are built CPU-side with a surface area heuristic (SAH) split: for each axis the build sorts items by centroid, sweeps every candidate split, and scores it as `SA(left) * leftCount + SA(right) * rightCount`, choosing the lowest-cost split across all three axes. `HalfSurfaceArea` provides the SA term, `FindTriangleSahSplit` drives per-mesh splits, and `FindTopLevelSahSplit` drives top-level/shadow splits; both fall back to a longest-axis median split if no positive-area split is found, and reuse a shared `_sahSuffixArea` scratch buffer (grown via `EnsureSahScratch`) to avoid per-node allocations. Leaf nodes hold up to `BvhLeafTriangleCount` (4) triangles for per-mesh BVHs.
+
+Traversal visits children near-first: each `IntersectAabbInverse` returns the AABB entry distance, and the traversal pushes the farther child first so the nearer child is popped and traversed first. A closer hit shrinks `bestHit.distance`, so the farther child's later AABB test fails and its subtree is skipped. `IntersectAabbInverse` also takes a precomputed inverse ray direction so each traversal computes the 3 reciprocals once per ray instead of once per node; `IntersectAabb` is a thin wrapper that computes the inverse and discards the entry distance. The traversal stack is fixed at 64 entries.
 
 ## Top-Level BVH
 
@@ -33,6 +35,8 @@ The top-level BVH has traversal overhead, so small scenes can be faster with fla
 Shadow traversal uses a separate shadow-only BVH over regular spheres and mesh AABBs, excluding light spheres because lights are not shadow blockers.
 
 Shadow rays traverse the shadow-only blocker BVH when enabled, or flat-loop blockers for small scenes. They test blockers against regular sphere and mesh leaves, but not light leaves. Opaque blockers early-out immediately, while transparent blockers use the nearest transparent hit before the light distance to tint transmitted shadow light.
+
+When the scene has no transparent shadow blockers, `GetShadowTransmittance()` takes a cheaper pure-occlusion fast path through `IsShadowRayBlocked()`: a boolean traversal that returns black on the first opaque blocker and white otherwise, using `SphereOccludes()` and `MeshBvhOccludes()` (which avoid building a `RayHit` per leaf and skip the nearest-transparent-blocker bookkeeping). The scene-level flag is uploaded from C# as `_HasTransparentShadowBlockers`; `GameManager` recomputes it each frame from regular sphere opacity (`UpdateSpheres`) and mesh material opacity (`UpdateMeshChangeCache`), treating opacity `< 1` as transparent. Lights are excluded because they are not shadow blockers.
 
 Profiling with `Benchmark_ShadowBlockers` showed that this shadow-only BVH can improve shadow-heavy workloads when forced on with `shadowBvhMinObjectCount = 0`; setting the threshold above the blocker count forces the flat path for comparison.
 

@@ -7,11 +7,13 @@ The renderer lives in `Assets/Scripts/RayTracingCompute.compute`. It has one ker
 Important shader globals:
 
 - `Result`: writable output texture.
+- `AccumulationResult`: writable HDR accumulation texture used to progressively average final-color frames before exposure/tone mapping.
 - `_CameraToWorld`: camera transform matrix.
 - `_CameraInverseProjection`: inverse projection matrix for camera ray generation.
 - `_SkyboxTexture`: sampled when rays miss all geometry. Sampling in `GetSkyboxColor()` uses a non-standard equirectangular mapping with negated axes (`theta = acos(dir.y) / -PI`, `phi = atan2(dir.x, -dir.z) / -PI * 0.5`), so skybox orientation/handedness is not obvious; expect to flip or rotate textures when swapping them in.
 - `_SkyboxLight`: skybox lighting multiplier.
 - `_NumberOfPasses`: per-frame samples per pixel.
+- `_UseFrameAccumulation`, `_AccumulatedFrameCount`, `_SampleOffset`: control progressive final-color accumulation and advance deterministic sample indices across frames.
 - `_NumBounces`: maximum bounces for `TracePath()`.
 - `_DebugRenderMode`: selects final path-traced color or a debug visualization.
 - `_ShadowQuality`: soft-shadow sample budget control. Bounce-0 direct lighting takes `max(1, _ShadowQuality + 1)` stochastic area-light samples per light.
@@ -104,7 +106,9 @@ The scene also uploads a top-level BVH over ray-traced spheres, emissive light s
 
 ## Tone Mapping And Exposure
 
-After all passes are averaged, `CSMain` applies exposure and tone mapping **only when `_DebugRenderMode == DebugFinalColor`**, so debug visualizations are written with their raw diagnostic values. The final color is computed as `ACESFilmicToneMap(color * _Exposure)`, where `ACESFilmicToneMap()` is the Narkowicz 2015 ACES filmic approximation. This maps open-ended HDR radiance into `[0, 1]` so bright values roll off smoothly instead of clipping hard to white. `_Exposure` comes from `GameManager.exposure`.
+After all passes are averaged, `CSMain` optionally blends final-color HDR radiance into `AccumulationResult` using `_AccumulatedFrameCount`. This happens before exposure/tone mapping, so exposure changes can remap the accumulated HDR result without changing the stored radiance. Debug visualizations skip accumulation and are written with their raw diagnostic values.
+
+`CSMain` applies exposure and tone mapping **only when `_DebugRenderMode == DebugFinalColor`**. The final color is computed as `ACESFilmicToneMap(color * _Exposure)`, where `ACESFilmicToneMap()` is the Narkowicz 2015 ACES filmic approximation. This maps open-ended HDR radiance into `[0, 1]` so bright values roll off smoothly instead of clipping hard to white. `_Exposure` comes from `GameManager.exposure`.
 
 ## Depth Of Field
 

@@ -27,12 +27,10 @@ These options should improve perceived quality with little or no extra ray-inter
 
 ## More Expensive Rendering Improvements
 
-- Add frame accumulation for progressive refinement when camera and scene are static.
-- Reset accumulation when camera, focus, quality settings, material values, object transforms, or render size change.
 - Further improve diffuse indirect lighting with lower-variance sampling and material-specific BRDF/PDF handling as new materials are added.
 - Improve transparent absorption and next-event estimation toward a more physically based formulation.
 - Improve importance-sampled light selection further: fold the surface normal (N·L) and a coarse visibility estimate into `LightImportanceWeight`, and consider a precomputed/global light CDF or a spatial light structure so many-light scenes scale beyond the current `MaxImportanceLights` (`128`) cap without the per-hit weight pass. Raising the cap is cheap but increases the per-hit weight loop cost.
-- Pair the random/importance light strategies with frame accumulation so their per-frame noise averages out on static views; without accumulation, the noise must be reduced by raising `lightSampleCount` or `numberOfPasses`.
+- Tune the random/importance light strategies now that frame accumulation can average their per-frame noise in static views; without accumulation, the noise must still be reduced by raising `lightSampleCount` or `numberOfPasses`.
 - Accumulate transmittance through multiple transparent shadow blockers instead of only using the nearest transparent blocker.
 - Improve glass refraction with proper sphere entry/exit traversal, Snell-law behavior, and distance-based absorption.
 - Improve direct light sampling by sampling sphere lights by visible solid angle instead of approximate disk samples.
@@ -40,10 +38,8 @@ These options should improve perceived quality with little or no extra ray-inter
 
 ## Geometry Improvements
 
-- Improve top-level BVH build quality and traversal ordering if scenes grow to many separate objects; mesh triangles already use per-mesh BVHs.
-- Add near-first traversal ordering for top-level and per-mesh BVHs so closer hits reduce `bestHit.distance` earlier and cull farther nodes sooner.
-- Consider precomputing or carrying inverse ray direction through BVH traversal to avoid repeated divides in AABB tests.
-- Consider a specialized opaque-shadow fast path that tests only whether an opaque blocker exists before the light distance, while preserving the current nearest-transparent-blocker path when transparent objects are present.
+- Top-level, shadow, and per-mesh BVHs now build with a surface area heuristic (SAH) split (`FindTriangleSahSplit`/`FindTopLevelSahSplit`), traverse children near-first, and carry a precomputed inverse ray direction through `IntersectAabbInverse`; further build-quality work (e.g. binned SAH, spatial splits) is only worth it if scenes grow much larger. See `06-shader-intersections-and-bvh.md`.
+- The opaque-shadow fast path is implemented: when `_HasTransparentShadowBlockers` is 0, shadow rays use `IsShadowRayBlocked()` for a boolean occlusion test instead of nearest-transparent-blocker bookkeeping. A possible extension is per-light or per-ray transparency classification instead of the current scene-level flag.
 - Add imported vertex normal support for smoother mesh shading.
 - Add texture/UV support if mesh materials need more than flat `RayMaterial` colors.
 - Improve mesh refraction with robust closed-volume traversal, nested media support, internal reflection handling, and distance-based absorption.

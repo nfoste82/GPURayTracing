@@ -1,9 +1,17 @@
 ﻿// Each #kernel tells which function to compile; you can have many kernels
 #pragma kernel CSMain
 
+// Debug render modes (normals, albedo, BVH visualization, etc.) pull in a second set of
+// scene-intersection/scatter code. Compiling that into the default final-color variant roughly
+// doubled the kernel's traversal code and dominated shader compile time. This keyword keeps the
+// debug code out of the default variant; GameManager enables DEBUG_RENDER only when a debug mode
+// is selected. The non-debug variant (the hot path) compiles without any debug intersection code.
+#pragma multi_compile _ DEBUG_RENDER
+
 // Create a RenderTexture with enableRandomWrite flag and set it
 // with cs.SetTexture
 RWTexture2D<float4> Result;
+RWTexture2D<float4> AccumulationResult;
 
 float4x4 _CameraToWorld;
 float4x4 _CameraInverseProjection;
@@ -20,6 +28,8 @@ int _DebugRenderMode;
 int _MaxLightSamples;
 int _LightSamplingStrategy;
 int _LightSampleCount;
+int _UseFrameAccumulation;
+int _AccumulatedFrameCount;
 float _ShadowRandomness;
 float _LightFalloffScale;
 float _FocalDistance;
@@ -27,6 +37,7 @@ float _GroundSmoothness;
 float _Exposure;
 
 uint _Seed;
+uint _SampleOffset;
 
 int _NumSpheres;
 int _NumLights;
@@ -34,6 +45,11 @@ int _NumTriangles;
 int _NumMeshes;
 int _NumTopLevelBvhNodes;
 int _NumShadowBvhNodes;
+
+// 1 when at least one shadow-casting blocker (regular sphere or mesh triangle) is transparent.
+// When 0, GetShadowTransmittance() takes a cheaper pure-occlusion path that returns black on
+// the first opaque blocker and never does nearest-transparent-blocker bookkeeping.
+int _HasTransparentShadowBlockers;
 
 static const float PI = 3.141593f;
 static const float MaxRefractionDiff = 4;
@@ -317,6 +333,29 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
     }
 }
 
+// Boolean occlusion test for opaque shadow blockers: returns true when the sphere blocks the ray
+// before maxDistance. Avoids building a RayHit, used by the pure-occlusion shadow fast path when
+// the scene has no transparent shadow blockers.
+bool SphereOccludes(Ray ray, Sphere sphere, float maxDistance)
+{
+    float3 d = sphere.position - ray.origin;
+    float p1 = dot(ray.direction, d);
+    if (p1 < 0)
+    {
+        return false;
+    }
+
+    float p2sqr = p1 * p1 - dot(d, d) + sphere.radius * sphere.radius;
+    if (p2sqr < 0)
+    {
+        return false;
+    }
+
+    float p2 = sqrt(p2sqr);
+    float t = p1 - p2 > 0 ? p1 - p2 : p1 + p2;
+    return t > 0.001f && t < maxDistance;
+}
+
 bool IntersectTriangleRaw(Ray ray, MeshTriangle meshTriangle, out float hitDistance, out float3 normal)
 {
     float3 edge1 = meshTriangle.vertex1 - meshTriangle.vertex0;
@@ -385,22 +424,35 @@ void IntersectTriangle(Ray ray, inout RayHit bestHit, MeshTriangle meshTriangle)
     }
 }
 
-bool IntersectAabb(Ray ray, float3 boundsMin, float3 boundsMax, float maxDistance)
+// Slab AABB test that takes a precomputed inverse ray direction so BVH traversal does not
+// repeat the 3 divides for every node it visits. Returns the entry distance (tMin, clamped to
+// 0 when the ray origin is inside the box) through entryDistance so callers can order child
+// visits near-first; entryDistance is only valid when the function returns true.
+bool IntersectAabbInverse(float3 rayOrigin, float3 inverseDirection, float3 boundsMin, float3 boundsMax, float maxDistance, out float entryDistance)
 {
-    float3 inverseDirection = 1.0f / ray.direction;
-    float3 t0 = (boundsMin - ray.origin) * inverseDirection;
-    float3 t1 = (boundsMax - ray.origin) * inverseDirection;
+    float3 t0 = (boundsMin - rayOrigin) * inverseDirection;
+    float3 t1 = (boundsMax - rayOrigin) * inverseDirection;
     float3 tMin3 = min(t0, t1);
     float3 tMax3 = max(t0, t1);
     float tMin = max(max(tMin3.x, tMin3.y), tMin3.z);
     float tMax = min(min(tMax3.x, tMax3.y), tMax3.z);
 
-    return tMax >= max(0.0f, tMin) && tMin < maxDistance;
+    entryDistance = max(0.0f, tMin);
+    return tMax >= entryDistance && tMin < maxDistance;
+}
+
+bool IntersectAabb(Ray ray, float3 boundsMin, float3 boundsMax, float maxDistance)
+{
+    float3 inverseDirection = 1.0f / ray.direction;
+    float entryDistance;
+    return IntersectAabbInverse(ray.origin, inverseDirection, boundsMin, boundsMax, maxDistance, entryDistance);
 }
 
 void IntersectMeshBvh(Ray ray, inout RayHit bestHit, MeshInfo meshInfo)
 {
-    if (meshInfo.triangleCount <= 0 || !IntersectAabb(ray, meshInfo.boundsMin, meshInfo.boundsMax, bestHit.distance))
+    float3 inverseDirection = 1.0f / ray.direction;
+    float ignoredEntry;
+    if (meshInfo.triangleCount <= 0 || !IntersectAabbInverse(ray.origin, inverseDirection, meshInfo.boundsMin, meshInfo.boundsMax, bestHit.distance, ignoredEntry))
     {
         return;
     }
@@ -409,18 +461,15 @@ void IntersectMeshBvh(Ray ray, inout RayHit bestHit, MeshInfo meshInfo)
     int stackCount = 0;
     stack[stackCount++] = meshInfo.rootNodeIndex;
 
+    [loop]
     while (stackCount > 0)
     {
         int nodeIndex = stack[--stackCount];
         BvhNode node = _BvhNodes[nodeIndex];
 
-        if (!IntersectAabb(ray, node.boundsMin, node.boundsMax, bestHit.distance))
-        {
-            continue;
-        }
-
         if (node.triangleCount > 0)
         {
+            [loop]
             for (int i = 0; i < node.triangleCount; i++)
             {
                 IntersectTriangle(ray, bestHit, _Triangles[node.triangleStart + i]);
@@ -428,21 +477,41 @@ void IntersectMeshBvh(Ray ray, inout RayHit bestHit, MeshInfo meshInfo)
             continue;
         }
 
-        if (node.leftChildIndex >= 0 && stackCount < BvhStackSize)
-        {
-            stack[stackCount++] = node.leftChildIndex;
-        }
+        // Test both children, then push the farther one first so the nearer child is popped
+        // and traversed first. A closer hit shrinks bestHit.distance, letting the farther
+        // child fail its AABB test and skip its whole subtree.
+        int leftIndex = node.leftChildIndex;
+        int rightIndex = node.rightChildIndex;
+        float leftEntry = 1.#INF;
+        float rightEntry = 1.#INF;
+        bool hitLeft = leftIndex >= 0 &&
+            IntersectAabbInverse(ray.origin, inverseDirection, _BvhNodes[leftIndex].boundsMin, _BvhNodes[leftIndex].boundsMax, bestHit.distance, leftEntry);
+        bool hitRight = rightIndex >= 0 &&
+            IntersectAabbInverse(ray.origin, inverseDirection, _BvhNodes[rightIndex].boundsMin, _BvhNodes[rightIndex].boundsMax, bestHit.distance, rightEntry);
 
-        if (node.rightChildIndex >= 0 && stackCount < BvhStackSize)
+        if (hitLeft && hitRight)
         {
-            stack[stackCount++] = node.rightChildIndex;
+            int nearIndex = leftEntry <= rightEntry ? leftIndex : rightIndex;
+            int farIndex = leftEntry <= rightEntry ? rightIndex : leftIndex;
+            if (stackCount < BvhStackSize) { stack[stackCount++] = farIndex; }
+            if (stackCount < BvhStackSize) { stack[stackCount++] = nearIndex; }
+        }
+        else if (hitLeft && stackCount < BvhStackSize)
+        {
+            stack[stackCount++] = leftIndex;
+        }
+        else if (hitRight && stackCount < BvhStackSize)
+        {
+            stack[stackCount++] = rightIndex;
         }
     }
 }
 
 bool IntersectMeshBvhForShadow(Ray ray, float maxDistance, inout RayHit nearestTransparentHit, MeshInfo meshInfo)
 {
-    if (meshInfo.triangleCount <= 0 || !IntersectAabb(ray, meshInfo.boundsMin, meshInfo.boundsMax, maxDistance))
+    float3 inverseDirection = 1.0f / ray.direction;
+    float ignoredEntry;
+    if (meshInfo.triangleCount <= 0 || !IntersectAabbInverse(ray.origin, inverseDirection, meshInfo.boundsMin, meshInfo.boundsMax, maxDistance, ignoredEntry))
     {
         return false;
     }
@@ -451,18 +520,15 @@ bool IntersectMeshBvhForShadow(Ray ray, float maxDistance, inout RayHit nearestT
     int stackCount = 0;
     stack[stackCount++] = meshInfo.rootNodeIndex;
 
+    [loop]
     while (stackCount > 0)
     {
         int nodeIndex = stack[--stackCount];
         BvhNode node = _BvhNodes[nodeIndex];
 
-        if (!IntersectAabb(ray, node.boundsMin, node.boundsMax, maxDistance))
-        {
-            continue;
-        }
-
         if (node.triangleCount > 0)
         {
+            [loop]
             for (int i = 0; i < node.triangleCount; i++)
             {
                 RayHit blockerHit = CreateRayHit();
@@ -487,14 +553,87 @@ bool IntersectMeshBvhForShadow(Ray ray, float maxDistance, inout RayHit nearestT
             continue;
         }
 
-        if (node.leftChildIndex >= 0 && stackCount < BvhStackSize)
+        int leftIndex = node.leftChildIndex;
+        int rightIndex = node.rightChildIndex;
+        float leftEntry;
+        float rightEntry;
+        bool hitLeft = leftIndex >= 0 &&
+            IntersectAabbInverse(ray.origin, inverseDirection, _BvhNodes[leftIndex].boundsMin, _BvhNodes[leftIndex].boundsMax, maxDistance, leftEntry);
+        bool hitRight = rightIndex >= 0 &&
+            IntersectAabbInverse(ray.origin, inverseDirection, _BvhNodes[rightIndex].boundsMin, _BvhNodes[rightIndex].boundsMax, maxDistance, rightEntry);
+
+        if (hitLeft && hitRight)
         {
-            stack[stackCount++] = node.leftChildIndex;
+            int nearIndex = leftEntry <= rightEntry ? leftIndex : rightIndex;
+            int farIndex = leftEntry <= rightEntry ? rightIndex : leftIndex;
+            if (stackCount < BvhStackSize) { stack[stackCount++] = farIndex; }
+            if (stackCount < BvhStackSize) { stack[stackCount++] = nearIndex; }
+        }
+        else if (hitLeft && stackCount < BvhStackSize)
+        {
+            stack[stackCount++] = leftIndex;
+        }
+        else if (hitRight && stackCount < BvhStackSize)
+        {
+            stack[stackCount++] = rightIndex;
+        }
+    }
+
+    return false;
+}
+
+// Pure-occlusion mesh traversal for the opaque-only shadow fast path. Returns true on the first
+// triangle that blocks the ray before maxDistance. Assumes the scene has no transparent shadow
+// blockers, so any hit fully occludes and the search can stop immediately.
+bool MeshBvhOccludes(Ray ray, float maxDistance, MeshInfo meshInfo)
+{
+    float3 inverseDirection = 1.0f / ray.direction;
+    float ignoredEntry;
+    if (meshInfo.triangleCount <= 0 || !IntersectAabbInverse(ray.origin, inverseDirection, meshInfo.boundsMin, meshInfo.boundsMax, maxDistance, ignoredEntry))
+    {
+        return false;
+    }
+
+    int stack[BvhStackSize];
+    int stackCount = 0;
+    stack[stackCount++] = meshInfo.rootNodeIndex;
+
+    [loop]
+    while (stackCount > 0)
+    {
+        int nodeIndex = stack[--stackCount];
+        BvhNode node = _BvhNodes[nodeIndex];
+
+        if (node.triangleCount > 0)
+        {
+            [loop]
+            for (int i = 0; i < node.triangleCount; i++)
+            {
+                float hitDistance;
+                float3 hitNormal;
+                if (IntersectTriangleRaw(ray, _Triangles[node.triangleStart + i], hitDistance, hitNormal)
+                    && hitDistance > 0.001f && hitDistance < maxDistance)
+                {
+                    return true;
+                }
+            }
+            continue;
         }
 
-        if (node.rightChildIndex >= 0 && stackCount < BvhStackSize)
+        int leftIndex = node.leftChildIndex;
+        int rightIndex = node.rightChildIndex;
+        float ignoredLeft;
+        float ignoredRight;
+        if (leftIndex >= 0 && stackCount < BvhStackSize &&
+            IntersectAabbInverse(ray.origin, inverseDirection, _BvhNodes[leftIndex].boundsMin, _BvhNodes[leftIndex].boundsMax, maxDistance, ignoredLeft))
         {
-            stack[stackCount++] = node.rightChildIndex;
+            stack[stackCount++] = leftIndex;
+        }
+
+        if (rightIndex >= 0 && stackCount < BvhStackSize &&
+            IntersectAabbInverse(ray.origin, inverseDirection, _BvhNodes[rightIndex].boundsMin, _BvhNodes[rightIndex].boundsMax, maxDistance, ignoredRight))
+        {
+            stack[stackCount++] = rightIndex;
         }
     }
 
@@ -506,7 +645,9 @@ bool IntersectMeshBvhForExit(Ray ray, MeshInfo meshInfo, out float exitDistance,
     exitDistance = 1.#INF;
     exitNormal = float3(0.0f, 1.0f, 0.0f);
 
-    if (meshInfo.triangleCount <= 0 || !IntersectAabb(ray, meshInfo.boundsMin, meshInfo.boundsMax, exitDistance))
+    float3 inverseDirection = 1.0f / ray.direction;
+    float ignoredEntry;
+    if (meshInfo.triangleCount <= 0 || !IntersectAabbInverse(ray.origin, inverseDirection, meshInfo.boundsMin, meshInfo.boundsMax, exitDistance, ignoredEntry))
     {
         return false;
     }
@@ -515,18 +656,15 @@ bool IntersectMeshBvhForExit(Ray ray, MeshInfo meshInfo, out float exitDistance,
     int stackCount = 0;
     stack[stackCount++] = meshInfo.rootNodeIndex;
 
+    [loop]
     while (stackCount > 0)
     {
         int nodeIndex = stack[--stackCount];
         BvhNode node = _BvhNodes[nodeIndex];
 
-        if (!IntersectAabb(ray, node.boundsMin, node.boundsMax, exitDistance))
-        {
-            continue;
-        }
-
         if (node.triangleCount > 0)
         {
+            [loop]
             for (int i = 0; i < node.triangleCount; i++)
             {
                 float triangleDistance;
@@ -540,14 +678,29 @@ bool IntersectMeshBvhForExit(Ray ray, MeshInfo meshInfo, out float exitDistance,
             continue;
         }
 
-        if (node.leftChildIndex >= 0 && stackCount < BvhStackSize)
-        {
-            stack[stackCount++] = node.leftChildIndex;
-        }
+        int leftIndex = node.leftChildIndex;
+        int rightIndex = node.rightChildIndex;
+        float leftEntry;
+        float rightEntry;
+        bool hitLeft = leftIndex >= 0 &&
+            IntersectAabbInverse(ray.origin, inverseDirection, _BvhNodes[leftIndex].boundsMin, _BvhNodes[leftIndex].boundsMax, exitDistance, leftEntry);
+        bool hitRight = rightIndex >= 0 &&
+            IntersectAabbInverse(ray.origin, inverseDirection, _BvhNodes[rightIndex].boundsMin, _BvhNodes[rightIndex].boundsMax, exitDistance, rightEntry);
 
-        if (node.rightChildIndex >= 0 && stackCount < BvhStackSize)
+        if (hitLeft && hitRight)
         {
-            stack[stackCount++] = node.rightChildIndex;
+            int nearIndex = leftEntry <= rightEntry ? leftIndex : rightIndex;
+            int farIndex = leftEntry <= rightEntry ? rightIndex : leftIndex;
+            if (stackCount < BvhStackSize) { stack[stackCount++] = farIndex; }
+            if (stackCount < BvhStackSize) { stack[stackCount++] = nearIndex; }
+        }
+        else if (hitLeft && stackCount < BvhStackSize)
+        {
+            stack[stackCount++] = leftIndex;
+        }
+        else if (hitRight && stackCount < BvhStackSize)
+        {
+            stack[stackCount++] = rightIndex;
         }
     }
 
@@ -563,16 +716,19 @@ RayHit GetNearestIntersection(Ray ray)
 	if (_NumTopLevelBvhNodes <= 0)
 	{
 		int i;
+		[loop]
 		for (i = 0; i < _NumSpheres; i++)
 		{
 			IntersectSphere(ray, bestHit, _Spheres[i]);
 		}
 
+		[loop]
 		for (i = 0; i < _NumLights; i++)
 		{
 			IntersectSphere(ray, bestHit, _Lights[i]);
 		}
 
+		[loop]
 		for (i = 0; i < _NumMeshes; i++)
 		{
 			IntersectMeshBvh(ray, bestHit, _Meshes[i]);
@@ -585,15 +741,13 @@ RayHit GetNearestIntersection(Ray ray)
 	int stackCount = 0;
 	stack[stackCount++] = 0;
 
+	float3 inverseDirection = 1.0f / ray.direction;
+
+	[loop]
 	while (stackCount > 0)
 	{
 		int nodeIndex = stack[--stackCount];
 		TopLevelBvhNode node = _TopLevelBvhNodes[nodeIndex];
-
-		if (!IntersectAabb(ray, node.boundsMin, node.boundsMax, bestHit.distance))
-		{
-			continue;
-		}
 
 		if (node.objectType == TopLevelObjectTypeSphere)
 		{
@@ -613,14 +767,31 @@ RayHit GetNearestIntersection(Ray ray)
 			continue;
 		}
 
-		if (node.leftChildIndex >= 0 && stackCount < BvhStackSize)
-		{
-			stack[stackCount++] = node.leftChildIndex;
-		}
+		// Internal node: test both children and push farther-first so the nearer subtree is
+		// traversed first, shrinking bestHit.distance to cull the farther subtree sooner.
+		int leftIndex = node.leftChildIndex;
+		int rightIndex = node.rightChildIndex;
+		float leftEntry;
+		float rightEntry;
+		bool hitLeft = leftIndex >= 0 &&
+			IntersectAabbInverse(ray.origin, inverseDirection, _TopLevelBvhNodes[leftIndex].boundsMin, _TopLevelBvhNodes[leftIndex].boundsMax, bestHit.distance, leftEntry);
+		bool hitRight = rightIndex >= 0 &&
+			IntersectAabbInverse(ray.origin, inverseDirection, _TopLevelBvhNodes[rightIndex].boundsMin, _TopLevelBvhNodes[rightIndex].boundsMax, bestHit.distance, rightEntry);
 
-		if (node.rightChildIndex >= 0 && stackCount < BvhStackSize)
+		if (hitLeft && hitRight)
 		{
-			stack[stackCount++] = node.rightChildIndex;
+			int nearIndex = leftEntry <= rightEntry ? leftIndex : rightIndex;
+			int farIndex = leftEntry <= rightEntry ? rightIndex : leftIndex;
+			if (stackCount < BvhStackSize) { stack[stackCount++] = farIndex; }
+			if (stackCount < BvhStackSize) { stack[stackCount++] = nearIndex; }
+		}
+		else if (hitLeft && stackCount < BvhStackSize)
+		{
+			stack[stackCount++] = leftIndex;
+		}
+		else if (hitRight && stackCount < BvhStackSize)
+		{
+			stack[stackCount++] = rightIndex;
 		}
 	}
 
@@ -682,14 +853,104 @@ float GetDirectLightFalloff(float distanceToLight, float lightRadius)
     return saturate(areaScale / distanceScale);
 }
 
+// Pure-occlusion shadow query used when the scene has no transparent shadow blockers
+// (_HasTransparentShadowBlockers == 0). Returns true as soon as any opaque blocker is found
+// before the light, skipping all the nearest-transparent-blocker bookkeeping and the per-leaf
+// RayHit construction the general path needs. Mirrors the structure of GetShadowTransmittance's
+// traversal (flat loops for small scenes, shadow BVH otherwise) but returns a boolean.
+bool IsShadowRayBlocked(Ray rayToLight, float distanceToLight)
+{
+    if (_NumShadowBvhNodes <= 0)
+    {
+        int j;
+        [loop]
+        for (j = 0; j < _NumSpheres; j++)
+        {
+            if (SphereOccludes(rayToLight, _Spheres[j], distanceToLight))
+            {
+                return true;
+            }
+        }
+
+        [loop]
+        for (j = 0; j < _NumMeshes; j++)
+        {
+            if (MeshBvhOccludes(rayToLight, distanceToLight, _Meshes[j]))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    int stack[BvhStackSize];
+    int stackCount = 0;
+    stack[stackCount++] = 0;
+
+    float3 inverseDirection = 1.0f / rayToLight.direction;
+
+    [loop]
+    while (stackCount > 0)
+    {
+        int nodeIndex = stack[--stackCount];
+        TopLevelBvhNode node = _ShadowBvhNodes[nodeIndex];
+
+        if (node.objectType == TopLevelObjectTypeSphere)
+        {
+            if (SphereOccludes(rayToLight, _Spheres[node.objectIndex], distanceToLight))
+            {
+                return true;
+            }
+            continue;
+        }
+
+        if (node.objectType == TopLevelObjectTypeMesh)
+        {
+            if (MeshBvhOccludes(rayToLight, distanceToLight, _Meshes[node.objectIndex]))
+            {
+                return true;
+            }
+            continue;
+        }
+
+        int leftIndex = node.leftChildIndex;
+        int rightIndex = node.rightChildIndex;
+        float ignoredLeft;
+        float ignoredRight;
+        if (leftIndex >= 0 && stackCount < BvhStackSize &&
+            IntersectAabbInverse(rayToLight.origin, inverseDirection, _ShadowBvhNodes[leftIndex].boundsMin, _ShadowBvhNodes[leftIndex].boundsMax, distanceToLight, ignoredLeft))
+        {
+            stack[stackCount++] = leftIndex;
+        }
+
+        if (rightIndex >= 0 && stackCount < BvhStackSize &&
+            IntersectAabbInverse(rayToLight.origin, inverseDirection, _ShadowBvhNodes[rightIndex].boundsMin, _ShadowBvhNodes[rightIndex].boundsMax, distanceToLight, ignoredRight))
+        {
+            stack[stackCount++] = rightIndex;
+        }
+    }
+
+    return false;
+}
+
 float3 GetShadowTransmittance(Ray rayToLight, float distanceToLight)
 {
+    // Opaque-only fast path: a single occlusion query, no transparent-blocker tracking.
+    if (_HasTransparentShadowBlockers == 0)
+    {
+        return IsShadowRayBlocked(rayToLight, distanceToLight)
+            ? float3(0.0f, 0.0f, 0.0f)
+            : float3(1.0f, 1.0f, 1.0f);
+    }
+
     RayHit nearestTransparentHit = CreateRayHit();
     nearestTransparentHit.distance = distanceToLight;
 
     if (_NumShadowBvhNodes <= 0)
     {
         int j;
+        [loop]
         for (j = 0; j < _NumSpheres; j++)
         {
             RayHit blockerHit = CreateRayHit();
@@ -712,6 +973,7 @@ float3 GetShadowTransmittance(Ray rayToLight, float distanceToLight)
             }
         }
 
+        [loop]
         for (j = 0; j < _NumMeshes; j++)
         {
             if (IntersectMeshBvhForShadow(rayToLight, distanceToLight, nearestTransparentHit, _Meshes[j]))
@@ -726,15 +988,13 @@ float3 GetShadowTransmittance(Ray rayToLight, float distanceToLight)
         int stackCount = 0;
         stack[stackCount++] = 0;
 
+        float3 inverseDirection = 1.0f / rayToLight.direction;
+
+        [loop]
         while (stackCount > 0)
         {
             int nodeIndex = stack[--stackCount];
             TopLevelBvhNode node = _ShadowBvhNodes[nodeIndex];
-
-            if (!IntersectAabb(rayToLight, node.boundsMin, node.boundsMax, distanceToLight))
-            {
-                continue;
-            }
 
             if (node.objectType == TopLevelObjectTypeSphere)
             {
@@ -770,14 +1030,31 @@ float3 GetShadowTransmittance(Ray rayToLight, float distanceToLight)
                 continue;
             }
 
-            if (node.leftChildIndex >= 0 && stackCount < BvhStackSize)
-            {
-                stack[stackCount++] = node.leftChildIndex;
-            }
+            // Internal node: visit the nearer child first. For opaque blockers this finds the
+            // occluder sooner and lets the early-out (return black) skip the rest of the tree.
+            int leftIndex = node.leftChildIndex;
+            int rightIndex = node.rightChildIndex;
+            float leftEntry;
+            float rightEntry;
+            bool hitLeft = leftIndex >= 0 &&
+                IntersectAabbInverse(rayToLight.origin, inverseDirection, _ShadowBvhNodes[leftIndex].boundsMin, _ShadowBvhNodes[leftIndex].boundsMax, distanceToLight, leftEntry);
+            bool hitRight = rightIndex >= 0 &&
+                IntersectAabbInverse(rayToLight.origin, inverseDirection, _ShadowBvhNodes[rightIndex].boundsMin, _ShadowBvhNodes[rightIndex].boundsMax, distanceToLight, rightEntry);
 
-            if (node.rightChildIndex >= 0 && stackCount < BvhStackSize)
+            if (hitLeft && hitRight)
             {
-                stack[stackCount++] = node.rightChildIndex;
+                int nearIndex = leftEntry <= rightEntry ? leftIndex : rightIndex;
+                int farIndex = leftEntry <= rightEntry ? rightIndex : leftIndex;
+                if (stackCount < BvhStackSize) { stack[stackCount++] = farIndex; }
+                if (stackCount < BvhStackSize) { stack[stackCount++] = nearIndex; }
+            }
+            else if (hitLeft && stackCount < BvhStackSize)
+            {
+                stack[stackCount++] = leftIndex;
+            }
+            else if (hitRight && stackCount < BvhStackSize)
+            {
+                stack[stackCount++] = rightIndex;
             }
         }
     }
@@ -813,6 +1090,7 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount, i
     CreateBasisFromNormal(ptToLight, tangent, bitangent);
 
     int sampleIndex;
+    [loop]
     for (sampleIndex = 0; sampleIndex < sampleCount; sampleIndex++)
     {
         float2 diskSample = SampleDisk(rngState) * _Lights[lightIndex].radius * max(0.0f, _ShadowRandomness);
@@ -893,6 +1171,7 @@ int SelectLightForDraw(int iteration, int drawCount, int lightCount, RayHit hit,
         // Accumulate total importance weight (cheap, no BVH traversal, no large array).
         float totalWeight = 0.0f;
         int w;
+        [loop]
         for (w = 0; w < weightedCount; w++)
         {
             totalWeight += LightImportanceWeight(w, hit);
@@ -910,6 +1189,7 @@ int SelectLightForDraw(int iteration, int drawCount, int lightCount, RayHit hit,
         int chosen = weightedCount - 1;
         float chosenWeight = LightImportanceWeight(chosen, hit);
         int c;
+        [loop]
         for (c = 0; c < weightedCount; c++)
         {
             float weight = LightImportanceWeight(c, hit);
@@ -1143,6 +1423,7 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, RayHit hit)
     float3 exitNormal = normal;
 
     int i;
+    [loop]
     for (i = 0; i < _NumMeshes; i++)
     {
         MeshInfo meshInfo = _Meshes[i];
@@ -1248,6 +1529,7 @@ float3 TracePath(Ray ray, inout uint rngState)
     float3 radiance = float3(0.0f, 0.0f, 0.0f);
     float3 throughput = float3(1.0f, 1.0f, 1.0f);
 
+    [loop]
     for (int bounce = 0; bounce < _NumBounces; bounce++)
     {
         RayHit hit = GetNearestIntersection(ray);
@@ -1291,6 +1573,7 @@ float3 TracePath(Ray ray, inout uint rngState)
     return radiance;
 }
 
+#if DEBUG_RENDER
 float3 GetDebugRenderColor(Ray ray, inout uint rngState)
 {
     RayHit hit = GetNearestIntersection(ray);
@@ -1360,6 +1643,7 @@ float3 GetDebugRenderColor(Ray ray, inout uint rngState)
         float3 throughput = float3(1.0f, 1.0f, 1.0f);
         int completedBounces = 0;
 
+        [loop]
         for (int bounce = 0; bounce < _NumBounces; bounce++)
         {
             hit = GetNearestIntersection(ray);
@@ -1395,6 +1679,7 @@ float3 GetDebugRenderColor(Ray ray, inout uint rngState)
 
     return TracePath(ray, rngState);
 }
+#endif // DEBUG_RENDER
 
 // Narkowicz 2015 ACES filmic tone mapping approximation. Maps the open-ended
 // HDR radiance range into [0,1] so bright values roll off smoothly instead of
@@ -1418,9 +1703,10 @@ void CSMain (uint3 id : SV_DispatchThreadID)
 
     // Transform pixel to [-1,1] range
     float3 result = float3(0.0f, 0.0f, 0.0f);
+    [loop]
     for (int i = 0; i < _NumberOfPasses; i++)
     {
-        uint rngState = CreateRngState(id.xy, i);
+        uint rngState = CreateRngState(id.xy, _SampleOffset + (uint)i);
         float2 uv = ((id.xy + float2(rand(rngState), rand(rngState))) / float2(width, height)) * 2.0f - 1.0f;
         Ray ray = CreateCameraRay(uv);
 
@@ -1437,10 +1723,24 @@ void CSMain (uint3 id : SV_DispatchThreadID)
             ray.direction = normalize(focalPoint - ray.origin);
         }
 
+#if DEBUG_RENDER
         result += _DebugRenderMode == DebugFinalColor ? TracePath(ray, rngState) : GetDebugRenderColor(ray, rngState);
+#else
+        result += TracePath(ray, rngState);
+#endif
     }
 
     float3 color = result / _NumberOfPasses;
+
+    if (_UseFrameAccumulation != 0 && _DebugRenderMode == DebugFinalColor)
+    {
+        float previousFrameCount = max(0, _AccumulatedFrameCount);
+        if (previousFrameCount > 0.0f)
+        {
+            color = (AccumulationResult[id.xy].rgb * previousFrameCount + color) / (previousFrameCount + 1.0f);
+        }
+        AccumulationResult[id.xy] = float4(color, 1);
+    }
 
     // Only tone map the final path-traced color. Debug visualizations are written
     // as-is so their values stay readable/diagnostic.
