@@ -13,6 +13,9 @@ public class RayMaterial : MonoBehaviour
 
     public Color32 Color;
 
+    [Tooltip("Optional albedo texture for mesh objects. Sphere materials still use Color only.")]
+    public Texture2D AlbedoTexture;
+
     [Range(0f, 1f)]
     public float Smoothness = 0.5f;
 

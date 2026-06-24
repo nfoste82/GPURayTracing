@@ -20,6 +20,7 @@ Fields:
 
 - `Type`: selects `Diffuse`, `Metal`, or `Glass` scattering in the compute shader. Defaults to `Metal`. (Mesh primitives created via `RayMeshPrimitive` override this to `Glass` in `Reset()`.)
 - `Color`: uploaded as normalized RGB and used as albedo/tint.
+- `AlbedoTexture`: optional mesh-only albedo texture. Mesh triangle UVs are uploaded and sampled from a fixed-size texture array; the sampled texture color multiplies `Color`. Sphere materials ignore this field.
 - `Smoothness`: controls metal/glass reflection roughness by randomizing the hit normal. Higher values preserve the normal more closely.
 - `Opacity`: `1` is opaque. Values below `1` allow glass/transparent transmission. Note that any opacity below `1` makes the shader treat the hit as glass (see below), regardless of `Type`.
 - `RefractionIndex`: used by glass Fresnel reflectance and the custom approximate refraction path.

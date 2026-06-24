@@ -11,6 +11,7 @@ Important shader globals:
 - `_CameraToWorld`: camera transform matrix.
 - `_CameraInverseProjection`: inverse projection matrix for camera ray generation.
 - `_SkyboxTexture`: sampled when rays miss all geometry. Sampling in `GetSkyboxColor()` uses a non-standard equirectangular mapping with negated axes (`theta = acos(dir.y) / -PI`, `phi = atan2(dir.x, -dir.z) / -PI * 0.5`), so skybox orientation/handedness is not obvious; expect to flip or rotate textures when swapping them in.
+- `_MeshAlbedoTextures`: fixed-size `Texture2DArray` containing active mesh albedo textures. Triangle hits interpolate uploaded UVs and sample `textureIndex`; untextured meshes keep using `RayMaterial.Color` only.
 - `_SkyboxLight`: skybox lighting multiplier.
 - `_NumberOfPasses`: per-frame samples per pixel.
 - `_UseFrameAccumulation`, `_AccumulatedFrameCount`, `_SampleOffset`: control progressive final-color accumulation and advance deterministic sample indices across frames.
@@ -66,15 +67,19 @@ struct MeshTriangle
     float3 vertex2;
     float3 normal;
     float3 color;
+    float2 uv0;
+    float2 uv1;
+    float2 uv2;
     float smoothness;
     float opacity;
     float refraction;
     int materialType;
     int meshIndex;
+    int textureIndex;
 };
 ```
 
-`meshIndex` identifies which uploaded triangles belong to the same mesh object. It is used by approximate closed-mesh refraction to find the exit face.
+`meshIndex` identifies which uploaded triangles belong to the same mesh object. It is used by approximate closed-mesh refraction to find the exit face. `textureIndex` selects a slice of `_MeshAlbedoTextures`; `-1` means no texture.
 
 ## Material Type Constants
 

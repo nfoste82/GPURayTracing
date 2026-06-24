@@ -79,18 +79,22 @@ Graphics.Blit(_outputTexture, dest);
 - `float refraction`
 - `int materialType`
 
-`RebuildBuffers()` also releases and recreates triangle, mesh-info, per-mesh BVH-node, and top-level BVH-node buffers. The triangle buffer uses stride `80`, matching the HLSL `MeshTriangle` struct layout:
+`RebuildBuffers()` also releases and recreates triangle, mesh-info, per-mesh BVH-node, and top-level BVH-node buffers. The triangle buffer uses stride `112`, matching the HLSL `MeshTriangle` struct layout:
 
 - `float3 vertex0`
 - `float3 vertex1`
 - `float3 vertex2`
 - `float3 normal`
 - `float3 color`
+- `float2 uv0`
+- `float2 uv1`
+- `float2 uv2`
 - `float smoothness`
 - `float opacity`
 - `float refraction`
 - `int materialType`
 - `int meshIndex`
+- `int textureIndex`
 
 The mesh-info buffer uses stride `48` and stores each mesh AABB, root BVH node index, triangle range, and mesh index. The per-mesh BVH-node buffer also uses stride `48` and stores each node AABB, child indices, and leaf triangle range. The top-level BVH-node buffer uses stride `48` and stores AABBs over sphere, light, and mesh objects, plus child indices or object type/index metadata. The shadow BVH-node buffer uses the same stride/layout but only includes shadow blockers: regular spheres and meshes, not light spheres.
 
@@ -100,7 +104,7 @@ Unity requires referenced structured buffers to be bound even when their active 
 
 `UpdateSpheres()` then calls `SetData()` every rendered frame for existing sphere and light buffers so dynamic transforms/material values are reflected on the GPU.
 
-`UpdateTriangles()` rebuilds world-space triangle data, mesh AABBs, and per-mesh BVH nodes, then uploads `_Triangles`, `_Meshes`, and `_BvhNodes` only when a mesh object's transform, color, smoothness, opacity, refraction index, or material type changes. `UpdateTopLevelBvh()` rebuilds and uploads the top-level object BVH every rendered frame after sphere/light and mesh updates, so dynamic objects keep correct top-level bounds. `UpdateShadowBvh()` does the same for the shadow-only blocker BVH.
+`UpdateTriangles()` rebuilds world-space triangle data, mesh UVs, mesh AABBs, per-mesh BVH nodes, and the active mesh albedo `Texture2DArray`, then uploads `_Triangles`, `_Meshes`, and `_BvhNodes` only when a mesh object's transform, color, albedo texture, smoothness, opacity, refraction index, or material type changes. Mesh albedo textures are copied into fixed `128x128` array slices and sampled by `textureIndex`; meshes without an albedo texture use only `RayMaterial.Color`. `UpdateTopLevelBvh()` rebuilds and uploads the top-level object BVH every rendered frame after sphere/light and mesh updates, so dynamic objects keep correct top-level bounds. `UpdateShadowBvh()` does the same for the shadow-only blocker BVH.
 
 `UpdateSpheres()` and `UpdateMeshChangeCache()` also recompute whether any shadow-casting blocker (regular sphere or mesh triangle) has opacity `< 1`. `SetShaderParameters()` uploads the combined result as the `_HasTransparentShadowBlockers` int so the shader can take its cheaper pure-occlusion shadow path when no transparent blockers exist (see `06-shader-intersections-and-bvh.md`).
 
@@ -127,6 +131,7 @@ Benchmark scene generation and overlay behavior are documented in `10-benchmarki
 `SetShaderParameters()` sends:
 
 - `_SkyboxTexture`
+- `_MeshAlbedoTextures`
 - `_CameraToWorld`
 - `_CameraInverseProjection`
 - `_SkyboxLight`

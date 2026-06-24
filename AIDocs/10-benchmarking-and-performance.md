@@ -16,6 +16,10 @@ This document covers runtime benchmark tooling, performance hotspots, and benchm
 - `Benchmark_Glass`: stresses transparent/refraction paths and transparent shadows.
 - `Benchmark_Sparse`: catches acceleration-structure overhead regressions in small scenes.
 - `Benchmark_Dynamic`: stresses per-frame transform updates, BVH rebuilds, and buffer uploads.
+- `Benchmark_CornellBox`: a Cornell-box-style image-quality/reference scene with red/green walls, a ceiling light, a reflective sphere, and a tall box.
+- `Wolfenstein`: a low-ceiling stone-room scene with textured mesh walls, multiple sphere lights, and colored spheres.
+
+Existing benchmark scene files are skipped rather than overwritten, so saved local tweaks in `Assets/Scenes/Benchmarks/` are preserved when regenerating scenes.
 
 ## Performance Hotspots
 

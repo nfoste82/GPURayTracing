@@ -7,8 +7,11 @@ using UnityEngine.SceneManagement;
 public static class RayTracingBenchmarkSceneGenerator
 {
     private const string BenchmarkSceneFolder = "Assets/Scenes/Benchmarks";
+    private const string GeneratedAssetFolder = "Assets/Scenes/Benchmarks/GeneratedAssets";
     private const string ComputeShaderPath = "Assets/Scripts/RayTracingCompute.compute";
     private const string SkyboxPath = "Assets/skyboxOcean.jpg";
+    private const string WolfensteinTextureAtlasPath = "Assets/wolf3d_textures.png";
+    private const int WolfensteinTextureTileSize = 64;
 
     [MenuItem("Tools/Ray Tracing/Generate Benchmark Scenes")]
     public static void GenerateBenchmarkScenes()
@@ -23,6 +26,8 @@ public static class RayTracingBenchmarkSceneGenerator
         CreateGlassScene();
         CreateSparseScene();
         CreateDynamicScene();
+        CreateCornellBoxScene();
+        CreateWolfensteinScene();
 
         AssetDatabase.SaveAssets();
         AssetDatabase.Refresh();
@@ -70,6 +75,11 @@ public static class RayTracingBenchmarkSceneGenerator
 
     private static void CreateManySpheresScene()
     {
+        if (ShouldSkipExistingScene("Benchmark_ManySpheres"))
+        {
+            return;
+        }
+
         var context = CreateBaseScene("Benchmark_ManySpheres", new Vector3(0.0f, 7.0f, -24.0f), new Vector3(15.0f, 0.0f, 0.0f));
         AddLight(context.Root, "Key Light", new Vector3(0.0f, 13.0f, -4.0f), 1.8f, new Color32(255, 235, 210, 255));
 
@@ -92,6 +102,11 @@ public static class RayTracingBenchmarkSceneGenerator
 
     private static void CreateShadowBlockersScene()
     {
+        if (ShouldSkipExistingScene("Benchmark_ShadowBlockers"))
+        {
+            return;
+        }
+
         var context = CreateBaseScene("Benchmark_ShadowBlockers", new Vector3(0.0f, 8.0f, -22.0f), new Vector3(18.0f, 0.0f, 0.0f), shadowQuality: 5);
         context.Manager.topLevelBvhMinObjectCount = 64;
         context.Manager.shadowBvhMinObjectCount = 0;
@@ -113,6 +128,11 @@ public static class RayTracingBenchmarkSceneGenerator
 
     private static void CreateManyLightsScene()
     {
+        if (ShouldSkipExistingScene("Benchmark_ManyLights"))
+        {
+            return;
+        }
+
         var context = CreateBaseScene("Benchmark_ManyLights", new Vector3(0.0f, 6.5f, -20.0f), new Vector3(15.0f, 0.0f, 0.0f), shadowQuality: 1);
 
         for (int i = 0; i < 72; i++)
@@ -134,6 +154,11 @@ public static class RayTracingBenchmarkSceneGenerator
 
     private static void CreateDenseMeshScene()
     {
+        if (ShouldSkipExistingScene("Benchmark_DenseMesh"))
+        {
+            return;
+        }
+
         var context = CreateBaseScene("Benchmark_DenseMesh", new Vector3(0.0f, 7.0f, -18.0f), new Vector3(16.0f, 0.0f, 0.0f));
         AddLight(context.Root, "Key Light", new Vector3(-3.0f, 12.0f, -5.0f), 1.7f, new Color32(255, 238, 218, 255));
         AddRayMesh(context.Root, "Dense Terrain Mesh", CreateGridMesh("Dense Terrain", 180, 180, 0.11f), new Vector3(-9.9f, 0.15f, -2.0f), Vector3.zero, Vector3.one, new Color32(170, 185, 160, 255), RayMaterial.MaterialType.Diffuse, 0.35f);
@@ -142,6 +167,11 @@ public static class RayTracingBenchmarkSceneGenerator
 
     private static void CreateManyMeshesScene()
     {
+        if (ShouldSkipExistingScene("Benchmark_ManyMeshes"))
+        {
+            return;
+        }
+
         var context = CreateBaseScene("Benchmark_ManyMeshes", new Vector3(0.0f, 8.0f, -22.0f), new Vector3(18.0f, 0.0f, 0.0f));
         context.Manager.topLevelBvhMinObjectCount = 0;
         AddLight(context.Root, "Key Light", new Vector3(0.0f, 14.0f, -5.0f), 2.0f, new Color32(255, 238, 218, 255));
@@ -161,6 +191,11 @@ public static class RayTracingBenchmarkSceneGenerator
 
     private static void CreateGlassScene()
     {
+        if (ShouldSkipExistingScene("Benchmark_Glass"))
+        {
+            return;
+        }
+
         var context = CreateBaseScene("Benchmark_Glass", new Vector3(0.0f, 5.5f, -16.0f), new Vector3(12.0f, 0.0f, 0.0f), passes: 2, bounces: 5, shadowQuality: 3);
         AddLight(context.Root, "Key Light", new Vector3(-3.0f, 9.0f, -4.0f), 1.5f, new Color32(255, 235, 220, 255));
         AddLight(context.Root, "Blue Light", new Vector3(4.0f, 5.5f, 4.0f), 0.8f, new Color32(110, 165, 255, 255));
@@ -179,6 +214,11 @@ public static class RayTracingBenchmarkSceneGenerator
 
     private static void CreateSparseScene()
     {
+        if (ShouldSkipExistingScene("Benchmark_Sparse"))
+        {
+            return;
+        }
+
         var context = CreateBaseScene("Benchmark_Sparse", new Vector3(0.0f, 4.0f, -12.0f), new Vector3(10.0f, 0.0f, 0.0f));
         AddLight(context.Root, "Key Light", new Vector3(-2.0f, 8.0f, -2.0f), 1.0f, new Color32(255, 240, 220, 255));
         AddSphere(context.Root, "Single Sphere", new Vector3(0.0f, 1.0f, 3.0f), 1.0f, new Color32(210, 80, 75, 255), RayMaterial.MaterialType.Metal, 0.9f);
@@ -187,6 +227,11 @@ public static class RayTracingBenchmarkSceneGenerator
 
     private static void CreateDynamicScene()
     {
+        if (ShouldSkipExistingScene("Benchmark_Dynamic"))
+        {
+            return;
+        }
+
         var context = CreateBaseScene("Benchmark_Dynamic", new Vector3(0.0f, 7.0f, -22.0f), new Vector3(15.0f, 0.0f, 0.0f));
         AddLight(context.Root, "Key Light", new Vector3(0.0f, 12.0f, -5.0f), 1.7f, new Color32(255, 238, 218, 255));
 
@@ -204,6 +249,77 @@ public static class RayTracingBenchmarkSceneGenerator
         }
 
         Save(context.Scene, "Benchmark_Dynamic");
+    }
+
+    private static void CreateCornellBoxScene()
+    {
+        const string sceneName = "Benchmark_CornellBox";
+        if (ShouldSkipExistingScene(sceneName))
+        {
+            return;
+        }
+
+        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 2.15f, -6.4f), Vector3.zero, passes: 4, bounces: 6, shadowQuality: 4);
+        context.Manager.cameraFocalDistance = 8.5f;
+        context.Manager.groundSmoothness = 0.15f;
+        context.Manager.lightFalloffScale = 0.02f;
+        context.Manager.topLevelBvhMinObjectCount = 0;
+        context.Manager.shadowBvhMinObjectCount = 0;
+        context.Manager._skyboxLightColor = new Color32(0, 0, 0, 255);
+
+        AddPrimitiveMesh(context.Root, "Floor", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 0.02f, 3.0f), Vector3.zero, new Vector3(6.0f, 0.04f, 6.0f), new Color32(230, 226, 218, 255), RayMaterial.MaterialType.Diffuse, 0.2f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Ceiling", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 4.5f, 3.0f), Vector3.zero, new Vector3(6.0f, 0.04f, 6.0f), new Color32(226, 226, 220, 255), RayMaterial.MaterialType.Diffuse, 0.15f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Back Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 2.25f, 6.0f), Vector3.zero, new Vector3(6.0f, 4.5f, 0.04f), new Color32(224, 222, 214, 255), RayMaterial.MaterialType.Diffuse, 0.15f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Left Red Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-3.0f, 2.25f, 3.0f), Vector3.zero, new Vector3(0.04f, 4.5f, 6.0f), new Color32(255, 0, 0, 255), RayMaterial.MaterialType.Diffuse, 0.05f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Right Green Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(3.0f, 2.25f, 3.0f), Vector3.zero, new Vector3(0.04f, 4.5f, 6.0f), new Color32(0, 255, 0, 255), RayMaterial.MaterialType.Diffuse, 0.05f, 1.0f);
+
+        AddRayMesh(context.Root, "Ceiling Light Disc", CreateDiscMesh("Ceiling Light Disc", 72), new Vector3(0.0f, 4.46f, 2.15f), Vector3.zero, new Vector3(1.65f, 1.0f, 0.42f), new Color32(255, 255, 245, 255), RayMaterial.MaterialType.Diffuse, 0.0f);
+        AddLight(context.Root, "Ceiling Area Light", new Vector3(0.0f, 4.18f, 2.15f), 0.85f, new Color32(255, 250, 230, 255));
+
+        AddSphere(context.Root, "Reflective Sphere", new Vector3(-1.75f, 0.82f, 2.4f), 0.8f, new Color32(235, 232, 224, 255), RayMaterial.MaterialType.Metal, 0.65f);
+        AddPrimitiveMesh(context.Root, "Tall Box", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(1.25f, 1.45f, 3.65f), Vector3.zero, new Vector3(1.45f, 2.9f, 1.45f), new Color32(212, 205, 195, 255), RayMaterial.MaterialType.Diffuse, 0.12f, 1.0f);
+
+        Save(context.Scene, sceneName);
+    }
+
+    private static void CreateWolfensteinScene()
+    {
+        const string sceneName = "Benchmark_Wolfenstein";
+        if (ShouldSkipExistingScene(sceneName))
+        {
+            return;
+        }
+
+        var wallTexture = GetOrCreateWolfensteinWallTexture();
+        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 1.35f, -4.8f), new Vector3(2.0f, 0.0f, 0.0f), passes: 4, bounces: 4, shadowQuality: 3);
+        context.Manager.cameraFocalDistance = 10.0f;
+        context.Manager.groundSmoothness = 0.25f;
+        context.Manager.lightFalloffScale = 0.035f;
+        context.Manager.exposure = 1.25f;
+        context.Manager._skyboxLightColor = new Color32(8, 8, 8, 255);
+        context.Manager.topLevelBvhMinObjectCount = 0;
+        context.Manager.shadowBvhMinObjectCount = 0;
+
+        AddRayMesh(context.Root, "Back Stone Wall", CreateQuadMesh("Back Stone Wall", 12.0f, 3.0f, 6.0f, 1.5f), new Vector3(0.0f, 1.5f, 7.0f), Vector3.zero, Vector3.one, Color.white, RayMaterial.MaterialType.Diffuse, 0.18f, 1.0f, 1.0f, wallTexture);
+        AddRayMesh(context.Root, "Left Stone Wall", CreateQuadMesh("Left Stone Wall", 12.0f, 3.0f, 6.0f, 1.5f), new Vector3(-6.0f, 1.5f, 1.0f), new Vector3(0.0f, 90.0f, 0.0f), Vector3.one, Color.white, RayMaterial.MaterialType.Diffuse, 0.18f, 1.0f, 1.0f, wallTexture);
+        AddRayMesh(context.Root, "Right Stone Wall", CreateQuadMesh("Right Stone Wall", 12.0f, 3.0f, 6.0f, 1.5f), new Vector3(6.0f, 1.5f, 1.0f), new Vector3(0.0f, -90.0f, 0.0f), Vector3.one, Color.white, RayMaterial.MaterialType.Diffuse, 0.18f, 1.0f, 1.0f, wallTexture);
+        AddRayMesh(context.Root, "Floor", CreateHorizontalQuadMesh("Floor", 12.0f, 12.0f, 3.0f, 3.0f), new Vector3(0.0f, 0.002f, 1.0f), Vector3.zero, Vector3.one, new Color32(78, 68, 48, 255), RayMaterial.MaterialType.Diffuse, 0.28f);
+        AddRayMesh(context.Root, "Ceiling", CreateHorizontalQuadMesh("Ceiling", 12.0f, 12.0f, 3.0f, 3.0f), new Vector3(0.0f, 3.0f, 1.0f), new Vector3(180.0f, 0.0f, 0.0f), Vector3.one, new Color32(92, 78, 54, 255), RayMaterial.MaterialType.Diffuse, 0.2f);
+
+        AddLight(context.Root, "Bright Wall Light", new Vector3(1.9f, 0.75f, 5.35f), 0.42f, new Color32(255, 245, 190, 255));
+        AddLight(context.Root, "Small Warm Light", new Vector3(-0.35f, 1.1f, 5.85f), 0.35f, new Color32(255, 238, 178, 255));
+        AddLight(context.Root, "Ceiling Fill", new Vector3(0.0f, 2.75f, 1.5f), 0.7f, new Color32(170, 135, 85, 255));
+
+        AddSphere(context.Root, "Large Center Sphere", new Vector3(-1.2f, 0.85f, 2.85f), 0.85f, new Color32(150, 146, 105, 255), RayMaterial.MaterialType.Diffuse, 0.4f);
+        AddSphere(context.Root, "Cyan Sphere", new Vector3(-2.65f, 0.72f, 2.45f), 0.72f, new Color32(32, 128, 135, 255), RayMaterial.MaterialType.Diffuse, 0.35f);
+        AddSphere(context.Root, "Orange Right Sphere", new Vector3(3.9f, 0.72f, 3.7f), 0.72f, new Color32(215, 93, 0, 255), RayMaterial.MaterialType.Diffuse, 0.3f);
+        AddSphere(context.Root, "Blue Left Sphere", new Vector3(-4.15f, 0.65f, 1.15f), 0.65f, new Color32(0, 56, 78, 255), RayMaterial.MaterialType.Diffuse, 0.25f);
+        AddSphere(context.Root, "Brown Right Sphere", new Vector3(1.75f, 0.62f, 1.35f), 0.62f, new Color32(116, 80, 34, 255), RayMaterial.MaterialType.Diffuse, 0.25f);
+        AddSphere(context.Root, "Foreground Green Sphere", new Vector3(-0.8f, 0.92f, -0.8f), 0.92f, new Color32(26, 68, 56, 255), RayMaterial.MaterialType.Diffuse, 0.25f);
+        AddSphere(context.Root, "Foreground Yellow Sphere", new Vector3(4.85f, 1.25f, -1.4f), 1.25f, new Color32(120, 112, 54, 255), RayMaterial.MaterialType.Diffuse, 0.2f);
+        AddSphere(context.Root, "Foreground Red Sphere", new Vector3(-5.0f, 1.0f, -2.05f), 1.0f, new Color32(105, 0, 25, 255), RayMaterial.MaterialType.Diffuse, 0.2f);
+
+        Save(context.Scene, sceneName);
     }
 
     private static GameObject AddSphere(Transform parent, string name, Vector3 position, float radius, Color color, RayMaterial.MaterialType type, float smoothness, float opacity = 1.0f, float refraction = 1.0f)
@@ -252,22 +368,27 @@ public static class RayTracingBenchmarkSceneGenerator
         obj.transform.localScale = scale;
 
         var material = obj.AddComponent<RayMaterial>();
+
+        obj.AddComponent<MeshFilter>();
+        obj.AddComponent<MeshRenderer>();
+        obj.AddComponent<MeshCollider>();
+        var primitive = obj.AddComponent<RayMeshPrimitive>();
+
+        // Adding RayMeshPrimitive in the editor can invoke Reset(), which assigns preview defaults
+        // to the RayMaterial. Apply benchmark material values after that so the compute renderer
+        // receives the intended colors and material settings.
         material.Type = type;
         material.Color = color;
         material.Smoothness = smoothness;
         material.Opacity = opacity;
         material.RefractionIndex = refraction;
 
-        obj.AddComponent<MeshFilter>();
-        obj.AddComponent<MeshRenderer>();
-        obj.AddComponent<MeshCollider>();
-        var primitive = obj.AddComponent<RayMeshPrimitive>();
         primitive.Type = primitiveType;
         primitive.EnsureMesh();
         return obj;
     }
 
-    private static GameObject AddRayMesh(Transform parent, string name, Mesh mesh, Vector3 position, Vector3 euler, Vector3 scale, Color color, RayMaterial.MaterialType type, float smoothness)
+    private static GameObject AddRayMesh(Transform parent, string name, Mesh mesh, Vector3 position, Vector3 euler, Vector3 scale, Color color, RayMaterial.MaterialType type, float smoothness, float opacity = 1.0f, float refraction = 1.0f, Texture2D albedoTexture = null)
     {
         var obj = new GameObject(name);
         obj.transform.SetParent(parent);
@@ -278,13 +399,14 @@ public static class RayTracingBenchmarkSceneGenerator
         var material = obj.AddComponent<RayMaterial>();
         material.Type = type;
         material.Color = color;
+        material.AlbedoTexture = albedoTexture;
         material.Smoothness = smoothness;
-        material.Opacity = 1.0f;
-        material.RefractionIndex = 1.0f;
+        material.Opacity = opacity;
+        material.RefractionIndex = refraction;
 
-        obj.AddComponent<RayTracingObject>();
         obj.AddComponent<MeshFilter>().sharedMesh = mesh;
         obj.AddComponent<MeshRenderer>();
+        obj.AddComponent<RayTracingObject>();
         return obj;
     }
 
@@ -333,9 +455,277 @@ public static class RayTracingBenchmarkSceneGenerator
         return mesh;
     }
 
+    private static Mesh CreateQuadMesh(string name, float width, float height, float uScale, float vScale)
+    {
+        var mesh = new Mesh
+        {
+            name = name,
+            vertices = new[]
+            {
+                new Vector3(-width * 0.5f, -height * 0.5f, 0.0f),
+                new Vector3(width * 0.5f, -height * 0.5f, 0.0f),
+                new Vector3(width * 0.5f, height * 0.5f, 0.0f),
+                new Vector3(-width * 0.5f, height * 0.5f, 0.0f)
+            },
+            uv = new[]
+            {
+                new Vector2(0.0f, 0.0f),
+                new Vector2(uScale, 0.0f),
+                new Vector2(uScale, vScale),
+                new Vector2(0.0f, vScale)
+            },
+            triangles = new[] { 0, 2, 1, 0, 3, 2 }
+        };
+        mesh.RecalculateNormals();
+        mesh.RecalculateBounds();
+        return mesh;
+    }
+
+    private static Mesh CreateHorizontalQuadMesh(string name, float width, float depth, float uScale, float vScale)
+    {
+        var mesh = new Mesh
+        {
+            name = name,
+            vertices = new[]
+            {
+                new Vector3(-width * 0.5f, 0.0f, -depth * 0.5f),
+                new Vector3(width * 0.5f, 0.0f, -depth * 0.5f),
+                new Vector3(width * 0.5f, 0.0f, depth * 0.5f),
+                new Vector3(-width * 0.5f, 0.0f, depth * 0.5f)
+            },
+            uv = new[]
+            {
+                new Vector2(0.0f, 0.0f),
+                new Vector2(uScale, 0.0f),
+                new Vector2(uScale, vScale),
+                new Vector2(0.0f, vScale)
+            },
+            triangles = new[] { 0, 1, 2, 0, 2, 3 }
+        };
+        mesh.RecalculateNormals();
+        mesh.RecalculateBounds();
+        return mesh;
+    }
+
+    private static Mesh CreateDiscMesh(string name, int segments)
+    {
+        segments = Mathf.Max(3, segments);
+        var vertices = new Vector3[segments + 1];
+        var triangles = new int[segments * 3];
+        vertices[0] = Vector3.zero;
+
+        for (int i = 0; i < segments; i++)
+        {
+            float angle = i * Mathf.PI * 2.0f / segments;
+            vertices[i + 1] = new Vector3(Mathf.Cos(angle), 0.0f, Mathf.Sin(angle));
+        }
+
+        for (int i = 0; i < segments; i++)
+        {
+            int triangleIndex = i * 3;
+            triangles[triangleIndex] = 0;
+            triangles[triangleIndex + 1] = i + 1;
+            triangles[triangleIndex + 2] = ((i + 1) % segments) + 1;
+        }
+
+        var mesh = new Mesh
+        {
+            name = name,
+            vertices = vertices,
+            triangles = triangles
+        };
+        mesh.RecalculateNormals();
+        mesh.RecalculateBounds();
+        return mesh;
+    }
+
+    private static Texture2D GetOrCreateWolfensteinWallTexture()
+    {
+        Directory.CreateDirectory(GeneratedAssetFolder);
+        const string texturePath = GeneratedAssetFolder + "/WolfensteinWall.png";
+        var existing = AssetDatabase.LoadAssetAtPath<Texture2D>(texturePath);
+        if (existing != null)
+        {
+            return existing;
+        }
+
+        var texture = CreateWolfensteinWallTexture();
+        File.WriteAllBytes(texturePath, texture.EncodeToPNG());
+        Object.DestroyImmediate(texture);
+        AssetDatabase.ImportAsset(texturePath);
+
+        var importer = AssetImporter.GetAtPath(texturePath) as TextureImporter;
+        if (importer != null)
+        {
+            importer.isReadable = true;
+            importer.textureCompression = TextureImporterCompression.Uncompressed;
+            importer.mipmapEnabled = false;
+            importer.filterMode = FilterMode.Point;
+            importer.wrapMode = TextureWrapMode.Repeat;
+            importer.SaveAndReimport();
+        }
+
+        return AssetDatabase.LoadAssetAtPath<Texture2D>(texturePath);
+    }
+
+    private static Texture2D CreateWolfensteinWallTexture()
+    {
+        var atlasTexture = LoadReadableTexture(WolfensteinTextureAtlasPath);
+        if (atlasTexture != null)
+        {
+            return ExtractTopLeftTextureTile(atlasTexture, WolfensteinTextureTileSize, "Wolfenstein Wall");
+        }
+
+        const int size = 128;
+        var texture = new Texture2D(size, size, TextureFormat.RGBA32, false)
+        {
+            name = "Wolfenstein Wall",
+            filterMode = FilterMode.Point,
+            wrapMode = TextureWrapMode.Repeat
+        };
+
+        var darkMortar = new Color32(28, 24, 18, 255);
+        var shadow = new Color32(60, 50, 34, 255);
+        var mid = new Color32(126, 111, 75, 255);
+        var light = new Color32(205, 181, 116, 255);
+        var highlight = new Color32(245, 221, 145, 255);
+
+        for (int y = 0; y < size; y++)
+        {
+            for (int x = 0; x < size; x++)
+            {
+                texture.SetPixel(x, y, mid);
+            }
+        }
+
+        FillRect(texture, 0, 0, size, size, shadow);
+        DrawBrick(texture, 3, 6, 23, 42, darkMortar, shadow, mid, light, highlight);
+        DrawBrick(texture, 31, 5, 31, 18, darkMortar, shadow, mid, light, highlight);
+        DrawBrick(texture, 69, 6, 24, 42, darkMortar, shadow, mid, light, highlight);
+        DrawBrick(texture, 99, 5, 26, 18, darkMortar, shadow, mid, light, highlight);
+        DrawBrick(texture, 31, 30, 32, 20, darkMortar, shadow, mid, light, highlight);
+        DrawBrick(texture, 98, 30, 27, 20, darkMortar, shadow, mid, light, highlight);
+        DrawBrick(texture, 4, 56, 32, 18, darkMortar, shadow, mid, light, highlight);
+        DrawBrick(texture, 42, 56, 21, 42, darkMortar, shadow, mid, light, highlight);
+        DrawBrick(texture, 70, 56, 32, 18, darkMortar, shadow, mid, light, highlight);
+        DrawBrick(texture, 106, 56, 18, 42, darkMortar, shadow, mid, light, highlight);
+        DrawBrick(texture, 5, 82, 31, 40, darkMortar, shadow, mid, light, highlight);
+        DrawBrick(texture, 70, 82, 32, 40, darkMortar, shadow, mid, light, highlight);
+
+        texture.Apply(false, false);
+        return texture;
+    }
+
+    private static Texture2D LoadReadableTexture(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        var texture = new Texture2D(2, 2, TextureFormat.RGBA32, false)
+        {
+            filterMode = FilterMode.Point,
+            wrapMode = TextureWrapMode.Repeat
+        };
+
+        if (!texture.LoadImage(File.ReadAllBytes(path), false))
+        {
+            Object.DestroyImmediate(texture);
+            return null;
+        }
+
+        return texture;
+    }
+
+    private static Texture2D ExtractTopLeftTextureTile(Texture2D source, int tileSize, string textureName)
+    {
+        int size = Mathf.Min(tileSize, source.width, source.height);
+        var texture = new Texture2D(size, size, TextureFormat.RGBA32, false)
+        {
+            name = textureName,
+            filterMode = FilterMode.Point,
+            wrapMode = TextureWrapMode.Repeat
+        };
+
+        int sourceY = source.height - size;
+        for (int y = 0; y < size; y++)
+        {
+            for (int x = 0; x < size; x++)
+            {
+                texture.SetPixel(x, y, source.GetPixel(x, sourceY + y));
+            }
+        }
+
+        texture.Apply(false, false);
+        Object.DestroyImmediate(source);
+        return texture;
+    }
+
+    private static void DrawBrick(Texture2D texture, int x, int y, int width, int height, Color32 mortar, Color32 shadow, Color32 mid, Color32 light, Color32 highlight)
+    {
+        FillRect(texture, x - 2, y - 2, width + 4, height + 4, mortar);
+        FillRect(texture, x, y, width, height, mid);
+        FillRect(texture, x, y, width, 3, shadow);
+        FillRect(texture, x, y, 3, height, shadow);
+        FillRect(texture, x + width - 3, y + 2, 3, height - 2, light);
+        FillRect(texture, x + 2, y + height - 3, width - 2, 3, light);
+        FillRect(texture, x + width / 5, y + height / 4, Mathf.Max(3, width / 2), Mathf.Max(3, height / 4), highlight);
+
+        for (int py = y + 4; py < y + height - 4; py += 4)
+        {
+            for (int px = x + 4; px < x + width - 4; px += 4)
+            {
+                int hash = (px * 37 + py * 17 + width * 13 + height * 7) & 3;
+                Color32 speckle = hash == 0 ? light : hash == 1 ? shadow : mid;
+                FillRect(texture, px, py, 2, 2, speckle);
+            }
+        }
+    }
+
+    private static void FillRect(Texture2D texture, int x, int y, int width, int height, Color32 color)
+    {
+        int minX = Mathf.Clamp(x, 0, texture.width);
+        int minY = Mathf.Clamp(y, 0, texture.height);
+        int maxX = Mathf.Clamp(x + width, 0, texture.width);
+        int maxY = Mathf.Clamp(y + height, 0, texture.height);
+
+        for (int py = minY; py < maxY; py++)
+        {
+            for (int px = minX; px < maxX; px++)
+            {
+                texture.SetPixel(px, py, color);
+            }
+        }
+    }
+
     private static void Save(Scene scene, string sceneName)
     {
-        EditorSceneManager.SaveScene(scene, $"{BenchmarkSceneFolder}/{sceneName}.unity");
+        string path = GetScenePath(sceneName);
+        if (File.Exists(path))
+        {
+            Debug.LogWarning($"Skipping save for existing benchmark scene: {path}");
+            return;
+        }
+
+        EditorSceneManager.SaveScene(scene, path);
+    }
+
+    private static bool ShouldSkipExistingScene(string sceneName)
+    {
+        string path = GetScenePath(sceneName);
+        if (!File.Exists(path))
+        {
+            return false;
+        }
+
+        Debug.Log($"Skipping existing benchmark scene: {path}");
+        return true;
+    }
+
+    private static string GetScenePath(string sceneName)
+    {
+        return $"{BenchmarkSceneFolder}/{sceneName}.unity";
     }
 
     private readonly struct BenchmarkContext

@@ -18,6 +18,8 @@ float4x4 _CameraInverseProjection;
 
 Texture2D<float4> _SkyboxTexture;
 SamplerState sampler_SkyboxTexture;
+Texture2DArray<float4> _MeshAlbedoTextures;
+SamplerState sampler_MeshAlbedoTextures;
 
 float4 _SkyboxLight;
 
@@ -135,11 +137,16 @@ struct MeshTriangle
     float3 vertex2;
     float3 normal;
     float3 color;
+    float2 uv0;
+    float2 uv1;
+    float2 uv2;
     float smoothness;
     float opacity;
     float refraction;
     int materialType;
     int meshIndex;
+    int textureIndex;
+    int padding0;
 };
 
 StructuredBuffer<MeshTriangle> _Triangles;
@@ -249,6 +256,8 @@ struct RayHit
     float refraction;
     int materialType;
     int meshIndex;
+    float2 uv;
+    int textureIndex;
 };
 
 RayHit CreateRayHit()
@@ -266,6 +275,8 @@ RayHit CreateRayHit()
     hit.refraction = 1.0f;
     hit.materialType = MaterialDiffuse;
     hit.meshIndex = -1;
+    hit.uv = float2(0.0f, 0.0f);
+    hit.textureIndex = -1;
 
     return hit;
 }
@@ -290,6 +301,8 @@ void IntersectGroundPlane(Ray ray, inout RayHit bestHit)
         bestHit.refraction = 1.0f;
         bestHit.materialType = MaterialDiffuse;
         bestHit.meshIndex = -1;
+        bestHit.uv = bestHit.position.xz;
+        bestHit.textureIndex = -1;
     }
 }
 
@@ -330,6 +343,8 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
         bestHit.refraction = sphere.refraction;
         bestHit.materialType = sphere.materialType;
         bestHit.meshIndex = -1;
+        bestHit.uv = float2(0.0f, 0.0f);
+        bestHit.textureIndex = -1;
     }
 }
 
@@ -356,7 +371,7 @@ bool SphereOccludes(Ray ray, Sphere sphere, float maxDistance)
     return t > 0.001f && t < maxDistance;
 }
 
-bool IntersectTriangleRaw(Ray ray, MeshTriangle meshTriangle, out float hitDistance, out float3 normal)
+bool IntersectTriangleRaw(Ray ray, MeshTriangle meshTriangle, out float hitDistance, out float3 normal, out float2 barycentric)
 {
     float3 edge1 = meshTriangle.vertex1 - meshTriangle.vertex0;
     float3 edge2 = meshTriangle.vertex2 - meshTriangle.vertex0;
@@ -365,6 +380,7 @@ bool IntersectTriangleRaw(Ray ray, MeshTriangle meshTriangle, out float hitDista
 
     hitDistance = 1.#INF;
     normal = meshTriangle.normal;
+    barycentric = float2(0.0f, 0.0f);
 
     if (abs(determinant) < 0.000001f)
     {
@@ -389,6 +405,7 @@ bool IntersectTriangleRaw(Ray ray, MeshTriangle meshTriangle, out float hitDista
     }
 
     hitDistance = dot(edge2, q) * inverseDeterminant;
+    barycentric = float2(u, v);
     return hitDistance > 0.001f;
 }
 
@@ -396,7 +413,8 @@ void IntersectTriangle(Ray ray, inout RayHit bestHit, MeshTriangle meshTriangle)
 {
     float hitDistance;
     float3 normal;
-    if (!IntersectTriangleRaw(ray, meshTriangle, hitDistance, normal))
+    float2 barycentric;
+    if (!IntersectTriangleRaw(ray, meshTriangle, hitDistance, normal, barycentric))
     {
         return;
     }
@@ -421,6 +439,10 @@ void IntersectTriangle(Ray ray, inout RayHit bestHit, MeshTriangle meshTriangle)
         bestHit.refraction = meshTriangle.refraction;
         bestHit.materialType = meshTriangle.materialType;
         bestHit.meshIndex = meshTriangle.meshIndex;
+        bestHit.uv = meshTriangle.uv0 * (1.0f - barycentric.x - barycentric.y)
+            + meshTriangle.uv1 * barycentric.x
+            + meshTriangle.uv2 * barycentric.y;
+        bestHit.textureIndex = meshTriangle.textureIndex;
     }
 }
 
@@ -611,7 +633,8 @@ bool MeshBvhOccludes(Ray ray, float maxDistance, MeshInfo meshInfo)
             {
                 float hitDistance;
                 float3 hitNormal;
-                if (IntersectTriangleRaw(ray, _Triangles[node.triangleStart + i], hitDistance, hitNormal)
+                float2 hitBarycentric;
+                if (IntersectTriangleRaw(ray, _Triangles[node.triangleStart + i], hitDistance, hitNormal, hitBarycentric)
                     && hitDistance > 0.001f && hitDistance < maxDistance)
                 {
                     return true;
@@ -669,7 +692,8 @@ bool IntersectMeshBvhForExit(Ray ray, MeshInfo meshInfo, out float exitDistance,
             {
                 float triangleDistance;
                 float3 triangleNormal;
-                if (IntersectTriangleRaw(ray, _Triangles[node.triangleStart + i], triangleDistance, triangleNormal) && triangleDistance < exitDistance)
+                float2 triangleBarycentric;
+                if (IntersectTriangleRaw(ray, _Triangles[node.triangleStart + i], triangleDistance, triangleNormal, triangleBarycentric) && triangleDistance < exitDistance)
                 {
                     exitDistance = triangleDistance;
                     exitNormal = triangleNormal;
@@ -1334,6 +1358,15 @@ float3 GetTerminalHitColor(Ray ray, RayHit hit)
 
 float3 GetAlbedo(RayHit hit)
 {
+    if (hit.textureIndex >= 0)
+    {
+        float3 textureColor = _MeshAlbedoTextures.SampleLevel(
+            sampler_MeshAlbedoTextures,
+            float3(frac(hit.uv), hit.textureIndex),
+            0).rgb;
+        return hit.color * textureColor;
+    }
+
     return hit.color;
 }
 

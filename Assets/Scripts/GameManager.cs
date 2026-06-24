@@ -125,6 +125,9 @@ public class GameManager : MonoBehaviour
 
     public Texture skyboxTexture;
 
+    [Tooltip("Fallback texture used when no mesh albedo textures are active. Created automatically at runtime if unset.")]
+    public Texture2D defaultMeshAlbedoTexture;
+
     [Header("Scene preview")]
     public bool syncUnitySkyboxToRayTracedSkybox = true;
 
@@ -164,6 +167,8 @@ public class GameManager : MonoBehaviour
     private readonly List<TopLevelBvhBuildItem> _shadowBvhBuildItems = new List<TopLevelBvhBuildItem>();
     private readonly TopLevelBvhBuildItemComparer _topLevelBvhBuildItemComparer = new TopLevelBvhBuildItemComparer();
     private readonly List<RayTracedMesh> _meshObjects = new List<RayTracedMesh>();
+    private readonly List<Texture2D> _meshAlbedoTextures = new List<Texture2D>();
+    private Texture2DArray _meshAlbedoTextureArray;
     private ComputeBuffer _triangleBuffer;
     private ComputeBuffer _meshBuffer;
     private ComputeBuffer _bvhNodeBuffer;
@@ -231,7 +236,8 @@ public class GameManager : MonoBehaviour
     private const int DynamicLightSampleDivisor = 10;
     private const float DynamicQualitySmoothing = 0.08f;
     private const float DynamicQualityAdjustmentInterval = 0.75f;
-    private const int TriangleStride = 80;
+    private const int MeshTextureSize = 128;
+    private const int TriangleStride = 112;
     private const int MeshInfoStride = 48;
     private const int BvhNodeStride = 48;
     private const int TopLevelBvhNodeStride = 48;
@@ -312,11 +318,16 @@ public class GameManager : MonoBehaviour
         public Vector3 vertex2;
         public Vector3 normal;
         public Vector3 color;
+        public Vector2 uv0;
+        public Vector2 uv1;
+        public Vector2 uv2;
         public float smoothness;
         public float opacity;
         public float refraction;
         public int materialType;
         public int meshIndex;
+        public int textureIndex;
+        public int padding0;
 
         public float Intersect(Vector3 origin, Vector3 direction)
         {
@@ -418,6 +429,7 @@ public class GameManager : MonoBehaviour
         public float previousOpacity;
         public float previousRefraction;
         public int previousMaterialType;
+        public Texture2D previousAlbedoTexture;
     }
 
     private void Start()
@@ -678,6 +690,18 @@ public class GameManager : MonoBehaviour
         _bvhNodeBuffer?.Release();
         _topLevelBvhNodeBuffer?.Release();
         _shadowBvhNodeBuffer?.Release();
+        DestroyRuntimeTextureArray();
+    }
+
+    private void DestroyRuntimeTextureArray()
+    {
+        if (_meshAlbedoTextureArray == null)
+        {
+            return;
+        }
+
+        Destroy(_meshAlbedoTextureArray);
+        _meshAlbedoTextureArray = null;
     }
 
     private void EnsureOutputTextureSize(int width, int height)
@@ -1140,6 +1164,7 @@ public class GameManager : MonoBehaviour
             var opacity = Mathf.Clamp01(material.Opacity);
             var refraction = material.RefractionIndex;
             var materialType = (int)material.Type;
+            var albedoTexture = material.AlbedoTexture;
 
             if (opacity < ShadowBlockerOpaqueThreshold)
             {
@@ -1151,7 +1176,8 @@ public class GameManager : MonoBehaviour
                 && Mathf.Approximately(meshObject.previousSmoothness, smoothness)
                 && Mathf.Approximately(meshObject.previousOpacity, opacity)
                 && Mathf.Approximately(meshObject.previousRefraction, refraction)
-                && meshObject.previousMaterialType == materialType)
+                && meshObject.previousMaterialType == materialType
+                && meshObject.previousAlbedoTexture == albedoTexture)
             {
                 continue;
             }
@@ -1162,6 +1188,7 @@ public class GameManager : MonoBehaviour
             meshObject.previousOpacity = opacity;
             meshObject.previousRefraction = refraction;
             meshObject.previousMaterialType = materialType;
+            meshObject.previousAlbedoTexture = albedoTexture;
             _meshObjects[i] = meshObject;
             changed = true;
         }
@@ -1174,6 +1201,7 @@ public class GameManager : MonoBehaviour
         _triangles.Clear();
         _meshInfos.Clear();
         _bvhNodes.Clear();
+        _meshAlbedoTextures.Clear();
 
         for (int meshIndex = 0; meshIndex < _meshObjects.Count; meshIndex++)
         {
@@ -1186,15 +1214,20 @@ public class GameManager : MonoBehaviour
 
             var vertices = mesh.vertices;
             var indices = mesh.triangles;
+            var uvs = mesh.uv;
             var localToWorld = meshObject.transform.localToWorldMatrix;
             var material = meshObject.material;
+            int textureIndex = GetMeshAlbedoTextureIndex(material.AlbedoTexture);
             var meshTriangles = new List<Triangle>(indices.Length / 3);
 
             for (int i = 0; i + 2 < indices.Length; i += 3)
             {
-                var vertex0 = localToWorld.MultiplyPoint3x4(vertices[indices[i]]);
-                var vertex1 = localToWorld.MultiplyPoint3x4(vertices[indices[i + 1]]);
-                var vertex2 = localToWorld.MultiplyPoint3x4(vertices[indices[i + 2]]);
+                int index0 = indices[i];
+                int index1 = indices[i + 1];
+                int index2 = indices[i + 2];
+                var vertex0 = localToWorld.MultiplyPoint3x4(vertices[index0]);
+                var vertex1 = localToWorld.MultiplyPoint3x4(vertices[index1]);
+                var vertex2 = localToWorld.MultiplyPoint3x4(vertices[index2]);
                 var normal = Vector3.Cross(vertex1 - vertex0, vertex2 - vertex0).normalized;
 
                 meshTriangles.Add(new Triangle
@@ -1204,11 +1237,15 @@ public class GameManager : MonoBehaviour
                     vertex2 = vertex2,
                     normal = normal,
                     color = material.Color.ToVector3(),
+                    uv0 = GetMeshUv(uvs, index0),
+                    uv1 = GetMeshUv(uvs, index1),
+                    uv2 = GetMeshUv(uvs, index2),
                     smoothness = material.Smoothness,
                     opacity = Mathf.Clamp01(material.Opacity),
                     refraction = material.RefractionIndex,
                     materialType = (int)material.Type,
-                    meshIndex = meshIndex
+                    meshIndex = meshIndex,
+                    textureIndex = textureIndex
                 });
             }
 
@@ -1229,6 +1266,110 @@ public class GameManager : MonoBehaviour
                 meshIndex = meshIndex
             });
         }
+
+        RebuildMeshAlbedoTextureArray();
+    }
+
+    private int GetMeshAlbedoTextureIndex(Texture2D texture)
+    {
+        if (texture == null)
+        {
+            return -1;
+        }
+
+        int existingIndex = _meshAlbedoTextures.IndexOf(texture);
+        if (existingIndex >= 0)
+        {
+            return existingIndex;
+        }
+
+        _meshAlbedoTextures.Add(texture);
+        return _meshAlbedoTextures.Count - 1;
+    }
+
+    private static Vector2 GetMeshUv(Vector2[] uvs, int vertexIndex)
+    {
+        return uvs != null && vertexIndex >= 0 && vertexIndex < uvs.Length ? uvs[vertexIndex] : Vector2.zero;
+    }
+
+    private void RebuildMeshAlbedoTextureArray()
+    {
+        EnsureDefaultMeshAlbedoTexture();
+        DestroyRuntimeTextureArray();
+
+        int textureCount = Mathf.Max(1, _meshAlbedoTextures.Count);
+        _meshAlbedoTextureArray = new Texture2DArray(
+            MeshTextureSize,
+            MeshTextureSize,
+            textureCount,
+            TextureFormat.RGBA32,
+            false)
+        {
+            name = "Ray Tracing Mesh Albedo Texture Array",
+            wrapMode = TextureWrapMode.Repeat,
+            filterMode = FilterMode.Point
+        };
+
+        for (int i = 0; i < textureCount; i++)
+        {
+            Texture2D source = i < _meshAlbedoTextures.Count && _meshAlbedoTextures[i] != null
+                ? _meshAlbedoTextures[i]
+                : defaultMeshAlbedoTexture;
+            CopyTextureToArraySlice(source, _meshAlbedoTextureArray, i);
+        }
+
+        _meshAlbedoTextureArray.Apply(false, false);
+    }
+
+    private void EnsureDefaultMeshAlbedoTexture()
+    {
+        if (defaultMeshAlbedoTexture != null)
+        {
+            return;
+        }
+
+        defaultMeshAlbedoTexture = new Texture2D(1, 1, TextureFormat.RGBA32, false)
+        {
+            name = "Default Mesh Albedo",
+            wrapMode = TextureWrapMode.Repeat,
+            filterMode = FilterMode.Point
+        };
+        defaultMeshAlbedoTexture.SetPixel(0, 0, Color.white);
+        defaultMeshAlbedoTexture.Apply(false, true);
+    }
+
+    private static void CopyTextureToArraySlice(Texture2D source, Texture2DArray destination, int slice)
+    {
+        var pixels = new Color32[MeshTextureSize * MeshTextureSize];
+        if (source == null)
+        {
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                pixels[i] = new Color32(255, 255, 255, 255);
+            }
+        }
+        else if (source.isReadable)
+        {
+            for (int y = 0; y < MeshTextureSize; y++)
+            {
+                float v = (y + 0.5f) / MeshTextureSize;
+                for (int x = 0; x < MeshTextureSize; x++)
+                {
+                    float u = (x + 0.5f) / MeshTextureSize;
+                    pixels[y * MeshTextureSize + x] = source.GetPixelBilinear(u, v);
+                }
+            }
+        }
+        else
+        {
+            Debug.LogWarning($"Mesh albedo texture '{source.name}' is not readable; using white fallback for ray tracing.");
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                pixels[i] = new Color32(255, 255, 255, 255);
+            }
+        }
+
+        destination.SetPixels32(pixels, slice);
     }
 
     private void RebuildTopLevelBvh()
@@ -1805,7 +1946,8 @@ public class GameManager : MonoBehaviour
                 previousSmoothness = material.Smoothness,
                 previousOpacity = Mathf.Clamp01(material.Opacity),
                 previousRefraction = material.RefractionIndex,
-                previousMaterialType = (int)material.Type
+                previousMaterialType = (int)material.Type,
+                previousAlbedoTexture = material.AlbedoTexture
             });
             RebuildTriangleData();
             return;
@@ -1934,6 +2076,11 @@ public class GameManager : MonoBehaviour
     private void SetShaderParameters(int kernelHandle)
     {
         shader.SetTexture(kernelHandle, "_SkyboxTexture", skyboxTexture);
+        if (_meshAlbedoTextureArray == null)
+        {
+            RebuildMeshAlbedoTextureArray();
+        }
+        shader.SetTexture(kernelHandle, "_MeshAlbedoTextures", _meshAlbedoTextureArray);
 
         shader.SetMatrix("_CameraToWorld", renderTextureCamera.cameraToWorldMatrix);
         shader.SetMatrix("_CameraInverseProjection", renderTextureCamera.projectionMatrix.inverse);
@@ -2122,6 +2269,7 @@ public class GameManager : MonoBehaviour
         hash = AddHash(hash, value.previousSmoothness);
         hash = AddHash(hash, value.previousOpacity);
         hash = AddHash(hash, value.previousRefraction);
-        return AddHash(hash, value.previousMaterialType);
+        hash = AddHash(hash, value.previousMaterialType);
+        return AddHash(hash, value.previousAlbedoTexture != null ? value.previousAlbedoTexture.GetInstanceID() : 0);
     }
 }
