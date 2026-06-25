@@ -116,6 +116,44 @@ public class GameManager : MonoBehaviour
     [Range(0.0f, 8.0f)]
     public float exposure = 1.0f;
 
+    [Header("Water")]
+    public bool enableWater = false;
+
+    [Tooltip("World-space center of the finite water body. X/Z define the lake center, Y defines the average water level.")]
+    public Vector3 waterCenter = new Vector3(0.0f, 0.5f, 0.0f);
+
+    [Tooltip("World-space X/Z size of the finite water body.")]
+    public Vector2 waterSize = new Vector2(24.0f, 24.0f);
+
+    public Color32 waterColor = new Color32(44, 116, 132, 255);
+
+    [Range(0.0f, 1.0f)]
+    public float waterSmoothness = 0.96f;
+
+    [Range(0.0f, 1.0f)]
+    public float waterOpacity = 0.18f;
+
+    [Range(1.0f, 2.0f)]
+    public float waterRefractionIndex = 1.333f;
+
+    [Tooltip("Maximum wave height above and below the average water level.")]
+    [Range(0.0f, 2.0f)]
+    public float waterWaveAmplitude = 0.22f;
+
+    [Tooltip("Scales the procedural wave frequency. Higher values create shorter waves.")]
+    [Range(0.05f, 4.0f)]
+    public float waterWaveScale = 0.55f;
+
+    [Tooltip("Procedural wave animation speed. Animated water disables frame accumulation to avoid ghosting.")]
+    [Range(0.0f, 4.0f)]
+    public float waterWaveSpeed = 0.75f;
+
+    [Range(8, 64)]
+    public int waterMarchSteps = 28;
+
+    [Range(2, 8)]
+    public int waterRefinementSteps = 5;
+
     private float previousFocalDistance = 100f;
     private float timeSincePreviousFocusDistance = 1f;
 
@@ -192,6 +230,7 @@ public class GameManager : MonoBehaviour
 
     private bool _running = true;
     private bool _previousSingleFrame;
+    private float _singleFrameRenderTime;
 
     // Compute-shader variants compile synchronously on their first Dispatch, which freezes the
     // main thread (the spinning-wheel stall) the first time a debug render mode is selected. We
@@ -245,6 +284,7 @@ public class GameManager : MonoBehaviour
     private const int BvhStackSize = 64;
     private const float BvhBoundsPadding = 0.0001f;
     private const float GroundPreviewSize = 40.0f;
+    private const float WaterPreviewMinThickness = 0.02f;
     private const int TopLevelObjectTypeInternal = -1;
     private const int TopLevelObjectTypeSphere = 0;
     private const int TopLevelObjectTypeLight = 1;
@@ -447,11 +487,38 @@ public class GameManager : MonoBehaviour
     private void OnDrawGizmos()
     {
         DrawGroundPreview();
+        DrawWaterPreview();
     }
 
     private void OnDrawGizmosSelected()
     {
         DrawGroundPreview();
+        DrawWaterPreview();
+    }
+
+    private void DrawWaterPreview()
+    {
+        if (!enableWater)
+        {
+            return;
+        }
+
+        float sizeX = Mathf.Max(0.01f, waterSize.x);
+        float sizeZ = Mathf.Max(0.01f, waterSize.y);
+        float waveHeight = Mathf.Max(WaterPreviewMinThickness, waterWaveAmplitude);
+        var center = waterCenter;
+        var size = new Vector3(sizeX, waveHeight * 2.0f, sizeZ);
+
+        Gizmos.color = new Color(waterColor.r / 255.0f, waterColor.g / 255.0f, waterColor.b / 255.0f, 0.35f);
+        Gizmos.DrawWireCube(center, size);
+
+        float halfX = sizeX * 0.5f;
+        float halfZ = sizeZ * 0.5f;
+        float y = waterCenter.y;
+        Gizmos.DrawLine(new Vector3(center.x - halfX, y, center.z - halfZ), new Vector3(center.x + halfX, y, center.z - halfZ));
+        Gizmos.DrawLine(new Vector3(center.x + halfX, y, center.z - halfZ), new Vector3(center.x + halfX, y, center.z + halfZ));
+        Gizmos.DrawLine(new Vector3(center.x + halfX, y, center.z + halfZ), new Vector3(center.x - halfX, y, center.z + halfZ));
+        Gizmos.DrawLine(new Vector3(center.x - halfX, y, center.z + halfZ), new Vector3(center.x - halfX, y, center.z - halfZ));
     }
 
     private static void DrawGroundPreview()
@@ -620,8 +687,14 @@ public class GameManager : MonoBehaviour
         _singleFrame = enabled;
         _previousSingleFrame = enabled;
         _running = true;
+        ResetFrameAccumulation();
 
-        if (!enabled)
+        if (enabled)
+        {
+            _singleFrameRenderTime = Time.time;
+            EnableSingleFrameSettings();
+        }
+        else
         {
             EnableRealtimeSettings();
         }
@@ -631,6 +704,7 @@ public class GameManager : MonoBehaviour
     {
         QualitySettings.vSyncCount = 0;
         Application.targetFrameRate = 10;
+        Time.timeScale = 0.0f;
     }
 
     private void EnableRealtimeSettings()
@@ -731,7 +805,13 @@ public class GameManager : MonoBehaviour
 
     private bool ShouldUseFrameAccumulation()
     {
-        return enableFrameAccumulation && debugRenderMode == DebugRenderMode.FinalColor;
+        bool animatedWater = enableWater && waterWaveAmplitude > 0.0f && waterWaveSpeed > 0.0f && !_singleFrame;
+        return enableFrameAccumulation && debugRenderMode == DebugRenderMode.FinalColor && !animatedWater;
+    }
+
+    private float GetRenderTime()
+    {
+        return _singleFrame ? _singleFrameRenderTime : Time.time;
     }
 
     private void ResetDynamicQualityState()
@@ -2070,6 +2150,22 @@ public class GameManager : MonoBehaviour
             }
         }
 
+        if (enableWater && !ShouldAutoFocusIgnoreObject(waterOpacity) && Mathf.Abs(ray.direction.y) > 0.000001f)
+        {
+            float hitDistance = (waterCenter.y - ray.origin.y) / ray.direction.y;
+            var hitPoint = ray.origin + ray.direction * hitDistance;
+            var halfSize = waterSize * 0.5f;
+            if (hitDistance > 0.0f
+                && hitDistance < nearestDistance
+                && hitPoint.x >= waterCenter.x - halfSize.x
+                && hitPoint.x <= waterCenter.x + halfSize.x
+                && hitPoint.z >= waterCenter.z - halfSize.y
+                && hitPoint.z <= waterCenter.z + halfSize.y)
+            {
+                nearestDistance = hitDistance;
+            }
+        }
+
         return nearestDistance;
     }
     
@@ -2144,6 +2240,20 @@ public class GameManager : MonoBehaviour
         shader.SetFloat("_FocalDistance", cameraFocalDistance);
         shader.SetFloat("_GroundSmoothness", groundSmoothness);
         shader.SetFloat("_Exposure", exposure);
+        shader.SetInt("_WaterEnabled", enableWater ? 1 : 0);
+        shader.SetVector("_WaterCenter", new Vector4(waterCenter.x, waterCenter.y, waterCenter.z, 0.0f));
+        shader.SetVector("_WaterSize", new Vector4(Mathf.Max(0.01f, waterSize.x), Mathf.Max(0.01f, waterSize.y), 0.0f, 0.0f));
+        var waterColorVector = waterColor.ToVector3();
+        shader.SetVector("_WaterColor", new Vector4(waterColorVector.x, waterColorVector.y, waterColorVector.z, 0.0f));
+        shader.SetFloat("_WaterSmoothness", waterSmoothness);
+        shader.SetFloat("_WaterOpacity", Mathf.Clamp01(waterOpacity));
+        shader.SetFloat("_WaterRefraction", waterRefractionIndex);
+        shader.SetFloat("_WaterWaveAmplitude", Mathf.Max(0.0f, waterWaveAmplitude));
+        shader.SetFloat("_WaterWaveScale", Mathf.Max(0.001f, waterWaveScale));
+        shader.SetFloat("_WaterWaveSpeed", Mathf.Max(0.0f, waterWaveSpeed));
+        shader.SetFloat("_WaterTime", Application.isPlaying ? GetRenderTime() : 0.0f);
+        shader.SetInt("_WaterMarchSteps", Mathf.Clamp(waterMarchSteps, 8, 64));
+        shader.SetInt("_WaterRefinementSteps", Mathf.Clamp(waterRefinementSteps, 2, 8));
         shader.SetInt("_NumTopLevelBvhNodes", _topLevelBvhNodes.Count);
         shader.SetInt("_NumShadowBvhNodes", _shadowBvhNodes.Count);
 
@@ -2190,6 +2300,20 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, lightFalloffScale);
             hash = AddHash(hash, cameraFocalDistance);
             hash = AddHash(hash, groundSmoothness);
+            hash = AddHash(hash, enableWater ? 1 : 0);
+            hash = AddHash(hash, waterCenter);
+            hash = AddHash(hash, new Vector3(waterSize.x, waterSize.y, 0.0f));
+            hash = AddHash(hash, waterColor.r);
+            hash = AddHash(hash, waterColor.g);
+            hash = AddHash(hash, waterColor.b);
+            hash = AddHash(hash, waterSmoothness);
+            hash = AddHash(hash, waterOpacity);
+            hash = AddHash(hash, waterRefractionIndex);
+            hash = AddHash(hash, waterWaveAmplitude);
+            hash = AddHash(hash, waterWaveScale);
+            hash = AddHash(hash, waterWaveSpeed);
+            hash = AddHash(hash, waterMarchSteps);
+            hash = AddHash(hash, waterRefinementSteps);
             hash = AddHash(hash, randomNoise ? 1 : 0);
             hash = AddHash(hash, skyboxTexture != null ? skyboxTexture.GetInstanceID() : 0);
             hash = AddHash(hash, _skyboxLightColor.r);

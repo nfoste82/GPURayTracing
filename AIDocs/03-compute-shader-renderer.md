@@ -153,7 +153,7 @@ Material scattering currently supports:
 
 - `Diffuse`: uses direct lighting and cosine-weighted hemisphere scattering on later bounces, attenuated by albedo. On bounce 0, smoothness blends the continuation ray between diffuse scattering and reflection, which allows the implicit ground plane's `_GroundSmoothness` to affect visible reflections.
 - `Metal`: reflects around the surface normal, with smoothness controlling rough reflection direction randomization, and attenuates by albedo.
-- `Glass`: uses Schlick Fresnel reflectance to weight the existing approximate sphere refraction path for spheres. For mesh triangles, it uses an approximate closed-mesh entry/exit path that refracts into the mesh, intersects the nearest exit triangle with the same `meshIndex`, refracts back out, and continues from the exit point.
+- `Glass`: uses Schlick Fresnel reflectance to weight the existing approximate sphere refraction path for spheres. For mesh triangles, it uses an approximate closed-mesh entry/exit path that refracts into the mesh, finds the nearest exit triangle with the same `meshIndex`, then checks the top-level scene traversal for any closer object inside that bounded internal segment. If an interior object is found, tracing continues inside the transparent mesh; otherwise the ray refracts back out and continues from the exit point.
 
 Note: the glass/refraction path is selected by `IsGlassMaterial(hit)`, which returns true when `materialType == Glass` **or** when `hit.opacity < 1.0`. A `Diffuse` or `Metal` object with opacity below `1` therefore takes the glass transmission/Fresnel path regardless of its declared material type.
 

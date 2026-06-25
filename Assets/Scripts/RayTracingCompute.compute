@@ -38,6 +38,20 @@ float _FocalDistance;
 float _GroundSmoothness;
 float _Exposure;
 
+int _WaterEnabled;
+float3 _WaterCenter;
+float2 _WaterSize;
+float3 _WaterColor;
+float _WaterSmoothness;
+float _WaterOpacity;
+float _WaterRefraction;
+float _WaterWaveAmplitude;
+float _WaterWaveScale;
+float _WaterWaveSpeed;
+float _WaterTime;
+int _WaterMarchSteps;
+int _WaterRefinementSteps;
+
 uint _Seed;
 uint _SampleOffset;
 
@@ -71,6 +85,7 @@ static const int MaterialDiffuse = 0;
 static const int MaterialMetal = 1;
 static const int MaterialGlass = 2;
 static const int MaterialEmissive = 3;
+static const int MaterialWater = 4;
 
 static const int TopLevelObjectTypeInternal = -1;
 static const int TopLevelObjectTypeSphere = 0;
@@ -87,6 +102,7 @@ static const int MaxImportanceLights = 128;
 
 static const float MinDirectLightThroughput = 0.01f;
 static const int BvhStackSize = 64;
+static const float WaterHitEpsilon = 0.001f;
 
 uint Hash(uint value)
 {
@@ -304,6 +320,163 @@ void IntersectGroundPlane(Ray ray, inout RayHit bestHit)
         bestHit.uv = bestHit.position.xz;
         bestHit.textureIndex = -1;
     }
+}
+
+float GetWaterWaveHeight(float2 worldXZ)
+{
+    float amplitude = max(0.0f, _WaterWaveAmplitude);
+    if (amplitude <= 0.0f)
+    {
+        return _WaterCenter.y;
+    }
+
+    float2 p = (worldXZ - _WaterCenter.xz) * max(0.001f, _WaterWaveScale);
+    float t = _WaterTime * _WaterWaveSpeed;
+
+    float h = 0.0f;
+    h += sin(dot(p, normalize(float2(0.86f, 0.51f))) * 1.25f + t * 1.10f) * 0.46f;
+    h += sin(dot(p, normalize(float2(-0.34f, 0.94f))) * 1.95f + t * 1.55f + 1.7f) * 0.27f;
+    h += sin(dot(p, normalize(float2(0.12f, -0.99f))) * 2.80f + t * 2.05f + 3.1f) * 0.17f;
+    h += sin(dot(p, normalize(float2(-0.78f, -0.62f))) * 4.10f + t * 2.70f + 0.4f) * 0.10f;
+
+    return _WaterCenter.y + h * amplitude;
+}
+
+float3 GetWaterNormal(float2 worldXZ)
+{
+    float sampleOffset = max(0.03f, 0.08f / max(0.001f, _WaterWaveScale));
+    float heightLeft = GetWaterWaveHeight(worldXZ - float2(sampleOffset, 0.0f));
+    float heightRight = GetWaterWaveHeight(worldXZ + float2(sampleOffset, 0.0f));
+    float heightBack = GetWaterWaveHeight(worldXZ - float2(0.0f, sampleOffset));
+    float heightForward = GetWaterWaveHeight(worldXZ + float2(0.0f, sampleOffset));
+
+    float dHeightDx = (heightRight - heightLeft) / (2.0f * sampleOffset);
+    float dHeightDz = (heightForward - heightBack) / (2.0f * sampleOffset);
+    return normalize(float3(-dHeightDx, 1.0f, -dHeightDz));
+}
+
+bool IsInsideWaterXZ(float2 worldXZ)
+{
+    float2 halfSize = max(_WaterSize, float2(0.01f, 0.01f)) * 0.5f;
+    float2 delta = abs(worldXZ - _WaterCenter.xz);
+    return delta.x <= halfSize.x && delta.y <= halfSize.y;
+}
+
+bool IntersectWaterBounds(Ray ray, float maxDistance, out float entryDistance, out float exitDistance)
+{
+    float waveHeight = max(0.001f, _WaterWaveAmplitude + WaterHitEpsilon);
+    float2 halfSize = max(_WaterSize, float2(0.01f, 0.01f)) * 0.5f;
+    float3 boundsMin = float3(_WaterCenter.x - halfSize.x, _WaterCenter.y - waveHeight, _WaterCenter.z - halfSize.y);
+    float3 boundsMax = float3(_WaterCenter.x + halfSize.x, _WaterCenter.y + waveHeight, _WaterCenter.z + halfSize.y);
+
+    float3 inverseDirection = 1.0f / ray.direction;
+    float3 t0 = (boundsMin - ray.origin) * inverseDirection;
+    float3 t1 = (boundsMax - ray.origin) * inverseDirection;
+    float3 tMin3 = min(t0, t1);
+    float3 tMax3 = max(t0, t1);
+    float tMin = max(max(tMin3.x, tMin3.y), tMin3.z);
+    float tMax = min(min(tMax3.x, tMax3.y), tMax3.z);
+
+    entryDistance = max(0.001f, tMin);
+    exitDistance = tMax;
+    return tMax >= entryDistance && entryDistance < maxDistance;
+}
+
+void IntersectWater(Ray ray, inout RayHit bestHit)
+{
+    if (_WaterEnabled == 0)
+    {
+        return;
+    }
+
+    float entryDistance;
+    float exitDistance;
+    if (!IntersectWaterBounds(ray, bestHit.distance, entryDistance, exitDistance))
+    {
+        return;
+    }
+
+    exitDistance = min(exitDistance, bestHit.distance);
+    int marchSteps = clamp(_WaterMarchSteps, 8, 64);
+    float stepSize = max(0.001f, (exitDistance - entryDistance) / marchSteps);
+
+    float previousT = entryDistance;
+    float3 previousPosition = ray.origin + ray.direction * previousT;
+    float previousSignedDistance = previousPosition.y - GetWaterWaveHeight(previousPosition.xz);
+
+    if (abs(previousSignedDistance) <= WaterHitEpsilon && IsInsideWaterXZ(previousPosition.xz))
+    {
+        previousSignedDistance = dot(ray.direction, float3(0.0f, 1.0f, 0.0f)) > 0.0f ? -WaterHitEpsilon : WaterHitEpsilon;
+    }
+
+    float hitT = 1.#INF;
+    int i;
+    [loop]
+    for (i = 1; i <= marchSteps; i++)
+    {
+        float currentT = min(exitDistance, entryDistance + stepSize * i);
+        float3 currentPosition = ray.origin + ray.direction * currentT;
+        float currentSignedDistance = currentPosition.y - GetWaterWaveHeight(currentPosition.xz);
+
+        if (IsInsideWaterXZ(currentPosition.xz)
+            && previousSignedDistance * currentSignedDistance <= 0.0f)
+        {
+            float lowT = previousT;
+            float highT = currentT;
+            int refinementSteps = clamp(_WaterRefinementSteps, 2, 8);
+            int r;
+            [loop]
+            for (r = 0; r < refinementSteps; r++)
+            {
+                float midT = (lowT + highT) * 0.5f;
+                float3 midPosition = ray.origin + ray.direction * midT;
+                float midSignedDistance = midPosition.y - GetWaterWaveHeight(midPosition.xz);
+
+                if (previousSignedDistance * midSignedDistance <= 0.0f)
+                {
+                    highT = midT;
+                    currentSignedDistance = midSignedDistance;
+                }
+                else
+                {
+                    lowT = midT;
+                    previousSignedDistance = midSignedDistance;
+                }
+            }
+
+            hitT = highT;
+            break;
+        }
+
+        previousT = currentT;
+        previousSignedDistance = currentSignedDistance;
+    }
+
+    if (hitT >= bestHit.distance || hitT <= 0.001f)
+    {
+        return;
+    }
+
+    bestHit.position = ray.origin + hitT * ray.direction;
+    bestHit.position.y = GetWaterWaveHeight(bestHit.position.xz);
+    bestHit.obj_position = _WaterCenter;
+    bestHit.normal = GetWaterNormal(bestHit.position.xz);
+    if (dot(bestHit.normal, ray.direction) > 0.0f)
+    {
+        bestHit.normal = -bestHit.normal;
+    }
+    bestHit.emission = float3(0.0f, 0.0f, 0.0f);
+    bestHit.color = _WaterColor;
+    bestHit.obj_radius = 0.0f;
+    bestHit.distance = hitT;
+    bestHit.smoothness = _WaterSmoothness;
+    bestHit.opacity = saturate(_WaterOpacity);
+    bestHit.distanceThroughOpacity = 0.0f;
+    bestHit.refraction = max(1.0f, _WaterRefraction);
+    bestHit.materialType = MaterialWater;
+    bestHit.meshIndex = -1;
+    bestHit.uv = bestHit.position.xz - _WaterCenter.xz;
+    bestHit.textureIndex = -1;
 }
 
 void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
@@ -731,11 +904,13 @@ bool IntersectMeshBvhForExit(Ray ray, MeshInfo meshInfo, out float exitDistance,
     return exitDistance < 1.#INF;
 }
 
-RayHit GetNearestIntersection(Ray ray)
+RayHit GetNearestIntersectionBounded(Ray ray, float maxDistance, int ignoredMeshIndex)
 {
 	RayHit bestHit = CreateRayHit();
+	bestHit.distance = maxDistance;
 
 	IntersectGroundPlane(ray, bestHit);
+	IntersectWater(ray, bestHit);
 
 	if (_NumTopLevelBvhNodes <= 0)
 	{
@@ -755,7 +930,17 @@ RayHit GetNearestIntersection(Ray ray)
 		[loop]
 		for (i = 0; i < _NumMeshes; i++)
 		{
+			if (_Meshes[i].meshIndex == ignoredMeshIndex)
+			{
+				continue;
+			}
+
 			IntersectMeshBvh(ray, bestHit, _Meshes[i]);
+		}
+
+		if (bestHit.distance >= maxDistance)
+		{
+			return CreateRayHit();
 		}
 
 		return bestHit;
@@ -787,6 +972,11 @@ RayHit GetNearestIntersection(Ray ray)
 
 		if (node.objectType == TopLevelObjectTypeMesh)
 		{
+			if (_Meshes[node.objectIndex].meshIndex == ignoredMeshIndex)
+			{
+				continue;
+			}
+
 			IntersectMeshBvh(ray, bestHit, _Meshes[node.objectIndex]);
 			continue;
 		}
@@ -819,7 +1009,17 @@ RayHit GetNearestIntersection(Ray ray)
 		}
 	}
 
+	if (bestHit.distance >= maxDistance)
+	{
+		return CreateRayHit();
+	}
+
 	return bestHit;
+}
+
+RayHit GetNearestIntersection(Ray ray)
+{
+	return GetNearestIntersectionBounded(ray, 1.#INF, -2);
 }
 
 float3 GetClosestPointOnLineSegment(float3 linePointStart, float3 linePointEnd, float3 testPoint)
@@ -1382,7 +1582,12 @@ float GetTransmissionAmount(RayHit hit)
 
 bool IsGlassMaterial(RayHit hit)
 {
-    return hit.materialType == MaterialGlass || hit.opacity < 1.0f;
+    return hit.materialType == MaterialGlass || hit.materialType == MaterialWater || hit.opacity < 1.0f;
+}
+
+bool IsWaterMaterial(RayHit hit)
+{
+    return hit.materialType == MaterialWater;
 }
 
 float GetFresnelReflectance(Ray ray, RayHit hit)
@@ -1487,6 +1692,14 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, RayHit hit)
     }
 
     float3 exitPoint = insideRay.origin + entryDirection * exitDistance;
+    RayHit interiorHit = GetNearestIntersectionBounded(insideRay, exitDistance, hit.meshIndex);
+    if (!DidHitSky(interiorHit))
+    {
+        ray.direction = entryDirection;
+        ray.origin = insideRay.origin;
+        return;
+    }
+
     float3 exitDirection = Refract(entryDirection, targetRefraction, 1.0f, -exitNormal);
     ray.direction = dot(exitDirection, exitDirection) > 0.0f
         ? normalize(exitDirection)
@@ -1494,11 +1707,39 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, RayHit hit)
     ray.origin = exitPoint + (ray.direction * 0.001f);
 }
 
+void ApplyWaterTransmission(inout Ray ray, Ray sourceRay, RayHit hit)
+{
+    bool enteringWater = sourceRay.origin.y >= GetWaterWaveHeight(sourceRay.origin.xz);
+    float sourceRefraction = enteringWater ? 1.0f : max(1.0f, hit.refraction);
+    float targetRefraction = enteringWater ? max(1.0f, hit.refraction) : 1.0f;
+    float3 transmissionDirection = Refract(sourceRay.direction, sourceRefraction, targetRefraction, hit.normal);
+
+    ray.direction = dot(transmissionDirection, transmissionDirection) > 0.0f
+        ? normalize(transmissionDirection)
+        : reflect(sourceRay.direction, hit.normal);
+    ray.origin = hit.position + ray.direction * 0.01f;
+}
+
 ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, inout uint rngState)
 {
     float3 albedo = GetAlbedo(hit);
     float3 roughNormal = GetRandomizedNormalBasedOnAmount(hit.normal, hit.smoothness, rngState);
     Ray scatteredRay = CreateRay(hit.position + (hit.normal * 0.001f), reflect(sourceRay.direction, roughNormal));
+
+    if (IsWaterMaterial(hit))
+    {
+        float fresnelReflectance = GetFresnelReflectance(sourceRay, hit);
+        if (rand(rngState) < fresnelReflectance)
+        {
+            scatteredRay.direction = reflect(sourceRay.direction, roughNormal);
+            scatteredRay.origin = hit.position + scatteredRay.direction * 0.01f;
+            return CreateScatterResult(scatteredRay, lerp(float3(1.0f, 1.0f, 1.0f), albedo, 0.08f));
+        }
+
+        ApplyWaterTransmission(scatteredRay, sourceRay, hit);
+        float3 tint = lerp(float3(1.0f, 1.0f, 1.0f), albedo, saturate(1.0f - hit.opacity));
+        return CreateScatterResult(scatteredRay, tint * GetTransmissionAmount(hit));
+    }
 
     if (IsGlassMaterial(hit))
     {

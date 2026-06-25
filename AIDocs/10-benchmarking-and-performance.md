@@ -14,6 +14,8 @@ This document covers runtime benchmark tooling, performance hotspots, and benchm
 - `Benchmark_DenseMesh`: stresses per-mesh BVH traversal and leaf triangle tests.
 - `Benchmark_ManyMeshes`: stresses object-level culling for many registered mesh objects.
 - `Benchmark_Glass`: stresses transparent/refraction paths and transparent shadows.
+- `Benchmark_Water`: stresses procedural ray-marched water, Fresnel reflection/refraction, underwater/above-water viewing, and disabled accumulation for animated water.
+- `Benchmark_GlassWaterPencil`: image-quality scene inspired by a pencil in a glass of water, stressing glass meshes, calm water refraction, nested transparent surfaces, and thin curved mesh highlights.
 - `Benchmark_Sparse`: catches acceleration-structure overhead regressions in small scenes.
 - `Benchmark_Dynamic`: stresses per-frame transform updates, BVH rebuilds, and buffer uploads.
 - `Benchmark_CornellBox`: a Cornell-box-style image-quality/reference scene with red/green walls, a ceiling light, a reflective sphere, and a tall box.

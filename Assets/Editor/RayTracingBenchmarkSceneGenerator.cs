@@ -26,6 +26,8 @@ public static class RayTracingBenchmarkSceneGenerator
         CreateGlassScene();
         CreateSparseScene();
         CreateDynamicScene();
+        CreateWaterScene();
+        CreateGlassOfWaterPencilScene();
         CreateCornellBoxScene();
         CreateWolfensteinScene();
 
@@ -81,6 +83,11 @@ public static class RayTracingBenchmarkSceneGenerator
         }
 
         var context = CreateBaseScene("Benchmark_ManySpheres", new Vector3(0.0f, 7.0f, -24.0f), new Vector3(15.0f, 0.0f, 0.0f));
+        context.Manager.numberOfPasses = 1;
+        context.Manager.enableFrameAccumulation = true;
+        context.Manager.numBounces = 6;
+        context.Manager.shadowBvhMinObjectCount = 1024;
+        context.Manager.shadowQuality = 1;
         AddLight(context.Root, "Key Light", new Vector3(0.0f, 13.0f, -4.0f), 1.8f, new Color32(255, 235, 210, 255));
 
         const int gridX = 24;
@@ -196,7 +203,8 @@ public static class RayTracingBenchmarkSceneGenerator
             return;
         }
 
-        var context = CreateBaseScene("Benchmark_Glass", new Vector3(0.0f, 5.5f, -16.0f), new Vector3(12.0f, 0.0f, 0.0f), passes: 2, bounces: 5, shadowQuality: 3);
+        var context = CreateBaseScene("Benchmark_Glass", new Vector3(0.0f, 5.5f, -16.0f), new Vector3(12.0f, 0.0f, 0.0f), passes: 1, bounces: 8, shadowQuality: 1);
+        context.Manager.enableFrameAccumulation = true;
         AddLight(context.Root, "Key Light", new Vector3(-3.0f, 9.0f, -4.0f), 1.5f, new Color32(255, 235, 220, 255));
         AddLight(context.Root, "Blue Light", new Vector3(4.0f, 5.5f, 4.0f), 0.8f, new Color32(110, 165, 255, 255));
 
@@ -249,6 +257,117 @@ public static class RayTracingBenchmarkSceneGenerator
         }
 
         Save(context.Scene, "Benchmark_Dynamic");
+    }
+
+    private static void CreateWaterScene()
+    {
+        const string sceneName = "Benchmark_Water";
+        if (ShouldSkipExistingScene(sceneName))
+        {
+            return;
+        }
+
+        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 0.95f, -14.0f), new Vector3(1.5f, 0.0f, 0.0f), passes: 2, bounces: 5, shadowQuality: 2);
+        context.Manager.cameraFocalDistance = 18.0f;
+        context.Manager.groundSmoothness = 0.72f;
+        context.Manager.lightFalloffScale = 0.045f;
+        context.Manager.exposure = 1.15f;
+        context.Manager.topLevelBvhMinObjectCount = 0;
+        context.Manager.shadowBvhMinObjectCount = 0;
+        context.Manager.enableWater = true;
+        context.Manager.waterCenter = new Vector3(0.0f, 0.85f, 5.0f);
+        context.Manager.waterSize = new Vector2(32.0f, 36.0f);
+        context.Manager.waterColor = new Color32(36, 110, 132, 255);
+        context.Manager.waterSmoothness = 0.97f;
+        context.Manager.waterOpacity = 0.16f;
+        context.Manager.waterRefractionIndex = 1.333f;
+        context.Manager.waterWaveAmplitude = 0.32f;
+        context.Manager.waterWaveScale = 0.7f;
+        context.Manager.waterWaveSpeed = 0.85f;
+        context.Manager.waterMarchSteps = 36;
+        context.Manager.waterRefinementSteps = 6;
+
+        AddLight(context.Root, "Low Sun Reflection Light", new Vector3(-5.0f, 4.0f, -5.5f), 1.2f, new Color32(255, 226, 188, 255));
+        AddLight(context.Root, "Cool Sky Fill", new Vector3(8.0f, 7.5f, 8.0f), 1.8f, new Color32(120, 170, 255, 255));
+
+        AddRayMesh(context.Root, "Lake Bed", CreateHorizontalQuadMesh("Lake Bed", 32.0f, 36.0f, 4.0f, 4.0f), new Vector3(0.0f, 0.04f, 5.0f), Vector3.zero, Vector3.one, new Color32(72, 63, 42, 255), RayMaterial.MaterialType.Diffuse, 0.35f);
+
+        for (int i = 0; i < 24; i++)
+        {
+            float angle = i * Mathf.PI * 2.0f / 24.0f;
+            float radiusX = 13.5f + (i % 3) * 0.65f;
+            float radiusZ = 15.0f + (i % 4) * 0.55f;
+            float x = Mathf.Cos(angle) * radiusX;
+            float z = 5.0f + Mathf.Sin(angle) * radiusZ;
+            float stoneRadius = 0.25f + 0.18f * Mathf.PerlinNoise(i * 0.37f, 2.1f);
+            AddSphere(context.Root, "Shore Rock", new Vector3(x, 0.18f + stoneRadius, z), stoneRadius, new Color32(98, 96, 88, 255), RayMaterial.MaterialType.Diffuse, 0.42f);
+        }
+
+        for (int i = 0; i < 18; i++)
+        {
+            float x = -11.0f + i * 1.3f;
+            float z = 0.5f + Mathf.Sin(i * 1.7f) * 5.5f;
+            float y = 0.22f + (i % 4) * 0.08f;
+            var color = Color.HSVToRGB(0.08f + i * 0.012f, 0.45f, 0.55f);
+            AddSphere(context.Root, "Underwater Pebble", new Vector3(x, y, z + 5.0f), 0.25f + (i % 3) * 0.08f, color, RayMaterial.MaterialType.Diffuse, 0.25f);
+        }
+
+        AddSphere(context.Root, "Half Submerged Red Marker", new Vector3(-3.2f, 0.95f, 1.2f), 0.62f, new Color32(220, 65, 45, 255), RayMaterial.MaterialType.Metal, 0.72f);
+        AddSphere(context.Root, "Underwater Blue Marker", new Vector3(2.7f, 0.42f, 3.2f), 0.58f, new Color32(50, 120, 235, 255), RayMaterial.MaterialType.Diffuse, 0.35f);
+        AddSphere(context.Root, "Far Reflection Sphere", new Vector3(5.4f, 1.25f, 13.0f), 0.95f, new Color32(230, 222, 196, 255), RayMaterial.MaterialType.Metal, 0.86f);
+
+        AddPrimitiveMesh(context.Root, "Left Dock Post", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-5.2f, 1.2f, -1.5f), Vector3.zero, new Vector3(0.28f, 2.4f, 0.28f), new Color32(96, 62, 34, 255), RayMaterial.MaterialType.Diffuse, 0.38f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Right Dock Post", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-3.8f, 1.2f, -1.5f), Vector3.zero, new Vector3(0.28f, 2.4f, 0.28f), new Color32(96, 62, 34, 255), RayMaterial.MaterialType.Diffuse, 0.38f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Dock Plank", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-4.5f, 1.55f, -1.5f), Vector3.zero, new Vector3(2.2f, 0.18f, 1.0f), new Color32(120, 78, 42, 255), RayMaterial.MaterialType.Diffuse, 0.45f, 1.0f);
+
+        Save(context.Scene, sceneName);
+    }
+
+    private static void CreateGlassOfWaterPencilScene()
+    {
+        const string sceneName = "Benchmark_GlassWaterPencil";
+        if (ShouldSkipExistingScene(sceneName))
+        {
+            return;
+        }
+
+        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 2.75f, -7.2f), new Vector3(6.0f, 0.0f, 0.0f), passes: 4, bounces: 8, shadowQuality: 4);
+        context.Manager.numberOfPasses = 1;
+        context.Manager.numBounces = 4;
+        context.Manager.shadowQuality = 1;
+        context.Manager.cameraFocalDistance = 7.5f;
+        context.Manager.groundSmoothness = 0.28f;
+        context.Manager.lightFalloffScale = 0.08f;
+        context.Manager.exposure = 1.0f;
+        context.Manager.topLevelBvhMinObjectCount = 0;
+        context.Manager.shadowBvhMinObjectCount = 1024;
+        context.Manager.lightSamplingStrategy = GameManager.LightSamplingStrategy.ImportanceSampled;
+        context.Manager.lightSampleCount = 1;
+        context.Manager._skyboxLightColor = new Color32(72, 76, 82, 255);
+        context.Manager.enableWater = false;
+
+        AddLight(context.Root, "Large Softbox", new Vector3(-3.5f, 5.6f, -3.8f), 1.6f, new Color32(255, 250, 236, 255));
+        AddLight(context.Root, "Rim Highlight", new Vector3(3.5f, 3.7f, -2.2f), 0.55f, new Color32(210, 230, 255, 255));
+
+        var tumblerRoot = new GameObject("Glass Tumbler");
+        tumblerRoot.transform.SetParent(context.Root, false);
+        tumblerRoot.transform.localPosition = Vector3.zero;
+        tumblerRoot.transform.localRotation = Quaternion.identity;
+        tumblerRoot.transform.localScale = Vector3.one;
+
+        AddRayMesh(tumblerRoot.transform, "Glass Wall", CreateOpenCylinderMesh("Glass Wall", 96, 1.36f, 3.05f, 0.055f), new Vector3(0.0f, 1.56f, 0.0f), Vector3.zero, Vector3.one, new Color32(212, 238, 245, 255), RayMaterial.MaterialType.Glass, 0.98f, 0.18f, 1.83f);
+        AddRayMesh(tumblerRoot.transform, "Water Volume", CreateCylinderMesh("Water Volume", 96, 1.24f, 1.86f), new Vector3(0.0f, 1.17f, 0.0f), Vector3.zero, Vector3.one, new Color32(190, 226, 238, 255), RayMaterial.MaterialType.Glass, 0.99f, 0.08f, 2.2f);
+        AddRayMesh(tumblerRoot.transform, "Top Rim", CreateTorusMesh("Top Rim", 96, 12, 1.36f, 0.055f), new Vector3(0.0f, 3.09f, 0.0f), Vector3.zero, Vector3.one, new Color32(220, 244, 250, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.16f, 1.52f);
+
+        var pencilRoot = new GameObject("Tilted Pencil");
+        pencilRoot.transform.SetParent(context.Root, false);
+        pencilRoot.transform.localPosition = new Vector3(-2.5f, 1.4f, 0.0f);
+        pencilRoot.transform.localEulerAngles = new Vector3(0.17f, 0.0f, -55.0f);
+        pencilRoot.transform.localScale = Vector3.one;
+
+        AddRayMesh(pencilRoot.transform, "Red Pencil Cylinder", CreateHorizontalCylinderMesh("Red Pencil Cylinder", 10, 0.14f, 5.7f), new Vector3(0.1f, 2.25f, 0.0f), Vector3.zero, Vector3.one, new Color32(174, 28, 36, 255), RayMaterial.MaterialType.Diffuse, 0.52f);
+
+        Save(context.Scene, sceneName);
     }
 
     private static void CreateCornellBoxScene()
@@ -325,8 +444,9 @@ public static class RayTracingBenchmarkSceneGenerator
     private static GameObject AddSphere(Transform parent, string name, Vector3 position, float radius, Color color, RayMaterial.MaterialType type, float smoothness, float opacity = 1.0f, float refraction = 1.0f)
     {
         var obj = new GameObject(name);
-        obj.transform.SetParent(parent);
-        obj.transform.position = position;
+        obj.transform.SetParent(parent, false);
+        obj.transform.localPosition = position;
+        obj.transform.localRotation = Quaternion.identity;
         obj.transform.localScale = Vector3.one;
 
         var collider = obj.AddComponent<SphereCollider>();
@@ -346,8 +466,10 @@ public static class RayTracingBenchmarkSceneGenerator
     private static GameObject AddLight(Transform parent, string name, Vector3 position, float radius, Color color)
     {
         var obj = new GameObject(name);
-        obj.transform.SetParent(parent);
-        obj.transform.position = position;
+        obj.transform.SetParent(parent, false);
+        obj.transform.localPosition = position;
+        obj.transform.localRotation = Quaternion.identity;
+        obj.transform.localScale = Vector3.one;
 
         var collider = obj.AddComponent<SphereCollider>();
         collider.radius = radius;
@@ -362,9 +484,9 @@ public static class RayTracingBenchmarkSceneGenerator
     private static GameObject AddPrimitiveMesh(Transform parent, string name, RayMeshPrimitive.PrimitiveType primitiveType, Vector3 position, Vector3 euler, Vector3 scale, Color color, RayMaterial.MaterialType type, float smoothness, float opacity, float refraction = 1.0f)
     {
         var obj = new GameObject(name);
-        obj.transform.SetParent(parent);
-        obj.transform.position = position;
-        obj.transform.eulerAngles = euler;
+        obj.transform.SetParent(parent, false);
+        obj.transform.localPosition = position;
+        obj.transform.localEulerAngles = euler;
         obj.transform.localScale = scale;
 
         var material = obj.AddComponent<RayMaterial>();
@@ -391,9 +513,9 @@ public static class RayTracingBenchmarkSceneGenerator
     private static GameObject AddRayMesh(Transform parent, string name, Mesh mesh, Vector3 position, Vector3 euler, Vector3 scale, Color color, RayMaterial.MaterialType type, float smoothness, float opacity = 1.0f, float refraction = 1.0f, Texture2D albedoTexture = null)
     {
         var obj = new GameObject(name);
-        obj.transform.SetParent(parent);
-        obj.transform.position = position;
-        obj.transform.eulerAngles = euler;
+        obj.transform.SetParent(parent, false);
+        obj.transform.localPosition = position;
+        obj.transform.localEulerAngles = euler;
         obj.transform.localScale = scale;
 
         var material = obj.AddComponent<RayMaterial>();
@@ -531,6 +653,232 @@ public static class RayTracingBenchmarkSceneGenerator
         var mesh = new Mesh
         {
             name = name,
+            vertices = vertices,
+            triangles = triangles
+        };
+        mesh.RecalculateNormals();
+        mesh.RecalculateBounds();
+        return mesh;
+    }
+
+    private static Mesh CreateCylinderMesh(string name, int segments, float radius, float height)
+    {
+        segments = Mathf.Max(3, segments);
+        var vertices = new Vector3[segments * 2 + 2];
+        var triangles = new int[segments * 12];
+        float halfHeight = height * 0.5f;
+
+        for (int i = 0; i < segments; i++)
+        {
+            float angle = i * Mathf.PI * 2.0f / segments;
+            float x = Mathf.Cos(angle) * radius;
+            float z = Mathf.Sin(angle) * radius;
+            vertices[i] = new Vector3(x, -halfHeight, z);
+            vertices[i + segments] = new Vector3(x, halfHeight, z);
+        }
+
+        int bottomCenter = segments * 2;
+        int topCenter = bottomCenter + 1;
+        vertices[bottomCenter] = new Vector3(0.0f, -halfHeight, 0.0f);
+        vertices[topCenter] = new Vector3(0.0f, halfHeight, 0.0f);
+
+        int triangleIndex = 0;
+        for (int i = 0; i < segments; i++)
+        {
+            int next = (i + 1) % segments;
+            triangles[triangleIndex++] = i;
+            triangles[triangleIndex++] = i + segments;
+            triangles[triangleIndex++] = next;
+            triangles[triangleIndex++] = next;
+            triangles[triangleIndex++] = i + segments;
+            triangles[triangleIndex++] = next + segments;
+
+            triangles[triangleIndex++] = bottomCenter;
+            triangles[triangleIndex++] = next;
+            triangles[triangleIndex++] = i;
+
+            triangles[triangleIndex++] = topCenter;
+            triangles[triangleIndex++] = i + segments;
+            triangles[triangleIndex++] = next + segments;
+        }
+
+        return CreateMesh(name, vertices, triangles);
+    }
+
+    private static Mesh CreateHorizontalCylinderMesh(string name, int segments, float radius, float length)
+    {
+        segments = Mathf.Max(3, segments);
+        var vertices = new Vector3[segments * 2 + 2];
+        var triangles = new int[segments * 12];
+        float halfLength = length * 0.5f;
+
+        for (int i = 0; i < segments; i++)
+        {
+            float angle = i * Mathf.PI * 2.0f / segments;
+            float y = Mathf.Cos(angle) * radius;
+            float z = Mathf.Sin(angle) * radius;
+            vertices[i] = new Vector3(-halfLength, y, z);
+            vertices[i + segments] = new Vector3(halfLength, y, z);
+        }
+
+        int leftCenter = segments * 2;
+        int rightCenter = leftCenter + 1;
+        vertices[leftCenter] = new Vector3(-halfLength, 0.0f, 0.0f);
+        vertices[rightCenter] = new Vector3(halfLength, 0.0f, 0.0f);
+
+        int triangleIndex = 0;
+        for (int i = 0; i < segments; i++)
+        {
+            int next = (i + 1) % segments;
+            triangles[triangleIndex++] = i;
+            triangles[triangleIndex++] = i + segments;
+            triangles[triangleIndex++] = next;
+            triangles[triangleIndex++] = next;
+            triangles[triangleIndex++] = i + segments;
+            triangles[triangleIndex++] = next + segments;
+
+            triangles[triangleIndex++] = leftCenter;
+            triangles[triangleIndex++] = next;
+            triangles[triangleIndex++] = i;
+
+            triangles[triangleIndex++] = rightCenter;
+            triangles[triangleIndex++] = i + segments;
+            triangles[triangleIndex++] = next + segments;
+        }
+
+        return CreateMesh(name, vertices, triangles);
+    }
+
+    private static Mesh CreateOpenCylinderMesh(string name, int segments, float radius, float height, float thickness)
+    {
+        segments = Mathf.Max(3, segments);
+        float innerRadius = Mathf.Max(0.01f, radius - Mathf.Max(0.001f, thickness));
+        float halfHeight = height * 0.5f;
+        var vertices = new Vector3[segments * 4];
+        var triangles = new int[segments * 12];
+
+        for (int i = 0; i < segments; i++)
+        {
+            float angle = i * Mathf.PI * 2.0f / segments;
+            var outer = new Vector3(Mathf.Cos(angle) * radius, 0.0f, Mathf.Sin(angle) * radius);
+            var inner = new Vector3(Mathf.Cos(angle) * innerRadius, 0.0f, Mathf.Sin(angle) * innerRadius);
+            vertices[i] = new Vector3(outer.x, -halfHeight, outer.z);
+            vertices[i + segments] = new Vector3(outer.x, halfHeight, outer.z);
+            vertices[i + segments * 2] = new Vector3(inner.x, -halfHeight, inner.z);
+            vertices[i + segments * 3] = new Vector3(inner.x, halfHeight, inner.z);
+        }
+
+        int triangleIndex = 0;
+        for (int i = 0; i < segments; i++)
+        {
+            int next = (i + 1) % segments;
+            int outerBottom = i;
+            int outerTop = i + segments;
+            int innerBottom = i + segments * 2;
+            int innerTop = i + segments * 3;
+            int nextOuterBottom = next;
+            int nextOuterTop = next + segments;
+            int nextInnerBottom = next + segments * 2;
+            int nextInnerTop = next + segments * 3;
+
+            triangles[triangleIndex++] = outerBottom;
+            triangles[triangleIndex++] = outerTop;
+            triangles[triangleIndex++] = nextOuterBottom;
+            triangles[triangleIndex++] = nextOuterBottom;
+            triangles[triangleIndex++] = outerTop;
+            triangles[triangleIndex++] = nextOuterTop;
+
+            triangles[triangleIndex++] = innerBottom;
+            triangles[triangleIndex++] = nextInnerBottom;
+            triangles[triangleIndex++] = innerTop;
+            triangles[triangleIndex++] = innerTop;
+            triangles[triangleIndex++] = nextInnerBottom;
+            triangles[triangleIndex++] = nextInnerTop;
+        }
+
+        return CreateMesh(name, vertices, triangles);
+    }
+
+    private static Mesh CreateConeMesh(string name, int segments, float radius, float height)
+    {
+        segments = Mathf.Max(3, segments);
+        var vertices = new Vector3[segments + 2];
+        var triangles = new int[segments * 6];
+        float halfHeight = height * 0.5f;
+        vertices[segments] = new Vector3(0.0f, halfHeight, 0.0f);
+        vertices[segments + 1] = new Vector3(0.0f, -halfHeight, 0.0f);
+
+        for (int i = 0; i < segments; i++)
+        {
+            float angle = i * Mathf.PI * 2.0f / segments;
+            vertices[i] = new Vector3(Mathf.Cos(angle) * radius, -halfHeight, Mathf.Sin(angle) * radius);
+        }
+
+        int triangleIndex = 0;
+        for (int i = 0; i < segments; i++)
+        {
+            int next = (i + 1) % segments;
+            triangles[triangleIndex++] = i;
+            triangles[triangleIndex++] = segments;
+            triangles[triangleIndex++] = next;
+
+            triangles[triangleIndex++] = segments + 1;
+            triangles[triangleIndex++] = next;
+            triangles[triangleIndex++] = i;
+        }
+
+        return CreateMesh(name, vertices, triangles);
+    }
+
+    private static Mesh CreateTorusMesh(string name, int majorSegments, int minorSegments, float majorRadius, float minorRadius)
+    {
+        majorSegments = Mathf.Max(3, majorSegments);
+        minorSegments = Mathf.Max(3, minorSegments);
+        var vertices = new Vector3[majorSegments * minorSegments];
+        var triangles = new int[majorSegments * minorSegments * 6];
+
+        for (int i = 0; i < majorSegments; i++)
+        {
+            float majorAngle = i * Mathf.PI * 2.0f / majorSegments;
+            var radial = new Vector3(Mathf.Cos(majorAngle), 0.0f, Mathf.Sin(majorAngle));
+            for (int j = 0; j < minorSegments; j++)
+            {
+                float minorAngle = j * Mathf.PI * 2.0f / minorSegments;
+                float ringRadius = majorRadius + Mathf.Cos(minorAngle) * minorRadius;
+                float y = Mathf.Sin(minorAngle) * minorRadius;
+                vertices[i * minorSegments + j] = new Vector3(radial.x * ringRadius, y, radial.z * ringRadius);
+            }
+        }
+
+        int triangleIndex = 0;
+        for (int i = 0; i < majorSegments; i++)
+        {
+            int nextI = (i + 1) % majorSegments;
+            for (int j = 0; j < minorSegments; j++)
+            {
+                int nextJ = (j + 1) % minorSegments;
+                int a = i * minorSegments + j;
+                int b = nextI * minorSegments + j;
+                int c = i * minorSegments + nextJ;
+                int d = nextI * minorSegments + nextJ;
+                triangles[triangleIndex++] = a;
+                triangles[triangleIndex++] = b;
+                triangles[triangleIndex++] = c;
+                triangles[triangleIndex++] = c;
+                triangles[triangleIndex++] = b;
+                triangles[triangleIndex++] = d;
+            }
+        }
+
+        return CreateMesh(name, vertices, triangles);
+    }
+
+    private static Mesh CreateMesh(string name, Vector3[] vertices, int[] triangles)
+    {
+        var mesh = new Mesh
+        {
+            name = name,
+            indexFormat = vertices.Length > 65535 ? UnityEngine.Rendering.IndexFormat.UInt32 : UnityEngine.Rendering.IndexFormat.UInt16,
             vertices = vertices,
             triangles = triangles
         };

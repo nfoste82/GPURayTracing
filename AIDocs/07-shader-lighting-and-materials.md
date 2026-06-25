@@ -67,11 +67,12 @@ Triangle mesh refraction uses `ApplyPlanarTransmission()` rather than the sphere
 
 1. Refract from air into the hit triangle using the project `Refract()` helper.
 2. Cast an internal ray against triangles with the same `meshIndex`.
-3. Use the nearest internal triangle hit as the exit face.
-4. Refract from material back into air.
-5. Continue the path from the exit point.
+3. Use the nearest internal triangle hit as the candidate exit face.
+4. Run a bounded scene intersection query along the internal segment, ignoring the current transparent mesh. This uses the normal top-level/per-mesh BVH traversal and can find objects enclosed by the transparent mesh before the exit face.
+5. If an interior object is found, continue tracing inside the transparent mesh so the next bounce shades that object.
+6. If no interior object is found, refract from material back into air and continue the path from the exit point.
 
-This gives visible prism-like behavior for simple closed meshes such as pyramids. It is still approximate: it assumes a mostly closed/convex mesh, does not handle nested media, and does not model distance-based absorption.
+This gives visible prism-like behavior for simple closed meshes such as pyramids while still allowing enclosed objects, such as a pencil inside a water cylinder, to be hit before the transparent mesh exit. It is still approximate: it assumes a mostly closed/convex mesh, does not track a full nested-medium stack, and does not model distance-based absorption.
 
 ## Partial Shader Pieces
 
