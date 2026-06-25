@@ -1,8 +1,10 @@
+using System;
 using System.IO;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using Object = UnityEngine.Object;
 
 public static class RayTracingBenchmarkSceneGenerator
 {
@@ -229,11 +231,12 @@ public static class RayTracingBenchmarkSceneGenerator
             return;
         }
 
-        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 5.8f, -13.5f), new Vector3(16.0f, 0.0f, 0.0f), passes: 1, bounces: 10, shadowQuality: 3);
+        var context = CreateBaseScene(sceneName, new Vector3(-6.65f, 4.86f, -1.99f), new Vector3(22.67f, 47.46f, 0.0f), passes: 1, bounces: 10, shadowQuality: 1);
         context.Manager.enableFrameAccumulation = true;
-        context.Manager.lightFalloffScale = 0.035f;
+        context.Manager.lightFalloffScale = 0.015f;
         context.Manager._skyboxLightColor = new Color32(18, 18, 22, 255);
-        context.Manager.groundSmoothness = 0.12f;
+        context.Manager.groundSmoothness = 1.0f;
+        context.Manager.topLevelBvhMinObjectCount = 1024;
         context.Manager.shadowBvhMinObjectCount = 0;
 
         AddLight(context.Root, "White Transmission Light", new Vector3(0.0f, 3.5f, -4.9f), 0.65f, Color.white);
@@ -243,7 +246,7 @@ public static class RayTracingBenchmarkSceneGenerator
         AddPrimitiveMesh(context.Root, "Receiver Back Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 2.0f, 5.2f), Vector3.zero, new Vector3(13.0f, 4.0f, 0.08f), new Color32(230, 230, 225, 255), RayMaterial.MaterialType.Diffuse, 0.05f, 1.0f);
         AddPrimitiveMesh(context.Root, "Receiver Floor", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 0.02f, 1.6f), Vector3.zero, new Vector3(13.0f, 0.04f, 11.0f), new Color32(215, 213, 205, 255), RayMaterial.MaterialType.Diffuse, 0.08f, 1.0f);
 
-        AddTransmissionFilterStack(context.Root, "Clear Reference", -5.4f, new Color32[0], 0.35f, 1.0f);
+        AddTransmissionFilterStack(context.Root, "Clear Reference", -5.4f, Array.Empty<Color32>(), 0.35f, 1.0f);
         AddTransmissionFilterStack(context.Root, "Blue Single Layer", -3.6f, new[] { new Color32(55, 105, 255, 255) }, 0.35f, 1.0f);
         AddTransmissionFilterStack(context.Root, "Yellow Single Layer", -1.8f, new[] { new Color32(255, 235, 50, 255) }, 0.35f, 1.0f);
         AddTransmissionFilterStack(context.Root, "Blue Then Yellow", 0.0f, new[] { new Color32(55, 105, 255, 255), new Color32(255, 235, 50, 255) }, 0.35f, 1.0f);
