@@ -103,6 +103,9 @@ static const int MaxImportanceLights = 128;
 static const float MinDirectLightThroughput = 0.01f;
 static const int BvhStackSize = 64;
 static const float WaterHitEpsilon = 0.001f;
+static const float GlassAbsorptionColorFloor = 0.001f;
+static const float GlassNeutralAbsorption = 0.08f;
+static const float ThinTransparentSurfaceDistance = 0.25f;
 
 uint Hash(uint value)
 {
@@ -544,6 +547,36 @@ bool SphereOccludes(Ray ray, Sphere sphere, float maxDistance)
     return t > 0.001f && t < maxDistance;
 }
 
+float GetSphereDistanceThroughMedium(Ray ray, Sphere sphere, float maxDistance)
+{
+    float3 d = sphere.position - ray.origin;
+    float p1 = dot(ray.direction, d);
+    float p2sqr = p1 * p1 - dot(d, d) + sphere.radius * sphere.radius;
+    if (p2sqr < 0.0f)
+    {
+        return 0.0f;
+    }
+
+    float p2 = sqrt(p2sqr);
+    float entryDistance = max(0.0f, p1 - p2);
+    float exitDistance = min(maxDistance, p1 + p2);
+    return max(0.0f, exitDistance - entryDistance);
+}
+
+float3 GetAbsorptionTransmittance(float3 filterColor, float opacity, float distanceThroughMedium)
+{
+    float densityDistance = max(0.0f, distanceThroughMedium) * saturate(opacity);
+    float3 spectralFilter = pow(max(saturate(filterColor), GlassAbsorptionColorFloor.xxx), densityDistance);
+    float neutralLoss = exp(-GlassNeutralAbsorption * densityDistance);
+    return saturate(spectralFilter * neutralLoss);
+}
+
+float3 GetTransparentShadowTransmittance(RayHit hit, float distanceThroughMedium)
+{
+    float surfaceTransmission = clamp((1.0f - hit.opacity) * 1.333f, 0.0f, 1.0f);
+    return GetAbsorptionTransmittance(hit.color, hit.opacity, distanceThroughMedium) * surfaceTransmission;
+}
+
 bool IntersectTriangleRaw(Ray ray, MeshTriangle meshTriangle, out float hitDistance, out float3 normal, out float2 barycentric)
 {
     float3 edge1 = meshTriangle.vertex1 - meshTriangle.vertex0;
@@ -702,7 +735,7 @@ void IntersectMeshBvh(Ray ray, inout RayHit bestHit, MeshInfo meshInfo)
     }
 }
 
-bool IntersectMeshBvhForShadow(Ray ray, float maxDistance, inout RayHit nearestTransparentHit, MeshInfo meshInfo)
+bool IntersectMeshBvhForShadow(Ray ray, float maxDistance, inout float3 transmittance, MeshInfo meshInfo)
 {
     float3 inverseDirection = 1.0f / ray.direction;
     float ignoredEntry;
@@ -740,10 +773,7 @@ bool IntersectMeshBvhForShadow(Ray ray, float maxDistance, inout RayHit nearestT
                     return true;
                 }
 
-                if (blockerHit.distance < nearestTransparentHit.distance)
-                {
-                    nearestTransparentHit = blockerHit;
-                }
+                transmittance *= GetTransparentShadowTransmittance(blockerHit, ThinTransparentSurfaceDistance);
             }
             continue;
         }
@@ -1168,8 +1198,7 @@ float3 GetShadowTransmittance(Ray rayToLight, float distanceToLight)
             : float3(1.0f, 1.0f, 1.0f);
     }
 
-    RayHit nearestTransparentHit = CreateRayHit();
-    nearestTransparentHit.distance = distanceToLight;
+    float3 transmittance = float3(1.0f, 1.0f, 1.0f);
 
     if (_NumShadowBvhNodes <= 0)
     {
@@ -1191,16 +1220,16 @@ float3 GetShadowTransmittance(Ray rayToLight, float distanceToLight)
                 return float3(0.0f, 0.0f, 0.0f);
             }
 
-            if (blockerHit.distance < nearestTransparentHit.distance)
-            {
-                nearestTransparentHit = blockerHit;
-            }
+            float distanceThroughMedium = blockerHit.obj_radius > 0.0f
+                ? GetSphereDistanceThroughMedium(rayToLight, _Spheres[j], distanceToLight)
+                : ThinTransparentSurfaceDistance;
+            transmittance *= GetTransparentShadowTransmittance(blockerHit, distanceThroughMedium);
         }
 
         [loop]
         for (j = 0; j < _NumMeshes; j++)
         {
-            if (IntersectMeshBvhForShadow(rayToLight, distanceToLight, nearestTransparentHit, _Meshes[j]))
+            if (IntersectMeshBvhForShadow(rayToLight, distanceToLight, transmittance, _Meshes[j]))
             {
                 return float3(0.0f, 0.0f, 0.0f);
             }
@@ -1236,17 +1265,17 @@ float3 GetShadowTransmittance(Ray rayToLight, float distanceToLight)
                     return float3(0.0f, 0.0f, 0.0f);
                 }
 
-                if (blockerHit.distance < nearestTransparentHit.distance)
-                {
-                    nearestTransparentHit = blockerHit;
-                }
+                float distanceThroughMedium = blockerHit.obj_radius > 0.0f
+                    ? GetSphereDistanceThroughMedium(rayToLight, _Spheres[node.objectIndex], distanceToLight)
+                    : ThinTransparentSurfaceDistance;
+                transmittance *= GetTransparentShadowTransmittance(blockerHit, distanceThroughMedium);
 
                 continue;
             }
 
             if (node.objectType == TopLevelObjectTypeMesh)
             {
-                if (IntersectMeshBvhForShadow(rayToLight, distanceToLight, nearestTransparentHit, _Meshes[node.objectIndex]))
+                if (IntersectMeshBvhForShadow(rayToLight, distanceToLight, transmittance, _Meshes[node.objectIndex]))
                 {
                     return float3(0.0f, 0.0f, 0.0f);
                 }
@@ -1283,25 +1312,7 @@ float3 GetShadowTransmittance(Ray rayToLight, float distanceToLight)
         }
     }
 
-    if (nearestTransparentHit.distance >= distanceToLight)
-    {
-        return float3(1.0f, 1.0f, 1.0f);
-    }
-
-    if (nearestTransparentHit.obj_radius <= 0.0f)
-    {
-        float opacity = saturate(nearestTransparentHit.opacity);
-        return lerp(float3(1.0f, 1.0f, 1.0f), nearestTransparentHit.color, opacity) * (1.0f - opacity);
-    }
-
-    float3 halfway = GetClosestPointOnLineSegment(
-        nearestTransparentHit.position,
-        nearestTransparentHit.position + (2.0f * nearestTransparentHit.obj_radius * rayToLight.direction),
-        nearestTransparentHit.obj_position);
-    float distanceThroughOpacity = length(halfway - nearestTransparentHit.position);
-    float lightFocusAmount = max(0.9f, distanceThroughOpacity * 2.0f / nearestTransparentHit.obj_radius);
-
-    return nearestTransparentHit.color * (1.0f - nearestTransparentHit.opacity) * lightFocusAmount;
+    return transmittance;
 }
 
 float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount, inout uint rngState)
@@ -1570,6 +1581,14 @@ float3 GetAlbedo(RayHit hit)
     return hit.color;
 }
 
+float3 GetGlassAbsorptionTransmittance(RayHit hit, float3 albedo)
+{
+    float distanceThroughMedium = hit.distanceThroughOpacity > 0.0f
+        ? hit.distanceThroughOpacity
+        : ThinTransparentSurfaceDistance;
+    return GetAbsorptionTransmittance(albedo, hit.opacity, distanceThroughMedium);
+}
+
 float3 GetEmission(RayHit hit)
 {
     return hit.emission;
@@ -1642,7 +1661,7 @@ void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit)
     ray.direction = Refract(ray.direction, hit.refraction, 1.0f, exitPointNormal);
 }
 
-void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, RayHit hit)
+void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit)
 {
     float3 normal = hit.normal;
     float targetRefraction = max(1.0f, hit.refraction);
@@ -1681,6 +1700,7 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, RayHit hit)
 
     if (exitDistance >= 1.#INF)
     {
+        hit.distanceThroughOpacity = ThinTransparentSurfaceDistance;
         ray.direction = entryDirection;
         ray.origin = insideRay.origin;
         return;
@@ -1695,11 +1715,13 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, RayHit hit)
     RayHit interiorHit = GetNearestIntersectionBounded(insideRay, exitDistance, hit.meshIndex);
     if (!DidHitSky(interiorHit))
     {
+        hit.distanceThroughOpacity = interiorHit.distance;
         ray.direction = entryDirection;
         ray.origin = insideRay.origin;
         return;
     }
 
+    hit.distanceThroughOpacity = exitDistance;
     float3 exitDirection = Refract(entryDirection, targetRefraction, 1.0f, -exitNormal);
     ray.direction = dot(exitDirection, exitDirection) > 0.0f
         ? normalize(exitDirection)
@@ -1757,7 +1779,7 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
                 ApplyPlanarTransmission(scatteredRay, sourceRay, hit);
             }
 
-            float3 tint = lerp(float3(1.0f, 1.0f, 1.0f), albedo, hit.opacity);
+            float3 tint = GetGlassAbsorptionTransmittance(hit, albedo);
             float transparentEnergy = hit.obj_radius > 0.0f ? transmission * (1.0f - fresnelReflectance) : transmission;
             return CreateScatterResult(scatteredRay, tint * transparentEnergy);
         }

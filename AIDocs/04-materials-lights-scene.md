@@ -19,7 +19,7 @@ Mesh objects use `RayMaterial` plus `MeshFilter` and should not have a `SphereCo
 Fields:
 
 - `Type`: selects `Diffuse`, `Metal`, or `Glass` scattering in the compute shader. Defaults to `Metal`. (Mesh primitives created via `RayMeshPrimitive` override this to `Glass` in `Reset()`.)
-- `Color`: uploaded as normalized RGB and used as albedo/tint.
+- `Color`: uploaded as normalized RGB and used as albedo/tint. For transmitted glass, it also acts as the RGB absorption/filter color, so stacked colored glass compounds per channel.
 - `AlbedoTexture`: optional mesh-only albedo texture. Mesh triangle UVs are uploaded and sampled from a fixed-size texture array; the sampled texture color multiplies `Color`. Sphere materials ignore this field.
 - `Smoothness`: controls metal/glass reflection roughness by randomizing the hit normal. Higher values preserve the normal more closely.
 - `Opacity`: `1` is opaque. Values below `1` allow glass/transparent transmission. Note that any opacity below `1` makes the shader treat the hit as glass (see below), regardless of `Type`.
@@ -27,7 +27,7 @@ Fields:
 
 The emissive material constant (`MaterialEmissive = 3` in the shader) is not selectable here. It is assigned internally to `RayLight` sphere lights during registration.
 
-In the shader, material color is retrieved through `GetAlbedo(hit)`. Diffuse and metal paths attenuate throughput by albedo. Glass transmission is tinted by albedo based on opacity, while glass reflection keeps white reflective throughput.
+In the shader, material color is retrieved through `GetAlbedo(hit)`. Diffuse and metal paths attenuate throughput by albedo. Glass transmission attenuates throughput with distance-based RGB absorption using albedo/color and opacity, while glass reflection keeps mostly white reflective throughput.
 
 The glass/refraction path is selected by `IsGlassMaterial(hit)`, which is true when `materialType == Glass` **or** when `hit.opacity < 1.0`. So a `Diffuse` or `Metal` object with opacity under `1` will render through the glass transmission/Fresnel path.
 
@@ -35,7 +35,7 @@ Material behavior:
 
 - `Diffuse`: direct lighting with cosine-weighted hemisphere scattering for later bounces.
 - `Metal`: reflective scattering, with `Smoothness` controlling roughness.
-- `Glass`: Schlick Fresnel weights approximate sphere refraction/transmission. Triangle meshes use approximate closed-mesh entry/exit refraction.
+- `Glass`: Schlick Fresnel weights approximate sphere refraction/transmission. Triangle meshes use approximate closed-mesh entry/exit refraction. Transmitted glass paths and transparent shadows apply accumulated RGB absorption, so light loses energy and changes color through colored layers.
 
 ## Ray Mesh Primitives
 

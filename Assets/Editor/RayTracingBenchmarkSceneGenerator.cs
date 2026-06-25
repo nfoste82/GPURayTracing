@@ -24,6 +24,7 @@ public static class RayTracingBenchmarkSceneGenerator
         CreateDenseMeshScene();
         CreateManyMeshesScene();
         CreateGlassScene();
+        CreateGlassTransmissionScene();
         CreateSparseScene();
         CreateDynamicScene();
         CreateWaterScene();
@@ -218,6 +219,59 @@ public static class RayTracingBenchmarkSceneGenerator
 
         AddPrimitiveMesh(context.Root, "Glass Pyramid", RayMeshPrimitive.PrimitiveType.Pyramid, new Vector3(0.0f, 1.4f, 3.0f), new Vector3(0.0f, 45.0f, 0.0f), Vector3.one * 2.2f, new Color32(180, 215, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.4f, 1.65f);
         Save(context.Scene, "Benchmark_Glass");
+    }
+
+    private static void CreateGlassTransmissionScene()
+    {
+        const string sceneName = "Benchmark_GlassTransmission";
+        if (ShouldSkipExistingScene(sceneName))
+        {
+            return;
+        }
+
+        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 5.8f, -13.5f), new Vector3(16.0f, 0.0f, 0.0f), passes: 1, bounces: 10, shadowQuality: 3);
+        context.Manager.enableFrameAccumulation = true;
+        context.Manager.lightFalloffScale = 0.035f;
+        context.Manager._skyboxLightColor = new Color32(18, 18, 22, 255);
+        context.Manager.groundSmoothness = 0.12f;
+        context.Manager.shadowBvhMinObjectCount = 0;
+
+        AddLight(context.Root, "White Transmission Light", new Vector3(0.0f, 5.0f, -4.9f), 0.65f, Color.white);
+        AddLight(context.Root, "Warm Side Reference Light", new Vector3(-5.6f, 4.8f, -2.2f), 0.38f, new Color32(255, 206, 145, 255));
+        AddLight(context.Root, "Blue Side Reference Light", new Vector3(5.6f, 4.8f, -2.2f), 0.38f, new Color32(95, 145, 255, 255));
+
+        AddPrimitiveMesh(context.Root, "Receiver Back Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 2.0f, 5.2f), Vector3.zero, new Vector3(13.0f, 4.0f, 0.08f), new Color32(230, 230, 225, 255), RayMaterial.MaterialType.Diffuse, 0.05f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Receiver Floor", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 0.02f, 1.6f), Vector3.zero, new Vector3(13.0f, 0.04f, 11.0f), new Color32(215, 213, 205, 255), RayMaterial.MaterialType.Diffuse, 0.08f, 1.0f);
+
+        AddTransmissionFilterStack(context.Root, "Clear Reference", -5.4f, new Color32[0], 0.35f, 1.0f);
+        AddTransmissionFilterStack(context.Root, "Blue Single Layer", -3.6f, new[] { new Color32(55, 105, 255, 255) }, 0.35f, 1.0f);
+        AddTransmissionFilterStack(context.Root, "Yellow Single Layer", -1.8f, new[] { new Color32(255, 235, 50, 255) }, 0.35f, 1.0f);
+        AddTransmissionFilterStack(context.Root, "Blue Then Yellow", 0.0f, new[] { new Color32(55, 105, 255, 255), new Color32(255, 235, 50, 255) }, 0.35f, 1.0f);
+        AddTransmissionFilterStack(context.Root, "Yellow Then Blue", 1.8f, new[] { new Color32(255, 235, 50, 255), new Color32(55, 105, 255, 255) }, 0.35f, 1.0f);
+        AddTransmissionFilterStack(context.Root, "Red Green Blue Stack", 3.6f, new[] { new Color32(255, 60, 45, 255), new Color32(55, 220, 75, 255), new Color32(55, 105, 255, 255) }, 0.35f, 1.0f);
+
+        AddPrimitiveMesh(context.Root, "Thick Blue Glass Block", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(5.4f, 2.0f, 0.0f), Vector3.zero, new Vector3(1.05f, 2.6f, 1.35f), new Color32(55, 105, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.28f, 1.5f);
+        AddPrimitiveMesh(context.Root, "Thin Blue Glass Plate", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(5.4f, 2.0f, -1.35f), Vector3.zero, new Vector3(1.05f, 2.6f, 0.14f), new Color32(55, 105, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.28f, 1.5f);
+
+        AddSphere(context.Root, "Cyan Glass Sphere Shadow Test", new Vector3(-4.5f, 1.05f, 2.15f), 0.75f, new Color32(45, 235, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.25f, 1.5f);
+        AddSphere(context.Root, "Magenta Glass Sphere Shadow Test", new Vector3(-2.9f, 1.05f, 2.15f), 0.75f, new Color32(255, 55, 210, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.25f, 1.5f);
+
+        Save(context.Scene, sceneName);
+    }
+
+    private static void AddTransmissionFilterStack(Transform parent, string name, float x, Color32[] colors, float opacity, float refraction)
+    {
+        if (colors.Length == 0)
+        {
+            AddPrimitiveMesh(parent, name + " Receiver Marker", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(x, 1.0f, 4.95f), Vector3.zero, new Vector3(1.05f, 1.8f, 0.08f), new Color32(245, 245, 240, 255), RayMaterial.MaterialType.Diffuse, 0.02f, 1.0f);
+            return;
+        }
+
+        for (int i = 0; i < colors.Length; i++)
+        {
+            float z = -0.55f + i * 0.42f;
+            AddPrimitiveMesh(parent, $"{name} Filter {i + 1}", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(x, 2.0f, z), Vector3.zero, new Vector3(1.05f, 2.8f, 0.12f), colors[i], RayMaterial.MaterialType.Glass, 1.0f, opacity, refraction);
+        }
     }
 
     private static void CreateSparseScene()
