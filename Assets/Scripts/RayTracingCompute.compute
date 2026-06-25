@@ -275,6 +275,7 @@ struct RayHit
     float refraction;
     int materialType;
     int meshIndex;
+    int objectIndex;
     float2 uv;
     int textureIndex;
 };
@@ -291,9 +292,11 @@ RayHit CreateRayHit()
     hit.distance = 1.#INF;
     hit.smoothness = 0.0f;
     hit.opacity = 1.0f;
+    hit.distanceThroughOpacity = 0.0f;
     hit.refraction = 1.0f;
     hit.materialType = MaterialDiffuse;
     hit.meshIndex = -1;
+    hit.objectIndex = -1;
     hit.uv = float2(0.0f, 0.0f);
     hit.textureIndex = -1;
 
@@ -320,6 +323,7 @@ void IntersectGroundPlane(Ray ray, inout RayHit bestHit)
         bestHit.refraction = 1.0f;
         bestHit.materialType = MaterialDiffuse;
         bestHit.meshIndex = -1;
+        bestHit.objectIndex = -1;
         bestHit.uv = bestHit.position.xz;
         bestHit.textureIndex = -1;
     }
@@ -478,23 +482,27 @@ void IntersectWater(Ray ray, inout RayHit bestHit)
     bestHit.refraction = max(1.0f, _WaterRefraction);
     bestHit.materialType = MaterialWater;
     bestHit.meshIndex = -1;
+    bestHit.objectIndex = -1;
     bestHit.uv = bestHit.position.xz - _WaterCenter.xz;
     bestHit.textureIndex = -1;
 }
 
-void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
+void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere, int objectIndex)
 {
     // Calculate distance along the ray where the sphere is intersected
     float3 d = sphere.position - ray.origin;
     float p1 = dot(ray.direction, d);
 
-    // Ray is pointing away from sphere
-    if (p1 < 0)
+    float radiusSqr = sphere.radius * sphere.radius;
+    float distanceToCenterSqr = dot(d, d);
+
+    // Ray is outside the sphere and pointing away from it.
+    if (p1 < 0 && distanceToCenterSqr > radiusSqr)
     {
         return;
     }
 
-    float p2sqr = p1 * p1 - dot(d, d) + sphere.radius * sphere.radius;
+    float p2sqr = p1 * p1 - distanceToCenterSqr + radiusSqr;
 
     // Ray missed the sphere
     if (p2sqr < 0)
@@ -519,6 +527,7 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere)
         bestHit.refraction = sphere.refraction;
         bestHit.materialType = sphere.materialType;
         bestHit.meshIndex = -1;
+        bestHit.objectIndex = objectIndex;
         bestHit.uv = float2(0.0f, 0.0f);
         bestHit.textureIndex = -1;
     }
@@ -561,6 +570,19 @@ float GetSphereDistanceThroughMedium(Ray ray, Sphere sphere, float maxDistance)
     float entryDistance = max(0.0f, p1 - p2);
     float exitDistance = min(maxDistance, p1 + p2);
     return max(0.0f, exitDistance - entryDistance);
+}
+
+float GetSphereExitDistance(Ray ray, float3 spherePosition, float sphereRadius)
+{
+    float3 d = spherePosition - ray.origin;
+    float p1 = dot(ray.direction, d);
+    float p2sqr = p1 * p1 - dot(d, d) + sphereRadius * sphereRadius;
+    if (p2sqr < 0.0f)
+    {
+        return 0.0f;
+    }
+
+    return p1 + sqrt(p2sqr);
 }
 
 float3 GetAbsorptionTransmittance(float3 filterColor, float opacity, float distanceThroughMedium)
@@ -645,6 +667,7 @@ void IntersectTriangle(Ray ray, inout RayHit bestHit, MeshTriangle meshTriangle)
         bestHit.refraction = meshTriangle.refraction;
         bestHit.materialType = meshTriangle.materialType;
         bestHit.meshIndex = meshTriangle.meshIndex;
+        bestHit.objectIndex = -1;
         bestHit.uv = meshTriangle.uv0 * (1.0f - barycentric.x - barycentric.y)
             + meshTriangle.uv1 * barycentric.x
             + meshTriangle.uv2 * barycentric.y;
@@ -934,7 +957,7 @@ bool IntersectMeshBvhForExit(Ray ray, MeshInfo meshInfo, out float exitDistance,
     return exitDistance < 1.#INF;
 }
 
-RayHit GetNearestIntersectionBounded(Ray ray, float maxDistance, int ignoredMeshIndex)
+RayHit GetNearestIntersectionBounded(Ray ray, float maxDistance, int ignoredMeshIndex, int ignoredSphereIndex)
 {
 	RayHit bestHit = CreateRayHit();
 	bestHit.distance = maxDistance;
@@ -948,13 +971,18 @@ RayHit GetNearestIntersectionBounded(Ray ray, float maxDistance, int ignoredMesh
 		[loop]
 		for (i = 0; i < _NumSpheres; i++)
 		{
-			IntersectSphere(ray, bestHit, _Spheres[i]);
+			if (i == ignoredSphereIndex)
+			{
+				continue;
+			}
+
+			IntersectSphere(ray, bestHit, _Spheres[i], i);
 		}
 
 		[loop]
 		for (i = 0; i < _NumLights; i++)
 		{
-			IntersectSphere(ray, bestHit, _Lights[i]);
+			IntersectSphere(ray, bestHit, _Lights[i], i);
 		}
 
 		[loop]
@@ -990,13 +1018,18 @@ RayHit GetNearestIntersectionBounded(Ray ray, float maxDistance, int ignoredMesh
 
 		if (node.objectType == TopLevelObjectTypeSphere)
 		{
-			IntersectSphere(ray, bestHit, _Spheres[node.objectIndex]);
+			if (node.objectIndex == ignoredSphereIndex)
+			{
+				continue;
+			}
+
+			IntersectSphere(ray, bestHit, _Spheres[node.objectIndex], node.objectIndex);
 			continue;
 		}
 
 		if (node.objectType == TopLevelObjectTypeLight)
 		{
-			IntersectSphere(ray, bestHit, _Lights[node.objectIndex]);
+			IntersectSphere(ray, bestHit, _Lights[node.objectIndex], node.objectIndex);
 			continue;
 		}
 
@@ -1049,7 +1082,7 @@ RayHit GetNearestIntersectionBounded(Ray ray, float maxDistance, int ignoredMesh
 
 RayHit GetNearestIntersection(Ray ray)
 {
-	return GetNearestIntersectionBounded(ray, 1.#INF, -2);
+	return GetNearestIntersectionBounded(ray, 1.#INF, -2, -1);
 }
 
 float3 GetClosestPointOnLineSegment(float3 linePointStart, float3 linePointEnd, float3 testPoint)
@@ -1208,7 +1241,7 @@ float3 GetShadowTransmittance(Ray rayToLight, float distanceToLight)
         {
             RayHit blockerHit = CreateRayHit();
             blockerHit.distance = distanceToLight;
-            IntersectSphere(rayToLight, blockerHit, _Spheres[j]);
+            IntersectSphere(rayToLight, blockerHit, _Spheres[j], j);
 
             if (blockerHit.distance >= distanceToLight)
             {
@@ -1253,7 +1286,7 @@ float3 GetShadowTransmittance(Ray rayToLight, float distanceToLight)
             {
                 RayHit blockerHit = CreateRayHit();
                 blockerHit.distance = distanceToLight;
-                IntersectSphere(rayToLight, blockerHit, _Spheres[node.objectIndex]);
+                IntersectSphere(rayToLight, blockerHit, _Spheres[node.objectIndex], node.objectIndex);
 
                 if (blockerHit.distance >= distanceToLight)
                 {
@@ -1652,6 +1685,16 @@ void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit)
 
     ray.direction = Refract(sourceRay.direction, 1.0f, hit.refraction, hit.normal);
 
+    Ray insideRay = CreateRay(hit.position + ray.direction * 0.001f, ray.direction);
+    float exitDistance = GetSphereExitDistance(insideRay, hit.obj_position, hit.obj_radius);
+    RayHit interiorHit = GetNearestIntersectionBounded(insideRay, exitDistance, -2, hit.objectIndex);
+    if (!DidHitSky(interiorHit))
+    {
+        hit.distanceThroughOpacity = interiorHit.distance;
+        ray.origin = insideRay.origin;
+        return;
+    }
+
     float3 halfway = GetClosestPointOnLineSegment(ray.origin, ray.origin + (2.0f * hit.obj_radius * ray.direction), hit.obj_position);
     float3 offset = ((halfway - ray.origin) * 2.0f);
     ray.origin += offset;
@@ -1712,7 +1755,7 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit)
     }
 
     float3 exitPoint = insideRay.origin + entryDirection * exitDistance;
-    RayHit interiorHit = GetNearestIntersectionBounded(insideRay, exitDistance, hit.meshIndex);
+    RayHit interiorHit = GetNearestIntersectionBounded(insideRay, exitDistance, hit.meshIndex, -1);
     if (!DidHitSky(interiorHit))
     {
         hit.distanceThroughOpacity = interiorHit.distance;

@@ -236,9 +236,9 @@ public static class RayTracingBenchmarkSceneGenerator
         context.Manager.groundSmoothness = 0.12f;
         context.Manager.shadowBvhMinObjectCount = 0;
 
-        AddLight(context.Root, "White Transmission Light", new Vector3(0.0f, 5.0f, -4.9f), 0.65f, Color.white);
-        AddLight(context.Root, "Warm Side Reference Light", new Vector3(-5.6f, 4.8f, -2.2f), 0.38f, new Color32(255, 206, 145, 255));
-        AddLight(context.Root, "Blue Side Reference Light", new Vector3(5.6f, 4.8f, -2.2f), 0.38f, new Color32(95, 145, 255, 255));
+        AddLight(context.Root, "White Transmission Light", new Vector3(0.0f, 3.5f, -4.9f), 0.65f, Color.white);
+        //AddLight(context.Root, "Warm Side Reference Light", new Vector3(-5.6f, 4.8f, -2.2f), 0.38f, new Color32(255, 206, 145, 255));
+        //AddLight(context.Root, "Blue Side Reference Light", new Vector3(5.6f, 4.8f, -2.2f), 0.38f, new Color32(95, 145, 255, 255));
 
         AddPrimitiveMesh(context.Root, "Receiver Back Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 2.0f, 5.2f), Vector3.zero, new Vector3(13.0f, 4.0f, 0.08f), new Color32(230, 230, 225, 255), RayMaterial.MaterialType.Diffuse, 0.05f, 1.0f);
         AddPrimitiveMesh(context.Root, "Receiver Floor", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 0.02f, 1.6f), Vector3.zero, new Vector3(13.0f, 0.04f, 11.0f), new Color32(215, 213, 205, 255), RayMaterial.MaterialType.Diffuse, 0.08f, 1.0f);
@@ -253,8 +253,8 @@ public static class RayTracingBenchmarkSceneGenerator
         AddPrimitiveMesh(context.Root, "Thick Blue Glass Block", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(5.4f, 2.0f, 0.0f), Vector3.zero, new Vector3(1.05f, 2.6f, 1.35f), new Color32(55, 105, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.28f, 1.5f);
         AddPrimitiveMesh(context.Root, "Thin Blue Glass Plate", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(5.4f, 2.0f, -1.35f), Vector3.zero, new Vector3(1.05f, 2.6f, 0.14f), new Color32(55, 105, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.28f, 1.5f);
 
-        AddSphere(context.Root, "Cyan Glass Sphere Shadow Test", new Vector3(-4.5f, 1.05f, 2.15f), 0.75f, new Color32(45, 235, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.25f, 1.5f);
-        AddSphere(context.Root, "Magenta Glass Sphere Shadow Test", new Vector3(-2.9f, 1.05f, 2.15f), 0.75f, new Color32(255, 55, 210, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.25f, 1.5f);
+        AddSphere(context.Root, "Cyan Glass Sphere Shadow Test", new Vector3(-3.85f, 1.05f, 2.15f), 0.75f, new Color32(45, 255, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.32f, 1.5f);
+        AddSphere(context.Root, "Yellow Glass Sphere Shadow Test", new Vector3(-2.9f, 1.05f, 2.15f), 0.75f, new Color32(255, 255, 55, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.25f, 1.5f);
 
         Save(context.Scene, sceneName);
     }

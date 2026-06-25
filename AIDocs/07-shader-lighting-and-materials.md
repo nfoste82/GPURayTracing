@@ -63,9 +63,11 @@ The `Refract()` helper is **not** a Snell's-law refraction. It is a custom linea
 Transparent/glass sphere refraction is approximate. `ApplySphereRefraction()`:
 
 1. Refracts from air into the sphere using `Refract()`, or from sphere material back into air when the ray starts inside the sphere.
-2. Estimates the exit point by finding a closest point across the sphere chord.
-3. Computes the exit normal.
-4. Refracts back out into air.
+2. For entry hits, casts a bounded internal ray up to the current sphere exit while ignoring that current sphere.
+3. If another scene object is hit before the exit, continues tracing inside the current sphere so interpenetrating transparent objects can be seen.
+4. If no closer internal object is hit, estimates the exit point by finding a closest point across the sphere chord.
+5. Computes the exit normal.
+6. Refracts back out into air.
 
 Glass material scattering uses Schlick Fresnel reflectance to weight transmission, but the transmitted ray still uses the project's approximate `Refract()` helper rather than a full Snell-law volume traversal. This avoids the high variance of randomly choosing reflection or transmission per sample.
 
