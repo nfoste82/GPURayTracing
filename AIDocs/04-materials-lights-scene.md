@@ -6,11 +6,11 @@ The compute renderer does not use Unity materials, mesh renderers, or built-in l
 
 Any object with `RayTracingObject` registers with `GameManager` when enabled.
 
-`RayTracingObject` can represent a sphere, light sphere, or triangle mesh depending on attached components.
+`RayTracingObject` can represent a sphere, light sphere, triangle mesh, or mesh light depending on attached components.
 
-Sphere and light objects use a `SphereCollider`; the collider center is transformed to world space for the ray-traced sphere center, and the collider radius is scaled by the largest absolute object scale axis for the ray-traced radius.
+Sphere objects and sphere lights use a `SphereCollider`; the collider center is transformed to world space for the ray-traced sphere center, and the collider radius is scaled by the largest absolute object scale axis for the ray-traced radius.
 
-Mesh objects use `RayMaterial` plus `MeshFilter` and should not have a `SphereCollider`, because sphere registration takes priority. The shared mesh triangles are transformed to world space and uploaded directly.
+Mesh objects use `RayMaterial` plus `MeshFilter` and should not have a `SphereCollider`, because sphere registration takes priority. Mesh lights use `RayLight` plus `MeshFilter` and no `SphereCollider`. The shared mesh triangles are transformed to world space and uploaded directly.
 
 ## Materials
 
@@ -25,7 +25,7 @@ Fields:
 - `Opacity`: `1` is opaque. Values below `1` allow glass/transparent transmission. Note that any opacity below `1` makes the shader treat the hit as glass (see below), regardless of `Type`.
 - `RefractionIndex`: used by glass Fresnel reflectance and the custom approximate refraction path.
 
-The emissive material constant (`MaterialEmissive = 3` in the shader) is not selectable here. It is assigned internally to `RayLight` sphere lights during registration.
+The emissive material constant (`MaterialEmissive = 3` in the shader) is not selectable here. It is assigned internally to `RayLight` sphere and mesh lights during registration.
 
 In the shader, material color is retrieved through `GetAlbedo(hit)`. Diffuse and metal paths attenuate throughput by albedo. Glass transmission attenuates throughput with distance-based RGB absorption using albedo/color and opacity, while glass reflection keeps mostly white reflective throughput.
 
@@ -55,15 +55,15 @@ The generated primitive material defaults are intended for glass/refraction test
 
 ## Lights
 
-`RayLight` marks a `RayTracingObject` as an emissive sphere light.
+`RayLight` marks a `RayTracingObject` as an emissive light. With a `SphereCollider` it becomes an emissive sphere light. With a `MeshFilter` and no `SphereCollider` it becomes an emissive triangle-mesh light, so rectangular panels, discs, and other mesh shapes can light the scene.
 
 Fields:
 
 - `Color`: uploaded as normalized RGB emission.
 
-Light objects are stored in `_Lights`, using the same `Sphere` data layout as regular spheres. When a camera/path ray directly hits a light sphere, `TracePath()` adds its emission and terminates the path.
+Light objects are stored in `_Lights` using a compact light layout. Sphere lights also participate in the top-level BVH as directly visible light objects. Mesh lights are uploaded through `_Triangles` with emissive material data, so when a camera/path ray directly hits a mesh-light triangle, `TracePath()` adds its emission and terminates the path.
 
-Direct lighting also samples `_Lights` explicitly in `GetLightHittingPoint()`. Bounce 0 uses multiple stochastic area-light samples per shaded light, while later bounces use one sample per shaded light. Sampled light contributions are accumulated additively. How many lights are shaded per hit depends on `GameManager.lightSamplingStrategy` (all lights, uniform random, or importance-sampled) and `lightSampleCount`; see `07-shader-lighting-and-materials.md`.
+Direct lighting also samples `_Lights` explicitly in `GetLightHittingPoint()`. Sphere lights use disk samples across their radius. Mesh lights add one direct-light entry per emissive triangle and sample barycentric points across each triangle. Bounce 0 uses multiple stochastic area-light samples per shaded light, while later bounces use one sample per shaded light. Sampled light contributions are accumulated additively. How many lights are shaded per hit depends on `GameManager.lightSamplingStrategy` (all lights, uniform random, or importance-sampled) and `lightSampleCount`; see `07-shader-lighting-and-materials.md`.
 
 ## Ground Plane
 

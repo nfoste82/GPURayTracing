@@ -324,10 +324,10 @@ public static class RayTracingBenchmarkSceneGenerator
             return;
         }
 
-        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 0.95f, -14.0f), new Vector3(1.5f, 0.0f, 0.0f), passes: 2, bounces: 5, shadowQuality: 2);
+        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 0.95f, -14.0f), new Vector3(1.5f, 0.0f, 0.0f), passes: 4, bounces: 5, shadowQuality: 1);
         context.Manager.cameraFocalDistance = 18.0f;
         context.Manager.groundSmoothness = 0.72f;
-        context.Manager.lightFalloffScale = 0.045f;
+        context.Manager.lightFalloffScale = 0.021f;
         context.Manager.exposure = 1.15f;
         context.Manager.topLevelBvhMinObjectCount = 0;
         context.Manager.shadowBvhMinObjectCount = 0;
@@ -337,7 +337,7 @@ public static class RayTracingBenchmarkSceneGenerator
         context.Manager.waterColor = new Color32(36, 110, 132, 255);
         context.Manager.waterSmoothness = 0.97f;
         context.Manager.waterOpacity = 0.16f;
-        context.Manager.waterRefractionIndex = 1.333f;
+        context.Manager.waterRefractionIndex = 2.5f;
         context.Manager.waterWaveAmplitude = 0.32f;
         context.Manager.waterWaveScale = 0.7f;
         context.Manager.waterWaveSpeed = 0.85f;
@@ -435,25 +435,37 @@ public static class RayTracingBenchmarkSceneGenerator
             return;
         }
 
-        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 2.15f, -6.4f), Vector3.zero, passes: 4, bounces: 6, shadowQuality: 4);
-        context.Manager.cameraFocalDistance = 8.5f;
-        context.Manager.groundSmoothness = 0.15f;
-        context.Manager.lightFalloffScale = 0.02f;
+        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 2.05f, -4.85f), new Vector3(0.0f, 0.0f, 0.0f), passes: 1, bounces: 9, shadowQuality: 1);
+        context.Manager.cameraFocalDistance = 9.5f;
+        context.Manager.groundSmoothness = 0.2f;
+        context.Manager.lightFalloffScale = 0.018f;
+        context.Manager.exposure = 1.0f;
         context.Manager.topLevelBvhMinObjectCount = 0;
         context.Manager.shadowBvhMinObjectCount = 0;
         context.Manager._skyboxLightColor = new Color32(0, 0, 0, 255);
+        context.Manager.enableFrameAccumulation = true;
 
-        AddPrimitiveMesh(context.Root, "Floor", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 0.02f, 3.0f), Vector3.zero, new Vector3(6.0f, 0.04f, 6.0f), new Color32(230, 226, 218, 255), RayMaterial.MaterialType.Diffuse, 0.2f, 1.0f);
-        AddPrimitiveMesh(context.Root, "Ceiling", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 4.5f, 3.0f), Vector3.zero, new Vector3(6.0f, 0.04f, 6.0f), new Color32(226, 226, 220, 255), RayMaterial.MaterialType.Diffuse, 0.15f, 1.0f);
-        AddPrimitiveMesh(context.Root, "Back Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 2.25f, 6.0f), Vector3.zero, new Vector3(6.0f, 4.5f, 0.04f), new Color32(224, 222, 214, 255), RayMaterial.MaterialType.Diffuse, 0.15f, 1.0f);
-        AddPrimitiveMesh(context.Root, "Left Red Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-3.0f, 2.25f, 3.0f), Vector3.zero, new Vector3(0.04f, 4.5f, 6.0f), new Color32(255, 0, 0, 255), RayMaterial.MaterialType.Diffuse, 0.05f, 1.0f);
-        AddPrimitiveMesh(context.Root, "Right Green Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(3.0f, 2.25f, 3.0f), Vector3.zero, new Vector3(0.04f, 4.5f, 6.0f), new Color32(0, 255, 0, 255), RayMaterial.MaterialType.Diffuse, 0.05f, 1.0f);
+        const float roomWidth = 6.0f;
+        const float roomHeight = 4.5f;
+        const float roomDepth = 12.0f;
+        const float roomCenterZ = 1.0f;
+        float backZ = roomCenterZ + roomDepth * 0.5f;
+        float frontZ = roomCenterZ - roomDepth * 0.5f;
 
-        AddRayMesh(context.Root, "Ceiling Light Disc", CreateDiscMesh("Ceiling Light Disc", 72), new Vector3(0.0f, 4.46f, 2.15f), Vector3.zero, new Vector3(1.65f, 1.0f, 0.42f), new Color32(255, 255, 245, 255), RayMaterial.MaterialType.Diffuse, 0.0f);
-        AddLight(context.Root, "Ceiling Area Light", new Vector3(0.0f, 4.18f, 2.15f), 0.85f, new Color32(255, 250, 230, 255));
+        AddPrimitiveMesh(context.Root, "Floor", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 0.02f, roomCenterZ), Vector3.zero, new Vector3(roomWidth, 0.04f, roomDepth), new Color32(230, 226, 212, 255), RayMaterial.MaterialType.Diffuse, 0.22f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Ceiling", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, roomHeight, roomCenterZ), Vector3.zero, new Vector3(roomWidth, 0.04f, roomDepth), new Color32(226, 224, 212, 255), RayMaterial.MaterialType.Diffuse, 0.18f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Left Green Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-roomWidth * 0.5f, roomHeight * 0.5f, roomCenterZ), Vector3.zero, new Vector3(0.04f, roomHeight, roomDepth), new Color32(34, 178, 58, 255), RayMaterial.MaterialType.Diffuse, 0.06f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Right Red Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(roomWidth * 0.5f, roomHeight * 0.5f, roomCenterZ), Vector3.zero, new Vector3(0.04f, roomHeight, roomDepth), new Color32(226, 38, 20, 255), RayMaterial.MaterialType.Diffuse, 0.06f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Far Mirror Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, roomHeight * 0.5f, backZ), Vector3.zero, new Vector3(roomWidth, roomHeight, 0.04f), new Color32(245, 244, 238, 255), RayMaterial.MaterialType.Metal, 1.0f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Camera-Side Mirror Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, roomHeight * 0.5f, frontZ), Vector3.zero, new Vector3(roomWidth, roomHeight, 0.04f), new Color32(242, 242, 238, 255), RayMaterial.MaterialType.Metal, 1.0f, 1.0f);
+        
+        AddMeshLight(context.Root, "Middle Rectangular Ceiling Light", CreateHorizontalQuadMesh("Middle Rectangular Ceiling Light", 1.35f, 0.46f, 1.0f, 1.0f), new Vector3(0.0f, roomHeight - 0.035f, 0.65f), Vector3.zero, new Vector3(2.0f, 1.0f, 1.0f), new Color32(255, 248, 220, 255));
 
-        AddSphere(context.Root, "Reflective Sphere", new Vector3(-1.75f, 0.82f, 2.4f), 0.8f, new Color32(235, 232, 224, 255), RayMaterial.MaterialType.Metal, 0.65f);
-        AddPrimitiveMesh(context.Root, "Tall Box", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(1.25f, 1.45f, 3.65f), Vector3.zero, new Vector3(1.45f, 2.9f, 1.45f), new Color32(212, 205, 195, 255), RayMaterial.MaterialType.Diffuse, 0.12f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Near Left Block", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-1.85f, 0.82f, -1.85f), Vector3.zero, new Vector3(1.45f, 1.6f, 1.15f), new Color32(218, 212, 196, 255), RayMaterial.MaterialType.Diffuse, 0.15f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Tall Center Block", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-0.55f, 1.55f, 0.8f), Vector3.zero, new Vector3(1.0f, 3.1f, 1.0f), new Color32(220, 216, 202, 255), RayMaterial.MaterialType.Diffuse, 0.12f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Glass Box", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(1.45f, 0.74f, 1.9f), new Vector3(0.0f, -8.0f, 0.0f), new Vector3(1.2f, 1.48f, 1.0f), new Color32(232, 232, 226, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.32f, 1.85f);
+        AddPrimitiveMesh(context.Root, "Glass Pyramid", RayMeshPrimitive.PrimitiveType.Pyramid, new Vector3(0.0f, 0.9f, -0.7f), new Vector3(0.0f, 22.0f, 0.0f), Vector3.one * 1.8f, new Color32(210, 235, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.32f, 1.85f);
+        AddSphere(context.Root, "Chrome Sphere", new Vector3(2.05f, 0.82f, -2.25f), 0.82f, new Color32(236, 233, 226, 255), RayMaterial.MaterialType.Metal, 1.0f);
 
         Save(context.Scene, sceneName);
     }
@@ -467,30 +479,30 @@ public static class RayTracingBenchmarkSceneGenerator
         }
 
         var wallTexture = GetOrCreateWolfensteinWallTexture();
-        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 1.35f, -4.8f), new Vector3(2.0f, 0.0f, 0.0f), passes: 4, bounces: 4, shadowQuality: 3);
+        var context = CreateBaseScene(sceneName, new Vector3(5.4f, 1.29f, 0.99f), new Vector3(2.0f, -60.55f, 0.0f), passes: 2, bounces: 6, shadowQuality: 1);
         context.Manager.cameraFocalDistance = 10.0f;
-        context.Manager.groundSmoothness = 0.25f;
+        context.Manager.groundSmoothness = 1.0f;
         context.Manager.lightFalloffScale = 0.035f;
         context.Manager.exposure = 1.25f;
         context.Manager._skyboxLightColor = new Color32(8, 8, 8, 255);
-        context.Manager.topLevelBvhMinObjectCount = 0;
-        context.Manager.shadowBvhMinObjectCount = 0;
+        context.Manager.topLevelBvhMinObjectCount = 1024;
+        context.Manager.shadowBvhMinObjectCount = 1024;
 
         AddRayMesh(context.Root, "Back Stone Wall", CreateQuadMesh("Back Stone Wall", 12.0f, 3.0f, 6.0f, 1.5f), new Vector3(0.0f, 1.5f, 7.0f), Vector3.zero, Vector3.one, Color.white, RayMaterial.MaterialType.Diffuse, 0.18f, 1.0f, 1.0f, wallTexture);
         AddRayMesh(context.Root, "Left Stone Wall", CreateQuadMesh("Left Stone Wall", 12.0f, 3.0f, 6.0f, 1.5f), new Vector3(-6.0f, 1.5f, 1.0f), new Vector3(0.0f, 90.0f, 0.0f), Vector3.one, Color.white, RayMaterial.MaterialType.Diffuse, 0.18f, 1.0f, 1.0f, wallTexture);
         AddRayMesh(context.Root, "Right Stone Wall", CreateQuadMesh("Right Stone Wall", 12.0f, 3.0f, 6.0f, 1.5f), new Vector3(6.0f, 1.5f, 1.0f), new Vector3(0.0f, -90.0f, 0.0f), Vector3.one, Color.white, RayMaterial.MaterialType.Diffuse, 0.18f, 1.0f, 1.0f, wallTexture);
         AddRayMesh(context.Root, "Floor", CreateHorizontalQuadMesh("Floor", 12.0f, 12.0f, 3.0f, 3.0f), new Vector3(0.0f, 0.002f, 1.0f), Vector3.zero, Vector3.one, new Color32(78, 68, 48, 255), RayMaterial.MaterialType.Diffuse, 0.28f);
-        AddRayMesh(context.Root, "Ceiling", CreateHorizontalQuadMesh("Ceiling", 12.0f, 12.0f, 3.0f, 3.0f), new Vector3(0.0f, 3.0f, 1.0f), new Vector3(180.0f, 0.0f, 0.0f), Vector3.one, new Color32(92, 78, 54, 255), RayMaterial.MaterialType.Diffuse, 0.2f);
+        AddRayMesh(context.Root, "Ceiling", CreateHorizontalQuadMesh("Ceiling", 12.0f, 12.0f, 3.0f, 3.0f), new Vector3(0.0f, 2.0f, 1.0f), new Vector3(180.0f, 0.0f, 0.0f), Vector3.one, new Color32(92, 78, 54, 255), RayMaterial.MaterialType.Diffuse, 0.2f);
 
-        AddLight(context.Root, "Bright Wall Light", new Vector3(1.9f, 0.75f, 5.35f), 0.42f, new Color32(255, 245, 190, 255));
+        //AddLight(context.Root, "Bright Wall Light", new Vector3(1.9f, 0.75f, 5.35f), 0.42f, new Color32(255, 245, 190, 255));
         AddLight(context.Root, "Small Warm Light", new Vector3(-0.35f, 1.1f, 5.85f), 0.35f, new Color32(255, 238, 178, 255));
-        AddLight(context.Root, "Ceiling Fill", new Vector3(0.0f, 2.75f, 1.5f), 0.7f, new Color32(170, 135, 85, 255));
+        AddLight(context.Root, "Ceiling Fill", new Vector3(0.47f, 2f, -1.62f), 0.7f, new Color32(170, 135, 85, 255));
 
         AddSphere(context.Root, "Large Center Sphere", new Vector3(-1.2f, 0.85f, 2.85f), 0.85f, new Color32(150, 146, 105, 255), RayMaterial.MaterialType.Diffuse, 0.4f);
         AddSphere(context.Root, "Cyan Sphere", new Vector3(-2.65f, 0.72f, 2.45f), 0.72f, new Color32(32, 128, 135, 255), RayMaterial.MaterialType.Diffuse, 0.35f);
-        AddSphere(context.Root, "Orange Right Sphere", new Vector3(3.9f, 0.72f, 3.7f), 0.72f, new Color32(215, 93, 0, 255), RayMaterial.MaterialType.Diffuse, 0.3f);
+        AddSphere(context.Root, "Orange Right Sphere", new Vector3(3.9f, 0.72f, 3.7f), 0.72f, new Color32(215, 93, 0, 255), RayMaterial.MaterialType.Metal, 1.0f);
         AddSphere(context.Root, "Blue Left Sphere", new Vector3(-4.15f, 0.65f, 1.15f), 0.65f, new Color32(0, 56, 78, 255), RayMaterial.MaterialType.Diffuse, 0.25f);
-        AddSphere(context.Root, "Brown Right Sphere", new Vector3(1.75f, 0.62f, 1.35f), 0.62f, new Color32(116, 80, 34, 255), RayMaterial.MaterialType.Diffuse, 0.25f);
+        AddSphere(context.Root, "Brown Right Sphere", new Vector3(1.75f, 0.62f, 1.35f), 0.62f, new Color32(116, 80, 34, 255), RayMaterial.MaterialType.Metal, 1.0f);
         AddSphere(context.Root, "Foreground Green Sphere", new Vector3(-0.8f, 0.92f, -0.8f), 0.92f, new Color32(26, 68, 56, 255), RayMaterial.MaterialType.Diffuse, 0.25f);
         AddSphere(context.Root, "Foreground Yellow Sphere", new Vector3(4.85f, 1.25f, -1.4f), 1.25f, new Color32(120, 112, 54, 255), RayMaterial.MaterialType.Diffuse, 0.2f);
         AddSphere(context.Root, "Foreground Red Sphere", new Vector3(-5.0f, 1.0f, -2.05f), 1.0f, new Color32(105, 0, 25, 255), RayMaterial.MaterialType.Diffuse, 0.2f);
@@ -534,6 +546,23 @@ public static class RayTracingBenchmarkSceneGenerator
         var light = obj.AddComponent<RayLight>();
         light.Color = color;
 
+        obj.AddComponent<RayTracingObject>();
+        return obj;
+    }
+
+    private static GameObject AddMeshLight(Transform parent, string name, Mesh mesh, Vector3 position, Vector3 euler, Vector3 scale, Color color)
+    {
+        var obj = new GameObject(name);
+        obj.transform.SetParent(parent, false);
+        obj.transform.localPosition = position;
+        obj.transform.localEulerAngles = euler;
+        obj.transform.localScale = scale;
+
+        var light = obj.AddComponent<RayLight>();
+        light.Color = color;
+
+        obj.AddComponent<MeshFilter>().sharedMesh = mesh;
+        obj.AddComponent<MeshRenderer>();
         obj.AddComponent<RayTracingObject>();
         return obj;
     }

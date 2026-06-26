@@ -4,7 +4,7 @@ This document captures current implementation limits and broad architectural dir
 
 ## Known Limitations
 
-- Spheres, emissive sphere lights, registered triangle meshes, and an implicit infinite ground plane are ray traced.
+- Spheres, emissive sphere lights, emissive mesh lights, registered triangle meshes, and an implicit infinite ground plane are ray traced.
 - Unity meshes are traced only when registered through `RayTracingObject` plus `RayMaterial` and `MeshFilter`; box colliders and the scene `Directional Light` are not used by the compute shader renderer.
 - First-hit rays use a top-level BVH over spheres, emissive light spheres, and registered mesh AABBs once the scene has enough objects to amortize traversal overhead. Shadow rays use a separate top-level BVH over blocker objects only: regular spheres and meshes. Smaller scenes use flat object loops. Triangle meshes also use per-mesh AABB culling and per-mesh BVHs to skip most triangle tests. Current default BVH thresholds are conservative so benchmark scenes can opt into BVHs deliberately.
 - `UpdateSpheres()` uploads all sphere/light data every rendered frame, even though component references are cached.

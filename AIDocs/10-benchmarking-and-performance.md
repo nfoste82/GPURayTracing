@@ -19,7 +19,7 @@ This document covers runtime benchmark tooling, performance hotspots, and benchm
 - `Benchmark_GlassWaterPencil`: image-quality scene inspired by a pencil in a glass of water, stressing glass meshes, calm water refraction, nested transparent surfaces, and thin curved mesh highlights.
 - `Benchmark_Sparse`: catches acceleration-structure overhead regressions in small scenes.
 - `Benchmark_Dynamic`: stresses per-frame transform updates, BVH rebuilds, and buffer uploads.
-- `Benchmark_CornellBox`: a Cornell-box-style image-quality/reference scene with red/green walls, a ceiling light, a reflective sphere, and a tall box.
+- `Benchmark_CornellBox`: a Cornell-box-style image-quality/reference scene in an enclosed mirror-ended room with red/green side walls, rectangular mesh ceiling lights, reflective/glass objects, and recursive mirror views.
 - `Wolfenstein`: a low-ceiling stone-room scene with textured mesh walls, multiple sphere lights, and colored spheres.
 
 Existing benchmark scene files are skipped rather than overwritten, so saved local tweaks in `Assets/Scenes/Benchmarks/` are preserved when regenerating scenes.

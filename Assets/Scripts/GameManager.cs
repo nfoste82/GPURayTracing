@@ -19,22 +19,6 @@ public class GameManager : MonoBehaviour
     [Tooltip("Progressively averages final-color renders while the camera, scene, and quality settings are unchanged. Debug render modes are not accumulated.")]
     public bool enableFrameAccumulation = true;
 
-    [Header("Dynamic quality")]
-    [Tooltip("Dynamically adjusts passes, light sampling, shadow quality, and bounces to approach the target frame rate. BVH thresholds are never changed.")]
-    public bool enableDynamicQuality = false;
-
-    [Tooltip("Target frame rate used as the dynamic-quality frame-time budget.")]
-    [Range(15, 240)]
-    public int dynamicQualityTargetFrameRate = 60;
-
-    [Tooltip("Allowed over-budget frame-time error before dynamic quality reduces a setting.")]
-    [Range(0.05f, 0.5f)]
-    public float dynamicQualityTolerance = 0.15f;
-
-    [Tooltip("Required under-budget headroom before dynamic quality increases a setting. Larger values reduce oscillation.")]
-    [Range(0.1f, 0.75f)]
-    public float dynamicQualityIncreaseHeadroom = 0.25f;
-
     [Range(1, 16)]
     public int numBounces = 3;
 
@@ -73,6 +57,22 @@ public class GameManager : MonoBehaviour
     [Tooltip("UniformRandom/ImportanceSampled only: how many lights each shading point samples per pass. 1 is fastest/noisiest; higher values reduce noise toward AllLights quality at proportional cost.")]
     [Range(1, 64)]
     public int lightSampleCount = 1;
+    
+    [Header("Dynamic quality")]
+    [Tooltip("Dynamically adjusts passes, light sampling, shadow quality, and bounces to approach the target frame rate. BVH thresholds are never changed.")]
+    public bool enableDynamicQuality = false;
+
+    [Tooltip("Target frame rate used as the dynamic-quality frame-time budget.")]
+    [Range(15, 240)]
+    public int dynamicQualityTargetFrameRate = 60;
+
+    [Tooltip("Allowed over-budget frame-time error before dynamic quality reduces a setting.")]
+    [Range(0.05f, 0.5f)]
+    public float dynamicQualityTolerance = 0.15f;
+
+    [Tooltip("Required under-budget headroom before dynamic quality increases a setting. Larger values reduce oscillation.")]
+    [Range(0.1f, 0.75f)]
+    public float dynamicQualityIncreaseHeadroom = 0.25f;
 
     // Must match MaxImportanceLights in RayTracingCompute.compute. Lights beyond this count
     // are ignored by the ImportanceSampled strategy.
@@ -133,8 +133,8 @@ public class GameManager : MonoBehaviour
     [Range(0.0f, 1.0f)]
     public float waterOpacity = 0.18f;
 
-    [Range(1.0f, 2.0f)]
-    public float waterRefractionIndex = 1.333f;
+    [Range(1.0f, 3.0f)]
+    public float waterRefractionIndex = 2.0f;
 
     [Tooltip("Maximum wave height above and below the average water level.")]
     [Range(0.0f, 2.0f)]
@@ -192,7 +192,7 @@ public class GameManager : MonoBehaviour
     private readonly List<RayTracedSphere> _sphereObjects = new List<RayTracedSphere>();
     private ComputeBuffer _sphereBuffer;
 
-    private List<Sphere> _lights = new List<Sphere>();
+    private List<Light> _lights = new List<Light>();
     private readonly List<RayTracedLight> _lightObjects = new List<RayTracedLight>();
     private ComputeBuffer _lightBuffer;
 
@@ -264,6 +264,7 @@ public class GameManager : MonoBehaviour
     private static readonly List<RayTracingObject> _rayTracingObjects = new List<RayTracingObject>();
 
     private const int SphereStride = 56;
+    private const int LightStride = 72;
     private const int MinNumberOfPasses = 1;
     private const int MaxNumberOfPasses = 32;
     private const int MinNumBounces = 1;
@@ -276,7 +277,7 @@ public class GameManager : MonoBehaviour
     private const float DynamicQualitySmoothing = 0.08f;
     private const float DynamicQualityAdjustmentInterval = 0.75f;
     private const int MeshTextureSize = 128;
-    private const int TriangleStride = 112;
+    private const int TriangleStride = 124;
     private const int MeshInfoStride = 48;
     private const int BvhNodeStride = 48;
     private const int TopLevelBvhNodeStride = 48;
@@ -289,6 +290,8 @@ public class GameManager : MonoBehaviour
     private const int TopLevelObjectTypeSphere = 0;
     private const int TopLevelObjectTypeLight = 1;
     private const int TopLevelObjectTypeMesh = 2;
+    private const int LightTypeSphere = 0;
+    private const int LightTypeTriangle = 1;
 
     private struct Sphere
     {
@@ -351,6 +354,38 @@ public class GameManager : MonoBehaviour
         public SphereCollider collider;
     }
 
+    private struct Light
+    {
+        public Vector3 position;
+        public Vector3 emission;
+        public Vector3 u;
+        public float radius;
+        public Vector3 v;
+        public float area;
+        public Vector3 normal;
+        public int type;
+
+        public float Intersect(Vector3 origin, Vector3 direction)
+        {
+            var diffToSphere = position - origin;
+            var b = Vector3.Dot(diffToSphere, direction);
+            if (b < 0f)
+            {
+                return -1.0f;
+            }
+
+            var c = diffToSphere.sqrMagnitude - radius * radius;
+            var discriminant = (b * b) - c;
+            if (discriminant < 0.0f)
+            {
+                return -1.0f;
+            }
+
+            var hitDistance = b - Mathf.Sqrt(discriminant) - 0.001f;
+            return hitDistance < 0.0f ? 0.0f : hitDistance;
+        }
+    }
+
     private struct Triangle
     {
         public Vector3 vertex0;
@@ -358,11 +393,12 @@ public class GameManager : MonoBehaviour
         public Vector3 vertex2;
         public Vector3 normal;
         public Vector3 color;
+        public float smoothness;
         public Vector2 uv0;
         public Vector2 uv1;
         public Vector2 uv2;
-        public float smoothness;
         public float opacity;
+        public Vector3 emission;
         public float refraction;
         public int materialType;
         public int meshIndex;
@@ -411,7 +447,7 @@ public class GameManager : MonoBehaviour
         public int triangleStart;
         public int triangleCount;
         public int meshIndex;
-        public int padding0;
+        public int isLight;
         public int padding1;
     }
 
@@ -462,9 +498,11 @@ public class GameManager : MonoBehaviour
         public RayTracingObject obj;
         public Transform transform;
         public RayMaterial material;
+        public RayLight light;
         public Mesh mesh;
         public Matrix4x4 previousLocalToWorld;
         public Vector3 previousColor;
+        public Vector3 previousEmission;
         public float previousSmoothness;
         public float previousOpacity;
         public float previousRefraction;
@@ -1142,17 +1180,24 @@ public class GameManager : MonoBehaviour
         
         for (int i = 0; i < _lights.Count; ++i)
         {
-            var sphere = _lights[i];
+            if (i >= _lightObjects.Count)
+            {
+                break;
+            }
+
+            var lightData = _lights[i];
             var lightObject = _lightObjects[i];
 
-            sphere.position = lightObject.transform.TransformPoint(lightObject.collider.center);
+            lightData.position = lightObject.transform.TransformPoint(lightObject.collider.center);
 
-            sphere.radius = GetWorldSphereRadius(lightObject.collider, lightObject.transform);
+            lightData.radius = GetWorldSphereRadius(lightObject.collider, lightObject.transform);
+            lightData.area = Mathf.PI * lightData.radius * lightData.radius;
+            lightData.type = LightTypeSphere;
 
             var light = lightObject.light;
-            sphere.emission = light.Color.ToVector3();
+            lightData.emission = light.Color.ToVector3();
             
-            _lights[i] = sphere;
+            _lights[i] = lightData;
         }
 
         if (_sphereBuffer != null && _spheres.Count > 0)
@@ -1160,7 +1205,13 @@ public class GameManager : MonoBehaviour
             _sphereBuffer.SetData(_spheres);
         }
 
-        if (_lightBuffer != null && _lights.Count > 0)
+        int requiredLightBufferCount = Mathf.Max(1, _lights.Count);
+        if (_lightBuffer == null || _lightBuffer.count < requiredLightBufferCount)
+        {
+            _lightBuffer?.Release();
+            _lightBuffer = CreateComputeBuffer(_lights, LightStride);
+        }
+        else if (_lights.Count > 0)
         {
             _lightBuffer.SetData(_lights);
         }
@@ -1194,6 +1245,17 @@ public class GameManager : MonoBehaviour
         if (_bvhNodeBuffer != null && _bvhNodes.Count > 0)
         {
             _bvhNodeBuffer.SetData(_bvhNodes);
+        }
+
+        int requiredLightBufferCount = Mathf.Max(1, _lights.Count);
+        if (_lightBuffer == null || _lightBuffer.count < requiredLightBufferCount)
+        {
+            _lightBuffer?.Release();
+            _lightBuffer = CreateComputeBuffer(_lights, LightStride);
+        }
+        else if (_lights.Count > 0)
+        {
+            _lightBuffer.SetData(_lights);
         }
     }
 
@@ -1238,13 +1300,15 @@ public class GameManager : MonoBehaviour
         {
             var meshObject = _meshObjects[i];
             var material = meshObject.material;
+            var light = meshObject.light;
             var localToWorld = meshObject.transform.localToWorldMatrix;
-            var color = material.Color.ToVector3();
-            var smoothness = material.Smoothness;
-            var opacity = Mathf.Clamp01(material.Opacity);
-            var refraction = material.RefractionIndex;
-            var materialType = (int)material.Type;
-            var albedoTexture = material.AlbedoTexture;
+            var color = material != null ? material.Color.ToVector3() : Vector3.one;
+            var emission = light != null ? light.Color.ToVector3() : Vector3.zero;
+            var smoothness = material != null ? material.Smoothness : 0.0f;
+            var opacity = material != null ? Mathf.Clamp01(material.Opacity) : 1.0f;
+            var refraction = material != null ? material.RefractionIndex : 1.0f;
+            var materialType = light != null ? 3 : (int)material.Type;
+            var albedoTexture = material != null ? material.AlbedoTexture : null;
 
             if (opacity < ShadowBlockerOpaqueThreshold)
             {
@@ -1253,6 +1317,7 @@ public class GameManager : MonoBehaviour
 
             if (meshObject.previousLocalToWorld == localToWorld
                 && meshObject.previousColor == color
+                && meshObject.previousEmission == emission
                 && Mathf.Approximately(meshObject.previousSmoothness, smoothness)
                 && Mathf.Approximately(meshObject.previousOpacity, opacity)
                 && Mathf.Approximately(meshObject.previousRefraction, refraction)
@@ -1264,6 +1329,7 @@ public class GameManager : MonoBehaviour
 
             meshObject.previousLocalToWorld = localToWorld;
             meshObject.previousColor = color;
+            meshObject.previousEmission = emission;
             meshObject.previousSmoothness = smoothness;
             meshObject.previousOpacity = opacity;
             meshObject.previousRefraction = refraction;
@@ -1282,6 +1348,11 @@ public class GameManager : MonoBehaviour
         _meshInfos.Clear();
         _bvhNodes.Clear();
         _meshAlbedoTextures.Clear();
+        int sphereLightCount = _lightObjects.Count;
+        if (_lights.Count > sphereLightCount)
+        {
+            _lights.RemoveRange(sphereLightCount, _lights.Count - sphereLightCount);
+        }
 
         for (int meshIndex = 0; meshIndex < _meshObjects.Count; meshIndex++)
         {
@@ -1297,7 +1368,15 @@ public class GameManager : MonoBehaviour
             var uvs = mesh.uv;
             var localToWorld = meshObject.transform.localToWorldMatrix;
             var material = meshObject.material;
-            int textureIndex = GetMeshAlbedoTextureIndex(material.AlbedoTexture);
+            var light = meshObject.light;
+            bool isLight = light != null;
+            var color = material != null ? material.Color.ToVector3() : Vector3.one;
+            var emission = isLight ? light.Color.ToVector3() : Vector3.zero;
+            var smoothness = material != null ? material.Smoothness : 0.0f;
+            var opacity = material != null ? Mathf.Clamp01(material.Opacity) : 1.0f;
+            var refraction = material != null ? material.RefractionIndex : 1.0f;
+            int materialType = isLight ? 3 : (int)material.Type;
+            int textureIndex = material != null ? GetMeshAlbedoTextureIndex(material.AlbedoTexture) : -1;
             var meshTriangles = new List<Triangle>(indices.Length / 3);
 
             for (int i = 0; i + 2 < indices.Length; i += 3)
@@ -1316,17 +1395,23 @@ public class GameManager : MonoBehaviour
                     vertex1 = vertex1,
                     vertex2 = vertex2,
                     normal = normal,
-                    color = material.Color.ToVector3(),
+                    color = color,
+                    emission = emission,
                     uv0 = GetMeshUv(uvs, index0),
                     uv1 = GetMeshUv(uvs, index1),
                     uv2 = GetMeshUv(uvs, index2),
-                    smoothness = material.Smoothness,
-                    opacity = Mathf.Clamp01(material.Opacity),
-                    refraction = material.RefractionIndex,
-                    materialType = (int)material.Type,
+                    smoothness = smoothness,
+                    opacity = opacity,
+                    refraction = refraction,
+                    materialType = materialType,
                     meshIndex = meshIndex,
                     textureIndex = textureIndex
                 });
+
+                if (isLight)
+                {
+                    AddTriangleLight(vertex0, vertex1, vertex2, normal, emission);
+                }
             }
 
             if (meshTriangles.Count == 0)
@@ -1343,7 +1428,8 @@ public class GameManager : MonoBehaviour
                 boundsMax = _bvhNodes[rootNodeIndex].boundsMax,
                 triangleStart = triangleStart,
                 triangleCount = _triangles.Count - triangleStart,
-                meshIndex = meshIndex
+                meshIndex = meshIndex,
+                isLight = isLight ? 1 : 0
             });
         }
 
@@ -1365,6 +1451,29 @@ public class GameManager : MonoBehaviour
 
         _meshAlbedoTextures.Add(texture);
         return _meshAlbedoTextures.Count - 1;
+    }
+
+    private void AddTriangleLight(Vector3 vertex0, Vector3 vertex1, Vector3 vertex2, Vector3 normal, Vector3 emission)
+    {
+        var u = vertex1 - vertex0;
+        var v = vertex2 - vertex0;
+        float area = Vector3.Cross(u, v).magnitude * 0.5f;
+        if (area <= 0.000001f)
+        {
+            return;
+        }
+
+        _lights.Add(new Light
+        {
+            position = vertex0,
+            emission = emission,
+            u = u,
+            v = v,
+            normal = normal,
+            area = area,
+            radius = Mathf.Sqrt(area / Mathf.PI),
+            type = LightTypeTriangle
+        });
     }
 
     private static Vector2 GetMeshUv(Vector2[] uvs, int vertexIndex)
@@ -1464,6 +1573,11 @@ public class GameManager : MonoBehaviour
 
         for (int i = 0; i < _lights.Count; i++)
         {
+            if (_lights[i].type != LightTypeSphere)
+            {
+                continue;
+            }
+
             AddSphereTopLevelBvhItem(_topLevelBvhBuildItems, _lights[i], TopLevelObjectTypeLight, i);
         }
 
@@ -1501,6 +1615,11 @@ public class GameManager : MonoBehaviour
 
         for (int i = 0; i < _meshInfos.Count; i++)
         {
+            if (_meshInfos[i].isLight != 0)
+            {
+                continue;
+            }
+
             _shadowBvhBuildItems.Add(new TopLevelBvhBuildItem
             {
                 boundsMin = _meshInfos[i].boundsMin,
@@ -1528,6 +1647,18 @@ public class GameManager : MonoBehaviour
         {
             boundsMin = sphere.position - radius,
             boundsMax = sphere.position + radius,
+            objectType = objectType,
+            objectIndex = objectIndex
+        });
+    }
+
+    private static void AddSphereTopLevelBvhItem(List<TopLevelBvhBuildItem> items, Light light, int objectType, int objectIndex)
+    {
+        var radius = Vector3.one * (light.radius + BvhBoundsPadding);
+        items.Add(new TopLevelBvhBuildItem
+        {
+            boundsMin = light.position - radius,
+            boundsMax = light.position + radius,
             objectType = objectType,
             objectIndex = objectIndex
         });
@@ -1952,7 +2083,7 @@ public class GameManager : MonoBehaviour
         shader.SetInt("_NumShadowBvhNodes", _shadowBvhNodes.Count);
 
         _sphereBuffer = CreateComputeBuffer(_spheres, SphereStride);
-        _lightBuffer = CreateComputeBuffer(_lights, SphereStride);
+        _lightBuffer = CreateComputeBuffer(_lights, LightStride);
         _triangleBuffer = CreateComputeBuffer(_triangles, TriangleStride);
         _meshBuffer = CreateComputeBuffer(_meshInfos, MeshInfoStride);
         _bvhNodeBuffer = CreateComputeBuffer(_bvhNodes, BvhNodeStride);
@@ -1987,6 +2118,7 @@ public class GameManager : MonoBehaviour
         ResetFrameAccumulation();
 
         var material = obj.GetComponent<RayMaterial>();
+        var rayLight = obj.GetComponent<RayLight>();
         var sphereCollider = obj.GetComponent<SphereCollider>();
 
         if (material != null && sphereCollider != null)
@@ -2013,37 +2145,40 @@ public class GameManager : MonoBehaviour
         }
 
         var meshFilter = obj.GetComponent<MeshFilter>();
-        if (material != null && meshFilter != null && meshFilter.sharedMesh != null)
+        if ((material != null || rayLight != null) && meshFilter != null && meshFilter.sharedMesh != null)
         {
             _meshObjects.Add(new RayTracedMesh
             {
                 obj = obj,
                 transform = obj.transform,
                 material = material,
+                light = rayLight,
                 mesh = meshFilter.sharedMesh,
                 previousLocalToWorld = obj.transform.localToWorldMatrix,
-                previousColor = material.Color.ToVector3(),
-                previousSmoothness = material.Smoothness,
-                previousOpacity = Mathf.Clamp01(material.Opacity),
-                previousRefraction = material.RefractionIndex,
-                previousMaterialType = (int)material.Type,
-                previousAlbedoTexture = material.AlbedoTexture
+                previousColor = material != null ? material.Color.ToVector3() : Vector3.one,
+                previousEmission = rayLight != null ? rayLight.Color.ToVector3() : Vector3.zero,
+                previousSmoothness = material != null ? material.Smoothness : 0.0f,
+                previousOpacity = material != null ? Mathf.Clamp01(material.Opacity) : 1.0f,
+                previousRefraction = material != null ? material.RefractionIndex : 1.0f,
+                previousMaterialType = rayLight != null ? 3 : (int)material.Type,
+                previousAlbedoTexture = material != null ? material.AlbedoTexture : null
             });
             RebuildTriangleData();
             return;
         }
 
-        var rayLight = obj.GetComponent<RayLight>();
         if (rayLight != null && sphereCollider != null)
         {
-            var sphere = new Sphere
+            var radius = GetWorldSphereRadius(sphereCollider, obj.transform);
+            var lightData = new Light
             {
                 position = obj.transform.TransformPoint(sphereCollider.center),
-                radius = GetWorldSphereRadius(sphereCollider, obj.transform),
+                radius = radius,
+                area = Mathf.PI * radius * radius,
                 emission = rayLight.Color.ToVector3(),
-                materialType = 3
+                type = LightTypeSphere
             };
-            _lights.Add(sphere);
+            _lights.Insert(_lightObjects.Count, lightData);
             _lightObjects.Add(new RayTracedLight
             {
                 obj = obj,
@@ -2054,7 +2189,7 @@ public class GameManager : MonoBehaviour
             return;
         }
 
-        Debug.LogWarning($"RayTracingObject '{obj.name}' needs RayMaterial with SphereCollider or MeshFilter, or RayLight with SphereCollider.", obj);
+        Debug.LogWarning($"RayTracingObject '{obj.name}' needs RayMaterial with SphereCollider or MeshFilter, or RayLight with SphereCollider or MeshFilter.", obj);
     }
     
     public void UnregisterObject(RayTracingObject obj)
@@ -2076,6 +2211,7 @@ public class GameManager : MonoBehaviour
         {
             _lightObjects.RemoveAt(lightIndex);
             _lights.RemoveAt(lightIndex);
+            RebuildTriangleData();
             return;
         }
 
@@ -2127,6 +2263,11 @@ public class GameManager : MonoBehaviour
 
         foreach (var sphere in _lights)
         {
+            if (sphere.type != LightTypeSphere)
+            {
+                continue;
+            }
+
             var hitDistance = sphere.Intersect(ray.origin, ray.direction);
 
             if (hitDistance >= 0.0f && hitDistance < nearestDistance)
@@ -2254,6 +2395,7 @@ public class GameManager : MonoBehaviour
         shader.SetFloat("_WaterTime", Application.isPlaying ? GetRenderTime() : 0.0f);
         shader.SetInt("_WaterMarchSteps", Mathf.Clamp(waterMarchSteps, 8, 64));
         shader.SetInt("_WaterRefinementSteps", Mathf.Clamp(waterRefinementSteps, 2, 8));
+        shader.SetInt("_NumLights", _lights.Count);
         shader.SetInt("_NumTopLevelBvhNodes", _topLevelBvhNodes.Count);
         shader.SetInt("_NumShadowBvhNodes", _shadowBvhNodes.Count);
 
@@ -2330,7 +2472,7 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, _lights.Count);
             for (int i = 0; i < _lights.Count; i++)
             {
-                hash = AddHash(hash, _lights[i]);
+        hash = AddHash(hash, _lights[i]);
             }
 
             hash = AddHash(hash, _triangles.Count);
@@ -2386,10 +2528,23 @@ public class GameManager : MonoBehaviour
         return AddHash(hash, value.materialType);
     }
 
+    private static int AddHash(int hash, Light value)
+    {
+        hash = AddHash(hash, value.position);
+        hash = AddHash(hash, value.emission);
+        hash = AddHash(hash, value.u);
+        hash = AddHash(hash, value.radius);
+        hash = AddHash(hash, value.v);
+        hash = AddHash(hash, value.area);
+        hash = AddHash(hash, value.normal);
+        return AddHash(hash, value.type);
+    }
+
     private static int AddHash(int hash, RayTracedMesh value)
     {
         hash = AddHash(hash, value.transform.localToWorldMatrix);
         hash = AddHash(hash, value.previousColor);
+        hash = AddHash(hash, value.previousEmission);
         hash = AddHash(hash, value.previousSmoothness);
         hash = AddHash(hash, value.previousOpacity);
         hash = AddHash(hash, value.previousRefraction);

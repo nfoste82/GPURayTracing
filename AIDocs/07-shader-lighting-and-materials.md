@@ -4,13 +4,13 @@ This document covers direct lighting, shadow behavior, material scattering, and 
 
 ## Direct Lighting
 
-Direct lighting comes from emissive sphere lights.
+Direct lighting comes from emissive sphere lights and emissive mesh-triangle lights.
 
-`GetLightHittingPoint()` computes direct lighting by drawing one or more lights per shading point and shading each with stochastic disk samples across the emissive sphere. Bounce 0 uses `max(1, _ShadowQuality + 1)` disk samples per shaded light, while later bounces use one sample per shaded light to reduce cost. The actual per-light shading work lives in `SampleSingleLight()`.
+`GetLightHittingPoint()` computes direct lighting by drawing one or more lights per shading point and shading each with stochastic samples across the light shape. Sphere lights use disk samples across the emissive sphere radius. Mesh lights are represented as one light per emissive triangle and use uniform barycentric samples across the triangle. Bounce 0 uses `max(1, _ShadowQuality + 1)` samples per shaded light, while later bounces use one sample per shaded light to reduce cost. The actual per-light shading work lives in `SampleSingleLight()`.
 
 Each disk sample is weighted by `saturate(dot(directionToLight, hit.normal))` and samples whose direction is at or behind the surface (N·L <= 0) are skipped entirely, so back-facing light directions contribute nothing. Shadow rays are spawned from `hit.position` offset along the surface normal (`hit.normal * 0.001`), not along the light direction.
 
-Direct light from sampled light points is accumulated additively rather than combined with a channel-wise max operation. Light falloff uses a clamped inverse-square-style distance term scaled by light radius and `_LightFalloffScale`. Transparent shadow blockers attenuate direct light with accumulated RGB transmittance, so colored glass can filter light before it reaches the shaded point.
+Direct light from sampled light points is accumulated additively rather than combined with a channel-wise max operation. Light falloff uses a clamped inverse-square-style distance term scaled by light radius/area and `_LightFalloffScale`. Mesh-light samples are additionally weighted by the light triangle facing term, so back-facing triangle lights do not illuminate a shading point. Transparent shadow blockers attenuate direct light with accumulated RGB transmittance, so colored glass can filter light before it reaches the shaded point.
 
 ### Light Sampling Strategies
 

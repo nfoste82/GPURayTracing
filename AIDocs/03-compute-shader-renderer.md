@@ -30,7 +30,7 @@ Important shader globals:
 - `_NumSpheres`, `_NumLights`, `_NumTriangles`, `_NumMeshes`: active buffer counts.
 - `_NumTopLevelBvhNodes`: active top-level object BVH node count; `0` means first-hit traversal uses flat object loops.
 - `_NumShadowBvhNodes`: active shadow-only BVH node count; `0` means shadow traversal uses flat blocker loops.
-- `_Spheres`, `_Lights`: structured buffers of `Sphere` data.
+- `_Spheres`: structured buffer of sphere data. `_Lights`: structured buffer of sphere and triangle light data.
 - `_Triangles`: structured buffer of `MeshTriangle` data.
 - `_Meshes`: structured buffer of per-mesh AABBs, triangle ranges, root BVH node indices, and mesh indices.
 - `_BvhNodes`: structured buffer of per-mesh BVH nodes.

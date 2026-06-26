@@ -2,7 +2,7 @@
 
 This is a Unity real-time GPU ray/path tracing project. The scene runs inside Unity, but the actual image generation is performed by a compute shader in `Assets/Scripts/RayTracingCompute.compute`.
 
-The renderer currently ray traces spheres, emissive sphere lights, registered triangle meshes, and an implicit infinite ground plane. Unity scene meshes, walls, and colliders that are not registered as ray-traced objects still exist mostly for scene organization and physics; they are not traced by the compute shader.
+The renderer currently ray traces spheres, emissive sphere and mesh lights, registered triangle meshes, and an implicit infinite ground plane. Unity scene meshes, walls, and colliders that are not registered as ray-traced objects still exist mostly for scene organization and physics; they are not traced by the compute shader.
 
 ## Key Files
 
@@ -33,7 +33,7 @@ The renderer currently ray traces spheres, emissive sphere lights, registered tr
 - Scene-view previews for ray-traced sphere and light-sphere objects through gizmos and optional rasterized `RayObjectPreview` meshes.
 - Scene-view ground preview for the implicit ray-traced ground plane.
 - Optional Unity skybox preview synced from `GameManager.skyboxTexture` and tinted by `_skyboxLightColor`.
-- Emissive sphere lights.
+- Emissive sphere and mesh lights.
 - Direct lighting with hard/soft shadow sampling.
 - Selectable direct-light sampling strategy (all lights, uniform random, or importance-sampled) with a configurable per-hit light sample count, for trading noise against cost in many-light scenes.
 - ACES filmic tone mapping with a configurable `exposure` control, applied to the final color (debug modes are left untone-mapped).

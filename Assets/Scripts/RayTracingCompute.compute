@@ -91,6 +91,8 @@ static const int TopLevelObjectTypeInternal = -1;
 static const int TopLevelObjectTypeSphere = 0;
 static const int TopLevelObjectTypeLight = 1;
 static const int TopLevelObjectTypeMesh = 2;
+static const int LightTypeSphere = 0;
+static const int LightTypeTriangle = 1;
 
 static const int LightSamplingAllLights = 0;
 static const int LightSamplingUniformRandom = 1;
@@ -147,7 +149,20 @@ struct Sphere
 };
 
 StructuredBuffer<Sphere> _Spheres;
-StructuredBuffer<Sphere> _Lights;
+
+struct Light
+{
+    float3 position;
+    float3 emission;
+    float3 u;
+    float radius;
+    float3 v;
+    float area;
+    float3 normal;
+    int type;
+};
+
+StructuredBuffer<Light> _Lights;
 
 struct MeshTriangle
 {
@@ -156,11 +171,12 @@ struct MeshTriangle
     float3 vertex2;
     float3 normal;
     float3 color;
+    float smoothness;
     float2 uv0;
     float2 uv1;
     float2 uv2;
-    float smoothness;
     float opacity;
+    float3 emission;
     float refraction;
     int materialType;
     int meshIndex;
@@ -178,7 +194,7 @@ struct MeshInfo
     int triangleStart;
     int triangleCount;
     int meshIndex;
-    int padding0;
+    int isLight;
     int padding1;
 };
 
@@ -533,6 +549,20 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere, int objectInd
     }
 }
 
+void IntersectLightSphere(Ray ray, inout RayHit bestHit, Light light, int objectIndex)
+{
+    Sphere sphere;
+    sphere.position = light.position;
+    sphere.color = float3(0.0f, 0.0f, 0.0f);
+    sphere.emission = light.emission;
+    sphere.radius = light.radius;
+    sphere.smoothness = 0.0f;
+    sphere.opacity = 1.0f;
+    sphere.refraction = 1.0f;
+    sphere.materialType = MaterialEmissive;
+    IntersectSphere(ray, bestHit, sphere, objectIndex);
+}
+
 // Boolean occlusion test for opaque shadow blockers: returns true when the sphere blocks the ray
 // before maxDistance. Avoids building a RayHit, used by the pure-occlusion shadow fast path when
 // the scene has no transparent shadow blockers.
@@ -657,7 +687,7 @@ void IntersectTriangle(Ray ray, inout RayHit bestHit, MeshTriangle meshTriangle)
         bestHit.position = ray.origin + hitDistance * ray.direction;
         bestHit.obj_position = bestHit.position;
         bestHit.normal = normal;
-        bestHit.emission = float3(0.0f, 0.0f, 0.0f);
+        bestHit.emission = meshTriangle.emission;
         bestHit.color = meshTriangle.color;
         bestHit.obj_radius = 0.0f;
         bestHit.distance = hitDistance;
@@ -982,7 +1012,10 @@ RayHit GetNearestIntersectionBounded(Ray ray, float maxDistance, int ignoredMesh
 		[loop]
 		for (i = 0; i < _NumLights; i++)
 		{
-			IntersectSphere(ray, bestHit, _Lights[i], i);
+            if (_Lights[i].type == LightTypeSphere)
+            {
+                IntersectLightSphere(ray, bestHit, _Lights[i], i);
+            }
 		}
 
 		[loop]
@@ -1029,7 +1062,7 @@ RayHit GetNearestIntersectionBounded(Ray ray, float maxDistance, int ignoredMesh
 
 		if (node.objectType == TopLevelObjectTypeLight)
 		{
-			IntersectSphere(ray, bestHit, _Lights[node.objectIndex], node.objectIndex);
+			IntersectLightSphere(ray, bestHit, _Lights[node.objectIndex], node.objectIndex);
 			continue;
 		}
 
@@ -1162,6 +1195,11 @@ bool IsShadowRayBlocked(Ray rayToLight, float distanceToLight)
         [loop]
         for (j = 0; j < _NumMeshes; j++)
         {
+            if (_Meshes[j].isLight != 0)
+            {
+                continue;
+            }
+
             if (MeshBvhOccludes(rayToLight, distanceToLight, _Meshes[j]))
             {
                 return true;
@@ -1262,6 +1300,11 @@ float3 GetShadowTransmittance(Ray rayToLight, float distanceToLight)
         [loop]
         for (j = 0; j < _NumMeshes; j++)
         {
+            if (_Meshes[j].isLight != 0)
+            {
+                continue;
+            }
+
             if (IntersectMeshBvhForShadow(rayToLight, distanceToLight, transmittance, _Meshes[j]))
             {
                 return float3(0.0f, 0.0f, 0.0f);
@@ -1351,7 +1394,8 @@ float3 GetShadowTransmittance(Ray rayToLight, float distanceToLight)
 float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount, inout uint rngState)
 {
     float3 lightTotal = float3(0.0f, 0.0f, 0.0f);
-    float3 lightPos = _Lights[lightIndex].position;
+    Light light = _Lights[lightIndex];
+    float3 lightPos = light.position;
     float3 ptToLight = normalize(lightPos - hit.position);
     float3 tangent;
     float3 bitangent;
@@ -1361,8 +1405,24 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount, i
     [loop]
     for (sampleIndex = 0; sampleIndex < sampleCount; sampleIndex++)
     {
-        float2 diskSample = SampleDisk(rngState) * _Lights[lightIndex].radius * max(0.0f, _ShadowRandomness);
-        float3 offsetPt = lightPos + tangent * diskSample.x + bitangent * diskSample.y;
+        float3 offsetPt;
+        if (light.type == LightTypeTriangle)
+        {
+            float r1 = rand(rngState);
+            float r2 = rand(rngState);
+            if (r1 + r2 > 1.0f)
+            {
+                r1 = 1.0f - r1;
+                r2 = 1.0f - r2;
+            }
+            offsetPt = light.position + light.u * r1 + light.v * r2;
+        }
+        else
+        {
+            float2 diskSample = SampleDisk(rngState) * light.radius * max(0.0f, _ShadowRandomness);
+            offsetPt = lightPos + tangent * diskSample.x + bitangent * diskSample.y;
+        }
+
         float3 ptToOffset = offsetPt - hit.position;
         float distanceToLight = length(ptToOffset);
         ptToOffset = normalize(ptToOffset);
@@ -1380,8 +1440,13 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount, i
             continue;
         }
 
-        float lightStrength = GetDirectLightFalloff(distanceToLight, _Lights[lightIndex].radius);
-        lightTotal += _Lights[lightIndex].emission * rayNormalDot * lightStrength * shadowTransmittance;
+        float lightStrength = GetDirectLightFalloff(distanceToLight, light.radius);
+        if (light.type == LightTypeTriangle)
+        {
+            lightStrength *= saturate(dot(light.normal, -ptToOffset)) * max(1.0f, light.area);
+        }
+
+        lightTotal += light.emission * rayNormalDot * lightStrength * shadowTransmittance;
     }
 
     return lightTotal / sampleCount;
@@ -1394,15 +1459,16 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount, i
 // Uses squared distance directly to avoid a sqrt; mirrors GetDirectLightFalloff's math.
 float LightImportanceWeight(int lightIndex, RayHit hit)
 {
-    float3 toLight = _Lights[lightIndex].position - hit.position;
+    Light light = _Lights[lightIndex];
+    float3 toLight = light.position - hit.position;
     float distSq = dot(toLight, toLight);
 
-    float lightRadius = _Lights[lightIndex].radius;
-    float areaScale = max(1.0f, lightRadius * lightRadius);
+    float lightRadius = light.radius;
+    float areaScale = max(1.0f, light.type == LightTypeTriangle ? light.area : lightRadius * lightRadius);
     float distanceScale = max(1.0f, distSq * max(0.001f, _LightFalloffScale));
     float falloff = saturate(areaScale / distanceScale);
 
-    float3 emission = _Lights[lightIndex].emission;
+    float3 emission = light.emission;
     float luminance = max(emission.x, max(emission.y, emission.z));
     // Keep a small floor so every light retains a nonzero pick probability (required for
     // the estimator to stay unbiased).
