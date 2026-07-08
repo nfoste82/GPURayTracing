@@ -89,7 +89,8 @@ public class GameManager : MonoBehaviour
         Throughput = 5,
         BounceCount = 6,
         HitDistance = 7,
-        AccelerationStructures = 8
+        AccelerationStructures = 8,
+        GlassScatter = 9
     }
 
     [Header("Debug render modes")]

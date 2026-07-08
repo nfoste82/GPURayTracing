@@ -68,8 +68,6 @@ int _NumShadowBvhNodes;
 int _HasTransparentShadowBlockers;
 
 static const float PI = 3.141593f;
-static const float MaxRefractionDiff = 4;
-static const float MaxReflect = 2;
 
 static const int DebugFinalColor = 0;
 static const int DebugNormals = 1;
@@ -80,6 +78,7 @@ static const int DebugThroughput = 5;
 static const int DebugBounceCount = 6;
 static const int DebugHitDistance = 7;
 static const int DebugAccelerationStructures = 8;
+static const int DebugGlassScatter = 9;
 
 static const int MaterialDiffuse = 0;
 static const int MaterialMetal = 1;
@@ -248,13 +247,15 @@ struct ScatterResult
 {
     Ray ray;
     float3 attenuation;
+    int bouncesConsumed;
 };
 
-ScatterResult CreateScatterResult(Ray ray, float3 attenuation)
+ScatterResult CreateScatterResult(Ray ray, float3 attenuation, int bouncesConsumed)
 {
     ScatterResult result;
     result.ray = ray;
     result.attenuation = attenuation;
+    result.bouncesConsumed = max(1, bouncesConsumed);
     return result;
 }
 
@@ -1137,19 +1138,31 @@ float3 GetClosestPointOnLineSegment(float3 linePointStart, float3 linePointEnd, 
     return linePointStart + (percentageAlongLine * (linePointEnd - linePointStart));
 }
 
-float3 Refract(float3 sourceDirection, float sourceRefraction, float targetRefraction, float3 targetNormal)
+bool RefractSnell(float3 sourceDirection, float sourceRefraction, float targetRefraction, float3 surfaceNormal, out float3 refractedDirection)
 {
-    float refraction = (targetRefraction - sourceRefraction) / MaxRefractionDiff;
-    float reflectAmount = refraction * MaxReflect;
+    float3 incident = normalize(sourceDirection);
+    float3 normal = normalize(surfaceNormal);
+    float sourceIndex = max(0.001f, sourceRefraction);
+    float targetIndex = max(0.001f, targetRefraction);
+    float eta = sourceIndex / targetIndex;
+    float cosIncident = clamp(dot(-incident, normal), -1.0f, 1.0f);
 
-    // reflect amount
-    // ------------------
-    // 0 no refraction
-    // -2 (-90 degrees)
-    // 2 (90 degrees)
+    if (cosIncident < 0.0f)
+    {
+        normal = -normal;
+        cosIncident = -cosIncident;
+    }
 
-    reflectAmount = reflectAmount * dot(targetNormal, sourceDirection);
-    return normalize((reflectAmount * targetNormal) + sourceDirection);
+    float sinTransmittedSqr = eta * eta * max(0.0f, 1.0f - cosIncident * cosIncident);
+    if (sinTransmittedSqr > 1.0f)
+    {
+        refractedDirection = float3(0.0f, 0.0f, 0.0f);
+        return false;
+    }
+
+    float cosTransmitted = sqrt(max(0.0f, 1.0f - sinTransmittedSqr));
+    refractedDirection = normalize(eta * incident + (eta * cosIncident - cosTransmitted) * normal);
+    return true;
 }
 
 void CreateBasisFromNormal(float3 normal, out float3 tangent, out float3 bitangent)
@@ -1739,17 +1752,33 @@ bool ShouldSampleDirectLight(float3 throughput)
     return max(throughput.x, max(throughput.y, throughput.z)) > MinDirectLightThroughput;
 }
 
-void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit)
+void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int remainingBounces, out int bouncesConsumed)
 {
+    bouncesConsumed = 1;
+
     if (dot(sourceRay.direction, hit.normal) > 0.0f)
     {
-        ray.direction = Refract(sourceRay.direction, hit.refraction, 1.0f, hit.normal);
+        float3 exitDirection;
+        if (!RefractSnell(sourceRay.direction, hit.refraction, 1.0f, -hit.normal, exitDirection))
+        {
+            exitDirection = reflect(sourceRay.direction, hit.normal);
+        }
+
+        ray.direction = exitDirection;
         ray.origin = hit.position + (ray.direction * 0.001f);
         hit.distanceThroughOpacity = hit.distance;
         return;
     }
 
-    ray.direction = Refract(sourceRay.direction, 1.0f, hit.refraction, hit.normal);
+    float3 entryDirection;
+    if (!RefractSnell(sourceRay.direction, 1.0f, hit.refraction, hit.normal, entryDirection))
+    {
+        ray.direction = reflect(sourceRay.direction, hit.normal);
+        ray.origin = hit.position + (ray.direction * 0.001f);
+        return;
+    }
+
+    ray.direction = entryDirection;
 
     Ray insideRay = CreateRay(hit.position + ray.direction * 0.001f, ray.direction);
     float exitDistance = GetSphereExitDistance(insideRay, hit.obj_position, hit.obj_radius);
@@ -1761,22 +1790,40 @@ void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit)
         return;
     }
 
+    if (remainingBounces <= bouncesConsumed)
+    {
+        hit.distanceThroughOpacity = exitDistance;
+        ray.origin = insideRay.origin;
+        ray.direction = insideRay.direction;
+        return;
+    }
+
     float3 halfway = GetClosestPointOnLineSegment(ray.origin, ray.origin + (2.0f * hit.obj_radius * ray.direction), hit.obj_position);
     float3 offset = ((halfway - ray.origin) * 2.0f);
     ray.origin += offset;
     float3 exitPointNormal = normalize(ray.origin - hit.obj_position);
 
     hit.distanceThroughOpacity = length(offset);
-    ray.direction = Refract(ray.direction, hit.refraction, 1.0f, exitPointNormal);
+    bouncesConsumed++;
+
+    float3 exitDirection;
+    if (!RefractSnell(ray.direction, hit.refraction, 1.0f, -exitPointNormal, exitDirection))
+    {
+        exitDirection = reflect(ray.direction, exitPointNormal);
+    }
+
+    ray.direction = exitDirection;
 }
 
-void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit)
+void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int remainingBounces, out int bouncesConsumed)
 {
+    bouncesConsumed = 1;
+
     float3 normal = hit.normal;
     float targetRefraction = max(1.0f, hit.refraction);
 
-    float3 entryDirection = Refract(sourceRay.direction, 1.0f, targetRefraction, normal);
-    if (dot(entryDirection, entryDirection) <= 0.0f)
+    float3 entryDirection;
+    if (!RefractSnell(sourceRay.direction, 1.0f, targetRefraction, normal, entryDirection))
     {
         ray.direction = reflect(sourceRay.direction, normal);
         ray.origin = hit.position + (ray.direction * 0.001f);
@@ -1785,57 +1832,75 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit)
 
     entryDirection = normalize(entryDirection);
     Ray insideRay = CreateRay(hit.position + entryDirection * 0.001f, entryDirection);
-    float exitDistance = 1.#INF;
-    float3 exitNormal = normal;
+    float distanceThroughMedium = 0.0f;
 
-    int i;
     [loop]
-    for (i = 0; i < _NumMeshes; i++)
+    while (bouncesConsumed < remainingBounces)
     {
-        MeshInfo meshInfo = _Meshes[i];
-        if (meshInfo.meshIndex != hit.meshIndex)
+        float exitDistance = 1.#INF;
+        float3 exitNormal = normal;
+
+        int i;
+        [loop]
+        for (i = 0; i < _NumMeshes; i++)
         {
-            continue;
+            MeshInfo meshInfo = _Meshes[i];
+            if (meshInfo.meshIndex != hit.meshIndex)
+            {
+                continue;
+            }
+
+            float meshExitDistance;
+            float3 meshExitNormal;
+            if (IntersectMeshBvhForExit(insideRay, meshInfo, meshExitDistance, meshExitNormal) && meshExitDistance < exitDistance)
+            {
+                exitDistance = meshExitDistance;
+                exitNormal = meshExitNormal;
+            }
         }
 
-        float meshExitDistance;
-        float3 meshExitNormal;
-        if (IntersectMeshBvhForExit(insideRay, meshInfo, meshExitDistance, meshExitNormal) && meshExitDistance < exitDistance)
+        if (exitDistance >= 1.#INF)
         {
-            exitDistance = meshExitDistance;
-            exitNormal = meshExitNormal;
+            hit.distanceThroughOpacity = max(distanceThroughMedium, ThinTransparentSurfaceDistance);
+            ray.direction = insideRay.direction;
+            ray.origin = insideRay.origin;
+            return;
         }
+
+        if (dot(exitNormal, insideRay.direction) < 0.0f)
+        {
+            exitNormal = -exitNormal;
+        }
+
+        float3 exitPoint = insideRay.origin + insideRay.direction * exitDistance;
+        RayHit interiorHit = GetNearestIntersectionBounded(insideRay, exitDistance, hit.meshIndex, -1);
+        if (!DidHitSky(interiorHit))
+        {
+            hit.distanceThroughOpacity = distanceThroughMedium + interiorHit.distance;
+            ray.direction = insideRay.direction;
+            ray.origin = insideRay.origin;
+            return;
+        }
+
+        distanceThroughMedium += exitDistance;
+        bouncesConsumed++;
+
+        float3 exitDirection;
+        if (RefractSnell(insideRay.direction, targetRefraction, 1.0f, -exitNormal, exitDirection))
+        {
+            hit.distanceThroughOpacity = distanceThroughMedium;
+            ray.direction = exitDirection;
+            ray.origin = exitPoint + (ray.direction * 0.001f);
+            return;
+        }
+
+        float3 reflectedDirection = normalize(reflect(insideRay.direction, exitNormal));
+        insideRay = CreateRay(exitPoint + reflectedDirection * 0.001f, reflectedDirection);
     }
 
-    if (exitDistance >= 1.#INF)
-    {
-        hit.distanceThroughOpacity = ThinTransparentSurfaceDistance;
-        ray.direction = entryDirection;
-        ray.origin = insideRay.origin;
-        return;
-    }
-
-    if (dot(exitNormal, entryDirection) < 0.0f)
-    {
-        exitNormal = -exitNormal;
-    }
-
-    float3 exitPoint = insideRay.origin + entryDirection * exitDistance;
-    RayHit interiorHit = GetNearestIntersectionBounded(insideRay, exitDistance, hit.meshIndex, -1);
-    if (!DidHitSky(interiorHit))
-    {
-        hit.distanceThroughOpacity = interiorHit.distance;
-        ray.direction = entryDirection;
-        ray.origin = insideRay.origin;
-        return;
-    }
-
-    hit.distanceThroughOpacity = exitDistance;
-    float3 exitDirection = Refract(entryDirection, targetRefraction, 1.0f, -exitNormal);
-    ray.direction = dot(exitDirection, exitDirection) > 0.0f
-        ? normalize(exitDirection)
-        : reflect(entryDirection, -exitNormal);
-    ray.origin = exitPoint + (ray.direction * 0.001f);
+    hit.distanceThroughOpacity = max(distanceThroughMedium, ThinTransparentSurfaceDistance);
+    ray.direction = insideRay.direction;
+    ray.origin = insideRay.origin;
 }
 
 void ApplyWaterTransmission(inout Ray ray, Ray sourceRay, RayHit hit)
@@ -1843,15 +1908,16 @@ void ApplyWaterTransmission(inout Ray ray, Ray sourceRay, RayHit hit)
     bool enteringWater = sourceRay.origin.y >= GetWaterWaveHeight(sourceRay.origin.xz);
     float sourceRefraction = enteringWater ? 1.0f : max(1.0f, hit.refraction);
     float targetRefraction = enteringWater ? max(1.0f, hit.refraction) : 1.0f;
-    float3 transmissionDirection = Refract(sourceRay.direction, sourceRefraction, targetRefraction, hit.normal);
+    float3 normal = enteringWater ? hit.normal : -hit.normal;
+    float3 transmissionDirection;
 
-    ray.direction = dot(transmissionDirection, transmissionDirection) > 0.0f
-        ? normalize(transmissionDirection)
+    ray.direction = RefractSnell(sourceRay.direction, sourceRefraction, targetRefraction, normal, transmissionDirection)
+        ? transmissionDirection
         : reflect(sourceRay.direction, hit.normal);
     ray.origin = hit.position + ray.direction * 0.01f;
 }
 
-ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, inout uint rngState)
+ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, int remainingBounces, inout uint rngState)
 {
     float3 albedo = GetAlbedo(hit);
     float3 roughNormal = GetRandomizedNormalBasedOnAmount(hit.normal, hit.smoothness, rngState);
@@ -1864,12 +1930,12 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
         {
             scatteredRay.direction = reflect(sourceRay.direction, roughNormal);
             scatteredRay.origin = hit.position + scatteredRay.direction * 0.01f;
-            return CreateScatterResult(scatteredRay, lerp(float3(1.0f, 1.0f, 1.0f), albedo, 0.08f));
+            return CreateScatterResult(scatteredRay, lerp(float3(1.0f, 1.0f, 1.0f), albedo, 0.08f), 1);
         }
 
         ApplyWaterTransmission(scatteredRay, sourceRay, hit);
         float3 tint = lerp(float3(1.0f, 1.0f, 1.0f), albedo, saturate(1.0f - hit.opacity));
-        return CreateScatterResult(scatteredRay, tint * GetTransmissionAmount(hit));
+        return CreateScatterResult(scatteredRay, tint * GetTransmissionAmount(hit), 1);
     }
 
     if (IsGlassMaterial(hit))
@@ -1877,23 +1943,30 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
         float transmission = GetTransmissionAmount(hit);
         float fresnelReflectance = GetFresnelReflectance(sourceRay, hit);
 
+        if (rand(rngState) < fresnelReflectance)
+        {
+            scatteredRay.direction = reflect(sourceRay.direction, roughNormal);
+            scatteredRay.origin = hit.position + scatteredRay.direction * 0.001f;
+            return CreateScatterResult(scatteredRay, float3(1.0f, 1.0f, 1.0f), 1);
+        }
+
         if (transmission > 0.0f)
         {
+            int bouncesConsumed = 1;
             if (hit.obj_radius > 0.0f)
             {
-                ApplySphereRefraction(scatteredRay, sourceRay, hit);
+                ApplySphereRefraction(scatteredRay, sourceRay, hit, remainingBounces, bouncesConsumed);
             }
             else
             {
-                ApplyPlanarTransmission(scatteredRay, sourceRay, hit);
+                ApplyPlanarTransmission(scatteredRay, sourceRay, hit, remainingBounces, bouncesConsumed);
             }
 
             float3 tint = GetGlassAbsorptionTransmittance(hit, albedo);
-            float transparentEnergy = hit.obj_radius > 0.0f ? transmission * (1.0f - fresnelReflectance) : transmission;
-            return CreateScatterResult(scatteredRay, tint * transparentEnergy);
+            return CreateScatterResult(scatteredRay, tint * transmission, bouncesConsumed);
         }
 
-        return CreateScatterResult(scatteredRay, fresnelReflectance.xxx);
+        return CreateScatterResult(scatteredRay, float3(1.0f, 1.0f, 1.0f), 1);
     }
 
     if (hit.materialType == MaterialDiffuse)
@@ -1903,7 +1976,7 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
             : GetDiffuseScatterDirection(hit.normal, rngState);
     }
 
-    return CreateScatterResult(scatteredRay, albedo);
+    return CreateScatterResult(scatteredRay, albedo, 1);
 }
 
 float3 GetDirectLight(Ray ray, RayHit hit, bool softShadows, inout uint rngState)
@@ -1953,16 +2026,18 @@ float3 TracePath(Ray ray, inout uint rngState)
         }
 
         float3 albedo = GetAlbedo(hit);
-        if (ShouldSampleDirectLight(throughput))
+        if (!IsGlassMaterial(hit) && ShouldSampleDirectLight(throughput))
         {
             bool softShadows = bounce == 0;
             float3 directLight = GetDirectLight(ray, hit, softShadows, rngState);
             radiance += throughput * albedo * directLight * hit.opacity;
         }
 
-        ScatterResult scatter = CreateScatteredRay(ray, hit, bounce, rngState);
+        int remainingBounces = _NumBounces - bounce;
+        ScatterResult scatter = CreateScatteredRay(ray, hit, bounce, remainingBounces, rngState);
         ray = scatter.ray;
         throughput *= scatter.attenuation;
+        bounce += scatter.bouncesConsumed - 1;
 
         if (!HasPathEnergy(throughput))
         {
@@ -2043,6 +2118,23 @@ float3 GetDebugRenderColor(Ray ray, inout uint rngState)
         return saturate(hit.distance / 25.0f).xxx;
     }
 
+    if (_DebugRenderMode == DebugGlassScatter)
+    {
+        if (!IsGlassMaterial(hit))
+        {
+            return GetAlbedo(hit) * 0.12f;
+        }
+
+        float transmission = GetTransmissionAmount(hit);
+        float fresnelReflectance = GetFresnelReflectance(ray, hit);
+        if (transmission <= 0.0f || rand(rngState) < fresnelReflectance)
+        {
+            return float3(1.0f, fresnelReflectance, 0.0f);
+        }
+
+        return float3(0.0f, fresnelReflectance, transmission);
+    }
+
     if (_DebugRenderMode == DebugBounceCount || _DebugRenderMode == DebugThroughput)
     {
         float3 throughput = float3(1.0f, 1.0f, 1.0f);
@@ -2057,11 +2149,13 @@ float3 GetDebugRenderColor(Ray ray, inout uint rngState)
                 break;
             }
 
-            ScatterResult scatter = CreateScatteredRay(ray, hit, bounce, rngState);
+            int remainingBounces = _NumBounces - bounce;
+            ScatterResult scatter = CreateScatteredRay(ray, hit, bounce, remainingBounces, rngState);
             ray = scatter.ray;
             throughput *= scatter.attenuation;
 
-            completedBounces++;
+            completedBounces += scatter.bouncesConsumed;
+            bounce += scatter.bouncesConsumed - 1;
 
             if (!HasPathEnergy(throughput))
             {

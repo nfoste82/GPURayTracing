@@ -19,6 +19,7 @@ Available modes:
 - `BounceCount`: completed non-terminal bounces normalized by `_NumBounces`.
 - `HitDistance`: first-hit distance divided by `25`, clamped to grayscale `[0, 1]`; sky renders white.
 - `AccelerationStructures`: visualizes whether the top-level and shadow BVHs are active. First-hit surfaces encode top-level activity in red and shadow-BVH activity in green, with blue used to distinguish glass/mesh/non-mesh hits. Sky shows BVH node-count intensity.
+- `GlassScatter`: first-hit glass scattering diagnostic. Non-glass surfaces render as dim albedo for context. Glass pixels render red when the sampled Fresnel branch reflects and blue when it transmits; green is the Schlick Fresnel reflectance probability, and blue intensity is the material transmission amount.
 
 Debug modes still use the normal camera ray generation and depth-of-field jitter path, so high `numberOfPasses` can average noisy debug samples for modes involving randomized normals, direct light, or throughput.
 
