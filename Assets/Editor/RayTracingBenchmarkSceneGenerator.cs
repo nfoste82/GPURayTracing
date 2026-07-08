@@ -12,6 +12,7 @@ public static class RayTracingBenchmarkSceneGenerator
     private const string GeneratedAssetFolder = "Assets/Scenes/Benchmarks/GeneratedAssets";
     private const string ComputeShaderPath = "Assets/Scripts/RayTracingCompute.compute";
     private const string SkyboxPath = "Assets/skyboxOcean.jpg";
+    private const string StanfordDragonModelPath = "Assets/Models/stanford-dragon-pbr.fbx";
     private const string WolfensteinTextureAtlasPath = "Assets/wolf3d_textures.png";
     private const int WolfensteinTextureTileSize = 64;
 
@@ -32,6 +33,7 @@ public static class RayTracingBenchmarkSceneGenerator
         CreateWaterScene();
         CreateGlassOfWaterPencilScene();
         CreateCornellBoxScene();
+        CreateDragonCornellBoxScene();
         CreateWolfensteinScene();
 
         AssetDatabase.SaveAssets();
@@ -438,7 +440,7 @@ public static class RayTracingBenchmarkSceneGenerator
         var context = CreateBaseScene(sceneName, new Vector3(0.0f, 2.05f, -4.85f), new Vector3(0.0f, 0.0f, 0.0f), passes: 1, bounces: 9, shadowQuality: 1);
         context.Manager.cameraFocalDistance = 9.5f;
         context.Manager.groundSmoothness = 0.2f;
-        context.Manager.lightFalloffScale = 0.018f;
+        context.Manager.lightFalloffScale = 0.075f;
         context.Manager.exposure = 1.0f;
         context.Manager.topLevelBvhMinObjectCount = 0;
         context.Manager.shadowBvhMinObjectCount = 0;
@@ -455,17 +457,64 @@ public static class RayTracingBenchmarkSceneGenerator
         AddPrimitiveMesh(context.Root, "Floor", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 0.02f, roomCenterZ), Vector3.zero, new Vector3(roomWidth, 0.04f, roomDepth), new Color32(230, 226, 212, 255), RayMaterial.MaterialType.Diffuse, 0.22f, 1.0f);
         AddPrimitiveMesh(context.Root, "Ceiling", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, roomHeight, roomCenterZ), Vector3.zero, new Vector3(roomWidth, 0.04f, roomDepth), new Color32(226, 224, 212, 255), RayMaterial.MaterialType.Diffuse, 0.18f, 1.0f);
         AddPrimitiveMesh(context.Root, "Left Green Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-roomWidth * 0.5f, roomHeight * 0.5f, roomCenterZ), Vector3.zero, new Vector3(0.04f, roomHeight, roomDepth), new Color32(34, 178, 58, 255), RayMaterial.MaterialType.Diffuse, 0.06f, 1.0f);
-        AddPrimitiveMesh(context.Root, "Right Red Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(roomWidth * 0.5f, roomHeight * 0.5f, roomCenterZ), Vector3.zero, new Vector3(0.04f, roomHeight, roomDepth), new Color32(226, 38, 20, 255), RayMaterial.MaterialType.Diffuse, 0.06f, 1.0f);
-        AddPrimitiveMesh(context.Root, "Far Mirror Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, roomHeight * 0.5f, backZ), Vector3.zero, new Vector3(roomWidth, roomHeight, 0.04f), new Color32(245, 244, 238, 255), RayMaterial.MaterialType.Metal, 1.0f, 1.0f);
-        AddPrimitiveMesh(context.Root, "Camera-Side Mirror Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, roomHeight * 0.5f, frontZ), Vector3.zero, new Vector3(roomWidth, roomHeight, 0.04f), new Color32(242, 242, 238, 255), RayMaterial.MaterialType.Metal, 1.0f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Right Red Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(roomWidth * 0.5f, roomHeight * 0.5f, roomCenterZ), Vector3.zero, new Vector3(0.04f, roomHeight, roomDepth), new Color32(226, 20, 20, 255), RayMaterial.MaterialType.Diffuse, 0.06f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Far Mirror Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, roomHeight * 0.5f, backZ), Vector3.zero, new Vector3(roomWidth, roomHeight, 0.04f), Color.white, RayMaterial.MaterialType.Metal, 1.0f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Camera-Side Mirror Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, roomHeight * 0.5f, frontZ), Vector3.zero, new Vector3(roomWidth, roomHeight, 0.04f), Color.white, RayMaterial.MaterialType.Metal, 1.0f, 1.0f);
         
         AddMeshLight(context.Root, "Middle Rectangular Ceiling Light", CreateHorizontalQuadMesh("Middle Rectangular Ceiling Light", 1.35f, 0.46f, 1.0f, 1.0f), new Vector3(0.0f, roomHeight - 0.035f, 0.65f), Vector3.zero, new Vector3(2.0f, 1.0f, 1.0f), new Color32(255, 248, 220, 255));
 
         AddPrimitiveMesh(context.Root, "Near Left Block", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-1.85f, 0.82f, -1.85f), Vector3.zero, new Vector3(1.45f, 1.6f, 1.15f), new Color32(218, 212, 196, 255), RayMaterial.MaterialType.Diffuse, 0.15f, 1.0f);
         AddPrimitiveMesh(context.Root, "Tall Center Block", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-0.55f, 1.55f, 0.8f), Vector3.zero, new Vector3(1.0f, 3.1f, 1.0f), new Color32(220, 216, 202, 255), RayMaterial.MaterialType.Diffuse, 0.12f, 1.0f);
-        AddPrimitiveMesh(context.Root, "Glass Box", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(1.45f, 0.74f, 1.9f), new Vector3(0.0f, -8.0f, 0.0f), new Vector3(1.2f, 1.48f, 1.0f), new Color32(232, 232, 226, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.32f, 1.85f);
-        AddPrimitiveMesh(context.Root, "Glass Pyramid", RayMeshPrimitive.PrimitiveType.Pyramid, new Vector3(0.0f, 0.9f, -0.7f), new Vector3(0.0f, 22.0f, 0.0f), Vector3.one * 1.8f, new Color32(210, 235, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.32f, 1.85f);
+        AddPrimitiveMesh(context.Root, "Glass Box", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(1.45f, 0.81f, 1.9f), new Vector3(0.0f, -8.0f, 0.0f), new Vector3(1.2f, 1.48f, 1.0f), new Color32(232, 232, 226, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.32f, 1.85f);
+        AddPrimitiveMesh(context.Root, "Glass Pyramid", RayMeshPrimitive.PrimitiveType.Pyramid, new Vector3(0.0f, 1.05f, -0.7f), new Vector3(0.0f, 22.0f, 0.0f), Vector3.one * 1.8f, new Color32(210, 235, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.32f, 1.85f);
         AddSphere(context.Root, "Chrome Sphere", new Vector3(2.05f, 0.82f, -2.25f), 0.82f, new Color32(236, 233, 226, 255), RayMaterial.MaterialType.Metal, 1.0f);
+
+        Save(context.Scene, sceneName);
+    }
+
+    private static void CreateDragonCornellBoxScene()
+    {
+        const string sceneName = "Benchmark_DragonCornellBox";
+        EnsureReadableModel(StanfordDragonModelPath);
+
+        if (ShouldSkipExistingScene(sceneName))
+        {
+            return;
+        }
+
+        var dragonMesh = LoadFirstMeshFromAsset(StanfordDragonModelPath);
+        if (dragonMesh == null)
+        {
+            Debug.LogWarning($"Skipping {sceneName}: no mesh found at {StanfordDragonModelPath}.");
+            return;
+        }
+
+        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 2.2f, -5.2f), new Vector3(2.0f, 0.0f, 0.0f), passes: 1, bounces: 10, shadowQuality: 1);
+        context.Manager.cameraFocalDistance = 6.5f;
+        context.Manager.groundSmoothness = 0.18f;
+        context.Manager.lightFalloffScale = 0.02f;
+        context.Manager.exposure = 1.0f;
+        context.Manager.topLevelBvhMinObjectCount = 0;
+        context.Manager.shadowBvhMinObjectCount = 0;
+        context.Manager._skyboxLightColor = new Color32(0, 0, 0, 255);
+        context.Manager.enableFrameAccumulation = true;
+
+        const float roomWidth = 5.6f;
+        const float roomHeight = 4.2f;
+        const float roomDepth = 8.2f;
+        const float roomCenterZ = 0.5f;
+        float backZ = roomCenterZ + roomDepth * 0.5f;
+
+        AddPrimitiveMesh(context.Root, "Floor", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 0.02f, roomCenterZ), Vector3.zero, new Vector3(roomWidth, 0.04f, roomDepth), new Color32(230, 226, 214, 255), RayMaterial.MaterialType.Diffuse, 0.18f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Ceiling", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, roomHeight, roomCenterZ), Vector3.zero, new Vector3(roomWidth, 0.04f, roomDepth), new Color32(226, 224, 214, 255), RayMaterial.MaterialType.Diffuse, 0.14f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Left Green Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-roomWidth * 0.5f, roomHeight * 0.5f, roomCenterZ), Vector3.zero, new Vector3(0.04f, roomHeight, roomDepth), new Color32(34, 178, 58, 255), RayMaterial.MaterialType.Diffuse, 0.05f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Right Red Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(roomWidth * 0.5f, roomHeight * 0.5f, roomCenterZ), Vector3.zero, new Vector3(0.04f, roomHeight, roomDepth), new Color32(226, 38, 20, 255), RayMaterial.MaterialType.Diffuse, 0.05f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Back Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, roomHeight * 0.5f, backZ), Vector3.zero, new Vector3(roomWidth, roomHeight, 0.04f), new Color32(232, 230, 220, 255), RayMaterial.MaterialType.Diffuse, 0.12f, 1.0f);
+
+        AddMeshLight(context.Root, "Rectangular Ceiling Light", CreateHorizontalQuadMesh("Rectangular Ceiling Light", 1.25f, 0.72f, 1.0f, 1.0f), new Vector3(0.0f, roomHeight - 0.035f, 0.2f), Vector3.zero, Vector3.one, new Color32(255, 248, 226, 255));
+
+        var dragon = AddRayMesh(context.Root, "Stanford Dragon", dragonMesh, new Vector3(0.0f, 0.02f, 0.15f), new Vector3(0.0f, 148.0f, 0.0f), Vector3.one, new Color32(48, 122, 255, 255), RayMaterial.MaterialType.Glass, 0.96f, 0.3f, 1.5f);
+        FitObjectToBox(dragon.transform, dragonMesh.bounds, new Vector3(0.0f, 0.04f, 0.15f), new Vector3(2.45f, 2.35f, 2.45f));
 
         Save(context.Scene, sceneName);
     }
@@ -616,6 +665,56 @@ public static class RayTracingBenchmarkSceneGenerator
         obj.AddComponent<MeshRenderer>();
         obj.AddComponent<RayTracingObject>();
         return obj;
+    }
+
+    private static Mesh LoadFirstMeshFromAsset(string path)
+    {
+        var mesh = AssetDatabase.LoadAssetAtPath<Mesh>(path);
+        if (mesh != null)
+        {
+            return mesh;
+        }
+
+        foreach (var asset in AssetDatabase.LoadAllAssetsAtPath(path))
+        {
+            if (asset is Mesh candidate)
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private static void EnsureReadableModel(string path)
+    {
+        var importer = AssetImporter.GetAtPath(path) as ModelImporter;
+        if (importer == null || importer.isReadable)
+        {
+            return;
+        }
+
+        importer.isReadable = true;
+        importer.SaveAndReimport();
+    }
+
+    private static void FitObjectToBox(Transform transform, Bounds sourceBounds, Vector3 floorCenter, Vector3 maxSize)
+    {
+        Vector3 size = sourceBounds.size;
+        if (size.x <= 0.0f || size.y <= 0.0f || size.z <= 0.0f)
+        {
+            return;
+        }
+
+        float uniformScale = Mathf.Min(maxSize.x / size.x, Mathf.Min(maxSize.y / size.y, maxSize.z / size.z));
+        transform.localScale = Vector3.one * uniformScale;
+
+        var scaledCenter = sourceBounds.center * uniformScale;
+        var rotatedCenter = transform.localRotation * scaledCenter;
+        transform.localPosition = new Vector3(
+            floorCenter.x - rotatedCenter.x,
+            floorCenter.y - sourceBounds.min.y * uniformScale,
+            floorCenter.z - rotatedCenter.z);
     }
 
     private static Mesh CreateGridMesh(string name, int xSegments, int zSegments, float spacing)

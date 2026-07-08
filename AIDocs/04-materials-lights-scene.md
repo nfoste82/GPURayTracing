@@ -22,12 +22,12 @@ Fields:
 - `Color`: uploaded as normalized RGB and used as albedo/tint. For transmitted glass, it also acts as the RGB absorption/filter color, so stacked colored glass compounds per channel.
 - `AlbedoTexture`: optional mesh-only albedo texture. Mesh triangle UVs are uploaded and sampled from a fixed-size texture array; the sampled texture color multiplies `Color`. Sphere materials ignore this field.
 - `Smoothness`: controls metal/glass reflection roughness by randomizing the hit normal. Higher values preserve the normal more closely.
-- `Opacity`: `1` is opaque. Values below `1` allow glass/transparent transmission. Note that any opacity below `1` makes the shader treat the hit as glass (see below), regardless of `Type`.
+- `Opacity`: controls glass transmission probability and absorption density. `1` is fully reflective/opaque, while lower values transmit more often and apply weaker color filtering through the material. Note that any opacity below `1` makes the shader treat the hit as glass (see below), regardless of `Type`.
 - `RefractionIndex`: used by glass Fresnel reflectance and the custom approximate refraction path.
 
 The emissive material constant (`MaterialEmissive = 3` in the shader) is not selectable here. It is assigned internally to `RayLight` sphere and mesh lights during registration.
 
-In the shader, material color is retrieved through `GetAlbedo(hit)`. Diffuse and metal paths attenuate throughput by albedo. Glass transmission attenuates throughput with distance-based RGB absorption using albedo/color and opacity, while glass reflection keeps mostly white reflective throughput.
+In the shader, material color is retrieved through `GetAlbedo(hit)`. Diffuse and metal paths attenuate throughput by albedo. Glass transmission attenuates throughput with distance-based RGB absorption using albedo/color and opacity, while glass reflection blends from white toward material color as opacity increases.
 
 The glass/refraction path is selected by `IsGlassMaterial(hit)`, which is true when `materialType == Glass` **or** when `hit.opacity < 1.0`. So a `Diffuse` or `Metal` object with opacity under `1` will render through the glass transmission/Fresnel path.
 
@@ -35,7 +35,7 @@ Material behavior:
 
 - `Diffuse`: direct lighting with cosine-weighted hemisphere scattering for later bounces.
 - `Metal`: reflective scattering, with `Smoothness` controlling roughness.
-- `Glass`: Schlick Fresnel weights approximate sphere refraction/transmission. Triangle meshes use approximate closed-mesh entry/exit refraction. Transmitted glass paths and transparent shadows apply accumulated RGB absorption, so light loses energy and changes color through colored layers.
+- `Glass`: opacity-scaled Schlick Fresnel weights approximate sphere refraction/transmission. Triangle meshes use approximate closed-mesh entry/exit refraction. Transmitted glass paths and transparent shadows apply accumulated RGB absorption, so light loses energy and changes color through colored layers.
 
 ## Ray Mesh Primitives
 
@@ -87,6 +87,8 @@ For scene composition, `GameManager.syncUnitySkyboxToRayTracedSkybox` can create
 ## Unity Scene Objects
 
 Unity meshes are traced by the compute shader only when they are registered through `RayTracingObject` plus `RayMaterial` and `MeshFilter`, without being registered as spheres through `SphereCollider`. Other Unity meshes/colliders can still affect Unity physics, scene editing, and visual editor context without being ray traced.
+
+Imported model assets such as FBX files are supported through their imported `MeshFilter`/`Mesh` data, but the mesh must be CPU-readable because `GameManager` reads vertices, indices, and UVs to build its own ray-tracing triangle buffer and per-mesh BVH. For model importer assets this means Unity's Read/Write import setting must be enabled. The Dragon Cornell benchmark generator enables this automatically for `Assets/Models/stanford-dragon-pbr.fbx` before loading its mesh.
 
 The scene’s `Directional Light` is a Unity light and is not used by the compute shader lighting model.
 

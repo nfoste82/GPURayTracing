@@ -8,7 +8,7 @@ Direct lighting comes from emissive sphere lights and emissive mesh-triangle lig
 
 `GetLightHittingPoint()` computes direct lighting by drawing one or more lights per shading point and shading each with stochastic samples across the light shape. Sphere lights use disk samples across the emissive sphere radius. Mesh lights are represented as one light per emissive triangle and use uniform barycentric samples across the triangle. Bounce 0 uses `max(1, _ShadowQuality + 1)` samples per shaded light, while later bounces use one sample per shaded light to reduce cost. The actual per-light shading work lives in `SampleSingleLight()`.
 
-Each disk sample is weighted by `saturate(dot(directionToLight, hit.normal))` and samples whose direction is at or behind the surface (N·L <= 0) are skipped entirely, so back-facing light directions contribute nothing. Shadow rays are spawned from `hit.position` offset along the surface normal (`hit.normal * 0.001`), not along the light direction.
+Each disk sample first checks `saturate(dot(directionToLight, hit.normal))`, and samples whose direction is at or behind the surface (N·L <= 0) are skipped entirely, so back-facing light directions contribute nothing. Lit samples are then evaluated by `GetDirectMaterialResponse()`: diffuse materials use albedo-weighted Lambert-style direct lighting, while metal/glass/water add a smoothness-controlled direct specular lobe with Schlick Fresnel. Shadow rays are spawned from `hit.position` offset along the surface normal (`hit.normal * 0.001`), not along the light direction.
 
 Direct light from sampled light points is accumulated additively rather than combined with a channel-wise max operation. Light falloff uses a clamped inverse-square-style distance term scaled by light radius/area and `_LightFalloffScale`. Mesh-light samples are additionally weighted by the light triangle facing term, so back-facing triangle lights do not illuminate a shading point. Transparent shadow blockers attenuate direct light with accumulated RGB transmittance, so colored glass can filter light before it reaches the shaded point.
 
@@ -45,16 +45,16 @@ For shadow-BVH traversal details, see `06-shader-intersections-and-bvh.md`.
 `TracePath()` supports these material scattering paths:
 
 - `Diffuse`: uses direct lighting and cosine-weighted hemisphere scattering on later bounces, attenuated by albedo. On bounce 0, smoothness blends the continuation ray between diffuse scattering and reflection, which allows the implicit ground plane's `_GroundSmoothness` to affect visible reflections.
-- `Metal`: reflects around the surface normal, with smoothness controlling rough reflection direction randomization, and attenuates by albedo.
-- `Glass`: uses Schlick Fresnel reflectance to randomly choose first-surface reflection versus transmission. Transmitted sphere and mesh paths use Snell refraction. Mesh glass supports bounded internal total internal reflection (TIR) while searching for an exit face. Transmitted glass paths are attenuated by distance-based RGB absorption.
+- `Metal`: reflects around the surface normal, with smoothness controlling rough reflection direction randomization, attenuates by albedo, and receives direct specular highlights from sampled lights.
+- `Glass`: uses Schlick Fresnel reflectance to randomly choose first-surface reflection versus transmission. Transmitted sphere and mesh paths use Snell refraction. Mesh glass supports bounded internal total internal reflection (TIR) while searching for an exit face. Transmitted glass paths are attenuated by distance-based RGB absorption. Glass and water also receive direct specular highlights from sampled lights.
 
 The glass path is entered whenever `IsGlassMaterial(hit)` is true, which happens for `materialType == Glass` **or** for any hit with `opacity < 1.0`. A nominally `Diffuse` or `Metal` object with reduced opacity therefore scatters through the glass transmission/Fresnel path.
 
 ## Transparency And Refraction
 
-The amount of light transmitted through a transparent surface still uses `GetTransmissionAmount(hit) = clamp((1 - opacity) * 1.333, 0, 1)`. Because of the `1.333` multiplier, transmission saturates to fully transparent once `opacity` drops to about `0.25` rather than scaling linearly with opacity, which surprises users tuning the `Opacity` slider.
+Glass opacity controls how often the material transmits versus reflects. `GetTransmissionAmount(hit)` returns `1 - opacity`, and the glass path transmits with probability `(1 - opacity) * (1 - fresnelReflectance)`. Opacity `1.0` is therefore fully reflective/opaque, while opacity `0.99` only rarely transmits instead of collapsing every transmitted path to near-black.
 
-In addition to that surface transmission term, glass now applies distance-based RGB absorption through `GetAbsorptionTransmittance()`. The shader treats `RayMaterial.Color`/sampled albedo as a per-channel filter color and raises it by `distanceThroughMedium * opacity`, with a small neutral absorption term (`GlassNeutralAbsorption`) so even nearly white glass loses some energy through distance/layers. This is Beer-Lambert-style behavior rather than a full spectral renderer, but it means stacked colored glass naturally compounds through path throughput and transparent shadows.
+Glass applies distance-based RGB absorption through `GetAbsorptionTransmittance()`. The shader treats `RayMaterial.Color`/sampled albedo as a per-channel filter color and raises it by `distanceThroughMedium * opacity`, with a small neutral absorption term (`GlassNeutralAbsorption`) so even nearly white glass loses some energy through distance/layers. This is Beer-Lambert-style behavior rather than a full spectral renderer, but it means stacked colored glass naturally compounds through path throughput and transparent shadows. Higher opacity means denser absorption, while lower opacity means a weaker color filter.
 
 `GetGlassAbsorptionTransmittance()` uses `hit.distanceThroughOpacity` when available and falls back to `ThinTransparentSurfaceDistance` for thin/open transparent surfaces. Sphere glass writes this distance in `ApplySphereRefraction()`. Mesh glass writes it in `ApplyPlanarTransmission()` from the accumulated internal distance to the exit face, or from the distance to an interior hit when an object is found inside the transparent mesh before the exit face.
 
@@ -69,7 +69,7 @@ Transparent/glass sphere refraction is approximate. `ApplySphereRefraction()`:
 5. Computes the exit normal.
 6. Refracts back out into air, or reflects on total internal reflection.
 
-Glass material scattering uses Schlick Fresnel reflectance to randomly choose first-surface reflection or transmission. Reflected glass paths keep neutral/white throughput, while transmitted paths are filtered by opacity and absorption. Internal TIR bounces consume from the same `_NumBounces` path budget as regular scene bounces, so a ray with only two bounces remaining can only spend two bounces on glass entry/exit/internal reflection work.
+Glass material scattering uses opacity-scaled Schlick Fresnel reflectance to randomly choose first-surface reflection or transmission. Reflected glass paths blend from white toward material color as opacity increases, while transmitted paths are filtered by distance-based absorption. Internal TIR bounces consume from the same `_NumBounces` path budget as regular scene bounces, so a ray with only two bounces remaining can only spend two bounces on glass entry/exit/internal reflection work.
 
 Triangle mesh refraction uses `ApplyPlanarTransmission()` rather than the sphere helper:
 

@@ -626,8 +626,7 @@ float3 GetAbsorptionTransmittance(float3 filterColor, float opacity, float dista
 
 float3 GetTransparentShadowTransmittance(RayHit hit, float distanceThroughMedium)
 {
-    float surfaceTransmission = clamp((1.0f - hit.opacity) * 1.333f, 0.0f, 1.0f);
-    return GetAbsorptionTransmittance(hit.color, hit.opacity, distanceThroughMedium) * surfaceTransmission;
+    return GetAbsorptionTransmittance(hit.color, hit.opacity, distanceThroughMedium) * saturate(1.0f - hit.opacity);
 }
 
 bool IntersectTriangleRaw(Ray ray, MeshTriangle meshTriangle, out float hitDistance, out float3 normal, out float2 barycentric)
@@ -1404,6 +1403,72 @@ float3 GetShadowTransmittance(Ray rayToLight, float distanceToLight)
     return transmittance;
 }
 
+float3 GetAlbedo(RayHit hit)
+{
+    if (hit.textureIndex >= 0)
+    {
+        float3 textureColor = _MeshAlbedoTextures.SampleLevel(
+            sampler_MeshAlbedoTextures,
+            float3(frac(hit.uv), hit.textureIndex),
+            0).rgb;
+        return hit.color * textureColor;
+    }
+
+    return hit.color;
+}
+
+bool IsGlassMaterial(RayHit hit)
+{
+    return hit.materialType == MaterialGlass || hit.materialType == MaterialWater || hit.opacity < 1.0f;
+}
+
+float3 GetDirectMaterialResponse(Ray ray, RayHit hit, float3 lightDirection, float normalDotLight)
+{
+    float3 albedo = GetAlbedo(hit);
+    float3 response = float3(0.0f, 0.0f, 0.0f);
+
+    if (!IsGlassMaterial(hit) && hit.materialType == MaterialDiffuse)
+    {
+        response += albedo * normalDotLight * hit.opacity;
+    }
+
+    float smoothness = saturate(hit.smoothness);
+    float specularScale = smoothness;
+    float3 f0 = float3(0.04f, 0.04f, 0.04f);
+
+    if (hit.materialType == MaterialMetal)
+    {
+        f0 = saturate(albedo);
+        specularScale = max(0.15f, smoothness);
+    }
+    else if (IsGlassMaterial(hit))
+    {
+        float refraction = max(1.0f, hit.refraction);
+        float dielectricF0 = (1.0f - refraction) / (1.0f + refraction);
+        dielectricF0 = max(0.02f, dielectricF0 * dielectricF0);
+        f0 = lerp(dielectricF0.xxx, saturate(albedo), saturate(hit.opacity));
+        specularScale = max(0.2f, smoothness);
+    }
+
+    if (specularScale <= 0.0f)
+    {
+        return response;
+    }
+
+    float3 viewDirection = normalize(-ray.direction);
+    float3 halfDirection = normalize(lightDirection + viewDirection);
+    float normalDotHalf = saturate(dot(hit.normal, halfDirection));
+    float viewDotHalf = saturate(dot(viewDirection, halfDirection));
+
+    float3 fresnel = f0 + (1.0f - f0) * pow(1.0f - viewDotHalf, 5.0f);
+    float specularPower = lerp(8.0f, 512.0f, smoothness * smoothness);
+    float specularNormalization = (specularPower + 2.0f) * 0.125f;
+    float specular = pow(normalDotHalf, specularPower) * specularNormalization * normalDotLight * specularScale;
+
+    response += fresnel * specular;
+    return response;
+}
+
 float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount, inout uint rngState)
 {
     float3 lightTotal = float3(0.0f, 0.0f, 0.0f);
@@ -1459,7 +1524,8 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount, i
             lightStrength *= saturate(dot(light.normal, -ptToOffset)) * max(1.0f, light.area);
         }
 
-        lightTotal += light.emission * rayNormalDot * lightStrength * shadowTransmittance;
+        float3 materialResponse = GetDirectMaterialResponse(ray, hit, ptToOffset, rayNormalDot);
+        lightTotal += light.emission * lightStrength * shadowTransmittance * materialResponse;
     }
 
     return lightTotal / sampleCount;
@@ -1679,20 +1745,6 @@ float3 GetTerminalHitColor(Ray ray, RayHit hit)
     return float3(0.0f, 0.0f, 0.0f);
 }
 
-float3 GetAlbedo(RayHit hit)
-{
-    if (hit.textureIndex >= 0)
-    {
-        float3 textureColor = _MeshAlbedoTextures.SampleLevel(
-            sampler_MeshAlbedoTextures,
-            float3(frac(hit.uv), hit.textureIndex),
-            0).rgb;
-        return hit.color * textureColor;
-    }
-
-    return hit.color;
-}
-
 float3 GetGlassAbsorptionTransmittance(RayHit hit, float3 albedo)
 {
     float distanceThroughMedium = hit.distanceThroughOpacity > 0.0f
@@ -1708,12 +1760,7 @@ float3 GetEmission(RayHit hit)
 
 float GetTransmissionAmount(RayHit hit)
 {
-    return clamp((1.0f - hit.opacity) * 1.333f, 0, 1);
-}
-
-bool IsGlassMaterial(RayHit hit)
-{
-    return hit.materialType == MaterialGlass || hit.materialType == MaterialWater || hit.opacity < 1.0f;
+    return saturate(1.0f - hit.opacity);
 }
 
 bool IsWaterMaterial(RayHit hit)
@@ -1942,15 +1989,9 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
     {
         float transmission = GetTransmissionAmount(hit);
         float fresnelReflectance = GetFresnelReflectance(sourceRay, hit);
+        float transmissionProbability = transmission * (1.0f - fresnelReflectance);
 
-        if (rand(rngState) < fresnelReflectance)
-        {
-            scatteredRay.direction = reflect(sourceRay.direction, roughNormal);
-            scatteredRay.origin = hit.position + scatteredRay.direction * 0.001f;
-            return CreateScatterResult(scatteredRay, float3(1.0f, 1.0f, 1.0f), 1);
-        }
-
-        if (transmission > 0.0f)
+        if (rand(rngState) < transmissionProbability)
         {
             int bouncesConsumed = 1;
             if (hit.obj_radius > 0.0f)
@@ -1963,10 +2004,13 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
             }
 
             float3 tint = GetGlassAbsorptionTransmittance(hit, albedo);
-            return CreateScatterResult(scatteredRay, tint * transmission, bouncesConsumed);
+            return CreateScatterResult(scatteredRay, tint, bouncesConsumed);
         }
 
-        return CreateScatterResult(scatteredRay, float3(1.0f, 1.0f, 1.0f), 1);
+        scatteredRay.direction = reflect(sourceRay.direction, roughNormal);
+        scatteredRay.origin = hit.position + scatteredRay.direction * 0.001f;
+        float3 reflectionTint = lerp(float3(1.0f, 1.0f, 1.0f), albedo, hit.opacity);
+        return CreateScatterResult(scatteredRay, reflectionTint, 1);
     }
 
     if (hit.materialType == MaterialDiffuse)
@@ -2025,12 +2069,11 @@ float3 TracePath(Ray ray, inout uint rngState)
             break;
         }
 
-        float3 albedo = GetAlbedo(hit);
-        if (!IsGlassMaterial(hit) && ShouldSampleDirectLight(throughput))
+        if (ShouldSampleDirectLight(throughput))
         {
             bool softShadows = bounce == 0;
             float3 directLight = GetDirectLight(ray, hit, softShadows, rngState);
-            radiance += throughput * albedo * directLight * hit.opacity;
+            radiance += throughput * directLight;
         }
 
         int remainingBounces = _NumBounces - bounce;
