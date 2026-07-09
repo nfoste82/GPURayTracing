@@ -23,6 +23,7 @@ Important shader globals:
 - `_FocalDistance`: depth-of-field focal distance.
 - `_GroundSmoothness`: smoothness for the implicit ground plane.
 - `_Exposure`: master brightness multiplier applied before tone mapping. Acts like a camera exposure dial.
+- `_WaterAbsorptionStrength`: distance-based water-medium absorption density. When a path or direct-light segment travels underwater, the shader applies exponential transmittance from `_WaterColor` and this strength.
 - `_LightSamplingStrategy`: selects how `GetLightHittingPoint()` samples scene lights (`0` = all lights, `1` = uniform random pick, `2` = importance-sampled pick). See `07-shader-lighting-and-materials.md`.
 - `_LightSampleCount`: for the random/importance strategies, how many lights each shading point draws per hit. Ignored by the all-lights strategy.
 - `_MaxLightSamples`: diagnostic cap on how many lights any strategy considers. `0` means no cap (use the real light count); a positive value clamps the considered light count to confirm the per-hit light loop is the bottleneck.
@@ -139,15 +140,16 @@ It maintains:
 Per bounce:
 
 1. Trace the ray with `GetNearestIntersection()`.
-2. If it hits sky, add `throughput * skyColor` and stop.
-3. If it hits a light, add `throughput * emission` and stop.
-4. For non-diffuse materials, randomize the normal based on surface smoothness.
-5. Sample direct light if the path throughput is above `MinDirectLightThroughput`. Bounce 0 uses multiple stochastic soft-shadow samples; later bounces use one light sample.
-6. Add direct contribution: `throughput * albedo * directLight * hit.opacity`.
-7. Create the next ray using the hit material type.
-8. Update `throughput` with the scatter attenuation.
-9. Stop early when throughput is effectively black.
-10. Starting after the first few bounces, apply Russian roulette termination and scale surviving throughput by survival probability.
+2. If the ray segment started underwater, attenuate `throughput` by water absorption for the distance to the hit.
+3. If it hits sky, add `throughput * skyColor` and stop.
+4. If it hits a light, add `throughput * emission` and stop.
+5. For non-diffuse materials, randomize the normal based on surface smoothness.
+6. Sample direct light if the path throughput is above `MinDirectLightThroughput`. Bounce 0 uses multiple stochastic soft-shadow samples; later bounces use one light sample.
+7. Add direct contribution: `throughput * albedo * directLight * hit.opacity`.
+8. Create the next ray using the hit material type.
+9. Update `throughput` with the scatter attenuation.
+10. Stop early when throughput is effectively black.
+11. Starting after the first few bounces, apply Russian roulette termination and scale surviving throughput by survival probability.
 
 Material scattering currently supports:
 

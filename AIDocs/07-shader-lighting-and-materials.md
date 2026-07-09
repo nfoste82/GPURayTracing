@@ -8,9 +8,11 @@ Direct lighting comes from emissive sphere lights and emissive mesh-triangle lig
 
 `GetLightHittingPoint()` computes direct lighting by drawing one or more lights per shading point and shading each with stochastic samples across the light shape. Sphere lights use disk samples across the emissive sphere radius. Mesh lights are represented as one light per emissive triangle and use uniform barycentric samples across the triangle. Bounce 0 uses `max(1, _ShadowQuality + 1)` samples per shaded light, while later bounces use one sample per shaded light to reduce cost. The actual per-light shading work lives in `SampleSingleLight()`.
 
-Each disk sample first checks `saturate(dot(directionToLight, hit.normal))`, and samples whose direction is at or behind the surface (N·L <= 0) are skipped entirely, so back-facing light directions contribute nothing. Lit samples are then evaluated by `GetDirectMaterialResponse()`: diffuse materials use albedo-weighted Lambert-style direct lighting, while metal/glass/water add a smoothness-controlled direct specular lobe with Schlick Fresnel. Shadow rays are spawned from `hit.position` offset along the surface normal (`hit.normal * 0.001`), not along the light direction.
+Each disk sample first checks `saturate(dot(directionToLight, hit.normal))`, and samples whose direction is at or behind the surface (N·L <= 0) are skipped entirely, so back-facing light directions contribute nothing. Lit samples are then evaluated by `GetDirectMaterialResponse()`: diffuse materials use albedo-weighted Lambert-style direct lighting, while metal/glass/water add a smoothness-controlled direct specular lobe with Schlick Fresnel. Water scales this direct specular response by opacity, with a small floor so fully clear water retains only faint Fresnel cues. Shadow rays are spawned from `hit.position` offset along the surface normal (`hit.normal * 0.001`), not along the light direction.
 
 Direct light from sampled light points is accumulated additively rather than combined with a channel-wise max operation. Light falloff uses a clamped inverse-square-style distance term scaled by light radius/area and `_LightFalloffScale`. Mesh-light samples are additionally weighted by the light triangle facing term, so back-facing triangle lights do not illuminate a shading point. Transparent shadow blockers attenuate direct light with accumulated RGB transmittance, so colored glass can filter light before it reaches the shaded point.
+
+Direct-light segments that cross the procedural water volume are additionally attenuated by water absorption using an estimated underwater segment length. This affects underwater points lit from above the water, above-water points lit from underwater, and underwater-to-underwater lighting.
 
 ### Light Sampling Strategies
 
@@ -70,6 +72,8 @@ Transparent/glass sphere refraction is approximate. `ApplySphereRefraction()`:
 6. Refracts back out into air, or reflects on total internal reflection.
 
 Glass material scattering uses opacity-scaled Schlick Fresnel reflectance to randomly choose first-surface reflection or transmission. Reflected glass paths blend from white toward material color as opacity increases, while transmitted paths are filtered by distance-based absorption. Internal TIR bounces consume from the same `_NumBounces` path budget as regular scene bounces, so a ray with only two bounces remaining can only spend two bounces on glass entry/exit/internal reflection work.
+
+Water uses the same refraction/Fresnel helper, but its reflection probability is additionally scaled by opacity. At 0 opacity, water is still ray-intersected and refracts/transmits rays, but first-surface reflections and direct specular highlights are reduced to a small minimum so underwater objects remain visible. Water opacity controls the surface response; `_WaterAbsorptionStrength` controls distance-based volume absorption separately. Path segments that start underwater multiply throughput by exponential transmittance based on `_WaterColor`, `_WaterAbsorptionStrength`, and segment distance, so shallow bottom bounces remain brighter while deeper water becomes darker and more color-filtered.
 
 Triangle mesh refraction uses `ApplyPlanarTransmission()` rather than the sphere helper:
 

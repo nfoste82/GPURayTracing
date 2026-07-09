@@ -134,6 +134,10 @@ public class GameManager : MonoBehaviour
     [Range(0.0f, 1.0f)]
     public float waterOpacity = 0.18f;
 
+    [Tooltip("Distance-based water absorption density. Higher values darken and tint long underwater ray segments more strongly.")]
+    [Range(0.0f, 2.0f)]
+    public float waterAbsorptionStrength = 0.22f;
+
     [Range(1.0f, 3.0f)]
     public float waterRefractionIndex = 2.0f;
 
@@ -2389,6 +2393,7 @@ public class GameManager : MonoBehaviour
         shader.SetVector("_WaterColor", new Vector4(waterColorVector.x, waterColorVector.y, waterColorVector.z, 0.0f));
         shader.SetFloat("_WaterSmoothness", waterSmoothness);
         shader.SetFloat("_WaterOpacity", Mathf.Clamp01(waterOpacity));
+        shader.SetFloat("_WaterAbsorptionStrength", Mathf.Max(0.0f, waterAbsorptionStrength));
         shader.SetFloat("_WaterRefraction", waterRefractionIndex);
         shader.SetFloat("_WaterWaveAmplitude", Mathf.Max(0.0f, waterWaveAmplitude));
         shader.SetFloat("_WaterWaveScale", Mathf.Max(0.001f, waterWaveScale));
@@ -2451,6 +2456,7 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, waterColor.b);
             hash = AddHash(hash, waterSmoothness);
             hash = AddHash(hash, waterOpacity);
+            hash = AddHash(hash, waterAbsorptionStrength);
             hash = AddHash(hash, waterRefractionIndex);
             hash = AddHash(hash, waterWaveAmplitude);
             hash = AddHash(hash, waterWaveScale);

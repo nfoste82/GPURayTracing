@@ -44,6 +44,7 @@ float2 _WaterSize;
 float3 _WaterColor;
 float _WaterSmoothness;
 float _WaterOpacity;
+float _WaterAbsorptionStrength;
 float _WaterRefraction;
 float _WaterWaveAmplitude;
 float _WaterWaveScale;
@@ -104,6 +105,7 @@ static const int MaxImportanceLights = 128;
 static const float MinDirectLightThroughput = 0.01f;
 static const int BvhStackSize = 64;
 static const float WaterHitEpsilon = 0.001f;
+static const float WaterMinFresnelOpacity = 0.05f;
 static const float GlassAbsorptionColorFloor = 0.001f;
 static const float GlassNeutralAbsorption = 0.08f;
 static const float ThinTransparentSurfaceDistance = 0.25f;
@@ -384,6 +386,70 @@ bool IsInsideWaterXZ(float2 worldXZ)
     float2 halfSize = max(_WaterSize, float2(0.01f, 0.01f)) * 0.5f;
     float2 delta = abs(worldXZ - _WaterCenter.xz);
     return delta.x <= halfSize.x && delta.y <= halfSize.y;
+}
+
+bool IsPointUnderWater(float3 position)
+{
+    return _WaterEnabled != 0 && IsInsideWaterXZ(position.xz) && position.y < GetWaterWaveHeight(position.xz);
+}
+
+float3 GetWaterAbsorptionTransmittance(float distanceInWater)
+{
+    float strength = max(0.0f, _WaterAbsorptionStrength);
+    if (strength <= 0.0f || distanceInWater <= 0.0f)
+    {
+        return float3(1.0f, 1.0f, 1.0f);
+    }
+
+    float3 absorption = (1.0f - saturate(_WaterColor)) * strength;
+    return exp(-absorption * distanceInWater);
+}
+
+float EstimateWaterDistanceAlongSegment(float3 startPosition, float3 endPosition)
+{
+    if (_WaterEnabled == 0)
+    {
+        return 0.0f;
+    }
+
+    float3 segment = endPosition - startPosition;
+    float segmentLength = length(segment);
+    if (segmentLength <= 0.001f)
+    {
+        return 0.0f;
+    }
+
+    bool startUnderWater = IsPointUnderWater(startPosition);
+    bool endUnderWater = IsPointUnderWater(endPosition);
+    if (startUnderWater && endUnderWater)
+    {
+        return segmentLength;
+    }
+
+    if (!startUnderWater && !endUnderWater)
+    {
+        return 0.0f;
+    }
+
+    float low = 0.0f;
+    float high = 1.0f;
+    int i;
+    [loop]
+    for (i = 0; i < 6; i++)
+    {
+        float mid = (low + high) * 0.5f;
+        bool midUnderWater = IsPointUnderWater(startPosition + segment * mid);
+        if (midUnderWater == startUnderWater)
+        {
+            low = mid;
+        }
+        else
+        {
+            high = mid;
+        }
+    }
+
+    return startUnderWater ? high * segmentLength : (1.0f - high) * segmentLength;
 }
 
 bool IntersectWaterBounds(Ray ray, float maxDistance, out float entryDistance, out float exitDistance)
@@ -1422,6 +1488,16 @@ bool IsGlassMaterial(RayHit hit)
     return hit.materialType == MaterialGlass || hit.materialType == MaterialWater || hit.opacity < 1.0f;
 }
 
+bool IsWaterMaterial(RayHit hit)
+{
+    return hit.materialType == MaterialWater;
+}
+
+float GetWaterReflectiveOpacity(RayHit hit)
+{
+    return lerp(WaterMinFresnelOpacity, 1.0f, saturate(hit.opacity));
+}
+
 float3 GetDirectMaterialResponse(Ray ray, RayHit hit, float3 lightDirection, float normalDotLight)
 {
     float3 albedo = GetAlbedo(hit);
@@ -1446,8 +1522,9 @@ float3 GetDirectMaterialResponse(Ray ray, RayHit hit, float3 lightDirection, flo
         float refraction = max(1.0f, hit.refraction);
         float dielectricF0 = (1.0f - refraction) / (1.0f + refraction);
         dielectricF0 = max(0.02f, dielectricF0 * dielectricF0);
-        f0 = lerp(dielectricF0.xxx, saturate(albedo), saturate(hit.opacity));
-        specularScale = max(0.2f, smoothness);
+        float reflectiveOpacity = IsWaterMaterial(hit) ? GetWaterReflectiveOpacity(hit) : saturate(hit.opacity);
+        f0 = lerp(dielectricF0.xxx * reflectiveOpacity, saturate(albedo), saturate(hit.opacity));
+        specularScale = max(0.2f, smoothness) * reflectiveOpacity;
     }
 
     if (specularScale <= 0.0f)
@@ -1513,6 +1590,12 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount, i
         }
 
         float3 shadowTransmittance = GetShadowTransmittance(rayToLight, distanceToLight);
+        if (max(shadowTransmittance.x, max(shadowTransmittance.y, shadowTransmittance.z)) <= 0.001f)
+        {
+            continue;
+        }
+
+        shadowTransmittance *= GetWaterAbsorptionTransmittance(EstimateWaterDistanceAlongSegment(hit.position, offsetPt));
         if (max(shadowTransmittance.x, max(shadowTransmittance.y, shadowTransmittance.z)) <= 0.001f)
         {
             continue;
@@ -1763,11 +1846,6 @@ float GetTransmissionAmount(RayHit hit)
     return saturate(1.0f - hit.opacity);
 }
 
-bool IsWaterMaterial(RayHit hit)
-{
-    return hit.materialType == MaterialWater;
-}
-
 float GetFresnelReflectance(Ray ray, RayHit hit)
 {
     float refraction = max(1.0f, hit.refraction);
@@ -1775,7 +1853,8 @@ float GetFresnelReflectance(Ray ray, RayHit hit)
     r0 *= r0;
 
     float cosTheta = saturate(abs(dot(-ray.direction, hit.normal)));
-    return r0 + (1.0f - r0) * pow(1.0f - cosTheta, 5.0f);
+    float reflectance = r0 + (1.0f - r0) * pow(1.0f - cosTheta, 5.0f);
+    return IsWaterMaterial(hit) ? reflectance * GetWaterReflectiveOpacity(hit) : reflectance;
 }
 
 float3 GetDiffuseScatterDirection(float3 normal, inout uint rngState)
@@ -2054,7 +2133,17 @@ float3 TracePath(Ray ray, inout uint rngState)
     [loop]
     for (int bounce = 0; bounce < _NumBounces; bounce++)
     {
+        bool rayStartedUnderWater = IsPointUnderWater(ray.origin);
         RayHit hit = GetNearestIntersection(ray);
+
+        if (rayStartedUnderWater)
+        {
+            throughput *= GetWaterAbsorptionTransmittance(hit.distance);
+            if (!HasPathEnergy(throughput))
+            {
+                break;
+            }
+        }
 
         if (DidHitSky(hit))
         {
