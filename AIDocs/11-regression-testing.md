@@ -13,6 +13,8 @@ The project uses EditMode tests under `Assets/Tests/EditMode/` to make rendering
 - Current Schlick Fresnel values at normal, 45-degree, and grazing incidence.
 - Current distance/color/opacity glass absorption approximation.
 - A GPU `CSRegressionProbe` kernel in the production compute shader that calls the same reflection, `RefractSnell()`, Fresnel formula, and `GetAbsorptionTransmittance()` behavior used by rendering. This catches divergence between CPU expectations and shader execution.
+- Deterministic `32x32` final-color image signatures for a reflective metal sphere, a refractive glass sphere with geometry behind it, and calm finite water with submerged geometry. Each baseline stores the image average and eight fixed pixel probes after tone mapping.
+- Initial medium-identity and transition probes for air -> water, water -> sphere glass, and sphere glass -> water. These establish object identity and source/target IOR semantics before medium state is carried through full paths.
 
 ## Running Tests
 
@@ -40,11 +42,24 @@ The GPU probe is skipped if the active graphics device does not support compute 
 4. Confirm the new result analytically or through a focused reference scene.
 5. Update the baseline and explain the intentional behavior change in the commit message.
 
-Do not loosen tolerances simply to make a changed render pass. CPU math uses tight tolerances; GPU probes allow slightly wider tolerances for backend floating-point differences.
+Do not loosen tolerances simply to make a changed render pass. CPU math uses tight tolerances; GPU probes allow slightly wider tolerances for backend floating-point differences. Image signatures use a small per-channel tolerance because GPU backends may vary slightly, but they are deliberately not perceptual comparisons: a changed probe is intended to force review.
+
+## Image Fixtures
+
+`RayTracingImageRegressionTests` drives `CSMain` directly with in-memory structured buffers and textures. It uses a fixed seed, fixed camera, no frame accumulation, flat object loops, and no scene assets, so the result does not depend on editor scene state. The first execution of `CSMain` may take longer while Unity compiles the kernel.
+
+The current fixtures cover spheres and procedural water. Mesh glass is still listed below because a meaningful mesh regression requires deterministic triangle, mesh-info, and BVH fixture data rather than bypassing production traversal.
+
+## Medium Transition Foundation
+
+`MediumIdentity` in `RayTracingCompute.compute` currently records medium type, object identity, IOR, opacity, and absorption color. `CreateHitMedium()`, `IsSameMedium()`, and `GetMediumTransitionIndices()` define the initial boundary semantics. They are exercised only by regression probes at this stage; `TracePath()` still uses the existing sphere/mesh/water-specific behavior, so image baselines remain unchanged.
+
+The next implementation step is a fixed-capacity path medium stack with air as its implicit base. Entering a boundary will push its identity; matching exits will pop it and reveal the parent medium. Stack overflow and unmatched exits must be detectable rather than silently ignored.
 
 ## Next Coverage
 
 - Brute-force versus per-mesh/top-level/shadow BVH equivalence over deterministic randomized scenes.
 - BVH maximum-depth enforcement against the fixed traversal stack.
-- Deterministic low-resolution image baselines for reflected geometry, sphere and mesh glass, transparent shadows, water, textures, and mesh lights.
+- Extend deterministic image baselines to mesh glass, transparent shadows, textures, and mesh lights.
+- Carry medium identity through `TracePath()` and add nested air -> water -> glass -> water -> air image/probe coverage.
 - Odd-resolution GPU dispatch smoke tests after `CSMain` adds an output-bounds guard.

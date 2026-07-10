@@ -25,13 +25,13 @@ namespace GPURayTracing.Tests
             }
 
             int kernel = shader.FindKernel("CSRegressionProbe");
-            var buffer = new ComputeBuffer(5, sizeof(float) * 4);
+            var buffer = new ComputeBuffer(8, sizeof(float) * 4);
             try
             {
                 shader.SetBuffer(kernel, "RegressionResults", buffer);
                 shader.Dispatch(kernel, 1, 1, 1);
 
-                var results = new Vector4[5];
+                var results = new Vector4[8];
                 buffer.GetData(results);
 
                 AssertVector(results[0], new Vector4(0.70710677f, 0.70710677f, 0.0f, 1.0f), "reflection");
@@ -39,6 +39,9 @@ namespace GPURayTracing.Tests
                 AssertVector(results[2], Vector4.zero, "total internal reflection signal");
                 AssertVector(results[3], new Vector4(0.042069275f, 0.04f, 0.0f, 1.0f), "Schlick Fresnel");
                 AssertVector(results[4], new Vector4(0.17212175f, 0.39543194f, 0.64325213f, 1.0f), "glass absorption", 0.0002f);
+                AssertVector(results[5], new Vector4(1.0f, 2.0f, 3.0f, 0.0f), "air-to-water medium transition");
+                AssertVector(results[6], new Vector4(2.0f, 1.5f, 1.0f, 7.0f), "water-to-glass medium transition");
+                AssertVector(results[7], new Vector4(1.5f, 2.0f, 1.0f, 1.0f), "glass-to-water medium transition");
             }
             finally
             {

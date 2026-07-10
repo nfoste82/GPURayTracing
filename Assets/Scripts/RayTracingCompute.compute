@@ -89,6 +89,11 @@ static const int MaterialGlass = 2;
 static const int MaterialEmissive = 3;
 static const int MaterialWater = 4;
 
+static const int MediumTypeAir = 0;
+static const int MediumTypeSphere = 1;
+static const int MediumTypeMesh = 2;
+static const int MediumTypeWater = 3;
+
 static const int TopLevelObjectTypeInternal = -1;
 static const int TopLevelObjectTypeSphere = 0;
 static const int TopLevelObjectTypeLight = 1;
@@ -300,6 +305,55 @@ struct RayHit
     float2 uv;
     int textureIndex;
 };
+
+// Medium identity is separate from material type: two glass objects can have the same material
+// properties but still represent different boundaries in a nested path. This is the first step
+// toward carrying a fixed medium stack through TracePath; existing path behavior is unchanged.
+struct MediumIdentity
+{
+    int type;
+    int objectIndex;
+    float refractionIndex;
+    float opacity;
+    float3 absorptionColor;
+};
+
+MediumIdentity CreateAirMedium()
+{
+    MediumIdentity medium;
+    medium.type = MediumTypeAir;
+    medium.objectIndex = -1;
+    medium.refractionIndex = 1.0f;
+    medium.opacity = 0.0f;
+    medium.absorptionColor = float3(1.0f, 1.0f, 1.0f);
+    return medium;
+}
+
+MediumIdentity CreateHitMedium(RayHit hit)
+{
+    MediumIdentity medium;
+    medium.type = hit.materialType == MaterialWater
+        ? MediumTypeWater
+        : (hit.obj_radius > 0.0f ? MediumTypeSphere : MediumTypeMesh);
+    medium.objectIndex = medium.type == MediumTypeSphere ? hit.objectIndex : hit.meshIndex;
+    medium.refractionIndex = max(1.0f, hit.refraction);
+    medium.opacity = saturate(hit.opacity);
+    medium.absorptionColor = saturate(hit.color);
+    return medium;
+}
+
+bool IsSameMedium(MediumIdentity left, MediumIdentity right)
+{
+    return left.type == right.type && left.objectIndex == right.objectIndex;
+}
+
+float2 GetMediumTransitionIndices(MediumIdentity currentMedium, MediumIdentity parentMedium, RayHit hit, bool entering)
+{
+    MediumIdentity boundaryMedium = CreateHitMedium(hit);
+    return entering
+        ? float2(currentMedium.refractionIndex, boundaryMedium.refractionIndex)
+        : float2(currentMedium.refractionIndex, parentMedium.refractionIndex);
+}
 
 RayHit CreateRayHit()
 {
@@ -2353,6 +2407,28 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     RegressionResults[2] = float4(ignoredDirection, didRefractTotalInternal ? 1.0f : 0.0f);
     RegressionResults[3] = float4(fresnel45, r0, 0.0f, 1.0f);
     RegressionResults[4] = float4(absorption, 1.0f);
+
+    RayHit waterHit = CreateRayHit();
+    waterHit.materialType = MaterialWater;
+    waterHit.meshIndex = 0;
+    waterHit.refraction = 2.0f;
+    waterHit.opacity = 0.18f;
+    waterHit.color = float3(0.17f, 0.45f, 0.52f);
+    MediumIdentity air = CreateAirMedium();
+    MediumIdentity water = CreateHitMedium(waterHit);
+
+    RayHit glassHit = CreateRayHit();
+    glassHit.materialType = MaterialGlass;
+    glassHit.obj_radius = 1.0f;
+    glassHit.objectIndex = 7;
+    glassHit.refraction = 1.5f;
+    glassHit.opacity = 0.6f;
+    glassHit.color = float3(0.8f, 0.9f, 1.0f);
+    MediumIdentity glass = CreateHitMedium(glassHit);
+
+    RegressionResults[5] = float4(GetMediumTransitionIndices(air, air, waterHit, true), water.type, water.objectIndex);
+    RegressionResults[6] = float4(GetMediumTransitionIndices(water, air, glassHit, true), glass.type, glass.objectIndex);
+    RegressionResults[7] = float4(GetMediumTransitionIndices(glass, water, glassHit, false), IsSameMedium(glass, CreateHitMedium(glassHit)) ? 1.0f : 0.0f, 1.0f);
 }
 
 [numthreads(8,8,1)]
