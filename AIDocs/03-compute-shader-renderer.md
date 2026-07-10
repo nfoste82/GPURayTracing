@@ -84,14 +84,15 @@ struct MeshTriangle
 
 ## Material Type Constants
 
-The shader defines four material type constants:
+The shader defines five material type constants:
 
 - `MaterialDiffuse = 0`
 - `MaterialMetal = 1`
 - `MaterialGlass = 2`
 - `MaterialEmissive = 3`
+- `MaterialWater = 4`
 
-`RayMaterial` only exposes `Diffuse`, `Metal`, and `Glass` (0-2). The `MaterialEmissive = 3` value is assigned by `GameManager.RegisterObject()` to emissive light spheres (it is not selectable in `RayMaterial`). The shader does not branch on `MaterialEmissive` in scatter logic; lights are detected by nonzero emission via `DidHitLight()` instead.
+`RayMaterial` only exposes `Diffuse`, `Metal`, and `Glass` (0-2). `MaterialEmissive = 3` is assigned to emissive sphere/mesh lights and is not selectable in `RayMaterial`; lights are detected by nonzero emission via `DidHitLight()`. `MaterialWater = 4` is assigned internally by the procedural water intersection.
 
 Triangle meshes also upload `MeshInfo` and `BvhNode` data. Each mesh has an object-level AABB in `_Meshes`, and its triangles are arranged into a binary BVH whose leaf nodes contain small contiguous triangle ranges in `_Triangles`.
 
@@ -143,13 +144,12 @@ Per bounce:
 2. If the ray segment started underwater, attenuate `throughput` by water absorption for the distance to the hit.
 3. If it hits sky, add `throughput * skyColor` and stop.
 4. If it hits a light, add `throughput * emission` and stop.
-5. For non-diffuse materials, randomize the normal based on surface smoothness.
-6. Sample direct light if the path throughput is above `MinDirectLightThroughput`. Bounce 0 uses multiple stochastic soft-shadow samples; later bounces use one light sample.
-7. Add direct contribution: `throughput * albedo * directLight * hit.opacity`.
-8. Create the next ray using the hit material type.
-9. Update `throughput` with the scatter attenuation.
-10. Stop early when throughput is effectively black.
-11. Starting after the first few bounces, apply Russian roulette termination and scale surviving throughput by survival probability.
+5. Sample direct light if the path throughput is above `MinDirectLightThroughput`. Bounce 0 uses multiple stochastic soft-shadow samples; later bounces use one light sample. `GetDirectMaterialResponse()` applies albedo/diffuse and approximate specular response while evaluating each sampled light.
+6. Add direct contribution: `throughput * directLight`.
+7. Create the next ray using the hit material type.
+8. Update `throughput` with the scatter attenuation.
+9. Stop early when throughput is effectively black.
+10. Starting after the first few bounces, apply Russian roulette termination and scale surviving throughput by survival probability.
 
 Material scattering currently supports:
 

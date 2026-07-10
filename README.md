@@ -2,17 +2,20 @@
 Realtime 3D raytracer running in a GPU compute shader in Unity.
 
 Features:
-* Surface reflections
-* Diffuse and ambient lighting
-* Transparency and light refraction
+* GPU compute-shader path tracing for spheres, registered triangle meshes, and an implicit ground plane
+* Emissive sphere and mesh lights with direct-light sampling
+* Surface reflections, diffuse indirect lighting, and multiple ray bounces
+* Glass reflection/refraction, distance-based absorption, and colored transparent shadows
+* Mesh UV/albedo textures
+* Optional animated procedural water with reflection, refraction, and underwater absorption
 * Hard and soft shadows
-* Transparent objects create colored shadows
 * Depth of field with auto-focusing
-* Multiple ray bounces
+* Frame accumulation, dynamic quality, debug views, and benchmark scenes
 
-Features missing (possibly added later):
-* Indirect lighting (Global illumination)
-* Caustics
+Features missing or approximate:
+* Caustics and a fully consistent energy-conserving BRDF/PDF formulation
+* General nested-medium handling for overlapping glass and water volumes
+* Imported smooth vertex normals and material texture maps beyond mesh albedo
 
 There are multiple quality settings on the GameManager object in the root scene. At normal settings you should be able to easily sustain 60+ frames per second. At the highest settings you'll end up with frames taking one or more seconds to render.
 

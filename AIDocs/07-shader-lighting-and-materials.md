@@ -16,17 +16,17 @@ Direct-light segments that cross the procedural water volume are additionally at
 
 ### Light Sampling Strategies
 
-`_LightSamplingStrategy` (from `GameManager.lightSamplingStrategy`) selects which lights each hit shades. All three strategies are unbiased estimators of the same total direct light; they trade per-frame noise for cost.
+`_LightSamplingStrategy` (from `GameManager.lightSamplingStrategy`) selects which lights each hit shades. The strategies trade per-frame noise for cost. Uniform and importance sampling are unbiased only over the set of lights they can select; the current importance cap described below can omit lights from that set.
 
 - **AllLights (0)**: shades every light each hit. Most accurate per frame; cost scales linearly with light count. This is the most expensive strategy in many-light scenes.
 - **UniformRandom (1)**: draws `_LightSampleCount` lights uniformly at random and applies a `lightCount / drawCount` Monte Carlo correction. Cheapest, but noisiest, because samples swing between near-black distant lights and bright nearby ones.
-- **ImportanceSampled (2)**: draws `_LightSampleCount` lights with probability proportional to a cheap `luminance(emission) * falloff(distanceSquared, radius)` weight (`LightImportanceWeight()`), then divides each contribution by its selection probability. Far less noise per sample than UniformRandom because samples concentrate on bright/nearby lights, while distant lights keep a nonzero pick probability so the result stays unbiased. The weight uses squared distance directly (no `sqrt`) and mirrors `GetDirectLightFalloff()` math.
+- **ImportanceSampled (2)**: draws `_LightSampleCount` lights with probability proportional to a cheap `luminance(emission) * falloff(distanceSquared, radius)` weight (`LightImportanceWeight()`), then divides each contribution by its selection probability. Far less noise per sample than UniformRandom because samples concentrate on bright/nearby lights. Within the capped considered set, distant lights keep a nonzero pick probability. The weight uses squared distance directly (no `sqrt`) and mirrors `GetDirectLightFalloff()` math.
 
 For the random/importance strategies, if `_LightSampleCount` would cover (nearly) every light anyway, `GetLightHittingPoint()` falls back to all-lights behavior (weight `1`, no `1/pdf` scaling) to avoid needless selection variance at the same cost.
 
 `_MaxLightSamples` is a separate diagnostic cap: when positive, it clamps how many lights any strategy considers, which was used to confirm the per-hit light loop is the dominant cost in `Benchmark_ManyLights`.
 
-ImportanceSampled only weights up to `MaxImportanceLights` (`128`) lights; lights beyond that are ignored for importance weighting. `GameManager` logs a one-time warning when the scene exceeds this count while ImportanceSampled is active.
+ImportanceSampled only weights up to `MaxImportanceLights` (`128`) lights; lights beyond that are ignored for importance weighting. `GameManager` logs a one-time warning when the scene exceeds this count while ImportanceSampled is active. Because omitted lights have zero selection probability, this mode is biased relative to the full scene when the cap is exceeded. Emissive mesh triangles each count as a light entry, so a tessellated mesh light can reach the limit quickly.
 
 ### Light Sampling Structure And Compile-Time Constraint
 

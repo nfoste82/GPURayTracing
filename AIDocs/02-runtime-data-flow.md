@@ -69,7 +69,7 @@ Graphics.Blit(_outputTexture, dest);
 
 `_buffersNeedRebuilding` is set when objects register or unregister. `Update()` calls `RebuildBuffers()` when this flag is true.
 
-`RebuildBuffers()` releases and recreates sphere/light buffers using stride `56`, matching the HLSL `Sphere` struct layout:
+`RebuildBuffers()` releases and recreates the sphere buffer using stride `56`, matching the HLSL `Sphere` struct layout:
 
 - `float3 position`
 - `float3 color`
@@ -80,22 +80,26 @@ Graphics.Blit(_outputTexture, dest);
 - `float refraction`
 - `int materialType`
 
-`RebuildBuffers()` also releases and recreates triangle, mesh-info, per-mesh BVH-node, and top-level BVH-node buffers. The triangle buffer uses stride `112`, matching the HLSL `MeshTriangle` struct layout:
+The separate light buffer uses stride `72`. Its `Light` layout stores position, emission, two triangle edges, radius, area, normal, and type so the same buffer can represent sphere lights and emissive mesh triangles.
+
+`RebuildBuffers()` also releases and recreates triangle, mesh-info, per-mesh BVH-node, and top-level BVH-node buffers. The triangle buffer uses stride `124`, matching the HLSL `MeshTriangle` struct layout:
 
 - `float3 vertex0`
 - `float3 vertex1`
 - `float3 vertex2`
 - `float3 normal`
 - `float3 color`
+- `float smoothness`
 - `float2 uv0`
 - `float2 uv1`
 - `float2 uv2`
-- `float smoothness`
 - `float opacity`
+- `float3 emission`
 - `float refraction`
 - `int materialType`
 - `int meshIndex`
 - `int textureIndex`
+- `int padding0`
 
 The mesh-info buffer uses stride `48` and stores each mesh AABB, root BVH node index, triangle range, and mesh index. The per-mesh BVH-node buffer also uses stride `48` and stores each node AABB, child indices, and leaf triangle range. The top-level BVH-node buffer uses stride `48` and stores AABBs over sphere, light, and mesh objects, plus child indices or object type/index metadata. The shadow BVH-node buffer uses the same stride/layout but only includes shadow blockers: regular spheres and meshes, not light spheres.
 
@@ -188,7 +192,7 @@ Dynamic quality resets frame accumulation whenever it changes a setting. It is s
 - `debugRenderMode` is exposed in the `GameManager` inspector and selects final color or one of the shader debug visualizations.
 - `enableDynamicQuality` and `dynamicQualityTargetFrameRate` are exposed in the inspector for optional adaptive quality scaling.
 
-Single-frame mode is exposed in the inspector through the serialized public field `_singleFrame` (under the "Render single frame" header). With frame accumulation disabled or unavailable, it renders one frame, then stops compute dispatch while the camera continues to blit the last `_outputTexture` into the Game view. With final-color frame accumulation enabled, single-frame mode keeps dispatching at the reduced single-frame presentation rate so the still image progressively refines. `EnableSingleFrameSettings()` sets `Application.targetFrameRate = 10` and disables vSync, so the player loop slows down but does not set `Time.timeScale` to zero; Unity keeps presenting the last ray-traced render instead of appearing to fall back to an editor/Scene view. Toggling it off in the inspector, pressing `T`, or pressing `Space` resumes real-time rendering and restores real-time presentation settings (`targetFrameRate = 60`, vSync re-enabled).
+Single-frame mode is exposed in the inspector through the serialized public field `_singleFrame` (under the "Render single frame" header). With frame accumulation disabled or unavailable, it renders one frame, then stops compute dispatch while the camera continues to blit the last `_outputTexture` into the Game view. With final-color frame accumulation enabled, single-frame mode keeps dispatching at the reduced single-frame presentation rate so the still image progressively refines. `EnableSingleFrameSettings()` sets `Application.targetFrameRate = 10`, disables vSync, and sets `Time.timeScale = 0`; toggling it off in the inspector, pressing `T`, or pressing `Space` resumes real-time rendering and currently restores hard-coded real-time settings (`targetFrameRate = 60`, `vSyncCount = 2`, and `timeScale = 1`). Preserving and restoring the caller's previous global settings is recommended in `09-roadmap-and-improvements.md`.
 
 Unity's editor toolbar Pause freezes the player loop, so runtime code cannot keep dispatching or blitting new frames while that pause is active. `Assets/Editor/GameViewPauseFocus.cs` listens for editor pause events and refocuses/repaints the Game view so the editor remains on the last presented render instead of switching to the Scene tab.
 

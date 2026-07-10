@@ -1,5 +1,6 @@
 ﻿// Each #kernel tells which function to compile; you can have many kernels
 #pragma kernel CSMain
+#pragma kernel CSRegressionProbe
 
 // Debug render modes (normals, albedo, BVH visualization, etc.) pull in a second set of
 // scene-intersection/scatter code. Compiling that into the default final-color variant roughly
@@ -12,6 +13,7 @@
 // with cs.SetTexture
 RWTexture2D<float4> Result;
 RWTexture2D<float4> AccumulationResult;
+RWStructuredBuffer<float4> RegressionResults;
 
 float4x4 _CameraToWorld;
 float4x4 _CameraInverseProjection;
@@ -2323,6 +2325,34 @@ float3 ACESFilmicToneMap(float3 color)
     const float d = 0.59f;
     const float e = 0.14f;
     return saturate((color * (a * color + b)) / (color * (c * color + d) + e));
+}
+
+// Deterministic probes for EditMode regression tests. These call the renderer's production helpers
+// directly so reflection/refraction changes cannot silently diverge from a separate test shader.
+[numthreads(1,1,1)]
+void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
+{
+    float3 normal = float3(0.0f, 1.0f, 0.0f);
+    float3 incident45 = normalize(float3(1.0f, -1.0f, 0.0f));
+    float3 reflected45 = reflect(incident45, normal);
+
+    float3 refracted45;
+    bool didRefract45 = RefractSnell(incident45, 1.0f, 1.5f, normal, refracted45);
+
+    float3 totalInternalDirection = normalize(float3(0.8660254f, 0.5f, 0.0f));
+    float3 ignoredDirection;
+    bool didRefractTotalInternal = RefractSnell(totalInternalDirection, 1.5f, 1.0f, -normal, ignoredDirection);
+
+    float r0 = (1.0f - 1.5f) / (1.0f + 1.5f);
+    r0 *= r0;
+    float fresnel45 = r0 + (1.0f - r0) * pow(1.0f - saturate(abs(dot(-incident45, normal))), 5.0f);
+    float3 absorption = GetAbsorptionTransmittance(float3(0.25f, 0.5f, 0.75f), 0.6f, 2.0f);
+
+    RegressionResults[0] = float4(reflected45, 1.0f);
+    RegressionResults[1] = float4(refracted45, didRefract45 ? 1.0f : 0.0f);
+    RegressionResults[2] = float4(ignoredDirection, didRefractTotalInternal ? 1.0f : 0.0f);
+    RegressionResults[3] = float4(fresnel45, r0, 0.0f, 1.0f);
+    RegressionResults[4] = float4(absorption, 1.0f);
 }
 
 [numthreads(8,8,1)]

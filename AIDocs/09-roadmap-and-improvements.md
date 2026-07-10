@@ -1,47 +1,69 @@
 # Roadmap And Improvements
 
-This document captures likely future work areas. For current implementation limits, see `05-known-limitations.md`. For performance hotspots and benchmark methodology, see `10-benchmarking-and-performance.md`.
+This document captures likely future work areas in priority order. For current implementation limits, see `05-known-limitations.md`. For performance hotspots and benchmark methodology, see `10-benchmarking-and-performance.md`.
 
-## Good Near-Term Fixes
+## Recommended Order
 
-- Add legends or configurable ranges for debug render modes if more detailed diagnostics are needed.
-- Add a simple material/debug preset workflow in the scene so material type changes can be compared quickly.
-- Add optional benchmark logging to CSV/JSON so frame-time comparisons can be captured without manual note-taking.
-- Add GPU timing instrumentation if feasible; Unity's profiler often collapses compute shader time into `Rendering`, so Xcode GPU Frame Capture remains useful on macOS.
-- Consider adding dynamic-quality presets or priorities if users want to favor shadows/bounces over per-frame sample count or light-sampling quality. The current dynamic-quality ladder changes passes first, then light sampling, then shadow quality, then bounces, and intentionally leaves BVH thresholds fixed.
+The recent texture, mesh-light, glass, specular, imported-model, and procedural-water work makes correctness and regression coverage more valuable than adding another major rendering feature. Recommended order:
 
-## Cheap Rendering Improvements
+1. Fix concrete correctness and lifecycle hazards.
+2. Add deterministic CPU/GPU regression coverage for intersections and acceleration structures.
+3. Make medium/material behavior internally consistent.
+4. Measure and remove avoidable CPU rebuild/upload work.
+5. Continue lower-risk visual and workflow improvements.
 
-These options should improve perceived quality with little or no extra ray-intersection cost. Most are better sampling, better parameter mapping, or cheap per-pixel math rather than more rays.
+## Priority 0: Correctness And Safety
 
-- Expose the depth-of-field aperture/lens radius as a parameter; it is currently a hard-coded `0.005` world-space ray-origin jitter in the shader.
-- Add an optional firefly/outlier clamp to reduce rare bright speckles in single-frame renders.
-- Improve `Smoothness` to roughness mapping, such as using a perceptual squared roughness curve, so material controls feel more predictable.
-- Improve rough metal reflection sampling by sampling around the ideal reflection lobe instead of randomizing the normal with axis-aligned noise.
-- Refine diffuse sampling basis construction and below-surface rejection to avoid unstable or invalid sample directions.
-- Tune direct light defaults, including `lightFalloffScale`, light radius/intensity expectations, and scene light colors.
-- Consider adding a global light intensity or exposure scale if light setup remains hard to balance.
-- Skip work that cannot contribute much, such as direct lighting for nearly black throughput, roughness randomization when smoothness is effectively `1`, or continuation work when `_NumBounces <= 1`.
-- Review default inspector values for `groundSmoothness`, `shadowRandomness`, `numberOfPasses`, `shadowQuality`, and `randomNoise` after visual testing.
-- Add UI overlays, legends, or configurable ranges for debug render modes if more detailed diagnostics are needed.
-- Add a simple material/debug preset workflow in the scene so material type and smoothness changes can be compared quickly.
+- Add an output-dimension guard at the start of `CSMain`. Dispatch uses ceiling-divided `8x8` groups, so render sizes not divisible by eight currently launch threads outside `Result`/`AccumulationResult`. Verify very small and odd resolutions.
+- Make ray-traced object registration and `_buffersNeedRebuilding` manager-local, or explicitly enforce and reset a supported singleton. Their current static lifetime conflicts with instance-owned buffers and is fragile with multiple managers or disabled domain reload.
+- Preserve and restore the application's previous `QualitySettings.vSyncCount`, `Application.targetFrameRate`, and `Time.timeScale` when entering/leaving single-frame mode, including disable/destruction cleanup.
+- Enforce the fixed BVH stack-depth invariant. Record maximum build depth and assert/fail clearly before a tree can exceed the CPU/GPU stack size of `64`; traversal currently drops overflowing children and could miss intersections.
+- Detect `MeshFilter.sharedMesh` replacement and define an explicit dirty path for runtime vertex/topology/UV changes. Validate `mesh.isReadable` with an actionable error before reading imported mesh data.
+- Update dynamic scene data before CPU autofocus and bring CPU sphere/water intersection behavior into parity with the shader. Autofocus currently sees previous-frame transforms and uses the average water plane rather than procedural waves.
+- Correct finite-water segment accounting. Paths starting underwater currently attenuate for the full distance to the next hit even if they leave the finite X/Z water region, while segments with two above-water endpoints can miss an intervening water crossing.
+- Validate required `shader`/camera wiring at startup and ensure the camera presenting `RayTracingCameraRenderer.OnRenderImage()` matches the camera whose matrices and controls `GameManager` uses.
 
-## More Expensive Rendering Improvements
+## Priority 1: Regression Coverage
 
-- Further improve diffuse indirect lighting with lower-variance sampling and material-specific BRDF/PDF handling as new materials are added.
-- Improve transparent absorption and next-event estimation toward a more physically based formulation.
-- Improve importance-sampled light selection further: fold the surface normal (N·L) and a coarse visibility estimate into `LightImportanceWeight`, and consider a precomputed/global light CDF or a spatial light structure so many-light scenes scale beyond the current `MaxImportanceLights` (`128`) cap without the per-hit weight pass. Raising the cap is cheap but increases the per-hit weight loop cost.
-- Tune the random/importance light strategies now that frame accumulation can average their per-frame noise in static views; without accumulation, the noise must still be reduced by raising `lightSampleCount` or `numberOfPasses`.
-- Accumulate transmittance through multiple transparent shadow blockers instead of only using the nearest transparent blocker.
-- Improve glass refraction with proper sphere entry/exit traversal, Snell-law behavior, and distance-based absorption.
-- Improve direct light sampling by sampling sphere lights by visible solid angle instead of approximate disk samples.
-- Consider a lightweight denoising or temporal stability pass after accumulation is in place.
+- Add an EditMode test assembly for CPU sphere/triangle/AABB intersections, including rays starting inside spheres and axis-aligned/zero-component directions.
+- Compare per-mesh, top-level, and shadow BVH results against brute-force intersections over deterministic randomized scenes, and test maximum tree depth against `BvhStackSize`.
+- Add registration/unregistration and lifecycle tests, including multiple managers and domain-reload-disabled-style static-state reset cases.
+- Add GPU smoke tests that dispatch final and debug variants at tiny, odd, and non-multiple-of-eight resolutions.
+- Add low-resolution deterministic image regressions for opaque/transparent shadows, stacked glass, sphere/mesh Snell and TIR behavior, mesh lights, textures, water absorption, and BVH-on versus flat-loop equivalence.
+- Add focused validation scenes or numeric probes for nested/interpenetrating media and water entry/exit distances before changing those systems further.
 
-## Geometry Improvements
+## Priority 2: Material And Medium Consistency
 
-- Top-level, shadow, and per-mesh BVHs now build with a surface area heuristic (SAH) split (`FindTriangleSahSplit`/`FindTopLevelSahSplit`), traverse children near-first, and carry a precomputed inverse ray direction through `IntersectAabbInverse`; further build-quality work (e.g. binned SAH, spatial splits) is only worth it if scenes grow much larger. See `06-shader-intersections-and-bvh.md`.
-- The opaque-shadow fast path is implemented: when `_HasTransparentShadowBlockers` is 0, shadow rays use `IsShadowRayBlocked()` for a boolean occlusion test instead of nearest-transparent-blocker bookkeeping. A possible extension is per-light or per-ray transparency classification instead of the current scene-level flag.
-- Add imported vertex normal support for smoother mesh shading.
-- Add texture/UV support if mesh materials need more than flat `RayMaterial` colors.
-- Improve mesh refraction with robust closed-volume traversal, nested media support, internal reflection handling, and distance-based absorption.
-- Keep the data model generic enough that spheres and mesh triangles can share the same material/emission shading path.
+- Introduce explicit current-medium state, eventually a small medium stack, so transitions among overlapping sphere glass, mesh glass, and water do not rely only on surface orientation and object-specific helpers.
+- Replace the approximate direct specular highlight with a coherent energy-conserving material model. Use a shared perceptual roughness mapping, matching BRDF/PDF sampling, correct dielectric/metal Fresnel, and eventually multiple importance sampling between light and BSDF samples.
+- Refine transparent shadow transport by pairing closed-mesh entry/exit hits for path length, tracking nested media, and early-outing when accumulated transmittance is negligible. Multiple blocker accumulation itself is already implemented.
+- Harden sphere and mesh glass for repeated internal reflection, concave/non-manifold/open meshes, exhausted bounce budgets inside a medium, and analytic Snell/TIR validation. Basic Snell transmission, distance absorption, bounded interior-object tests, and mesh TIR are already implemented.
+- Improve water intersection with adaptive/root-finding behavior, consistent side/bottom volume boundaries, and optional support for multiple/transformed water bodies.
+
+## Priority 3: Lighting And Geometry Quality
+
+- Add imported vertex normals and interpolate them barycentrically. This is now high-value because the Stanford Dragon benchmark and direct specular highlights make flat triangle normals visibly facet smooth models.
+- Make mesh-light selection hierarchical: choose an emissive mesh by total area/power, then a triangle through an area/power distribution. This avoids treating every emissive triangle as a global light and removes pressure on the `MaxImportanceLights` (`128`) cap.
+- Replace or redesign the global importance-light cap so every active emitter keeps nonzero selection probability. A precomputed CDF/alias table or spatial light structure should avoid the current per-hit full weight scan while preserving the shader's single `SampleSingleLight()` call-site compile constraint.
+- Improve rough metal continuation sampling around the ideal reflection lobe instead of randomizing the normal with axis-aligned noise.
+- Improve diffuse basis construction and add consistent material-specific BRDF/PDF handling as the material model evolves.
+- Sample sphere lights by visible solid angle instead of approximate disk samples.
+
+## Priority 4: Performance And Tooling
+
+- Avoid rebuilding/uploading both top-level BVHs every rendered frame when object bounds are unchanged. Reuse static trees and evaluate refitting for transform-only changes before a full SAH rebuild.
+- Separate mesh geometry, material, light, and texture dirtiness. A material or transform change currently rebuilds every world-space triangle, per-mesh BVH, mesh-light entry, and texture-array slice.
+- Upload sphere/light data only when relevant transforms or component values change.
+- Add benchmark CSV/JSON export with warmup, fixed settings, sample duration/count, median/p95, and scene/settings metadata.
+- Add GPU timing when supported; Unity's CPU frame time often collapses compute work into `Rendering`, so Xcode GPU Frame Capture remains useful on macOS.
+- Add focused water march/refinement and mesh-light tessellation benchmarks before optimizing those paths.
+- Consider dynamic-quality presets or user-selectable priorities if users need to favor bounces/shadows over sample count or light quality.
+
+## Priority 5: Lower-Risk Visual Improvements
+
+- Expose depth-of-field aperture/lens radius and sample a camera-space lens disk instead of using the hard-coded `0.005` three-axis origin jitter.
+- Improve mesh textures beyond fixed `128x128` point-filtered, mipless albedo slices: configurable/source resolution, filtering/mips and LOD, color-space validation, then normal and roughness maps.
+- Add an optional firefly/outlier clamp for rare bright speckles in single-frame renders.
+- Consider a lightweight denoising or temporal-stability pass, especially for animated water where normal frame accumulation is disabled.
+- Tune defaults for light falloff, ground smoothness, shadow randomness, passes, shadow quality, and noise after reference-image testing.
+- Add debug legends/configurable ranges and material/debug presets only when they serve a specific diagnosis workflow.
