@@ -100,7 +100,7 @@ The scene also uploads a top-level BVH over ray-traced spheres, emissive light s
 
 `RayHit` stores hit position, object position/radius, normal, emission, color, distance, smoothness, opacity, transparent travel distance, refraction index, material type, mesh index, and sphere object index.
 
-`MediumIdentity` is the initial foundation for nested-medium tracking. It distinguishes air, sphere, mesh, and water media by both type and object identity, and stores IOR/opacity/absorption color. Regression probes define air -> water -> glass -> water source/target IOR transitions. This state is not yet carried through `TracePath()`, so production scattering still uses the existing object-specific refraction helpers.
+`MediumIdentity` distinguishes air, sphere, mesh, and water media by both type and object identity, and stores IOR/opacity/absorption color. `TracePath()` carries a fixed-capacity stack with implicit air, initializes water for rays that start underwater, and updates it only for transmitted boundary crossings. Matching exits reveal the parent medium; overflow and unmatched exits set explicit stack status bits. Production scattering still uses the existing object-specific refraction helpers, so the carried state does not yet select source/target IORs or segment absorption.
 
 ## Ray Generation
 
@@ -137,6 +137,7 @@ It maintains:
 
 - `radiance`: accumulated light returned to the camera.
 - `throughput`: accumulated material/tint/energy carried by the current path.
+- `mediumStack`: the nested closed volumes currently containing the path, with implicit air at the base.
 - `albedo`: surface color from `hit.color`.
 - `emission`: emitted light from `hit.emission`.
 

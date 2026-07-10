@@ -13,8 +13,8 @@ The project uses EditMode tests under `Assets/Tests/EditMode/` to make rendering
 - Current Schlick Fresnel values at normal, 45-degree, and grazing incidence.
 - Current distance/color/opacity glass absorption approximation.
 - A GPU `CSRegressionProbe` kernel in the production compute shader that calls the same reflection, `RefractSnell()`, Fresnel formula, and `GetAbsorptionTransmittance()` behavior used by rendering. This catches divergence between CPU expectations and shader execution.
-- Deterministic `32x32` final-color image signatures for a reflective metal sphere, a refractive glass sphere with geometry behind it, and calm finite water with submerged geometry. Each baseline stores the image average and eight fixed pixel probes after tone mapping.
-- Initial medium-identity and transition probes for air -> water, water -> sphere glass, and sphere glass -> water. These establish object identity and source/target IOR semantics before medium state is carried through full paths.
+- Deterministic `32x32` final-color image signatures for a reflective metal sphere, a refractive glass sphere with geometry behind it, calm finite water with submerged geometry, nested water/sphere-glass, and a camera starting underwater. Each baseline stores the image average and eight fixed pixel probes after tone mapping.
+- Medium-identity and stack probes for air -> water -> sphere glass -> water -> air, parent lookup, matching exits, overflow, unmatched exits, and underwater initialization.
 
 ## Running Tests
 
@@ -52,14 +52,14 @@ The current fixtures cover spheres and procedural water. Mesh glass is still lis
 
 ## Medium Transition Foundation
 
-`MediumIdentity` in `RayTracingCompute.compute` currently records medium type, object identity, IOR, opacity, and absorption color. `CreateHitMedium()`, `IsSameMedium()`, and `GetMediumTransitionIndices()` define the initial boundary semantics. They are exercised only by regression probes at this stage; `TracePath()` still uses the existing sphere/mesh/water-specific behavior, so image baselines remain unchanged.
+`MediumIdentity` in `RayTracingCompute.compute` records medium type, object identity, IOR, opacity, and absorption color. `TracePath()` carries a fixed-capacity stack with implicit air and initializes water when a camera ray starts underwater. Transmission updates the stack while reflection and TIR preserve it. Sphere/mesh helpers that internally cross both faces leave the net stack unchanged; paths that stop inside a volume retain that medium for the next production bounce.
 
-The next implementation step is a fixed-capacity path medium stack with air as its implicit base. Entering a boundary will push its identity; matching exits will pop it and reveal the parent medium. Stack overflow and unmatched exits must be detectable rather than silently ignored.
+Stack overflow and unmatched exits set explicit status bits and preserve valid existing state. The next implementation step is using the carried current medium for per-segment absorption, followed by source/target IOR selection for refraction.
 
 ## Next Coverage
 
 - Brute-force versus per-mesh/top-level/shadow BVH equivalence over deterministic randomized scenes.
 - BVH maximum-depth enforcement against the fixed traversal stack.
 - Extend deterministic image baselines to mesh glass, transparent shadows, textures, and mesh lights.
-- Carry medium identity through `TracePath()` and add nested air -> water -> glass -> water -> air image/probe coverage.
+- Extend nested-medium fixtures to closed mesh glass when deterministic production mesh/BVH fixture data is available.
 - Odd-resolution GPU dispatch smoke tests after `CSMain` adds an output-bounds guard.

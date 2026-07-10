@@ -50,6 +50,8 @@ For shadow-BVH traversal details, see `06-shader-intersections-and-bvh.md`.
 - `Metal`: reflects around the surface normal, with smoothness controlling rough reflection direction randomization, attenuates by albedo, and receives direct specular highlights from sampled lights.
 - `Glass`: uses Schlick Fresnel reflectance to randomly choose first-surface reflection versus transmission. Transmitted sphere and mesh paths use Snell refraction. Mesh glass supports bounded internal total internal reflection (TIR) while searching for an exit face. Transmitted glass paths are attenuated by distance-based RGB absorption. Glass and water also receive direct specular highlights from sampled lights.
 
+`TracePath()` now also carries a fixed-capacity medium stack. Transmitted water, sphere-glass, and mesh-glass paths update that state; reflection and TIR do not. This is currently state-only: the object-specific helpers below still choose their legacy air/material IORs and absorption behavior until the segment-absorption and stack-driven-refraction stages.
+
 The glass path is entered whenever `IsGlassMaterial(hit)` is true, which happens for `materialType == Glass` **or** for any hit with `opacity < 1.0`. A nominally `Diffuse` or `Metal` object with reduced opacity therefore scatters through the glass transmission/Fresnel path.
 
 ## Transparency And Refraction

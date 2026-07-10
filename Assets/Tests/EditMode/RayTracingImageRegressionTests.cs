@@ -31,7 +31,7 @@ namespace GPURayTracing.Tests
             Vector4[] signature = RenderSignature(new[]
             {
                 Sphere(new Vector3(0.0f, 1.0f, 0.5f), new Vector3(0.75f, 0.25f, 0.12f), 1.0f, 1.0f, 1.0f, 1.0f, 1)
-            }, false, Quaternion.Euler(4.0f, 0.0f, 0.0f));
+            }, false, new Vector3(0.0f, 1.6f, -4.5f), Quaternion.Euler(4.0f, 0.0f, 0.0f));
 
             AssertSignature("reflection", signature, ReflectionBaseline);
         }
@@ -43,7 +43,7 @@ namespace GPURayTracing.Tests
             {
                 Sphere(new Vector3(0.0f, 1.0f, 0.5f), new Vector3(0.35f, 0.7f, 0.95f), 1.0f, 1.0f, 0.35f, 1.5f, 2),
                 Sphere(new Vector3(0.0f, 1.0f, 2.5f), new Vector3(0.9f, 0.2f, 0.12f), 0.65f, 0.2f, 1.0f, 1.0f, 0)
-            }, false, Quaternion.Euler(4.0f, 0.0f, 0.0f));
+            }, false, new Vector3(0.0f, 1.6f, -4.5f), Quaternion.Euler(4.0f, 0.0f, 0.0f));
 
             AssertSignature("glass sphere", signature, GlassBaseline);
         }
@@ -54,9 +54,33 @@ namespace GPURayTracing.Tests
             Vector4[] signature = RenderSignature(new[]
             {
                 Sphere(new Vector3(0.0f, 0.35f, 1.5f), new Vector3(0.95f, 0.32f, 0.08f), 0.35f, 0.2f, 1.0f, 1.0f, 0)
-            }, true, Quaternion.Euler(10.0f, 0.0f, 0.0f));
+            }, true, new Vector3(0.0f, 1.6f, -4.5f), Quaternion.Euler(10.0f, 0.0f, 0.0f));
 
             AssertSignature("water", signature, WaterBaseline);
+        }
+
+        [Test]
+        public void NestedWaterAndGlassScene_CurrentImageBaseline_IsStable()
+        {
+            Vector4[] signature = RenderSignature(new[]
+            {
+                Sphere(new Vector3(0.0f, 0.35f, 1.35f), new Vector3(0.42f, 0.78f, 0.95f), 0.32f, 1.0f, 0.25f, 1.5f, 2),
+                Sphere(new Vector3(0.0f, 0.35f, 2.05f), new Vector3(0.95f, 0.2f, 0.08f), 0.24f, 0.2f, 1.0f, 1.0f, 0)
+            }, true, new Vector3(0.0f, 1.6f, -4.5f), Quaternion.Euler(10.0f, 0.0f, 0.0f));
+
+            AssertSignature("nested water and glass", signature, NestedWaterGlassBaseline);
+        }
+
+        [Test]
+        public void CameraStartingUnderwaterScene_CurrentImageBaseline_IsStable()
+        {
+            Vector4[] signature = RenderSignature(new[]
+            {
+                Sphere(new Vector3(0.0f, 0.35f, 1.35f), new Vector3(0.42f, 0.78f, 0.95f), 0.32f, 1.0f, 0.25f, 1.5f, 2),
+                Sphere(new Vector3(0.0f, 0.35f, 2.05f), new Vector3(0.95f, 0.2f, 0.08f), 0.24f, 0.2f, 1.0f, 1.0f, 0)
+            }, true, new Vector3(0.0f, 0.35f, -4.5f), Quaternion.identity);
+
+            AssertSignature("camera starting underwater", signature, UnderwaterCameraBaseline);
         }
 
         // Average HDR color followed by eight fixed pixel probes. These values intentionally lock
@@ -100,6 +124,32 @@ namespace GPURayTracing.Tests
             new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f)
         };
 
+        private static readonly Vector4[] NestedWaterGlassBaseline =
+        {
+            new Vector4(0.10129490f, 0.19434070f, 0.31647750f, 1.0f),
+            new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
+            new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
+            new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
+            new Vector4(0.03365663f, 0.08516176f, 0.19658320f, 1.0f),
+            new Vector4(0.01132319f, 0.02900140f, 0.07406791f, 1.0f),
+            new Vector4(0.01617341f, 0.07468688f, 0.20154250f, 1.0f),
+            new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f),
+            new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f)
+        };
+
+        private static readonly Vector4[] UnderwaterCameraBaseline =
+        {
+            new Vector4(0.00057631f, 0.00922092f, 0.03454152f, 1.0f),
+            new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
+            new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
+            new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
+            new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
+            new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
+            new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
+            new Vector4(0.00246564f, 0.02287684f, 0.07859048f, 1.0f),
+            new Vector4(0.00112369f, 0.01974659f, 0.07859048f, 1.0f)
+        };
+
         private static SphereData Sphere(Vector3 position, Vector3 color, float radius, float smoothness, float opacity, float refraction, int materialType)
         {
             return new SphereData
@@ -115,7 +165,7 @@ namespace GPURayTracing.Tests
             };
         }
 
-        private static Vector4[] RenderSignature(SphereData[] spheres, bool waterEnabled, Quaternion cameraRotation)
+        private static Vector4[] RenderSignature(SphereData[] spheres, bool waterEnabled, Vector3 cameraPosition, Quaternion cameraRotation)
         {
             if (!SystemInfo.supportsComputeShaders)
             {
@@ -160,7 +210,7 @@ namespace GPURayTracing.Tests
                 // Unity view-space camera rays point down -Z; cameraToWorld includes that handedness
                 // conversion, unlike Transform.localToWorldMatrix.
                 Matrix4x4 cameraToWorld = Matrix4x4.TRS(
-                    new Vector3(0.0f, 1.6f, -4.5f),
+                    cameraPosition,
                     cameraRotation,
                     new Vector3(1.0f, 1.0f, -1.0f));
                 shader.SetMatrix("_CameraToWorld", cameraToWorld);

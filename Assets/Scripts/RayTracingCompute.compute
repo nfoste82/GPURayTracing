@@ -93,6 +93,12 @@ static const int MediumTypeAir = 0;
 static const int MediumTypeSphere = 1;
 static const int MediumTypeMesh = 2;
 static const int MediumTypeWater = 3;
+static const int MediumStackCapacity = 8;
+static const int MediumTransitionNone = 0;
+static const int MediumTransitionEnter = 1;
+static const int MediumTransitionExit = 2;
+static const int MediumStackStatusOverflow = 1;
+static const int MediumStackStatusUnmatchedExit = 2;
 
 static const int TopLevelObjectTypeInternal = -1;
 static const int TopLevelObjectTypeSphere = 0;
@@ -257,14 +263,16 @@ struct ScatterResult
     Ray ray;
     float3 attenuation;
     int bouncesConsumed;
+    int mediumTransition;
 };
 
-ScatterResult CreateScatterResult(Ray ray, float3 attenuation, int bouncesConsumed)
+ScatterResult CreateScatterResult(Ray ray, float3 attenuation, int bouncesConsumed, int mediumTransition)
 {
     ScatterResult result;
     result.ray = ray;
     result.attenuation = attenuation;
     result.bouncesConsumed = max(1, bouncesConsumed);
+    result.mediumTransition = mediumTransition;
     return result;
 }
 
@@ -307,8 +315,7 @@ struct RayHit
 };
 
 // Medium identity is separate from material type: two glass objects can have the same material
-// properties but still represent different boundaries in a nested path. This is the first step
-// toward carrying a fixed medium stack through TracePath; existing path behavior is unchanged.
+// properties but still represent different boundaries in a nested path.
 struct MediumIdentity
 {
     int type;
@@ -316,6 +323,20 @@ struct MediumIdentity
     float refractionIndex;
     float opacity;
     float3 absorptionColor;
+};
+
+struct MediumStack
+{
+    MediumIdentity entry0;
+    MediumIdentity entry1;
+    MediumIdentity entry2;
+    MediumIdentity entry3;
+    MediumIdentity entry4;
+    MediumIdentity entry5;
+    MediumIdentity entry6;
+    MediumIdentity entry7;
+    int count;
+    int status;
 };
 
 MediumIdentity CreateAirMedium()
@@ -342,9 +363,122 @@ MediumIdentity CreateHitMedium(RayHit hit)
     return medium;
 }
 
+MediumIdentity CreateWaterMedium()
+{
+    MediumIdentity medium;
+    medium.type = MediumTypeWater;
+    medium.objectIndex = -1;
+    medium.refractionIndex = max(1.0f, _WaterRefraction);
+    medium.opacity = saturate(_WaterOpacity);
+    medium.absorptionColor = saturate(_WaterColor);
+    return medium;
+}
+
 bool IsSameMedium(MediumIdentity left, MediumIdentity right)
 {
     return left.type == right.type && left.objectIndex == right.objectIndex;
+}
+
+bool IsPointUnderWater(float3 position);
+
+MediumStack CreateMediumStack(float3 rayOrigin)
+{
+    MediumStack stack;
+    MediumIdentity air = CreateAirMedium();
+    stack.count = 1;
+    stack.status = 0;
+    stack.entry0 = air;
+    stack.entry1 = air;
+    stack.entry2 = air;
+    stack.entry3 = air;
+    stack.entry4 = air;
+    stack.entry5 = air;
+    stack.entry6 = air;
+    stack.entry7 = air;
+
+    if (IsPointUnderWater(rayOrigin))
+    {
+        stack.entry1 = CreateWaterMedium();
+        stack.count = 2;
+    }
+
+    return stack;
+}
+
+MediumIdentity GetCurrentMedium(MediumStack stack)
+{
+    int index = max(0, stack.count - 1);
+    if (index == 7) return stack.entry7;
+    if (index == 6) return stack.entry6;
+    if (index == 5) return stack.entry5;
+    if (index == 4) return stack.entry4;
+    if (index == 3) return stack.entry3;
+    if (index == 2) return stack.entry2;
+    if (index == 1) return stack.entry1;
+    return stack.entry0;
+}
+
+MediumIdentity GetParentMedium(MediumStack stack)
+{
+    int index = max(0, stack.count - 2);
+    if (index == 6) return stack.entry6;
+    if (index == 5) return stack.entry5;
+    if (index == 4) return stack.entry4;
+    if (index == 3) return stack.entry3;
+    if (index == 2) return stack.entry2;
+    if (index == 1) return stack.entry1;
+    return stack.entry0;
+}
+
+MediumStack PushMedium(MediumStack stack, MediumIdentity medium)
+{
+    if (stack.count >= MediumStackCapacity)
+    {
+        stack.status |= MediumStackStatusOverflow;
+        return stack;
+    }
+
+    if (stack.count == 7) stack.entry7 = medium;
+    else if (stack.count == 6) stack.entry6 = medium;
+    else if (stack.count == 5) stack.entry5 = medium;
+    else if (stack.count == 4) stack.entry4 = medium;
+    else if (stack.count == 3) stack.entry3 = medium;
+    else if (stack.count == 2) stack.entry2 = medium;
+    else stack.entry1 = medium;
+    stack.count++;
+    return stack;
+}
+
+MediumStack PopMatchingMedium(MediumStack stack, MediumIdentity medium)
+{
+    if (stack.count <= 1 || !IsSameMedium(GetCurrentMedium(stack), medium))
+    {
+        stack.status |= MediumStackStatusUnmatchedExit;
+        return stack;
+    }
+
+    stack.count--;
+    return stack;
+}
+
+void ApplyMediumTransition(inout MediumStack stack, RayHit hit, int transition)
+{
+    if (transition == MediumTransitionEnter)
+    {
+        MediumIdentity boundaryMedium = CreateHitMedium(hit);
+        if (IsSameMedium(GetCurrentMedium(stack), boundaryMedium))
+        {
+            stack = PopMatchingMedium(stack, boundaryMedium);
+        }
+        else
+        {
+            stack = PushMedium(stack, boundaryMedium);
+        }
+    }
+    else if (transition == MediumTransitionExit)
+    {
+        stack = PopMatchingMedium(stack, CreateHitMedium(hit));
+    }
 }
 
 float2 GetMediumTransitionIndices(MediumIdentity currentMedium, MediumIdentity parentMedium, RayHit hit, bool entering)
@@ -1934,14 +2068,19 @@ bool ShouldSampleDirectLight(float3 throughput)
     return max(throughput.x, max(throughput.y, throughput.z)) > MinDirectLightThroughput;
 }
 
-void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int remainingBounces, out int bouncesConsumed)
+void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int remainingBounces, out int bouncesConsumed, out int mediumTransition)
 {
     bouncesConsumed = 1;
+    mediumTransition = MediumTransitionNone;
 
     if (dot(sourceRay.direction, hit.normal) > 0.0f)
     {
         float3 exitDirection;
-        if (!RefractSnell(sourceRay.direction, hit.refraction, 1.0f, -hit.normal, exitDirection))
+        if (RefractSnell(sourceRay.direction, hit.refraction, 1.0f, -hit.normal, exitDirection))
+        {
+            mediumTransition = MediumTransitionExit;
+        }
+        else
         {
             exitDirection = reflect(sourceRay.direction, hit.normal);
         }
@@ -1969,6 +2108,7 @@ void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int r
     {
         hit.distanceThroughOpacity = interiorHit.distance;
         ray.origin = insideRay.origin;
+        mediumTransition = MediumTransitionEnter;
         return;
     }
 
@@ -1977,6 +2117,7 @@ void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int r
         hit.distanceThroughOpacity = exitDistance;
         ray.origin = insideRay.origin;
         ray.direction = insideRay.direction;
+        mediumTransition = MediumTransitionEnter;
         return;
     }
 
@@ -1992,14 +2133,16 @@ void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int r
     if (!RefractSnell(ray.direction, hit.refraction, 1.0f, -exitPointNormal, exitDirection))
     {
         exitDirection = reflect(ray.direction, exitPointNormal);
+        mediumTransition = MediumTransitionEnter;
     }
 
     ray.direction = exitDirection;
 }
 
-void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int remainingBounces, out int bouncesConsumed)
+void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int remainingBounces, out int bouncesConsumed, out int mediumTransition)
 {
     bouncesConsumed = 1;
+    mediumTransition = MediumTransitionNone;
 
     float3 normal = hit.normal;
     float targetRefraction = max(1.0f, hit.refraction);
@@ -2046,6 +2189,7 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int
             hit.distanceThroughOpacity = max(distanceThroughMedium, ThinTransparentSurfaceDistance);
             ray.direction = insideRay.direction;
             ray.origin = insideRay.origin;
+            mediumTransition = MediumTransitionEnter;
             return;
         }
 
@@ -2061,6 +2205,7 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int
             hit.distanceThroughOpacity = distanceThroughMedium + interiorHit.distance;
             ray.direction = insideRay.direction;
             ray.origin = insideRay.origin;
+            mediumTransition = MediumTransitionEnter;
             return;
         }
 
@@ -2083,9 +2228,10 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int
     hit.distanceThroughOpacity = max(distanceThroughMedium, ThinTransparentSurfaceDistance);
     ray.direction = insideRay.direction;
     ray.origin = insideRay.origin;
+    mediumTransition = MediumTransitionEnter;
 }
 
-void ApplyWaterTransmission(inout Ray ray, Ray sourceRay, RayHit hit)
+int ApplyWaterTransmission(inout Ray ray, Ray sourceRay, RayHit hit)
 {
     bool enteringWater = sourceRay.origin.y >= GetWaterWaveHeight(sourceRay.origin.xz);
     float sourceRefraction = enteringWater ? 1.0f : max(1.0f, hit.refraction);
@@ -2093,10 +2239,12 @@ void ApplyWaterTransmission(inout Ray ray, Ray sourceRay, RayHit hit)
     float3 normal = enteringWater ? hit.normal : -hit.normal;
     float3 transmissionDirection;
 
-    ray.direction = RefractSnell(sourceRay.direction, sourceRefraction, targetRefraction, normal, transmissionDirection)
-        ? transmissionDirection
-        : reflect(sourceRay.direction, hit.normal);
+    bool transmitted = RefractSnell(sourceRay.direction, sourceRefraction, targetRefraction, normal, transmissionDirection);
+    ray.direction = transmitted ? transmissionDirection : reflect(sourceRay.direction, hit.normal);
     ray.origin = hit.position + ray.direction * 0.01f;
+    return transmitted
+        ? (enteringWater ? MediumTransitionEnter : MediumTransitionExit)
+        : MediumTransitionNone;
 }
 
 ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, int remainingBounces, inout uint rngState)
@@ -2112,12 +2260,12 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
         {
             scatteredRay.direction = reflect(sourceRay.direction, roughNormal);
             scatteredRay.origin = hit.position + scatteredRay.direction * 0.01f;
-            return CreateScatterResult(scatteredRay, lerp(float3(1.0f, 1.0f, 1.0f), albedo, 0.08f), 1);
+            return CreateScatterResult(scatteredRay, lerp(float3(1.0f, 1.0f, 1.0f), albedo, 0.08f), 1, MediumTransitionNone);
         }
 
-        ApplyWaterTransmission(scatteredRay, sourceRay, hit);
+        int mediumTransition = ApplyWaterTransmission(scatteredRay, sourceRay, hit);
         float3 tint = lerp(float3(1.0f, 1.0f, 1.0f), albedo, saturate(1.0f - hit.opacity));
-        return CreateScatterResult(scatteredRay, tint * GetTransmissionAmount(hit), 1);
+        return CreateScatterResult(scatteredRay, tint * GetTransmissionAmount(hit), 1, mediumTransition);
     }
 
     if (IsGlassMaterial(hit))
@@ -2129,23 +2277,24 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
         if (rand(rngState) < transmissionProbability)
         {
             int bouncesConsumed = 1;
+            int mediumTransition = MediumTransitionNone;
             if (hit.obj_radius > 0.0f)
             {
-                ApplySphereRefraction(scatteredRay, sourceRay, hit, remainingBounces, bouncesConsumed);
+                ApplySphereRefraction(scatteredRay, sourceRay, hit, remainingBounces, bouncesConsumed, mediumTransition);
             }
             else
             {
-                ApplyPlanarTransmission(scatteredRay, sourceRay, hit, remainingBounces, bouncesConsumed);
+                ApplyPlanarTransmission(scatteredRay, sourceRay, hit, remainingBounces, bouncesConsumed, mediumTransition);
             }
 
             float3 tint = GetGlassAbsorptionTransmittance(hit, albedo);
-            return CreateScatterResult(scatteredRay, tint, bouncesConsumed);
+            return CreateScatterResult(scatteredRay, tint, bouncesConsumed, mediumTransition);
         }
 
         scatteredRay.direction = reflect(sourceRay.direction, roughNormal);
         scatteredRay.origin = hit.position + scatteredRay.direction * 0.001f;
         float3 reflectionTint = lerp(float3(1.0f, 1.0f, 1.0f), albedo, hit.opacity);
-        return CreateScatterResult(scatteredRay, reflectionTint, 1);
+        return CreateScatterResult(scatteredRay, reflectionTint, 1, MediumTransitionNone);
     }
 
     if (hit.materialType == MaterialDiffuse)
@@ -2155,7 +2304,7 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
             : GetDiffuseScatterDirection(hit.normal, rngState);
     }
 
-    return CreateScatterResult(scatteredRay, albedo, 1);
+    return CreateScatterResult(scatteredRay, albedo, 1, MediumTransitionNone);
 }
 
 float3 GetDirectLight(Ray ray, RayHit hit, bool softShadows, inout uint rngState)
@@ -2185,6 +2334,7 @@ float3 TracePath(Ray ray, inout uint rngState)
 {
     float3 radiance = float3(0.0f, 0.0f, 0.0f);
     float3 throughput = float3(1.0f, 1.0f, 1.0f);
+    MediumStack mediumStack = CreateMediumStack(ray.origin);
 
     [loop]
     for (int bounce = 0; bounce < _NumBounces; bounce++)
@@ -2223,6 +2373,7 @@ float3 TracePath(Ray ray, inout uint rngState)
 
         int remainingBounces = _NumBounces - bounce;
         ScatterResult scatter = CreateScatteredRay(ray, hit, bounce, remainingBounces, rngState);
+        ApplyMediumTransition(mediumStack, hit, scatter.mediumTransition);
         ray = scatter.ray;
         throughput *= scatter.attenuation;
         bounce += scatter.bouncesConsumed - 1;
@@ -2327,6 +2478,7 @@ float3 GetDebugRenderColor(Ray ray, inout uint rngState)
     {
         float3 throughput = float3(1.0f, 1.0f, 1.0f);
         int completedBounces = 0;
+        MediumStack mediumStack = CreateMediumStack(ray.origin);
 
         [loop]
         for (int bounce = 0; bounce < _NumBounces; bounce++)
@@ -2339,6 +2491,7 @@ float3 GetDebugRenderColor(Ray ray, inout uint rngState)
 
             int remainingBounces = _NumBounces - bounce;
             ScatterResult scatter = CreateScatteredRay(ray, hit, bounce, remainingBounces, rngState);
+            ApplyMediumTransition(mediumStack, hit, scatter.mediumTransition);
             ray = scatter.ray;
             throughput *= scatter.attenuation;
 
@@ -2429,6 +2582,33 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     RegressionResults[5] = float4(GetMediumTransitionIndices(air, air, waterHit, true), water.type, water.objectIndex);
     RegressionResults[6] = float4(GetMediumTransitionIndices(water, air, glassHit, true), glass.type, glass.objectIndex);
     RegressionResults[7] = float4(GetMediumTransitionIndices(glass, water, glassHit, false), IsSameMedium(glass, CreateHitMedium(glassHit)) ? 1.0f : 0.0f, 1.0f);
+
+    MediumStack nestedStack = CreateMediumStack(float3(0.0f, 2.0f, 0.0f));
+    ApplyMediumTransition(nestedStack, waterHit, MediumTransitionEnter);
+    ApplyMediumTransition(nestedStack, glassHit, MediumTransitionEnter);
+    RegressionResults[8] = float4(GetCurrentMedium(nestedStack).refractionIndex, GetParentMedium(nestedStack).refractionIndex, nestedStack.count, nestedStack.status);
+
+    ApplyMediumTransition(nestedStack, glassHit, MediumTransitionExit);
+    RegressionResults[9] = float4(GetCurrentMedium(nestedStack).refractionIndex, GetParentMedium(nestedStack).refractionIndex, nestedStack.count, nestedStack.status);
+    ApplyMediumTransition(nestedStack, waterHit, MediumTransitionExit);
+    RegressionResults[10] = float4(GetCurrentMedium(nestedStack).refractionIndex, GetCurrentMedium(nestedStack).type, nestedStack.count, nestedStack.status);
+
+    MediumStack mismatchStack = CreateMediumStack(float3(0.0f, 2.0f, 0.0f));
+    ApplyMediumTransition(mismatchStack, waterHit, MediumTransitionEnter);
+    ApplyMediumTransition(mismatchStack, glassHit, MediumTransitionExit);
+    RegressionResults[11] = float4(GetCurrentMedium(mismatchStack).type, mismatchStack.count, mismatchStack.status, IsSameMedium(GetCurrentMedium(mismatchStack), water) ? 1.0f : 0.0f);
+
+    MediumStack overflowStack = CreateMediumStack(float3(0.0f, 2.0f, 0.0f));
+    int stackEntry;
+    [unroll]
+    for (stackEntry = 0; stackEntry < MediumStackCapacity; stackEntry++)
+    {
+        overflowStack = PushMedium(overflowStack, glass);
+    }
+    RegressionResults[12] = float4(overflowStack.count, overflowStack.status, GetCurrentMedium(overflowStack).type, GetParentMedium(overflowStack).type);
+
+    MediumStack underwaterStack = CreateMediumStack(float3(0.0f, _WaterCenter.y - 1.0f, 0.0f));
+    RegressionResults[13] = float4(GetCurrentMedium(underwaterStack).type, GetCurrentMedium(underwaterStack).refractionIndex, underwaterStack.count, underwaterStack.status);
 }
 
 [numthreads(8,8,1)]
