@@ -326,7 +326,7 @@ public static class RayTracingBenchmarkSceneGenerator
             return;
         }
 
-        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 0.95f, -14.0f), new Vector3(1.5f, 0.0f, 0.0f), passes: 4, bounces: 5, shadowQuality: 1);
+        var context = CreateBaseScene(sceneName, new Vector3(-6.13f, 1.8f, 12.0f), new Vector3(14.6f, 61.861f, 0.0f), passes: 3, bounces: 8, shadowQuality: 1);
         context.Manager.cameraFocalDistance = 18.0f;
         context.Manager.groundSmoothness = 0.72f;
         context.Manager.lightFalloffScale = 0.021f;
@@ -336,7 +336,7 @@ public static class RayTracingBenchmarkSceneGenerator
         context.Manager.enableWater = true;
         context.Manager.waterCenter = new Vector3(0.0f, 0.85f, 5.0f);
         context.Manager.waterSize = new Vector2(32.0f, 36.0f);
-        context.Manager.waterColor = new Color32(36, 110, 132, 255);
+        context.Manager.waterColor = new Color32(215, 255, 255, 255);
         context.Manager.waterSmoothness = 0.97f;
         context.Manager.waterOpacity = 0.08f;
         context.Manager.waterAbsorptionStrength = 0.55f;
@@ -352,24 +352,24 @@ public static class RayTracingBenchmarkSceneGenerator
 
         AddRayMesh(context.Root, "Sloped Shoreline Bed", CreateWaterShorelineBedMesh("Sloped Shoreline Bed", 32.0f, 36.0f, 36, 42), new Vector3(0.0f, 0.0f, 5.0f), Vector3.zero, Vector3.one, new Color32(88, 78, 48, 255), RayMaterial.MaterialType.Diffuse, 0.38f);
 
-        for (int i = 0; i < 24; i++)
+        for (var i = 0; i < 24; i++)
         {
-            float angle = i * Mathf.PI * 2.0f / 24.0f;
-            float radiusX = 13.5f + (i % 3) * 0.65f;
-            float radiusZ = 15.0f + (i % 4) * 0.55f;
-            float x = Mathf.Cos(angle) * radiusX;
-            float z = 5.0f + Mathf.Sin(angle) * radiusZ;
-            float stoneRadius = 0.25f + 0.18f * Mathf.PerlinNoise(i * 0.37f, 2.1f);
+            var angle = i * Mathf.PI * 2.0f / 24.0f;
+            var radiusX = 13.5f + (i % 3) * 0.65f;
+            var radiusZ = 15.0f + (i % 4) * 0.55f;
+            var x = Mathf.Cos(angle) * radiusX;
+            var z = 5.0f + Mathf.Sin(angle) * radiusZ;
+            var stoneRadius = 0.25f + 0.18f * Mathf.PerlinNoise(i * 0.37f, 2.1f);
             AddSphere(context.Root, "Shore Rock", new Vector3(x, 0.18f + stoneRadius, z), stoneRadius, new Color32(98, 96, 88, 255), RayMaterial.MaterialType.Diffuse, 0.42f);
         }
 
-        for (int i = 0; i < 18; i++)
+        for (var i = 0; i < 18; i++)
         {
-            float x = -11.0f + i * 1.3f;
-            float localZ = -3.0f + i * 1.1f + Mathf.Sin(i * 1.7f) * 1.8f;
-            float y = GetWaterBenchmarkBedHeight(x, localZ) + 0.18f + (i % 4) * 0.04f;
-            var color = Color.HSVToRGB(0.08f + i * 0.012f, 0.45f, 0.55f);
-            AddSphere(context.Root, "Depth Gradient Pebble", new Vector3(x, y, localZ + 5.0f), 0.25f + (i % 3) * 0.08f, color, RayMaterial.MaterialType.Diffuse, 0.25f);
+            var x = -11.0f + i * 1.3f;
+            var localZ = -3.0f + i * 1.1f + Mathf.Sin(i * 1.7f) * 1.8f;
+            var y = GetWaterBenchmarkBedHeight(x, localZ) + 0.18f + (i % 4) * 0.04f;
+            var color = Color.HSVToRGB(0.08f + i * 0.012f, 0.65f, 0.55f);
+            AddSphere(context.Root, "Depth Gradient Pebble", new Vector3(x, y, localZ + 5.0f), 0.25f + (i % 3) * 0.08f, color, RayMaterial.MaterialType.Glass, 1.0f, 0.3f, 1.25f);
         }
 
         AddSphere(context.Root, "Half Submerged Red Marker", new Vector3(-3.2f, 0.95f, 1.2f), 0.62f, new Color32(220, 65, 45, 255), RayMaterial.MaterialType.Metal, 0.72f);
@@ -377,9 +377,9 @@ public static class RayTracingBenchmarkSceneGenerator
         AddSphere(context.Root, "Deep Yellow Marker", new Vector3(-2.2f, GetWaterBenchmarkBedHeight(-2.2f, 10.5f) + 0.55f, 15.5f), 0.55f, new Color32(245, 210, 70, 255), RayMaterial.MaterialType.Diffuse, 0.35f);
         AddSphere(context.Root, "Far Reflection Sphere", new Vector3(5.4f, 1.25f, 13.0f), 0.95f, new Color32(230, 222, 196, 255), RayMaterial.MaterialType.Metal, 0.86f);
 
-        AddPrimitiveMesh(context.Root, "Left Dock Post", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-5.2f, 1.2f, -1.5f), Vector3.zero, new Vector3(0.28f, 2.4f, 0.28f), new Color32(96, 62, 34, 255), RayMaterial.MaterialType.Diffuse, 0.38f, 1.0f);
-        AddPrimitiveMesh(context.Root, "Right Dock Post", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-3.8f, 1.2f, -1.5f), Vector3.zero, new Vector3(0.28f, 2.4f, 0.28f), new Color32(96, 62, 34, 255), RayMaterial.MaterialType.Diffuse, 0.38f, 1.0f);
-        AddPrimitiveMesh(context.Root, "Dock Plank", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-4.5f, 1.55f, -1.5f), Vector3.zero, new Vector3(2.2f, 0.18f, 1.0f), new Color32(120, 78, 42, 255), RayMaterial.MaterialType.Diffuse, 0.45f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Left Dock Post", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-5.2f, 1.2f, 14.5f), Vector3.zero, new Vector3(0.28f, 2.4f, 0.28f), new Color32(96, 62, 34, 255), RayMaterial.MaterialType.Diffuse, 0.38f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Right Dock Post", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-3.8f, 1.2f, 14.5f), Vector3.zero, new Vector3(0.28f, 2.4f, 0.28f), new Color32(96, 62, 34, 255), RayMaterial.MaterialType.Diffuse, 0.38f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Dock Plank", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-4.5f, 1.55f, 14.5f), Vector3.zero, new Vector3(2.2f, 0.18f, 1.0f), new Color32(120, 78, 42, 255), RayMaterial.MaterialType.Diffuse, 0.45f, 1.0f);
 
         Save(context.Scene, sceneName);
     }

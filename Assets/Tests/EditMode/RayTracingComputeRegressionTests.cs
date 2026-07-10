@@ -25,7 +25,7 @@ namespace GPURayTracing.Tests
             }
 
             int kernel = shader.FindKernel("CSRegressionProbe");
-            var buffer = new ComputeBuffer(14, sizeof(float) * 4);
+            var buffer = new ComputeBuffer(18, sizeof(float) * 4);
             try
             {
                 shader.SetInt("_WaterEnabled", 1);
@@ -33,12 +33,13 @@ namespace GPURayTracing.Tests
                 shader.SetVector("_WaterSize", new Vector4(10.0f, 10.0f, 0.0f, 0.0f));
                 shader.SetVector("_WaterColor", new Vector4(0.17f, 0.45f, 0.52f, 0.0f));
                 shader.SetFloat("_WaterOpacity", 0.18f);
+                shader.SetFloat("_WaterAbsorptionStrength", 0.22f);
                 shader.SetFloat("_WaterRefraction", 2.0f);
                 shader.SetFloat("_WaterWaveAmplitude", 0.0f);
                 shader.SetBuffer(kernel, "RegressionResults", buffer);
                 shader.Dispatch(kernel, 1, 1, 1);
 
-                var results = new Vector4[14];
+                var results = new Vector4[18];
                 buffer.GetData(results);
 
                 AssertVector(results[0], new Vector4(0.70710677f, 0.70710677f, 0.0f, 1.0f), "reflection");
@@ -55,6 +56,10 @@ namespace GPURayTracing.Tests
                 AssertVector(results[11], new Vector4(3.0f, 2.0f, 2.0f, 1.0f), "unmatched exit preserves current medium");
                 AssertVector(results[12], new Vector4(8.0f, 1.0f, 1.0f, 1.0f), "stack overflow is detectable");
                 AssertVector(results[13], new Vector4(3.0f, 2.0f, 2.0f, 0.0f), "underwater path initialization");
+                AssertVector(results[14], new Vector4(5.0f, 1.0f, 2.0f, 5.0f), "finite water segment distances", 0.001f);
+                AssertVector(results[15], new Vector4(0.6950495f, 0.8005689f, 0.9084640f, 1.0f), "glass active-medium segment", 0.0002f);
+                AssertVector(results[16], new Vector4(0.6940578f, 0.7850562f, 0.8096121f, 1.0f), "water active-medium segment", 0.0002f);
+                AssertVector(results[17], new Vector4(1.0f, 1.0f, 1.0f, 0.0f), "air segment is neutral");
             }
             finally
             {

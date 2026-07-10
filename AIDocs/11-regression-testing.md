@@ -13,7 +13,7 @@ The project uses EditMode tests under `Assets/Tests/EditMode/` to make rendering
 - Current Schlick Fresnel values at normal, 45-degree, and grazing incidence.
 - Current distance/color/opacity glass absorption approximation.
 - A GPU `CSRegressionProbe` kernel in the production compute shader that calls the same reflection, `RefractSnell()`, Fresnel formula, and `GetAbsorptionTransmittance()` behavior used by rendering. This catches divergence between CPU expectations and shader execution.
-- Deterministic `32x32` final-color image signatures for a reflective metal sphere, a refractive glass sphere with geometry behind it, calm finite water with submerged geometry, nested water/sphere-glass, and a camera starting underwater. Each baseline stores the image average and eight fixed pixel probes after tone mapping.
+- Deterministic `32x32` final-color image signatures for a reflective metal sphere, a refractive glass sphere with geometry behind it, closed mesh glass through production triangle/mesh/BVH buffers, calm finite water with submerged geometry, nested water/sphere-glass, and a camera starting underwater. Each baseline stores the image average and eight fixed pixel probes after tone mapping.
 - Medium-identity and stack probes for air -> water -> sphere glass -> water -> air, parent lookup, matching exits, overflow, unmatched exits, and underwater initialization.
 
 ## Running Tests
@@ -54,7 +54,7 @@ The current fixtures cover spheres and procedural water. Mesh glass is still lis
 
 `MediumIdentity` in `RayTracingCompute.compute` records medium type, object identity, IOR, opacity, and absorption color. `TracePath()` carries a fixed-capacity stack with implicit air and initializes water when a camera ray starts underwater. Transmission updates the stack while reflection and TIR preserve it. Sphere/mesh helpers that internally cross both faces leave the net stack unchanged; paths that stop inside a volume retain that medium for the next production bounce.
 
-Stack overflow and unmatched exits set explicit status bits and preserve valid existing state. The next implementation step is using the carried current medium for per-segment absorption, followed by source/target IOR selection for refraction.
+Stack overflow and unmatched exits set explicit status bits and preserve valid existing state. Per-segment probes cover glass/water attenuation, neutral air, finite water side and surface exits, clipping at the next hit, and finite-medium sky misses. The next implementation step is source/target IOR selection for refraction.
 
 ## Next Coverage
 

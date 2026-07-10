@@ -305,7 +305,6 @@ struct RayHit
     float distance;
     float smoothness;
     float opacity;
-    float distanceThroughOpacity;
     float refraction;
     int materialType;
     int meshIndex;
@@ -501,7 +500,6 @@ RayHit CreateRayHit()
     hit.distance = 1.#INF;
     hit.smoothness = 0.0f;
     hit.opacity = 1.0f;
-    hit.distanceThroughOpacity = 0.0f;
     hit.refraction = 1.0f;
     hit.materialType = MaterialDiffuse;
     hit.meshIndex = -1;
@@ -528,7 +526,6 @@ void IntersectGroundPlane(Ray ray, inout RayHit bestHit)
         bestHit.obj_position = float3(0.0f, 0.0f, 0.0f);
         bestHit.obj_radius = 0.0f;
         bestHit.opacity = 1.0f;
-        bestHit.distanceThroughOpacity = 0.0f;
         bestHit.refraction = 1.0f;
         bestHit.materialType = MaterialDiffuse;
         bestHit.meshIndex = -1;
@@ -593,6 +590,46 @@ float3 GetWaterAbsorptionTransmittance(float distanceInWater)
 
     float3 absorption = (1.0f - saturate(_WaterColor)) * strength;
     return exp(-absorption * distanceInWater);
+}
+
+void IntersectWater(Ray ray, inout RayHit bestHit);
+
+float GetWaterDistanceAlongRay(Ray ray, float maxDistance)
+{
+    if (!IsPointUnderWater(ray.origin))
+    {
+        return 0.0f;
+    }
+
+    float2 halfSize = max(_WaterSize, float2(0.01f, 0.01f)) * 0.5f;
+    float2 boundsMin = _WaterCenter.xz - halfSize;
+    float2 boundsMax = _WaterCenter.xz + halfSize;
+    float sideExitDistance = 1.#INF;
+
+    if (ray.direction.x > 0.000001f)
+    {
+        sideExitDistance = min(sideExitDistance, (boundsMax.x - ray.origin.x) / ray.direction.x);
+    }
+    else if (ray.direction.x < -0.000001f)
+    {
+        sideExitDistance = min(sideExitDistance, (boundsMin.x - ray.origin.x) / ray.direction.x);
+    }
+
+    if (ray.direction.z > 0.000001f)
+    {
+        sideExitDistance = min(sideExitDistance, (boundsMax.y - ray.origin.z) / ray.direction.z);
+    }
+    else if (ray.direction.z < -0.000001f)
+    {
+        sideExitDistance = min(sideExitDistance, (boundsMin.y - ray.origin.z) / ray.direction.z);
+    }
+
+    RayHit surfaceExit = CreateRayHit();
+    IntersectWater(ray, surfaceExit);
+    float surfaceExitDistance = surfaceExit.distance;
+    float volumeExitDistance = min(sideExitDistance, surfaceExitDistance);
+    float segmentEndDistance = maxDistance < 1.#INF ? max(0.0f, maxDistance) : volumeExitDistance;
+    return volumeExitDistance < 1.#INF ? max(0.0f, min(segmentEndDistance, volumeExitDistance)) : 0.0f;
 }
 
 float EstimateWaterDistanceAlongSegment(float3 startPosition, float3 endPosition)
@@ -751,7 +788,6 @@ void IntersectWater(Ray ray, inout RayHit bestHit)
     bestHit.distance = hitT;
     bestHit.smoothness = _WaterSmoothness;
     bestHit.opacity = saturate(_WaterOpacity);
-    bestHit.distanceThroughOpacity = 0.0f;
     bestHit.refraction = max(1.0f, _WaterRefraction);
     bestHit.materialType = MaterialWater;
     bestHit.meshIndex = -1;
@@ -796,7 +832,6 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere, int objectInd
         bestHit.distance = t;
         bestHit.smoothness = sphere.smoothness;
         bestHit.opacity = sphere.opacity;
-        bestHit.distanceThroughOpacity = 0.0f;
         bestHit.refraction = sphere.refraction;
         bestHit.materialType = sphere.materialType;
         bestHit.meshIndex = -1;
@@ -880,6 +915,54 @@ float3 GetAbsorptionTransmittance(float3 filterColor, float opacity, float dista
     return saturate(spectralFilter * neutralLoss);
 }
 
+float GetMediumSegmentDistance(Ray ray, float hitDistance, MediumIdentity medium)
+{
+    if (medium.type == MediumTypeAir)
+    {
+        return 0.0f;
+    }
+
+    if (medium.type == MediumTypeWater)
+    {
+        return GetWaterDistanceAlongRay(ray, hitDistance);
+    }
+
+    return hitDistance < 1.#INF ? max(0.0f, hitDistance) : 0.0f;
+}
+
+float3 GetMediumSegmentTransmittance(MediumIdentity medium, float distanceThroughMedium)
+{
+    if (medium.type == MediumTypeAir || distanceThroughMedium <= 0.0f)
+    {
+        return float3(1.0f, 1.0f, 1.0f);
+    }
+
+    return medium.type == MediumTypeWater
+        ? GetWaterAbsorptionTransmittance(distanceThroughMedium)
+        : GetAbsorptionTransmittance(medium.absorptionColor, medium.opacity, distanceThroughMedium);
+}
+
+float3 GetActiveMediumSegmentTransmittance(Ray ray, float hitDistance, MediumStack stack)
+{
+    MediumIdentity medium = GetCurrentMedium(stack);
+    return GetMediumSegmentTransmittance(medium, GetMediumSegmentDistance(ray, hitDistance, medium));
+}
+
+void ApplyFiniteMediumExitAfterSegment(inout MediumStack stack, Ray ray, RayHit hit)
+{
+    MediumIdentity medium = GetCurrentMedium(stack);
+    if (medium.type != MediumTypeWater || hit.materialType == MaterialWater)
+    {
+        return;
+    }
+
+    float waterDistance = GetWaterDistanceAlongRay(ray, hit.distance);
+    if (waterDistance + 0.001f < hit.distance)
+    {
+        stack = PopMatchingMedium(stack, medium);
+    }
+}
+
 float3 GetTransparentShadowTransmittance(RayHit hit, float distanceThroughMedium)
 {
     return GetAbsorptionTransmittance(hit.color, hit.opacity, distanceThroughMedium) * saturate(1.0f - hit.opacity);
@@ -949,7 +1032,6 @@ void IntersectTriangle(Ray ray, inout RayHit bestHit, MeshTriangle meshTriangle)
         bestHit.distance = hitDistance;
         bestHit.smoothness = meshTriangle.smoothness;
         bestHit.opacity = meshTriangle.opacity;
-        bestHit.distanceThroughOpacity = 0.0f;
         bestHit.refraction = meshTriangle.refraction;
         bestHit.materialType = meshTriangle.materialType;
         bestHit.meshIndex = meshTriangle.meshIndex;
@@ -2018,14 +2100,6 @@ float3 GetTerminalHitColor(Ray ray, RayHit hit)
     return float3(0.0f, 0.0f, 0.0f);
 }
 
-float3 GetGlassAbsorptionTransmittance(RayHit hit, float3 albedo)
-{
-    float distanceThroughMedium = hit.distanceThroughOpacity > 0.0f
-        ? hit.distanceThroughOpacity
-        : ThinTransparentSurfaceDistance;
-    return GetAbsorptionTransmittance(albedo, hit.opacity, distanceThroughMedium);
-}
-
 float3 GetEmission(RayHit hit)
 {
     return hit.emission;
@@ -2068,10 +2142,11 @@ bool ShouldSampleDirectLight(float3 throughput)
     return max(throughput.x, max(throughput.y, throughput.z)) > MinDirectLightThroughput;
 }
 
-void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int remainingBounces, out int bouncesConsumed, out int mediumTransition)
+void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int remainingBounces, out int bouncesConsumed, out int mediumTransition, out float mediumDistanceTraveled)
 {
     bouncesConsumed = 1;
     mediumTransition = MediumTransitionNone;
+    mediumDistanceTraveled = 0.0f;
 
     if (dot(sourceRay.direction, hit.normal) > 0.0f)
     {
@@ -2087,7 +2162,6 @@ void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int r
 
         ray.direction = exitDirection;
         ray.origin = hit.position + (ray.direction * 0.001f);
-        hit.distanceThroughOpacity = hit.distance;
         return;
     }
 
@@ -2106,7 +2180,6 @@ void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int r
     RayHit interiorHit = GetNearestIntersectionBounded(insideRay, exitDistance, -2, hit.objectIndex);
     if (!DidHitSky(interiorHit))
     {
-        hit.distanceThroughOpacity = interiorHit.distance;
         ray.origin = insideRay.origin;
         mediumTransition = MediumTransitionEnter;
         return;
@@ -2114,7 +2187,6 @@ void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int r
 
     if (remainingBounces <= bouncesConsumed)
     {
-        hit.distanceThroughOpacity = exitDistance;
         ray.origin = insideRay.origin;
         ray.direction = insideRay.direction;
         mediumTransition = MediumTransitionEnter;
@@ -2126,7 +2198,7 @@ void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int r
     ray.origin += offset;
     float3 exitPointNormal = normalize(ray.origin - hit.obj_position);
 
-    hit.distanceThroughOpacity = length(offset);
+    mediumDistanceTraveled = length(offset);
     bouncesConsumed++;
 
     float3 exitDirection;
@@ -2139,10 +2211,11 @@ void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int r
     ray.direction = exitDirection;
 }
 
-void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int remainingBounces, out int bouncesConsumed, out int mediumTransition)
+void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int remainingBounces, out int bouncesConsumed, out int mediumTransition, out float mediumDistanceTraveled)
 {
     bouncesConsumed = 1;
     mediumTransition = MediumTransitionNone;
+    mediumDistanceTraveled = 0.0f;
 
     float3 normal = hit.normal;
     float targetRefraction = max(1.0f, hit.refraction);
@@ -2186,10 +2259,9 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int
 
         if (exitDistance >= 1.#INF)
         {
-            hit.distanceThroughOpacity = max(distanceThroughMedium, ThinTransparentSurfaceDistance);
+            mediumDistanceTraveled = ThinTransparentSurfaceDistance;
             ray.direction = insideRay.direction;
             ray.origin = insideRay.origin;
-            mediumTransition = MediumTransitionEnter;
             return;
         }
 
@@ -2202,7 +2274,7 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int
         RayHit interiorHit = GetNearestIntersectionBounded(insideRay, exitDistance, hit.meshIndex, -1);
         if (!DidHitSky(interiorHit))
         {
-            hit.distanceThroughOpacity = distanceThroughMedium + interiorHit.distance;
+            mediumDistanceTraveled = distanceThroughMedium;
             ray.direction = insideRay.direction;
             ray.origin = insideRay.origin;
             mediumTransition = MediumTransitionEnter;
@@ -2215,7 +2287,7 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int
         float3 exitDirection;
         if (RefractSnell(insideRay.direction, targetRefraction, 1.0f, -exitNormal, exitDirection))
         {
-            hit.distanceThroughOpacity = distanceThroughMedium;
+            mediumDistanceTraveled = distanceThroughMedium;
             ray.direction = exitDirection;
             ray.origin = exitPoint + (ray.direction * 0.001f);
             return;
@@ -2225,7 +2297,7 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int
         insideRay = CreateRay(exitPoint + reflectedDirection * 0.001f, reflectedDirection);
     }
 
-    hit.distanceThroughOpacity = max(distanceThroughMedium, ThinTransparentSurfaceDistance);
+    mediumDistanceTraveled = distanceThroughMedium;
     ray.direction = insideRay.direction;
     ray.origin = insideRay.origin;
     mediumTransition = MediumTransitionEnter;
@@ -2278,16 +2350,17 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
         {
             int bouncesConsumed = 1;
             int mediumTransition = MediumTransitionNone;
+            float mediumDistanceTraveled = 0.0f;
             if (hit.obj_radius > 0.0f)
             {
-                ApplySphereRefraction(scatteredRay, sourceRay, hit, remainingBounces, bouncesConsumed, mediumTransition);
+                ApplySphereRefraction(scatteredRay, sourceRay, hit, remainingBounces, bouncesConsumed, mediumTransition, mediumDistanceTraveled);
             }
             else
             {
-                ApplyPlanarTransmission(scatteredRay, sourceRay, hit, remainingBounces, bouncesConsumed, mediumTransition);
+                ApplyPlanarTransmission(scatteredRay, sourceRay, hit, remainingBounces, bouncesConsumed, mediumTransition, mediumDistanceTraveled);
             }
 
-            float3 tint = GetGlassAbsorptionTransmittance(hit, albedo);
+            float3 tint = GetMediumSegmentTransmittance(CreateHitMedium(hit), mediumDistanceTraveled);
             return CreateScatterResult(scatteredRay, tint, bouncesConsumed, mediumTransition);
         }
 
@@ -2339,17 +2412,14 @@ float3 TracePath(Ray ray, inout uint rngState)
     [loop]
     for (int bounce = 0; bounce < _NumBounces; bounce++)
     {
-        bool rayStartedUnderWater = IsPointUnderWater(ray.origin);
         RayHit hit = GetNearestIntersection(ray);
 
-        if (rayStartedUnderWater)
+        throughput *= GetActiveMediumSegmentTransmittance(ray, hit.distance, mediumStack);
+        if (!HasPathEnergy(throughput))
         {
-            throughput *= GetWaterAbsorptionTransmittance(hit.distance);
-            if (!HasPathEnergy(throughput))
-            {
-                break;
-            }
+            break;
         }
+        ApplyFiniteMediumExitAfterSegment(mediumStack, ray, hit);
 
         if (DidHitSky(hit))
         {
@@ -2484,6 +2554,13 @@ float3 GetDebugRenderColor(Ray ray, inout uint rngState)
         for (int bounce = 0; bounce < _NumBounces; bounce++)
         {
             hit = GetNearestIntersection(ray);
+            throughput *= GetActiveMediumSegmentTransmittance(ray, hit.distance, mediumStack);
+            if (!HasPathEnergy(throughput))
+            {
+                break;
+            }
+            ApplyFiniteMediumExitAfterSegment(mediumStack, ray, hit);
+
             if (DidHitSky(hit) || DidHitLight(hit))
             {
                 break;
@@ -2609,6 +2686,18 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
 
     MediumStack underwaterStack = CreateMediumStack(float3(0.0f, _WaterCenter.y - 1.0f, 0.0f));
     RegressionResults[13] = float4(GetCurrentMedium(underwaterStack).type, GetCurrentMedium(underwaterStack).refractionIndex, underwaterStack.count, underwaterStack.status);
+
+    float3 waterOrigin = float3(_WaterCenter.x, _WaterCenter.y - 1.0f, _WaterCenter.z);
+    float waterSideDistance = GetWaterDistanceAlongRay(CreateRay(waterOrigin, float3(1.0f, 0.0f, 0.0f)), 1.#INF);
+    float waterSurfaceDistance = GetWaterDistanceAlongRay(CreateRay(waterOrigin, float3(0.0f, 1.0f, 0.0f)), 1.#INF);
+    float waterClippedDistance = GetWaterDistanceAlongRay(CreateRay(waterOrigin, float3(1.0f, 0.0f, 0.0f)), 2.0f);
+    RegressionResults[14] = float4(waterSideDistance, waterSurfaceDistance, waterClippedDistance, GetMediumSegmentDistance(CreateRay(waterOrigin, float3(1.0f, 0.0f, 0.0f)), 1.#INF, GetCurrentMedium(underwaterStack)));
+
+    float3 glassSegment = GetMediumSegmentTransmittance(glass, 2.0f);
+    float3 waterSegment = GetMediumSegmentTransmittance(water, 2.0f);
+    RegressionResults[15] = float4(glassSegment, 1.0f);
+    RegressionResults[16] = float4(waterSegment, 1.0f);
+    RegressionResults[17] = float4(GetMediumSegmentTransmittance(air, 1000.0f), GetMediumSegmentDistance(CreateRay(float3(0.0f, 2.0f, 0.0f), float3(1.0f, 0.0f, 0.0f)), 1.#INF, air));
 }
 
 [numthreads(8,8,1)]

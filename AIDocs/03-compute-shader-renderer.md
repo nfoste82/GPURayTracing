@@ -100,7 +100,7 @@ The scene also uploads a top-level BVH over ray-traced spheres, emissive light s
 
 `RayHit` stores hit position, object position/radius, normal, emission, color, distance, smoothness, opacity, transparent travel distance, refraction index, material type, mesh index, and sphere object index.
 
-`MediumIdentity` distinguishes air, sphere, mesh, and water media by both type and object identity, and stores IOR/opacity/absorption color. `TracePath()` carries a fixed-capacity stack with implicit air, initializes water for rays that start underwater, and updates it only for transmitted boundary crossings. Matching exits reveal the parent medium; overflow and unmatched exits set explicit stack status bits. Production scattering still uses the existing object-specific refraction helpers, so the carried state does not yet select source/target IORs or segment absorption.
+`MediumIdentity` distinguishes air, sphere, mesh, and water media by both type and object identity, and stores IOR/opacity/absorption color. `TracePath()` carries a fixed-capacity stack with implicit air, initializes water for rays that start underwater, and updates it only for transmitted boundary crossings. Matching exits reveal the parent medium; overflow and unmatched exits set explicit stack status bits. Every traveled segment now receives absorption from the active medium before its hit is shaded. Production refraction still uses the existing object-specific source/target IOR assumptions.
 
 ## Ray Generation
 
@@ -144,7 +144,7 @@ It maintains:
 Per bounce:
 
 1. Trace the ray with `GetNearestIntersection()`.
-2. If the ray segment started underwater, attenuate `throughput` by water absorption for the distance to the hit.
+2. Attenuate `throughput` for the actual finite distance traveled through the stack's active medium. Water segments stop at their surface or finite X/Z side boundary; air is neutral and finite glass sky misses do not use infinite distance.
 3. If it hits sky, add `throughput * skyColor` and stop.
 4. If it hits a light, add `throughput * emission` and stop.
 5. Sample direct light if the path throughput is above `MinDirectLightThroughput`. Bounce 0 uses multiple stochastic soft-shadow samples; later bounces use one light sample. `GetDirectMaterialResponse()` applies albedo/diffuse and approximate specular response while evaluating each sampled light.

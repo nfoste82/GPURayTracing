@@ -17,9 +17,9 @@ The recent texture, mesh-light, glass, specular, imported-model, and procedural-
 
 ## Current Status
 
-- **Regression foundation: in progress.** CPU intersection/math tests, production GPU reflection/refraction/Fresnel/absorption probes, and deterministic reflective-sphere, glass-sphere, water, nested water/sphere-glass, and camera-starting-underwater image signatures are implemented. Mesh glass, transparent-shadow, texture, mesh-light, BVH-equivalence, and odd-resolution fixtures remain.
-- **Medium identity and path state: implemented.** `TracePath()` carries a fixed-capacity stack with implicit air, initializes underwater camera rays, updates transmitted water/sphere/mesh paths, and exposes overflow/unmatched-exit status through regression probes. Starting inside closed sphere/mesh glass and using stack state for absorption/refraction remain unsupported.
-- **Segment absorption, stack-driven refraction, shadow boundary traversal, coherent BRDF/BSDF sampling, and MIS: not started.** Existing object-specific approximations remain active and are now partially protected by regression baselines.
+- **Regression foundation: in progress.** CPU intersection/math tests, production GPU reflection/refraction/Fresnel/absorption probes, and deterministic reflective-sphere, glass-sphere, closed-mesh-glass, water, nested water/sphere-glass, and camera-starting-underwater image signatures are implemented. Transparent-shadow, texture, mesh-light, BVH-equivalence, and odd-resolution fixtures remain.
+- **Medium identity and path state: implemented.** `TracePath()` carries a fixed-capacity stack with implicit air, initializes underwater camera rays, updates transmitted water/sphere/mesh paths, and exposes overflow/unmatched-exit status through regression probes. Starting inside closed sphere/mesh glass and using stack state for refraction remain unsupported.
+- **Segment absorption: implemented.** Production paths attenuate each traveled segment from the active medium; finite water clips against surface/XZ exits and finite-medium sky misses avoid infinite attenuation. Stack-driven refraction, shadow boundary traversal, coherent BRDF/BSDF sampling, and MIS remain.
 
 ## Priority 0: Protect Upcoming Changes
 
