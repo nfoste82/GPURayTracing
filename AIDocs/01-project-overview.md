@@ -6,7 +6,7 @@ The renderer currently ray traces spheres, emissive sphere and mesh lights, regi
 
 ## Key Files
 
-- `Assets/Scripts/GameManager.cs`: Main Unity-side controller. Owns render texture creation, compute shader dispatch, quality settings, camera controls, autofocus, object buffers, shader parameter uploads, implicit ground/water preview drawing, and optional Unity skybox preview sync. It does not implement `OnRenderImage()` itself; it exposes `RenderImage(src, dest)`, which is called by `RayTracingCameraRenderer`.
+- `Assets/Scripts/GameManager.cs`: Main Unity-side controller. Owns render texture creation, compute shader dispatch, quality settings, camera controls, autofocus, object buffers, shader parameter uploads, implicit ground preview drawing, and optional Unity skybox preview sync. It does not implement `OnRenderImage()` itself; it exposes `RenderImage(src, dest)`, which is called by `RayTracingCameraRenderer`.
 - `Assets/Scripts/RayTracingCameraRenderer.cs`: Camera component whose `OnRenderImage()` delegates to `GameManager.RenderImage()`. It runs on whatever camera holds this component (typically the same camera wired into `GameManager.renderTextureCamera`, but that link is only inspector wiring, not enforced in code).
 - `Assets/Scripts/RayTracingCompute.compute`: Main GPU renderer. Generates camera rays, performs intersections, computes lighting/shadows/reflections/refraction, and writes the final pixel color.
 - `Assets/Scripts/RayTracingBenchmarkOverlay.cs`: Runtime benchmark overlay for frame timing, geometry counts, BVH status, and quality settings.
@@ -16,6 +16,7 @@ The renderer currently ray traces spheres, emissive sphere and mesh lights, regi
 - `Assets/Scripts/RayMeshPrimitive.cs`: Procedural mesh primitive helper for ray-traced cube, pyramid, and dodecahedron test objects.
 - `Assets/Scripts/RayObjectPreview.cs`: Editor/runtime helper that adds rasterized sphere previews and optional Unity point-light previews for ray-traced sphere and light objects.
 - `Assets/Scripts/RayLight.cs`: Per-light sphere emission color.
+- `Assets/Scripts/Water.cs`: Transform-backed finite water volume. Position sets the average wavy-top center, scale sets X/Z footprint and Y depth, and the component owns water material/wave settings. One active component is currently supported per `GameManager`.
 - `Assets/Scripts/ColorExtensions.cs`: Converts `Color32` to normalized `Vector3` values for GPU upload.
 - `Assets/Editor/RayMeshPrimitiveMenu.cs`: Adds `GameObject > Ray Tracing` menu entries for creating ray-traced mesh primitive test objects in the hierarchy.
 - `Assets/Editor/RaySceneObjectMenu.cs`: Adds `GameObject > Ray Tracing` menu entries for ray-traced spheres, light spheres, and a ground preview plane.
@@ -46,7 +47,7 @@ The renderer currently ray traces spheres, emissive sphere and mesh lights, regi
 - Configurable samples per pixel via `numberOfPasses`.
 - Configurable bounce count via `numBounces` / `_NumBounces`.
 - Optional top-level object BVH and separate shadow-blocker BVH, each controlled by runtime thresholds so small scenes can stay on cheaper flat loops.
-- One optional finite, animated procedural water surface with Fresnel reflection/refraction and distance-based underwater absorption.
+- One optional finite axis-aligned water volume with a procedural wavy top, flat sides/bottom, Fresnel reflection/refraction, and distance-based underwater absorption.
 - Benchmark overlay and generated benchmark scenes for comparing optimization behavior across different workloads.
 
 ## Current Renderer Shape

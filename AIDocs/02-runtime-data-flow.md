@@ -156,7 +156,7 @@ Benchmark scene generation and overlay behavior are documented in `10-benchmarki
 - `_FocalDistance`
 - `_GroundSmoothness`
 - `_Exposure`
-- `_WaterEnabled`, `_WaterCenter`, `_WaterSize`, `_WaterColor`, `_WaterSmoothness`, `_WaterOpacity`, `_WaterAbsorptionStrength`, `_WaterRefraction`, `_WaterWaveAmplitude`, `_WaterWaveScale`, `_WaterWaveSpeed`, `_WaterTime`, `_WaterMarchSteps`, `_WaterRefinementSteps`
+- `_WaterEnabled`, `_WaterCenter`, `_WaterSize`, `_WaterDepth`, `_WaterColor`, `_WaterSmoothness`, `_WaterOpacity`, `_WaterAbsorptionStrength`, `_WaterRefraction`, `_WaterWaveAmplitude`, `_WaterWaveScale`, `_WaterWaveSpeed`, `_WaterTime`, `_WaterMarchSteps`, `_WaterRefinementSteps`. These are sourced from the registered `Water` component; its transform supplies center, footprint, and depth.
 - `_Spheres`
 - `_Lights`
 - `_Triangles`

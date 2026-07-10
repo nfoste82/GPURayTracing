@@ -15,7 +15,7 @@ This document covers runtime benchmark tooling, performance hotspots, and benchm
 - `Benchmark_ManyMeshes`: stresses object-level culling for many registered mesh objects.
 - `Benchmark_Glass`: stresses transparent/refraction paths and transparent shadows.
 - `Benchmark_GlassTransmission`: visual test for light energy loss and RGB filtering through single colored panes, stacked colored panes, thin versus thick glass, and colored transparent sphere shadows.
-- `Benchmark_Water`: stresses procedural ray-marched water, Fresnel reflection/refraction, underwater/above-water viewing, distance-based water absorption, a sloped shoreline bed with exposed/shallow/deep regions, and disabled accumulation for animated water.
+- `Benchmark_Water`: stresses the finite water AABB's ray-marched top and flat side/bottom boundaries, Fresnel reflection/refraction, distance-based absorption, and distinct ground-only, water-only, and water-over-ground regions. Accumulation is disabled for animated water.
 - `Benchmark_GlassWaterPencil`: image-quality scene inspired by a pencil in a glass of water, stressing glass meshes, calm water refraction, nested transparent surfaces, and thin curved mesh highlights.
 - `Benchmark_Sparse`: catches acceleration-structure overhead regressions in small scenes.
 - `Benchmark_Dynamic`: stresses per-frame transform updates, BVH rebuilds, and buffer uploads.
@@ -25,7 +25,7 @@ This document covers runtime benchmark tooling, performance hotspots, and benchm
 
 Existing benchmark scene files are skipped rather than overwritten, so saved local tweaks in `Assets/Scenes/Benchmarks/` are preserved when regenerating scenes.
 
-This also means generator changes do not automatically update an already-created benchmark scene. For example, the current `CreateWaterScene()` code creates a sloped shoreline bed and updated water absorption settings, but an existing `Assets/Scenes/Benchmarks/Benchmark_Water.unity` with the older flat `Lake Bed` mesh will remain unchanged until that scene is deleted or manually updated before running `Tools > Ray Tracing > Generate Benchmark Scenes` again.
+This also means generator changes do not automatically update an already-created benchmark scene. Delete or manually update an existing generated scene before running `Tools > Ray Tracing > Generate Benchmark Scenes` when generator changes need to be applied.
 
 ## Performance Hotspots
 

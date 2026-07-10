@@ -401,6 +401,7 @@ namespace GPURayTracing.Tests
             shader.SetInt("_WaterEnabled", enabled ? 1 : 0);
             shader.SetVector("_WaterCenter", new Vector4(0.0f, 0.75f, 1.0f, 0.0f));
             shader.SetVector("_WaterSize", new Vector4(12.0f, 12.0f, 0.0f, 0.0f));
+            shader.SetFloat("_WaterDepth", 6.0f);
             shader.SetVector("_WaterColor", new Vector4(0.17f, 0.45f, 0.52f, 0.0f));
             shader.SetFloat("_WaterSmoothness", 0.96f);
             shader.SetFloat("_WaterOpacity", 0.18f);

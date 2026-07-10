@@ -25,12 +25,13 @@ namespace GPURayTracing.Tests
             }
 
             int kernel = shader.FindKernel("CSRegressionProbe");
-            var buffer = new ComputeBuffer(18, sizeof(float) * 4);
+            var buffer = new ComputeBuffer(20, sizeof(float) * 4);
             try
             {
                 shader.SetInt("_WaterEnabled", 1);
                 shader.SetVector("_WaterCenter", Vector4.zero);
                 shader.SetVector("_WaterSize", new Vector4(10.0f, 10.0f, 0.0f, 0.0f));
+                shader.SetFloat("_WaterDepth", 5.0f);
                 shader.SetVector("_WaterColor", new Vector4(0.17f, 0.45f, 0.52f, 0.0f));
                 shader.SetFloat("_WaterOpacity", 0.18f);
                 shader.SetFloat("_WaterAbsorptionStrength", 0.22f);
@@ -39,7 +40,7 @@ namespace GPURayTracing.Tests
                 shader.SetBuffer(kernel, "RegressionResults", buffer);
                 shader.Dispatch(kernel, 1, 1, 1);
 
-                var results = new Vector4[18];
+                var results = new Vector4[20];
                 buffer.GetData(results);
 
                 AssertVector(results[0], new Vector4(0.70710677f, 0.70710677f, 0.0f, 1.0f), "reflection");
@@ -60,6 +61,8 @@ namespace GPURayTracing.Tests
                 AssertVector(results[15], new Vector4(0.6950495f, 0.8005689f, 0.9084640f, 1.0f), "glass active-medium segment", 0.0002f);
                 AssertVector(results[16], new Vector4(0.6940578f, 0.7850562f, 0.8096121f, 1.0f), "water active-medium segment", 0.0002f);
                 AssertVector(results[17], new Vector4(1.0f, 1.0f, 1.0f, 0.0f), "air segment is neutral");
+                AssertVector(results[18], new Vector4(4.0f, 1.0f, 4.0f, 1.0f), "water AABB bottom and side intersections", 0.001f);
+                AssertVector(results[19], new Vector4(-1.0f, 0.0f, 0.0f, 1.0f), "water AABB side normal");
             }
             finally
             {

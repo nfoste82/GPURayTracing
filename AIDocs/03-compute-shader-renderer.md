@@ -23,7 +23,7 @@ Important shader globals:
 - `_FocalDistance`: depth-of-field focal distance.
 - `_GroundSmoothness`: smoothness for the implicit ground plane.
 - `_Exposure`: master brightness multiplier applied before tone mapping. Acts like a camera exposure dial.
-- `_WaterAbsorptionStrength`: distance-based water-medium absorption density. When a path or direct-light segment travels underwater, the shader applies exponential transmittance from `_WaterColor` and this strength.
+- `_WaterAbsorptionStrength`: distance-based water-medium absorption density. When a path or direct-light segment travels underwater, the shader applies exponential transmittance from `_WaterColor` and this strength. The active `Water` component supplies these globals; its transform position is `_WaterCenter`, X/Z scale is `_WaterSize`, and Y scale is `_WaterDepth` below the wavy top.
 - `_LightSamplingStrategy`: selects how `GetLightHittingPoint()` samples scene lights (`0` = all lights, `1` = uniform random pick, `2` = importance-sampled pick). See `07-shader-lighting-and-materials.md`.
 - `_LightSampleCount`: for the random/importance strategies, how many lights each shading point draws per hit. Ignored by the all-lights strategy.
 - `_MaxLightSamples`: diagnostic cap on how many lights any strategy considers. `0` means no cap (use the real light count); a positive value clamps the considered light count to confirm the per-hit light loop is the bottleneck.
@@ -144,7 +144,7 @@ It maintains:
 Per bounce:
 
 1. Trace the ray with `GetNearestIntersection()`.
-2. Attenuate `throughput` for the actual finite distance traveled through the stack's active medium. Water segments stop at their surface or finite X/Z side boundary; air is neutral and finite glass sky misses do not use infinite distance.
+2. Attenuate `throughput` for the actual finite distance traveled through the stack's active medium. Water segments stop at the nearest wavy-top, side, or bottom boundary; air is neutral and finite glass sky misses do not use infinite distance.
 3. If it hits sky, add `throughput * skyColor` and stop.
 4. If it hits a light, add `throughput * emission` and stop.
 5. Sample direct light if the path throughput is above `MinDirectLightThroughput`. Bounce 0 uses multiple stochastic soft-shadow samples; later bounces use one light sample. `GetDirectMaterialResponse()` applies albedo/diffuse and approximate specular response while evaluating each sampled light.

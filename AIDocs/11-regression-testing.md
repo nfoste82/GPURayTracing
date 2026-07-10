@@ -14,7 +14,7 @@ The project uses EditMode tests under `Assets/Tests/EditMode/` to make rendering
 - Current distance/color/opacity glass absorption approximation.
 - A GPU `CSRegressionProbe` kernel in the production compute shader that calls the same reflection, `RefractSnell()`, Fresnel formula, and `GetAbsorptionTransmittance()` behavior used by rendering. This catches divergence between CPU expectations and shader execution.
 - Deterministic `32x32` final-color image signatures for a reflective metal sphere, a refractive glass sphere with geometry behind it, closed mesh glass through production triangle/mesh/BVH buffers, calm finite water with submerged geometry, nested water/sphere-glass, and a camera starting underwater. Each baseline stores the image average and eight fixed pixel probes after tone mapping.
-- Medium-identity and stack probes for air -> water -> sphere glass -> water -> air, parent lookup, matching exits, overflow, unmatched exits, and underwater initialization.
+- Medium-identity and stack probes for air -> water -> sphere glass -> water -> air, parent lookup, matching exits, overflow, unmatched exits, underwater initialization, and flat water-volume side/bottom intersections.
 
 ## Running Tests
 

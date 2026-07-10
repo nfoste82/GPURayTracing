@@ -44,7 +44,7 @@ Completion criteria: production paths carry stable, test-covered medium state ac
 
 - Apply absorption per traveled ray segment using the medium active before the next boundary/hit, rather than applying separate post-hoc sphere, mesh, and water rules.
 - Convert glass color/opacity and water color/absorption settings into one documented attenuation representation while preserving current values as closely as practical during the first refactor.
-- Replace `TracePath()`'s assumption that an underwater ray remains underwater for the complete distance to its next hit. Clip water distance against the finite X/Z bounds and actual surface exit.
+- Keep water segment distance clipped against the nearest wavy-top, side, or bottom boundary of the finite volume.
 - Handle sky misses from finite media without attenuating by infinite hit distance.
 - Keep the existing object-specific absorption helpers temporarily available only while migrating fixtures one path at a time; remove them once all production paths use segment state.
 
@@ -115,7 +115,7 @@ Completion criteria: light and material sampling can both discover the same path
 
 - Follow Priorities 1-6 above for medium state, absorption, refraction, shadow traversal, coherent material sampling, and MIS rather than implementing isolated object-specific fixes.
 - Harden sphere and mesh glass for repeated internal reflection, concave/non-manifold/open meshes, exhausted bounce budgets inside a medium, and analytic Snell/TIR validation. Basic Snell transmission, distance absorption, bounded interior-object tests, and mesh TIR are already implemented.
-- Improve water intersection with adaptive/root-finding behavior, consistent side/bottom volume boundaries, and optional support for multiple/transformed water bodies.
+- Improve wavy-top intersection with adaptive/root-finding behavior and optionally support multiple/transformed water volumes.
 
 ## Priority 7: Lighting And Geometry Quality
 

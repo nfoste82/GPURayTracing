@@ -43,6 +43,7 @@ float _Exposure;
 int _WaterEnabled;
 float3 _WaterCenter;
 float2 _WaterSize;
+float _WaterDepth;
 float3 _WaterColor;
 float _WaterSmoothness;
 float _WaterOpacity;
@@ -378,7 +379,7 @@ bool IsSameMedium(MediumIdentity left, MediumIdentity right)
     return left.type == right.type && left.objectIndex == right.objectIndex;
 }
 
-bool IsPointUnderWater(float3 position);
+bool IsPointInWater(float3 position);
 
 MediumStack CreateMediumStack(float3 rayOrigin)
 {
@@ -395,7 +396,7 @@ MediumStack CreateMediumStack(float3 rayOrigin)
     stack.entry6 = air;
     stack.entry7 = air;
 
-    if (IsPointUnderWater(rayOrigin))
+    if (IsPointInWater(rayOrigin))
     {
         stack.entry1 = CreateWaterMedium();
         stack.count = 2;
@@ -575,9 +576,13 @@ bool IsInsideWaterXZ(float2 worldXZ)
     return delta.x <= halfSize.x && delta.y <= halfSize.y;
 }
 
-bool IsPointUnderWater(float3 position)
+bool IsPointInWater(float3 position)
 {
-    return _WaterEnabled != 0 && IsInsideWaterXZ(position.xz) && position.y < GetWaterWaveHeight(position.xz);
+    float bottom = _WaterCenter.y - max(0.01f, _WaterDepth);
+    return _WaterEnabled != 0
+        && IsInsideWaterXZ(position.xz)
+        && position.y >= bottom
+        && position.y <= GetWaterWaveHeight(position.xz);
 }
 
 float3 GetWaterAbsorptionTransmittance(float distanceInWater)
@@ -596,40 +601,20 @@ void IntersectWater(Ray ray, inout RayHit bestHit);
 
 float GetWaterDistanceAlongRay(Ray ray, float maxDistance)
 {
-    if (!IsPointUnderWater(ray.origin))
+    if (!IsPointInWater(ray.origin))
     {
         return 0.0f;
     }
 
-    float2 halfSize = max(_WaterSize, float2(0.01f, 0.01f)) * 0.5f;
-    float2 boundsMin = _WaterCenter.xz - halfSize;
-    float2 boundsMax = _WaterCenter.xz + halfSize;
-    float sideExitDistance = 1.#INF;
-
-    if (ray.direction.x > 0.000001f)
+    RayHit volumeExit = CreateRayHit();
+    IntersectWater(ray, volumeExit);
+    if (volumeExit.distance >= 1.#INF)
     {
-        sideExitDistance = min(sideExitDistance, (boundsMax.x - ray.origin.x) / ray.direction.x);
-    }
-    else if (ray.direction.x < -0.000001f)
-    {
-        sideExitDistance = min(sideExitDistance, (boundsMin.x - ray.origin.x) / ray.direction.x);
+        return 0.0f;
     }
 
-    if (ray.direction.z > 0.000001f)
-    {
-        sideExitDistance = min(sideExitDistance, (boundsMax.y - ray.origin.z) / ray.direction.z);
-    }
-    else if (ray.direction.z < -0.000001f)
-    {
-        sideExitDistance = min(sideExitDistance, (boundsMin.y - ray.origin.z) / ray.direction.z);
-    }
-
-    RayHit surfaceExit = CreateRayHit();
-    IntersectWater(ray, surfaceExit);
-    float surfaceExitDistance = surfaceExit.distance;
-    float volumeExitDistance = min(sideExitDistance, surfaceExitDistance);
-    float segmentEndDistance = maxDistance < 1.#INF ? max(0.0f, maxDistance) : volumeExitDistance;
-    return volumeExitDistance < 1.#INF ? max(0.0f, min(segmentEndDistance, volumeExitDistance)) : 0.0f;
+    float segmentEndDistance = maxDistance < 1.#INF ? max(0.0f, maxDistance) : volumeExit.distance;
+    return max(0.0f, min(segmentEndDistance, volumeExit.distance));
 }
 
 float EstimateWaterDistanceAlongSegment(float3 startPosition, float3 endPosition)
@@ -646,8 +631,8 @@ float EstimateWaterDistanceAlongSegment(float3 startPosition, float3 endPosition
         return 0.0f;
     }
 
-    bool startUnderWater = IsPointUnderWater(startPosition);
-    bool endUnderWater = IsPointUnderWater(endPosition);
+    bool startUnderWater = IsPointInWater(startPosition);
+    bool endUnderWater = IsPointInWater(endPosition);
     if (startUnderWater && endUnderWater)
     {
         return segmentLength;
@@ -665,7 +650,7 @@ float EstimateWaterDistanceAlongSegment(float3 startPosition, float3 endPosition
     for (i = 0; i < 6; i++)
     {
         float mid = (low + high) * 0.5f;
-        bool midUnderWater = IsPointUnderWater(startPosition + segment * mid);
+        bool midUnderWater = IsPointInWater(startPosition + segment * mid);
         if (midUnderWater == startUnderWater)
         {
             low = mid;
@@ -679,7 +664,7 @@ float EstimateWaterDistanceAlongSegment(float3 startPosition, float3 endPosition
     return startUnderWater ? high * segmentLength : (1.0f - high) * segmentLength;
 }
 
-bool IntersectWaterBounds(Ray ray, float maxDistance, out float entryDistance, out float exitDistance)
+bool IntersectWaterSurfaceBounds(Ray ray, float maxDistance, out float entryDistance, out float exitDistance)
 {
     float waveHeight = max(0.001f, _WaterWaveAmplitude + WaterHitEpsilon);
     float2 halfSize = max(_WaterSize, float2(0.01f, 0.01f)) * 0.5f;
@@ -699,16 +684,94 @@ bool IntersectWaterBounds(Ray ray, float maxDistance, out float entryDistance, o
     return tMax >= entryDistance && entryDistance < maxDistance;
 }
 
-void IntersectWater(Ray ray, inout RayHit bestHit)
+void SetWaterHit(Ray ray, float hitT, float3 outwardNormal, inout RayHit bestHit)
 {
-    if (_WaterEnabled == 0)
+    if (hitT <= 0.001f || hitT >= bestHit.distance)
     {
         return;
     }
 
+    bestHit.position = ray.origin + hitT * ray.direction;
+    bestHit.obj_position = _WaterCenter;
+    bestHit.normal = dot(outwardNormal, ray.direction) > 0.0f ? -outwardNormal : outwardNormal;
+    bestHit.emission = float3(0.0f, 0.0f, 0.0f);
+    bestHit.color = _WaterColor;
+    bestHit.obj_radius = 0.0f;
+    bestHit.distance = hitT;
+    bestHit.smoothness = _WaterSmoothness;
+    bestHit.opacity = saturate(_WaterOpacity);
+    bestHit.refraction = max(1.0f, _WaterRefraction);
+    bestHit.materialType = MaterialWater;
+    bestHit.meshIndex = -1;
+    bestHit.objectIndex = -1;
+    bestHit.uv = bestHit.position.xz - _WaterCenter.xz;
+    bestHit.textureIndex = -1;
+}
+
+void IntersectWaterFlatBoundaries(Ray ray, inout RayHit bestHit)
+{
+    float2 halfSize = max(_WaterSize, float2(0.01f, 0.01f)) * 0.5f;
+    float2 boundsMin = _WaterCenter.xz - halfSize;
+    float2 boundsMax = _WaterCenter.xz + halfSize;
+    float bottom = _WaterCenter.y - max(0.01f, _WaterDepth);
+    float t;
+    float3 position;
+
+    if (abs(ray.direction.y) > 0.000001f)
+    {
+        t = (bottom - ray.origin.y) / ray.direction.y;
+        position = ray.origin + ray.direction * t;
+        if (position.x >= boundsMin.x && position.x <= boundsMax.x
+            && position.z >= boundsMin.y && position.z <= boundsMax.y)
+        {
+            SetWaterHit(ray, t, float3(0.0f, -1.0f, 0.0f), bestHit);
+        }
+    }
+
+    if (abs(ray.direction.x) > 0.000001f)
+    {
+        t = (boundsMin.x - ray.origin.x) / ray.direction.x;
+        position = ray.origin + ray.direction * t;
+        if (position.z >= boundsMin.y && position.z <= boundsMax.y
+            && position.y >= bottom && position.y <= GetWaterWaveHeight(position.xz))
+        {
+            SetWaterHit(ray, t, float3(-1.0f, 0.0f, 0.0f), bestHit);
+        }
+
+        t = (boundsMax.x - ray.origin.x) / ray.direction.x;
+        position = ray.origin + ray.direction * t;
+        if (position.z >= boundsMin.y && position.z <= boundsMax.y
+            && position.y >= bottom && position.y <= GetWaterWaveHeight(position.xz))
+        {
+            SetWaterHit(ray, t, float3(1.0f, 0.0f, 0.0f), bestHit);
+        }
+    }
+
+    if (abs(ray.direction.z) > 0.000001f)
+    {
+        t = (boundsMin.y - ray.origin.z) / ray.direction.z;
+        position = ray.origin + ray.direction * t;
+        if (position.x >= boundsMin.x && position.x <= boundsMax.x
+            && position.y >= bottom && position.y <= GetWaterWaveHeight(position.xz))
+        {
+            SetWaterHit(ray, t, float3(0.0f, 0.0f, -1.0f), bestHit);
+        }
+
+        t = (boundsMax.y - ray.origin.z) / ray.direction.z;
+        position = ray.origin + ray.direction * t;
+        if (position.x >= boundsMin.x && position.x <= boundsMax.x
+            && position.y >= bottom && position.y <= GetWaterWaveHeight(position.xz))
+        {
+            SetWaterHit(ray, t, float3(0.0f, 0.0f, 1.0f), bestHit);
+        }
+    }
+}
+
+void IntersectWaterTop(Ray ray, inout RayHit bestHit)
+{
     float entryDistance;
     float exitDistance;
-    if (!IntersectWaterBounds(ray, bestHit.distance, entryDistance, exitDistance))
+    if (!IntersectWaterSurfaceBounds(ray, bestHit.distance, entryDistance, exitDistance))
     {
         return;
     }
@@ -774,26 +837,20 @@ void IntersectWater(Ray ray, inout RayHit bestHit)
         return;
     }
 
-    bestHit.position = ray.origin + hitT * ray.direction;
+    float3 hitPosition = ray.origin + hitT * ray.direction;
+    SetWaterHit(ray, hitT, GetWaterNormal(hitPosition.xz), bestHit);
     bestHit.position.y = GetWaterWaveHeight(bestHit.position.xz);
-    bestHit.obj_position = _WaterCenter;
-    bestHit.normal = GetWaterNormal(bestHit.position.xz);
-    if (dot(bestHit.normal, ray.direction) > 0.0f)
+}
+
+void IntersectWater(Ray ray, inout RayHit bestHit)
+{
+    if (_WaterEnabled == 0)
     {
-        bestHit.normal = -bestHit.normal;
+        return;
     }
-    bestHit.emission = float3(0.0f, 0.0f, 0.0f);
-    bestHit.color = _WaterColor;
-    bestHit.obj_radius = 0.0f;
-    bestHit.distance = hitT;
-    bestHit.smoothness = _WaterSmoothness;
-    bestHit.opacity = saturate(_WaterOpacity);
-    bestHit.refraction = max(1.0f, _WaterRefraction);
-    bestHit.materialType = MaterialWater;
-    bestHit.meshIndex = -1;
-    bestHit.objectIndex = -1;
-    bestHit.uv = bestHit.position.xz - _WaterCenter.xz;
-    bestHit.textureIndex = -1;
+
+    IntersectWaterFlatBoundaries(ray, bestHit);
+    IntersectWaterTop(ray, bestHit);
 }
 
 void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere, int objectIndex)
@@ -2305,7 +2362,7 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int
 
 int ApplyWaterTransmission(inout Ray ray, Ray sourceRay, RayHit hit)
 {
-    bool enteringWater = sourceRay.origin.y >= GetWaterWaveHeight(sourceRay.origin.xz);
+    bool enteringWater = !IsPointInWater(sourceRay.origin);
     float sourceRefraction = enteringWater ? 1.0f : max(1.0f, hit.refraction);
     float targetRefraction = enteringWater ? max(1.0f, hit.refraction) : 1.0f;
     float3 normal = enteringWater ? hit.normal : -hit.normal;
@@ -2692,6 +2749,12 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     float waterSurfaceDistance = GetWaterDistanceAlongRay(CreateRay(waterOrigin, float3(0.0f, 1.0f, 0.0f)), 1.#INF);
     float waterClippedDistance = GetWaterDistanceAlongRay(CreateRay(waterOrigin, float3(1.0f, 0.0f, 0.0f)), 2.0f);
     RegressionResults[14] = float4(waterSideDistance, waterSurfaceDistance, waterClippedDistance, GetMediumSegmentDistance(CreateRay(waterOrigin, float3(1.0f, 0.0f, 0.0f)), 1.#INF, GetCurrentMedium(underwaterStack)));
+
+    float waterBottomDistance = GetWaterDistanceAlongRay(CreateRay(waterOrigin, float3(0.0f, -1.0f, 0.0f)), 1.#INF);
+    RayHit waterSideHit = CreateRayHit();
+    IntersectWater(CreateRay(float3(_WaterCenter.x - 6.0f, _WaterCenter.y - 1.0f, _WaterCenter.z), float3(1.0f, 0.0f, 0.0f)), waterSideHit);
+    RegressionResults[18] = float4(waterBottomDistance, waterSideHit.distance, waterSideHit.materialType, 1.0f);
+    RegressionResults[19] = float4(waterSideHit.normal, 1.0f);
 
     float3 glassSegment = GetMediumSegmentTransmittance(glass, 2.0f);
     float3 waterSegment = GetMediumSegmentTransmittance(water, 2.0f);

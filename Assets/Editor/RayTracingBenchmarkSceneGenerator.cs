@@ -326,31 +326,38 @@ public static class RayTracingBenchmarkSceneGenerator
             return;
         }
 
-        var context = CreateBaseScene(sceneName, new Vector3(-6.13f, 1.8f, 12.0f), new Vector3(14.6f, 61.861f, 0.0f), passes: 3, bounces: 8, shadowQuality: 1);
+        var context = CreateBaseScene(sceneName, new Vector3(11.72f, 6.48f, 26.0f), new Vector3(15.954f, -151.8f, 0.0f), passes: 3, bounces: 8, shadowQuality: 1);
         context.Manager.cameraFocalDistance = 18.0f;
         context.Manager.groundSmoothness = 0.72f;
         context.Manager.lightFalloffScale = 0.021f;
         context.Manager.exposure = 1.15f;
         context.Manager.topLevelBvhMinObjectCount = 0;
         context.Manager.shadowBvhMinObjectCount = 0;
-        context.Manager.enableWater = true;
-        context.Manager.waterCenter = new Vector3(0.0f, 0.85f, 5.0f);
-        context.Manager.waterSize = new Vector2(32.0f, 36.0f);
-        context.Manager.waterColor = new Color32(215, 255, 255, 255);
-        context.Manager.waterSmoothness = 0.97f;
-        context.Manager.waterOpacity = 0.08f;
-        context.Manager.waterAbsorptionStrength = 0.55f;
-        context.Manager.waterRefractionIndex = 1.33f;
-        context.Manager.waterWaveAmplitude = 0.32f;
-        context.Manager.waterWaveScale = 0.7f;
-        context.Manager.waterWaveSpeed = 0.85f;
-        context.Manager.waterMarchSteps = 36;
-        context.Manager.waterRefinementSteps = 6;
+        context.Manager.lightSamplingStrategy = GameManager.LightSamplingStrategy.ImportanceSampled;
+        
+        var waterObject = new GameObject("Water Volume");
+        waterObject.transform.SetParent(context.Root, false);
+        var water = waterObject.AddComponent<Water>();
+        waterObject.transform.position = new Vector3(-2.0f, 5.0f, 3.0f);
+        waterObject.transform.localScale = new Vector3(40.0f, 5.0f, 40.0f);
+        water.Color = new Color32(215, 255, 255, 255);
+        water.Smoothness = 0.97f;
+        water.Opacity = 0.08f;
+        water.AbsorptionStrength = 0.55f;
+        water.RefractionIndex = 1.33f;
+        water.WaveAmplitude = 0.32f;
+        water.WaveScale = 0.7f;
+        water.WaveSpeed = 0.85f;
+        water.MarchSteps = 36;
+        water.RefinementSteps = 6;
 
         AddLight(context.Root, "Low Sun Reflection Light", new Vector3(-5.0f, 4.0f, -5.5f), 1.2f, new Color32(255, 226, 188, 255));
-        AddLight(context.Root, "Cool Sky Fill", new Vector3(8.0f, 7.5f, 8.0f), 1.8f, new Color32(120, 170, 255, 255));
+        AddLight(context.Root, "Cool Sky Fill", new Vector3(8.0f, 15f, 8.0f), 1.8f, new Color32(255, 253, 155, 255));
 
-        AddRayMesh(context.Root, "Sloped Shoreline Bed", CreateWaterShorelineBedMesh("Sloped Shoreline Bed", 32.0f, 36.0f, 36, 42), new Vector3(0.0f, 0.0f, 5.0f), Vector3.zero, Vector3.one, new Color32(88, 78, 48, 255), RayMaterial.MaterialType.Diffuse, 0.38f);
+        // The implicit y=0 plane remains visible around the volume (ground only). The raised
+        // half-bed intersects the right half of the volume, while the left half exposes the
+        // suspended water bottom with no geometry inside it.
+        AddPrimitiveMesh(context.Root, "Raised Bed Inside Water", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(10.0f, 0.43f, 10.0f), new Vector3(0.0f, 0.0f, 25.0f), new Vector3(15.0f, 5.0f, 40.0f), new Color32(88, 78, 48, 255), RayMaterial.MaterialType.Diffuse, 0.38f, 1.0f);
 
         for (var i = 0; i < 24; i++)
         {
@@ -367,19 +374,19 @@ public static class RayTracingBenchmarkSceneGenerator
         {
             var x = -11.0f + i * 1.3f;
             var localZ = -3.0f + i * 1.1f + Mathf.Sin(i * 1.7f) * 1.8f;
-            var y = GetWaterBenchmarkBedHeight(x, localZ) + 0.18f + (i % 4) * 0.04f;
+            var y = 0.7f + (i % 4) * 0.04f;
             var color = Color.HSVToRGB(0.08f + i * 0.012f, 0.65f, 0.55f);
             AddSphere(context.Root, "Depth Gradient Pebble", new Vector3(x, y, localZ + 5.0f), 0.25f + (i % 3) * 0.08f, color, RayMaterial.MaterialType.Glass, 1.0f, 0.3f, 1.25f);
         }
 
         AddSphere(context.Root, "Half Submerged Red Marker", new Vector3(-3.2f, 0.95f, 1.2f), 0.62f, new Color32(220, 65, 45, 255), RayMaterial.MaterialType.Metal, 0.72f);
-        AddSphere(context.Root, "Shallow Blue Marker", new Vector3(2.7f, GetWaterBenchmarkBedHeight(2.7f, -4.0f) + 0.58f, 1.0f), 0.58f, new Color32(50, 120, 235, 255), RayMaterial.MaterialType.Diffuse, 0.35f);
-        AddSphere(context.Root, "Deep Yellow Marker", new Vector3(-2.2f, GetWaterBenchmarkBedHeight(-2.2f, 10.5f) + 0.55f, 15.5f), 0.55f, new Color32(245, 210, 70, 255), RayMaterial.MaterialType.Diffuse, 0.35f);
+        AddSphere(context.Root, "Shallow Blue Marker", new Vector3(2.7f, 0.86f, 1.0f), 0.58f, new Color32(50, 120, 235, 255), RayMaterial.MaterialType.Diffuse, 0.35f);
+        AddSphere(context.Root, "Water Only Yellow Marker", new Vector3(-5.5f, 0.55f, 10.5f), 0.22f, new Color32(245, 210, 70, 255), RayMaterial.MaterialType.Diffuse, 0.35f);
         AddSphere(context.Root, "Far Reflection Sphere", new Vector3(5.4f, 1.25f, 13.0f), 0.95f, new Color32(230, 222, 196, 255), RayMaterial.MaterialType.Metal, 0.86f);
 
-        AddPrimitiveMesh(context.Root, "Left Dock Post", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-5.2f, 1.2f, 14.5f), Vector3.zero, new Vector3(0.28f, 2.4f, 0.28f), new Color32(96, 62, 34, 255), RayMaterial.MaterialType.Diffuse, 0.38f, 1.0f);
-        AddPrimitiveMesh(context.Root, "Right Dock Post", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-3.8f, 1.2f, 14.5f), Vector3.zero, new Vector3(0.28f, 2.4f, 0.28f), new Color32(96, 62, 34, 255), RayMaterial.MaterialType.Diffuse, 0.38f, 1.0f);
-        AddPrimitiveMesh(context.Root, "Dock Plank", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-4.5f, 1.55f, 14.5f), Vector3.zero, new Vector3(2.2f, 0.18f, 1.0f), new Color32(120, 78, 42, 255), RayMaterial.MaterialType.Diffuse, 0.45f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Left Dock Post", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-5.2f, 1.2f, 14.5f), Vector3.zero, new Vector3(0.28f, 10.0f, 0.28f), new Color32(96, 62, 34, 255), RayMaterial.MaterialType.Diffuse, 0.38f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Right Dock Post", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-3.8f, 1.2f, 14.5f), Vector3.zero, new Vector3(0.28f, 10.0f, 0.28f), new Color32(96, 62, 34, 255), RayMaterial.MaterialType.Diffuse, 0.38f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Dock Plank", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-4.5f, 5.0f, 14.5f), Vector3.zero, new Vector3(2.2f, 0.18f, 1.0f), new Color32(120, 78, 42, 255), RayMaterial.MaterialType.Diffuse, 0.45f, 1.0f);
 
         Save(context.Scene, sceneName);
     }
@@ -405,7 +412,6 @@ public static class RayTracingBenchmarkSceneGenerator
         context.Manager.lightSamplingStrategy = GameManager.LightSamplingStrategy.ImportanceSampled;
         context.Manager.lightSampleCount = 1;
         context.Manager._skyboxLightColor = new Color32(72, 76, 82, 255);
-        context.Manager.enableWater = false;
 
         AddLight(context.Root, "Large Softbox", new Vector3(-3.5f, 5.6f, -3.8f), 1.6f, new Color32(255, 250, 236, 255));
         AddLight(context.Root, "Rim Highlight", new Vector3(3.5f, 3.7f, -2.2f), 0.55f, new Color32(210, 230, 255, 255));
@@ -814,61 +820,6 @@ public static class RayTracingBenchmarkSceneGenerator
         mesh.RecalculateNormals();
         mesh.RecalculateBounds();
         return mesh;
-    }
-
-    private static Mesh CreateWaterShorelineBedMesh(string name, float width, float depth, int xSegments, int zSegments)
-    {
-        xSegments = Mathf.Max(1, xSegments);
-        zSegments = Mathf.Max(1, zSegments);
-
-        var vertices = new Vector3[(xSegments + 1) * (zSegments + 1)];
-        var uv = new Vector2[vertices.Length];
-        var triangles = new int[xSegments * zSegments * 6];
-
-        for (int z = 0; z <= zSegments; z++)
-        {
-            float v = z / (float)zSegments;
-            float localZ = Mathf.Lerp(-depth * 0.5f, depth * 0.5f, v);
-            for (int x = 0; x <= xSegments; x++)
-            {
-                float u = x / (float)xSegments;
-                float localX = Mathf.Lerp(-width * 0.5f, width * 0.5f, u);
-                vertices[z * (xSegments + 1) + x] = new Vector3(localX, GetWaterBenchmarkBedHeight(localX, localZ), localZ);
-                uv[z * (xSegments + 1) + x] = new Vector2(u * 4.0f, v * 4.0f);
-            }
-        }
-
-        int triangleIndex = 0;
-        for (int z = 0; z < zSegments; z++)
-        {
-            for (int x = 0; x < xSegments; x++)
-            {
-                int a = z * (xSegments + 1) + x;
-                int b = a + 1;
-                int c = a + xSegments + 1;
-                int d = c + 1;
-
-                triangles[triangleIndex++] = a;
-                triangles[triangleIndex++] = c;
-                triangles[triangleIndex++] = b;
-                triangles[triangleIndex++] = b;
-                triangles[triangleIndex++] = c;
-                triangles[triangleIndex++] = d;
-            }
-        }
-
-        var mesh = CreateMesh(name, vertices, triangles);
-        mesh.uv = uv;
-        return mesh;
-    }
-
-    private static float GetWaterBenchmarkBedHeight(float localX, float localZ)
-    {
-        float depth01 = Mathf.InverseLerp(-12.0f, 17.0f, localZ);
-        float shelf = Mathf.SmoothStep(0.0f, 1.0f, depth01);
-        float shoreRise = Mathf.Exp(-Mathf.Pow((localZ + 12.5f) * 0.28f, 2.0f)) * 0.55f;
-        float sandRipples = Mathf.Sin(localX * 0.55f + localZ * 0.18f) * 0.045f + Mathf.Sin(localX * 1.15f - localZ * 0.33f) * 0.025f;
-        return 1.1f + shoreRise - shelf * 0.9f + sandRipples;
     }
 
     private static Mesh CreateDiscMesh(string name, int segments)
