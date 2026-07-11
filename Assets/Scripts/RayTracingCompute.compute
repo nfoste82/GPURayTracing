@@ -380,6 +380,30 @@ bool IsSameMedium(MediumIdentity left, MediumIdentity right)
 }
 
 bool IsPointInWater(float3 position);
+MediumStack PushMedium(MediumStack stack, MediumIdentity medium);
+
+bool MediumStackContains(MediumStack stack, MediumIdentity medium)
+{
+    if (stack.count > 7 && IsSameMedium(stack.entry7, medium)) return true;
+    if (stack.count > 6 && IsSameMedium(stack.entry6, medium)) return true;
+    if (stack.count > 5 && IsSameMedium(stack.entry5, medium)) return true;
+    if (stack.count > 4 && IsSameMedium(stack.entry4, medium)) return true;
+    if (stack.count > 3 && IsSameMedium(stack.entry3, medium)) return true;
+    if (stack.count > 2 && IsSameMedium(stack.entry2, medium)) return true;
+    if (stack.count > 1 && IsSameMedium(stack.entry1, medium)) return true;
+    return IsSameMedium(stack.entry0, medium);
+}
+
+MediumIdentity CreateSphereMedium(Sphere sphere, int sphereIndex)
+{
+    MediumIdentity medium;
+    medium.type = MediumTypeSphere;
+    medium.objectIndex = sphereIndex;
+    medium.refractionIndex = max(1.0f, sphere.refraction);
+    medium.opacity = saturate(sphere.opacity);
+    medium.absorptionColor = saturate(sphere.color);
+    return medium;
+}
 
 MediumStack CreateMediumStack(float3 rayOrigin)
 {
@@ -400,6 +424,35 @@ MediumStack CreateMediumStack(float3 rayOrigin)
     {
         stack.entry1 = CreateWaterMedium();
         stack.count = 2;
+    }
+
+    // Add containing glass spheres from largest to smallest so the innermost medium is active.
+    [loop]
+    while (stack.count < MediumStackCapacity)
+    {
+        int containingSphereIndex = -1;
+        float containingSphereRadius = -1.0f;
+        int sphereIndex;
+        [loop]
+        for (sphereIndex = 0; sphereIndex < _NumSpheres; sphereIndex++)
+        {
+            Sphere sphere = _Spheres[sphereIndex];
+            bool isGlass = sphere.materialType == MaterialGlass || sphere.opacity < 1.0f;
+            bool containsOrigin = dot(rayOrigin - sphere.position, rayOrigin - sphere.position) < sphere.radius * sphere.radius;
+            MediumIdentity sphereMedium = CreateSphereMedium(sphere, sphereIndex);
+            if (isGlass && containsOrigin && !MediumStackContains(stack, sphereMedium) && sphere.radius > containingSphereRadius)
+            {
+                containingSphereIndex = sphereIndex;
+                containingSphereRadius = sphere.radius;
+            }
+        }
+
+        if (containingSphereIndex < 0)
+        {
+            break;
+        }
+
+        stack = PushMedium(stack, CreateSphereMedium(_Spheres[containingSphereIndex], containingSphereIndex));
     }
 
     return stack;
@@ -487,6 +540,13 @@ float2 GetMediumTransitionIndices(MediumIdentity currentMedium, MediumIdentity p
     return entering
         ? float2(currentMedium.refractionIndex, boundaryMedium.refractionIndex)
         : float2(currentMedium.refractionIndex, parentMedium.refractionIndex);
+}
+
+float2 GetBoundaryTransitionIndices(MediumStack stack, RayHit hit, out bool entering)
+{
+    MediumIdentity currentMedium = GetCurrentMedium(stack);
+    entering = !IsSameMedium(currentMedium, CreateHitMedium(hit));
+    return GetMediumTransitionIndices(currentMedium, GetParentMedium(stack), hit, entering);
 }
 
 RayHit CreateRayHit()
@@ -2167,10 +2227,11 @@ float GetTransmissionAmount(RayHit hit)
     return saturate(1.0f - hit.opacity);
 }
 
-float GetFresnelReflectance(Ray ray, RayHit hit)
+float GetFresnelReflectance(Ray ray, RayHit hit, float sourceRefraction, float targetRefraction)
 {
-    float refraction = max(1.0f, hit.refraction);
-    float r0 = (1.0f - refraction) / (1.0f + refraction);
+    float sourceIndex = max(0.001f, sourceRefraction);
+    float targetIndex = max(0.001f, targetRefraction);
+    float r0 = (sourceIndex - targetIndex) / (sourceIndex + targetIndex);
     r0 *= r0;
 
     float cosTheta = saturate(abs(dot(-ray.direction, hit.normal)));
@@ -2199,16 +2260,16 @@ bool ShouldSampleDirectLight(float3 throughput)
     return max(throughput.x, max(throughput.y, throughput.z)) > MinDirectLightThroughput;
 }
 
-void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int remainingBounces, out int bouncesConsumed, out int mediumTransition, out float mediumDistanceTraveled)
+void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int remainingBounces, bool entering, float sourceRefraction, float targetRefraction, out int bouncesConsumed, out int mediumTransition, out float mediumDistanceTraveled)
 {
     bouncesConsumed = 1;
     mediumTransition = MediumTransitionNone;
     mediumDistanceTraveled = 0.0f;
 
-    if (dot(sourceRay.direction, hit.normal) > 0.0f)
+    if (!entering)
     {
         float3 exitDirection;
-        if (RefractSnell(sourceRay.direction, hit.refraction, 1.0f, -hit.normal, exitDirection))
+        if (RefractSnell(sourceRay.direction, sourceRefraction, targetRefraction, -hit.normal, exitDirection))
         {
             mediumTransition = MediumTransitionExit;
         }
@@ -2223,7 +2284,7 @@ void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int r
     }
 
     float3 entryDirection;
-    if (!RefractSnell(sourceRay.direction, 1.0f, hit.refraction, hit.normal, entryDirection))
+    if (!RefractSnell(sourceRay.direction, sourceRefraction, targetRefraction, hit.normal, entryDirection))
     {
         ray.direction = reflect(sourceRay.direction, hit.normal);
         ray.origin = hit.position + (ray.direction * 0.001f);
@@ -2259,7 +2320,7 @@ void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int r
     bouncesConsumed++;
 
     float3 exitDirection;
-    if (!RefractSnell(ray.direction, hit.refraction, 1.0f, -exitPointNormal, exitDirection))
+    if (!RefractSnell(ray.direction, targetRefraction, sourceRefraction, -exitPointNormal, exitDirection))
     {
         exitDirection = reflect(ray.direction, exitPointNormal);
         mediumTransition = MediumTransitionEnter;
@@ -2268,17 +2329,33 @@ void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int r
     ray.direction = exitDirection;
 }
 
-void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int remainingBounces, out int bouncesConsumed, out int mediumTransition, out float mediumDistanceTraveled)
+void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int remainingBounces, bool entering, float sourceRefraction, float targetRefraction, out int bouncesConsumed, out int mediumTransition, out float mediumDistanceTraveled)
 {
     bouncesConsumed = 1;
     mediumTransition = MediumTransitionNone;
     mediumDistanceTraveled = 0.0f;
 
-    float3 normal = hit.normal;
-    float targetRefraction = max(1.0f, hit.refraction);
+    float3 normal = dot(sourceRay.direction, hit.normal) < 0.0f ? hit.normal : -hit.normal;
+
+    if (!entering)
+    {
+        float3 exitDirection;
+        if (RefractSnell(sourceRay.direction, sourceRefraction, targetRefraction, normal, exitDirection))
+        {
+            ray.direction = exitDirection;
+            mediumTransition = MediumTransitionExit;
+        }
+        else
+        {
+            ray.direction = reflect(sourceRay.direction, hit.normal);
+        }
+
+        ray.origin = hit.position + ray.direction * 0.001f;
+        return;
+    }
 
     float3 entryDirection;
-    if (!RefractSnell(sourceRay.direction, 1.0f, targetRefraction, normal, entryDirection))
+    if (!RefractSnell(sourceRay.direction, sourceRefraction, targetRefraction, normal, entryDirection))
     {
         ray.direction = reflect(sourceRay.direction, normal);
         ray.origin = hit.position + (ray.direction * 0.001f);
@@ -2342,7 +2419,7 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int
         bouncesConsumed++;
 
         float3 exitDirection;
-        if (RefractSnell(insideRay.direction, targetRefraction, 1.0f, -exitNormal, exitDirection))
+        if (RefractSnell(insideRay.direction, targetRefraction, sourceRefraction, -exitNormal, exitDirection))
         {
             mediumDistanceTraveled = distanceThroughMedium;
             ray.direction = exitDirection;
@@ -2360,23 +2437,20 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int
     mediumTransition = MediumTransitionEnter;
 }
 
-int ApplyWaterTransmission(inout Ray ray, Ray sourceRay, RayHit hit)
+int ApplyWaterTransmission(inout Ray ray, Ray sourceRay, RayHit hit, bool entering, float sourceRefraction, float targetRefraction)
 {
-    bool enteringWater = !IsPointInWater(sourceRay.origin);
-    float sourceRefraction = enteringWater ? 1.0f : max(1.0f, hit.refraction);
-    float targetRefraction = enteringWater ? max(1.0f, hit.refraction) : 1.0f;
-    float3 normal = enteringWater ? hit.normal : -hit.normal;
+    float3 normal = dot(sourceRay.direction, hit.normal) < 0.0f ? hit.normal : -hit.normal;
     float3 transmissionDirection;
 
     bool transmitted = RefractSnell(sourceRay.direction, sourceRefraction, targetRefraction, normal, transmissionDirection);
     ray.direction = transmitted ? transmissionDirection : reflect(sourceRay.direction, hit.normal);
     ray.origin = hit.position + ray.direction * 0.01f;
     return transmitted
-        ? (enteringWater ? MediumTransitionEnter : MediumTransitionExit)
+        ? (entering ? MediumTransitionEnter : MediumTransitionExit)
         : MediumTransitionNone;
 }
 
-ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, int remainingBounces, inout uint rngState)
+ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, int remainingBounces, MediumStack mediumStack, inout uint rngState)
 {
     float3 albedo = GetAlbedo(hit);
     float3 roughNormal = GetRandomizedNormalBasedOnAmount(hit.normal, hit.smoothness, rngState);
@@ -2384,7 +2458,9 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
 
     if (IsWaterMaterial(hit))
     {
-        float fresnelReflectance = GetFresnelReflectance(sourceRay, hit);
+        bool entering;
+        float2 transitionIndices = GetBoundaryTransitionIndices(mediumStack, hit, entering);
+        float fresnelReflectance = GetFresnelReflectance(sourceRay, hit, transitionIndices.x, transitionIndices.y);
         if (rand(rngState) < fresnelReflectance)
         {
             scatteredRay.direction = reflect(sourceRay.direction, roughNormal);
@@ -2392,15 +2468,17 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
             return CreateScatterResult(scatteredRay, lerp(float3(1.0f, 1.0f, 1.0f), albedo, 0.08f), 1, MediumTransitionNone);
         }
 
-        int mediumTransition = ApplyWaterTransmission(scatteredRay, sourceRay, hit);
+        int mediumTransition = ApplyWaterTransmission(scatteredRay, sourceRay, hit, entering, transitionIndices.x, transitionIndices.y);
         float3 tint = lerp(float3(1.0f, 1.0f, 1.0f), albedo, saturate(1.0f - hit.opacity));
         return CreateScatterResult(scatteredRay, tint * GetTransmissionAmount(hit), 1, mediumTransition);
     }
 
     if (IsGlassMaterial(hit))
     {
+        bool entering;
+        float2 transitionIndices = GetBoundaryTransitionIndices(mediumStack, hit, entering);
         float transmission = GetTransmissionAmount(hit);
-        float fresnelReflectance = GetFresnelReflectance(sourceRay, hit);
+        float fresnelReflectance = GetFresnelReflectance(sourceRay, hit, transitionIndices.x, transitionIndices.y);
         float transmissionProbability = transmission * (1.0f - fresnelReflectance);
 
         if (rand(rngState) < transmissionProbability)
@@ -2410,11 +2488,11 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
             float mediumDistanceTraveled = 0.0f;
             if (hit.obj_radius > 0.0f)
             {
-                ApplySphereRefraction(scatteredRay, sourceRay, hit, remainingBounces, bouncesConsumed, mediumTransition, mediumDistanceTraveled);
+                ApplySphereRefraction(scatteredRay, sourceRay, hit, remainingBounces, entering, transitionIndices.x, transitionIndices.y, bouncesConsumed, mediumTransition, mediumDistanceTraveled);
             }
             else
             {
-                ApplyPlanarTransmission(scatteredRay, sourceRay, hit, remainingBounces, bouncesConsumed, mediumTransition, mediumDistanceTraveled);
+                ApplyPlanarTransmission(scatteredRay, sourceRay, hit, remainingBounces, entering, transitionIndices.x, transitionIndices.y, bouncesConsumed, mediumTransition, mediumDistanceTraveled);
             }
 
             float3 tint = GetMediumSegmentTransmittance(CreateHitMedium(hit), mediumDistanceTraveled);
@@ -2499,7 +2577,7 @@ float3 TracePath(Ray ray, inout uint rngState)
         }
 
         int remainingBounces = _NumBounces - bounce;
-        ScatterResult scatter = CreateScatteredRay(ray, hit, bounce, remainingBounces, rngState);
+        ScatterResult scatter = CreateScatteredRay(ray, hit, bounce, remainingBounces, mediumStack, rngState);
         ApplyMediumTransition(mediumStack, hit, scatter.mediumTransition);
         ray = scatter.ray;
         throughput *= scatter.attenuation;
@@ -2592,7 +2670,10 @@ float3 GetDebugRenderColor(Ray ray, inout uint rngState)
         }
 
         float transmission = GetTransmissionAmount(hit);
-        float fresnelReflectance = GetFresnelReflectance(ray, hit);
+        MediumStack mediumStack = CreateMediumStack(ray.origin);
+        bool entering;
+        float2 transitionIndices = GetBoundaryTransitionIndices(mediumStack, hit, entering);
+        float fresnelReflectance = GetFresnelReflectance(ray, hit, transitionIndices.x, transitionIndices.y);
         if (transmission <= 0.0f || rand(rngState) < fresnelReflectance)
         {
             return float3(1.0f, fresnelReflectance, 0.0f);
@@ -2624,7 +2705,7 @@ float3 GetDebugRenderColor(Ray ray, inout uint rngState)
             }
 
             int remainingBounces = _NumBounces - bounce;
-            ScatterResult scatter = CreateScatteredRay(ray, hit, bounce, remainingBounces, rngState);
+            ScatterResult scatter = CreateScatteredRay(ray, hit, bounce, remainingBounces, mediumStack, rngState);
             ApplyMediumTransition(mediumStack, hit, scatter.mediumTransition);
             ray = scatter.ray;
             throughput *= scatter.attenuation;
@@ -2711,6 +2792,7 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     glassHit.refraction = 1.5f;
     glassHit.opacity = 0.6f;
     glassHit.color = float3(0.8f, 0.9f, 1.0f);
+    glassHit.normal = normal;
     MediumIdentity glass = CreateHitMedium(glassHit);
 
     RegressionResults[5] = float4(GetMediumTransitionIndices(air, air, waterHit, true), water.type, water.objectIndex);
@@ -2761,6 +2843,23 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     RegressionResults[15] = float4(glassSegment, 1.0f);
     RegressionResults[16] = float4(waterSegment, 1.0f);
     RegressionResults[17] = float4(GetMediumSegmentTransmittance(air, 1000.0f), GetMediumSegmentDistance(CreateRay(float3(0.0f, 2.0f, 0.0f), float3(1.0f, 0.0f, 0.0f)), 1.#INF, air));
+
+    MediumStack waterStack = CreateMediumStack(float3(0.0f, 2.0f, 0.0f));
+    ApplyMediumTransition(waterStack, waterHit, MediumTransitionEnter);
+    bool enteringNestedGlass;
+    float2 nestedEntryIndices = GetBoundaryTransitionIndices(waterStack, glassHit, enteringNestedGlass);
+    float3 nestedEntryDirection;
+    bool didRefractNestedEntry = RefractSnell(incident45, nestedEntryIndices.x, nestedEntryIndices.y, normal, nestedEntryDirection);
+    RegressionResults[20] = float4(nestedEntryIndices, enteringNestedGlass ? 1.0f : 0.0f, didRefractNestedEntry ? 1.0f : 0.0f);
+    RegressionResults[21] = float4(nestedEntryDirection, GetFresnelReflectance(CreateRay(float3(0.0f, 0.0f, 0.0f), incident45), glassHit, nestedEntryIndices.x, nestedEntryIndices.y));
+
+    MediumStack glassInWaterStack = PushMedium(waterStack, glass);
+    bool enteringNestedExit;
+    float2 nestedExitIndices = GetBoundaryTransitionIndices(glassInWaterStack, glassHit, enteringNestedExit);
+    float3 nestedExitDirection;
+    bool didRefractNestedExit = RefractSnell(normalize(float3(0.8660254f, 0.5f, 0.0f)), nestedExitIndices.x, nestedExitIndices.y, -normal, nestedExitDirection);
+    RegressionResults[22] = float4(nestedExitIndices, enteringNestedExit ? 1.0f : 0.0f, didRefractNestedExit ? 1.0f : 0.0f);
+    RegressionResults[23] = float4(nestedExitDirection, glassInWaterStack.count);
 }
 
 [numthreads(8,8,1)]

@@ -50,7 +50,7 @@ For shadow-BVH traversal details, see `06-shader-intersections-and-bvh.md`.
 - `Metal`: reflects around the surface normal, with smoothness controlling rough reflection direction randomization, attenuates by albedo, and receives direct specular highlights from sampled lights.
 - `Glass`: uses Schlick Fresnel reflectance to randomly choose first-surface reflection versus transmission. Transmitted sphere and mesh paths use Snell refraction. Mesh glass supports bounded internal total internal reflection (TIR) while searching for an exit face. Transmitted glass paths are attenuated by distance-based RGB absorption. Glass and water also receive direct specular highlights from sampled lights.
 
-`TracePath()` carries a fixed-capacity medium stack. Transmitted water, sphere-glass, and mesh-glass paths update that state; reflection and TIR do not. Absorption is evaluated for each traveled segment from the active medium. The object-specific transmission helpers still choose their legacy air/material IORs until stack-driven refraction is implemented.
+`TracePath()` carries a fixed-capacity medium stack. Camera rays initialize the stack with containing water and translucent spheres, with containing spheres ordered outermost to innermost. Transmitted water, sphere-glass, and mesh-glass paths update that state; reflection and TIR do not. Absorption is evaluated for each traveled segment from the active medium. Path-selection Fresnel and the sphere, mesh, and water transmission helpers use the current medium IOR as the source and the entered medium or revealed parent IOR as the target.
 
 The glass path is entered whenever `IsGlassMaterial(hit)` is true, which happens for `materialType == Glass` **or** for any hit with `opacity < 1.0`. A nominally `Diffuse` or `Metal` object with reduced opacity therefore scatters through the glass transmission/Fresnel path.
 
@@ -66,12 +66,12 @@ Sphere and closed-mesh helpers report only internal distance they consume while 
 
 Transparent/glass sphere refraction is approximate. `ApplySphereRefraction()`:
 
-1. Refracts from air into the sphere using `RefractSnell()`, or from sphere material back into air when the ray starts inside the sphere.
+1. Refracts from the current stack medium into the sphere using `RefractSnell()`, or from the sphere into the revealed parent medium on an exit hit.
 2. For entry hits, casts a bounded internal ray up to the current sphere exit while ignoring that current sphere.
 3. If another scene object is hit before the exit, continues tracing inside the current sphere so interpenetrating transparent objects can be seen.
 4. If no closer internal object is hit, estimates the exit point by finding a closest point across the sphere chord.
 5. Computes the exit normal.
-6. Refracts back out into air, or reflects on total internal reflection.
+6. Refracts back into the source/parent medium, or reflects on total internal reflection.
 
 Glass material scattering uses opacity-scaled Schlick Fresnel reflectance to randomly choose first-surface reflection or transmission. Reflected glass paths blend from white toward material color as opacity increases, while transmitted paths are filtered by distance-based absorption. Internal TIR bounces consume from the same `_NumBounces` path budget as regular scene bounces, so a ray with only two bounces remaining can only spend two bounces on glass entry/exit/internal reflection work.
 
@@ -79,12 +79,12 @@ Water uses the same refraction/Fresnel helper, but its reflection probability is
 
 Triangle mesh refraction uses `ApplyPlanarTransmission()` rather than the sphere helper:
 
-1. Refract from air into the hit triangle using `RefractSnell()`.
+1. Refract from the current stack medium into the hit triangle using `RefractSnell()`; an already-active matching mesh boundary instead refracts directly into its parent medium.
 2. Cast an internal ray against triangles with the same `meshIndex`.
 3. Use the nearest internal triangle hit as the candidate exit face.
 4. Run a bounded scene intersection query along the internal segment, ignoring the current transparent mesh. This uses the normal top-level/per-mesh BVH traversal and can find objects enclosed by the transparent mesh before the exit face.
 5. If an interior object is found, continue tracing inside the transparent mesh so the next bounce shades that object.
-6. If no interior object is found, try to refract from material back into air and continue the path from the exit point.
+6. If no interior object is found, try to refract from the material back into the source/parent medium and continue the path from the exit point.
 7. If the exit face exceeds the critical angle, reflect internally and repeat until the ray exits, hits an interior object, misses the closed mesh, or exhausts the remaining path-bounce budget.
 
-This gives visible prism-like behavior for simple closed meshes such as pyramids while still allowing enclosed objects, such as a pencil inside a water cylinder, to be hit before the transparent mesh exit. It is still approximate: it assumes a mostly closed/convex mesh and does not track a full nested-medium stack.
+This gives visible prism-like behavior for simple closed meshes such as pyramids while still allowing enclosed objects, such as a pencil inside a water cylinder, to be hit before the transparent mesh exit. It is still approximate: it assumes a mostly closed/convex mesh and supports properly nested volumes rather than arbitrary interpenetrating medium ordering.

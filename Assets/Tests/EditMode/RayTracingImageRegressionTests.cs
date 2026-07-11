@@ -109,6 +109,18 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void CameraInsideTranslucentGlassSphere_CurrentImageBaseline_IsStable()
+        {
+            Vector4[] signature = RenderSignature(new[]
+            {
+                Sphere(new Vector3(0.0f, 1.3f, -3.8f), new Vector3(0.42f, 0.72f, 0.94f), 1.45f, 1.0f, 0.35f, 1.5f, 2),
+                Sphere(new Vector3(0.0f, 1.1f, 1.4f), new Vector3(0.92f, 0.2f, 0.08f), 0.75f, 0.2f, 1.0f, 1.0f, 0)
+            }, false, new Vector3(0.0f, 1.3f, -4.5f), Quaternion.identity);
+
+            AssertSignature("camera inside translucent glass sphere", signature, InsideGlassCameraBaseline);
+        }
+
+        [Test]
         public void WaterScene_CurrentImageBaseline_IsStable()
         {
             Vector4[] signature = RenderSignature(new[]
@@ -251,6 +263,19 @@ namespace GPURayTracing.Tests
             new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f)
         };
 
+        private static readonly Vector4[] InsideGlassCameraBaseline =
+        {
+            new Vector4(0.05468999f, 0.22955850f, 0.51936210f, 1.0f),
+            new Vector4(0.04178934f, 0.19062350f, 0.45779480f, 1.0f),
+            new Vector4(0.04602021f, 0.22105660f, 0.51487710f, 1.0f),
+            new Vector4(0.05979341f, 0.26276930f, 0.56128440f, 1.0f),
+            new Vector4(0.05455200f, 0.23933270f, 0.53959990f, 1.0f),
+            new Vector4(0.02384388f, 0.02539920f, 0.07592814f, 1.0f),
+            new Vector4(0.09506290f, 0.34522480f, 0.63457150f, 1.0f),
+            new Vector4(0.07205451f, 0.28918140f, 0.59165610f, 1.0f),
+            new Vector4(0.04310199f, 0.20011510f, 0.47649630f, 1.0f)
+        };
+
         private static readonly Vector4[] WaterBaseline =
         {
             new Vector4(0.10111540f, 0.19415280f, 0.31678240f, 1.0f),
@@ -271,7 +296,7 @@ namespace GPURayTracing.Tests
 
         private static readonly Vector4[] UnderwaterCameraBaseline =
         {
-            new Vector4(0.00065369f, 0.01063801f, 0.04030129f, 1.0f),
+            new Vector4(0.00060182f, 0.00948681f, 0.03588293f, 1.0f),
             new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
             new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.00168944f, 0.02495992f, 0.09691052f, 1.0f),
             new Vector4(0.00009245f, 0.00087927f, 0.00297273f, 1.0f), new Vector4(0.00166109f, 0.02461908f, 0.09583434f, 1.0f),

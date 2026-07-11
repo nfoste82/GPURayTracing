@@ -8,17 +8,17 @@ The recent texture, mesh-light, glass, specular, imported-model, and procedural-
 
 1. Finish explicit medium identity/state and carry it through production paths.
 2. Unify segment absorption around the active medium and actual distance traveled.
-3. Refactor refraction to use source/target IORs from medium state.
-4. Rework transparent shadow rays as ordered boundary traversal.
-5. Replace the approximate direct specular path with shared BRDF/BSDF evaluation and sampling.
-6. Add multiple importance sampling (MIS) after material and light PDFs are trustworthy.
-7. Address independent correctness/lifecycle hazards and measured CPU-side performance work alongside the renderer sequence where they do not destabilize it.
+3. Rework transparent shadow rays as ordered boundary traversal.
+4. Replace the approximate direct specular path with shared BRDF/BSDF evaluation and sampling.
+5. Add multiple importance sampling (MIS) after material and light PDFs are trustworthy.
+6. Address independent correctness/lifecycle hazards and measured CPU-side performance work alongside the renderer sequence where they do not destabilize it.
 
 ## Current Status
 
-- **Regression foundation: implemented.** CPU intersection/math tests, production GPU reflection/refraction/Fresnel/absorption probes, deterministic rendering signatures, transparent sphere/closed-mesh/stacked shadow fixtures, texture and mesh-light fixtures, deterministic BVH equivalence/depth checks, and tiny/odd-resolution GPU dispatch smoke tests are implemented. The water-family signatures currently expose baseline drift that must be reviewed before the next intentional water change.
-- **Medium identity and path state: implemented.** `TracePath()` carries a fixed-capacity stack with implicit air, initializes underwater camera rays, updates transmitted water/sphere/mesh paths, and exposes overflow/unmatched-exit status through regression probes. Starting inside closed sphere/mesh glass and using stack state for refraction remain unsupported.
-- **Segment absorption: implemented.** Production paths attenuate each traveled segment from the active medium; finite water clips against surface/XZ exits and finite-medium sky misses avoid infinite attenuation. Stack-driven refraction, shadow boundary traversal, coherent BRDF/BSDF sampling, and MIS remain.
+- **Regression foundation: implemented.** CPU intersection/math tests, production GPU reflection/refraction/Fresnel/absorption probes, deterministic rendering signatures, transparent sphere/closed-mesh/stacked shadow fixtures, texture and mesh-light fixtures, deterministic BVH equivalence/depth checks, and tiny/odd-resolution GPU dispatch smoke tests are implemented. The water-family signature drift from finite-water AABB changes has been reviewed and recaptured.
+- **Medium identity and path state: implemented.** `TracePath()` carries a fixed-capacity stack with implicit air, initializes underwater camera rays, updates transmitted water/sphere/mesh paths, and exposes overflow/unmatched-exit status through regression probes. Refraction now consumes stack state; starting inside closed sphere/mesh glass remains unsupported.
+- **Segment absorption: implemented.** Production paths attenuate each traveled segment from the active medium; finite water clips against surface/XZ exits and finite-medium sky misses avoid infinite attenuation. Shadow boundary traversal, coherent BRDF/BSDF sampling, and MIS remain.
+- **Stack-driven refraction: implemented.** Path-selection Fresnel and sphere, mesh, and water transmission derive source/target IORs from the active medium and its entered/revealed neighbor. Reflection and TIR preserve stack state; production probes cover water -> glass -> water indices, direction, Fresnel, and water-surrounded TIR behavior.
 
 ## Priority 0: Protect Upcoming Changes
 
@@ -50,6 +50,8 @@ Completion criteria: production paths carry stable, test-covered medium state ac
 Completion criteria: every finite path segment is attenuated by its actual active medium and distance, air adds no attenuation, finite-water exits are respected, and nested-medium absorption tests pass.
 
 ## Priority 3: Stack-Driven Refraction
+
+Status: implemented.
 
 - Use the current medium IOR as the source and the pushed medium or revealed parent IOR as the target for every dielectric boundary.
 - Replace hard-coded air -> material and material -> air assumptions in sphere, mesh, and water transmission helpers.

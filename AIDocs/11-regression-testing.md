@@ -13,7 +13,7 @@ The project uses EditMode tests under `Assets/Tests/EditMode/` to make rendering
 - Current Schlick Fresnel values at normal, 45-degree, and grazing incidence.
 - Current distance/color/opacity glass absorption approximation.
 - A GPU `CSRegressionProbe` kernel in the production compute shader that calls the same reflection, `RefractSnell()`, Fresnel formula, and `GetAbsorptionTransmittance()` behavior used by rendering. This catches divergence between CPU expectations and shader execution.
-- Deterministic `32x32` final-color image signatures for a reflective metal sphere, a refractive glass sphere with geometry behind it, closed mesh glass through production triangle/mesh/BVH buffers, calm finite water with submerged geometry, nested water/sphere-glass, a camera starting underwater, textured geometry, triangle mesh lights, and transparent sphere/closed-mesh/stacked shadows. Each baseline stores the image average and eight fixed pixel probes after tone mapping.
+- Deterministic `32x32` final-color image signatures for a reflective metal sphere, a refractive glass sphere with geometry behind it, a camera starting inside a translucent glass sphere, closed mesh glass through production triangle/mesh/BVH buffers, calm finite water with submerged geometry, nested water/sphere-glass, a camera starting underwater, textured geometry, triangle mesh lights, and transparent sphere/closed-mesh/stacked shadows. Each baseline stores the image average and eight fixed pixel probes after tone mapping.
 - Medium-identity and stack probes for air -> water -> sphere glass -> water -> air, parent lookup, matching exits, overflow, unmatched exits, underwater initialization, and flat water-volume side/bottom intersections.
 - Deterministic randomized CPU reference comparisons for per-mesh, top-level, and shadow BVH traversal against brute force, with maximum build depth checked against the fixed stack capacity of `64`.
 - GPU dispatch smoke coverage at `1x1`, `3x5`, and `13x7`; `CSMain` now returns before accessing output textures for ceiling-dispatch threads outside their dimensions.
@@ -54,9 +54,9 @@ The fixtures use deterministic in-memory sphere, light, triangle, mesh-info, BVH
 
 ## Medium Transition Foundation
 
-`MediumIdentity` in `RayTracingCompute.compute` records medium type, object identity, IOR, opacity, and absorption color. `TracePath()` carries a fixed-capacity stack with implicit air and initializes water when a camera ray starts underwater. Transmission updates the stack while reflection and TIR preserve it. Sphere/mesh helpers that internally cross both faces leave the net stack unchanged; paths that stop inside a volume retain that medium for the next production bounce.
+`MediumIdentity` in `RayTracingCompute.compute` records medium type, object identity, IOR, opacity, and absorption color. `TracePath()` carries a fixed-capacity stack with implicit air and initializes containing water and translucent spheres at the camera origin. Containing spheres are pushed from largest to smallest so the innermost sphere is active. Transmission updates the stack while reflection and TIR preserve it. Sphere/mesh helpers that internally cross both faces leave the net stack unchanged; paths that stop inside a volume retain that medium for the next production bounce.
 
-Stack overflow and unmatched exits set explicit status bits and preserve valid existing state. Per-segment probes cover glass/water attenuation, neutral air, finite water side and surface exits, clipping at the next hit, and finite-medium sky misses. The next implementation step is source/target IOR selection for refraction.
+Stack overflow and unmatched exits set explicit status bits and preserve valid existing state. Per-segment probes cover glass/water attenuation, neutral air, finite water side and surface exits, clipping at the next hit, and finite-medium sky misses. Production probes also cover water -> glass and glass -> water source/target selection, refraction direction, Fresnel, and the case where glass -> air would incorrectly produce TIR but glass -> water transmits.
 
 ## Remaining Coverage
 

@@ -25,9 +25,11 @@ namespace GPURayTracing.Tests
             }
 
             int kernel = shader.FindKernel("CSRegressionProbe");
-            var buffer = new ComputeBuffer(20, sizeof(float) * 4);
+            var buffer = new ComputeBuffer(24, sizeof(float) * 4);
+            var sphereBuffer = new ComputeBuffer(1, 56);
             try
             {
+                shader.SetInt("_NumSpheres", 0);
                 shader.SetInt("_WaterEnabled", 1);
                 shader.SetVector("_WaterCenter", Vector4.zero);
                 shader.SetVector("_WaterSize", new Vector4(10.0f, 10.0f, 0.0f, 0.0f));
@@ -37,10 +39,11 @@ namespace GPURayTracing.Tests
                 shader.SetFloat("_WaterAbsorptionStrength", 0.22f);
                 shader.SetFloat("_WaterRefraction", 2.0f);
                 shader.SetFloat("_WaterWaveAmplitude", 0.0f);
+                shader.SetBuffer(kernel, "_Spheres", sphereBuffer);
                 shader.SetBuffer(kernel, "RegressionResults", buffer);
                 shader.Dispatch(kernel, 1, 1, 1);
 
-                var results = new Vector4[20];
+                var results = new Vector4[24];
                 buffer.GetData(results);
 
                 AssertVector(results[0], new Vector4(0.70710677f, 0.70710677f, 0.0f, 1.0f), "reflection");
@@ -63,9 +66,14 @@ namespace GPURayTracing.Tests
                 AssertVector(results[17], new Vector4(1.0f, 1.0f, 1.0f, 0.0f), "air segment is neutral");
                 AssertVector(results[18], new Vector4(4.0f, 1.0f, 4.0f, 1.0f), "water AABB bottom and side intersections", 0.001f);
                 AssertVector(results[19], new Vector4(-1.0f, 0.0f, 0.0f, 1.0f), "water AABB side normal");
+                AssertVector(results[20], new Vector4(2.0f, 1.5f, 1.0f, 1.0f), "production water-to-glass transition selection");
+                AssertVector(results[21], new Vector4(0.9428090f, -0.3333333f, 0.0f, 0.0225197f), "production water-to-glass direction and Fresnel", 0.0002f);
+                AssertVector(results[22], new Vector4(1.5f, 2.0f, 0.0f, 1.0f), "production glass-to-water transition avoids air TIR");
+                AssertVector(results[23], new Vector4(0.6495190f, 0.7603453f, 0.0f, 3.0f), "production glass-to-water direction preserves stack until transmission", 0.0002f);
             }
             finally
             {
+                sphereBuffer.Release();
                 buffer.Release();
             }
         }
