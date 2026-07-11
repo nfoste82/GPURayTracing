@@ -6,18 +6,17 @@ This document captures likely future work areas in priority order. For current i
 
 The recent texture, mesh-light, glass, specular, imported-model, and procedural-water work makes correctness and regression coverage more valuable than adding another major rendering feature. The current recommended order is:
 
-1. Complete the regression fixtures needed to protect medium and acceleration-structure changes.
-2. Finish explicit medium identity/state and carry it through production paths.
-3. Unify segment absorption around the active medium and actual distance traveled.
-4. Refactor refraction to use source/target IORs from medium state.
-5. Rework transparent shadow rays as ordered boundary traversal.
-6. Replace the approximate direct specular path with shared BRDF/BSDF evaluation and sampling.
-7. Add multiple importance sampling (MIS) after material and light PDFs are trustworthy.
-8. Address independent correctness/lifecycle hazards and measured CPU-side performance work alongside the renderer sequence where they do not destabilize it.
+1. Finish explicit medium identity/state and carry it through production paths.
+2. Unify segment absorption around the active medium and actual distance traveled.
+3. Refactor refraction to use source/target IORs from medium state.
+4. Rework transparent shadow rays as ordered boundary traversal.
+5. Replace the approximate direct specular path with shared BRDF/BSDF evaluation and sampling.
+6. Add multiple importance sampling (MIS) after material and light PDFs are trustworthy.
+7. Address independent correctness/lifecycle hazards and measured CPU-side performance work alongside the renderer sequence where they do not destabilize it.
 
 ## Current Status
 
-- **Regression foundation: in progress.** CPU intersection/math tests, production GPU reflection/refraction/Fresnel/absorption probes, and deterministic reflective-sphere, glass-sphere, closed-mesh-glass, water, nested water/sphere-glass, and camera-starting-underwater image signatures are implemented. Transparent-shadow, texture, mesh-light, BVH-equivalence, and odd-resolution fixtures remain.
+- **Regression foundation: implemented.** CPU intersection/math tests, production GPU reflection/refraction/Fresnel/absorption probes, deterministic rendering signatures, transparent sphere/closed-mesh/stacked shadow fixtures, texture and mesh-light fixtures, deterministic BVH equivalence/depth checks, and tiny/odd-resolution GPU dispatch smoke tests are implemented. The water-family signatures currently expose baseline drift that must be reviewed before the next intentional water change.
 - **Medium identity and path state: implemented.** `TracePath()` carries a fixed-capacity stack with implicit air, initializes underwater camera rays, updates transmitted water/sphere/mesh paths, and exposes overflow/unmatched-exit status through regression probes. Starting inside closed sphere/mesh glass and using stack state for refraction remain unsupported.
 - **Segment absorption: implemented.** Production paths attenuate each traveled segment from the active medium; finite water clips against surface/XZ exits and finite-medium sky misses avoid infinite attenuation. Stack-driven refraction, shadow boundary traversal, coherent BRDF/BSDF sampling, and MIS remain.
 
@@ -25,9 +24,9 @@ The recent texture, mesh-light, glass, specular, imported-model, and procedural-
 
 - Add deterministic mesh-glass image fixture data that exercises production triangle, mesh-info, and per-mesh BVH traversal. Cover visible refraction and total internal reflection rather than testing only isolated math.
 - Add a current-behavior nested-media fixture for air -> water -> glass -> water -> air before changing production transitions. Include camera-starting-underwater and, if practical, camera-starting-inside-glass cases.
-- Add deterministic transparent-shadow fixtures for a sphere, a closed mesh, and stacked blockers so later boundary-distance changes fail visibly and intentionally.
-- Compare per-mesh, top-level, and shadow BVH results against brute-force intersections over deterministic randomized scenes, and test maximum tree depth against `BvhStackSize`.
-- Add odd-resolution GPU smoke tests immediately after the `CSMain` output-dimension guard is implemented.
+- Deterministic transparent-shadow fixtures for a sphere, a closed mesh, and stacked blockers now protect later boundary-distance changes.
+- Deterministic randomized per-mesh, top-level, and shadow BVH reference traversals are compared against brute force and assert maximum depth against `BvhStackSize`.
+- Tiny and odd-resolution GPU smoke tests now cover the `CSMain` output-dimension guard.
 
 ## Priority 1: Medium Identity And Path State
 
@@ -93,10 +92,10 @@ Completion criteria: light and material sampling can both discover the same path
 
 ## Parallel Correctness And Safety
 
-- Add an output-dimension guard at the start of `CSMain`. Dispatch uses ceiling-divided `8x8` groups, so render sizes not divisible by eight currently launch threads outside `Result`/`AccumulationResult`. Verify very small and odd resolutions.
+- The output-dimension guard at the start of `CSMain` is implemented and covered at `1x1`, `3x5`, and `13x7`.
 - Make ray-traced object registration and `_buffersNeedRebuilding` manager-local, or explicitly enforce and reset a supported singleton. Their current static lifetime conflicts with instance-owned buffers and is fragile with multiple managers or disabled domain reload.
 - Preserve and restore the application's previous `QualitySettings.vSyncCount`, `Application.targetFrameRate`, and `Time.timeScale` when entering/leaving single-frame mode, including disable/destruction cleanup.
-- Enforce the fixed BVH stack-depth invariant. Record maximum build depth and assert/fail clearly before a tree can exceed the CPU/GPU stack size of `64`; traversal currently drops overflowing children and could miss intersections.
+- The fixed BVH stack-depth invariant is enforced during mesh, top-level, and shadow builds; construction fails clearly before exceeding the CPU/GPU stack size of `64`.
 - Detect `MeshFilter.sharedMesh` replacement and define an explicit dirty path for runtime vertex/topology/UV changes. Validate `mesh.isReadable` with an actionable error before reading imported mesh data.
 - Update dynamic scene data before CPU autofocus and bring CPU sphere/water intersection behavior into parity with the shader. Autofocus currently sees previous-frame transforms and uses the average water plane rather than procedural waves.
 - Correct finite-water segment accounting as part of Priority 2 rather than adding another independent water-only attenuation path.

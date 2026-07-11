@@ -1536,7 +1536,7 @@ public class GameManager : MonoBehaviour
 
         if (_topLevelBvhBuildItems.Count > 0)
         {
-            BuildTopLevelBvhNode(_topLevelBvhBuildItems, _topLevelBvhNodes, 0, _topLevelBvhBuildItems.Count);
+            BuildTopLevelBvhNode(_topLevelBvhBuildItems, _topLevelBvhNodes, 0, _topLevelBvhBuildItems.Count, 1);
         }
     }
 
@@ -1573,7 +1573,7 @@ public class GameManager : MonoBehaviour
 
         if (_shadowBvhBuildItems.Count > 0)
         {
-            BuildTopLevelBvhNode(_shadowBvhBuildItems, _shadowBvhNodes, 0, _shadowBvhBuildItems.Count);
+            BuildTopLevelBvhNode(_shadowBvhBuildItems, _shadowBvhNodes, 0, _shadowBvhBuildItems.Count, 1);
         }
     }
 
@@ -1601,8 +1601,13 @@ public class GameManager : MonoBehaviour
         });
     }
 
-    private int BuildTopLevelBvhNode(List<TopLevelBvhBuildItem> items, List<TopLevelBvhNode> nodes, int start, int count)
+    private int BuildTopLevelBvhNode(List<TopLevelBvhBuildItem> items, List<TopLevelBvhNode> nodes, int start, int count, int depth)
     {
+        if (depth > BvhStackSize)
+        {
+            throw new InvalidOperationException($"Top-level BVH depth {depth} exceeds traversal stack capacity {BvhStackSize}.");
+        }
+
         var nodeIndex = nodes.Count;
         var boundsMin = items[start].boundsMin;
         var boundsMax = items[start].boundsMax;
@@ -1641,8 +1646,8 @@ public class GameManager : MonoBehaviour
         int leftCount = FindTopLevelSahSplit(items, start, count);
 
         int rightCount = count - leftCount;
-        int leftChildIndex = BuildTopLevelBvhNode(items, nodes, start, leftCount);
-        int rightChildIndex = BuildTopLevelBvhNode(items, nodes, start + leftCount, rightCount);
+        int leftChildIndex = BuildTopLevelBvhNode(items, nodes, start, leftCount, depth + 1);
+        int rightChildIndex = BuildTopLevelBvhNode(items, nodes, start + leftCount, rightCount, depth + 1);
 
         nodes[nodeIndex] = new TopLevelBvhNode
         {
@@ -1719,8 +1724,13 @@ public class GameManager : MonoBehaviour
         return Mathf.Clamp(bestSplit, 1, count - 1);
     }
 
-    private int BuildBvhNode(List<Triangle> meshTriangles, int start, int count)
+    private int BuildBvhNode(List<Triangle> meshTriangles, int start, int count, int depth = 1)
     {
+        if (depth > BvhStackSize)
+        {
+            throw new InvalidOperationException($"Mesh BVH depth {depth} exceeds traversal stack capacity {BvhStackSize}.");
+        }
+
         var nodeIndex = _bvhNodes.Count;
         var boundsMin = GetTriangleBoundsMin(meshTriangles[start]);
         var boundsMax = GetTriangleBoundsMax(meshTriangles[start]);
@@ -1767,8 +1777,8 @@ public class GameManager : MonoBehaviour
         int leftCount = FindTriangleSahSplit(meshTriangles, start, count);
 
         int rightCount = count - leftCount;
-        int leftChildIndex = BuildBvhNode(meshTriangles, start, leftCount);
-        int rightChildIndex = BuildBvhNode(meshTriangles, start + leftCount, rightCount);
+        int leftChildIndex = BuildBvhNode(meshTriangles, start, leftCount, depth + 1);
+        int rightChildIndex = BuildBvhNode(meshTriangles, start + leftCount, rightCount, depth + 1);
 
         _bvhNodes[nodeIndex] = new BvhNode
         {

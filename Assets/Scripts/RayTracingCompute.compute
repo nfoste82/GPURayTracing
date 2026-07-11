@@ -2770,6 +2770,11 @@ void CSMain (uint3 id : SV_DispatchThreadID)
     uint width, height;
     Result.GetDimensions(width, height);
 
+    if (id.x >= width || id.y >= height)
+    {
+        return;
+    }
+
     // Transform pixel to [-1,1] range
     float3 result = float3(0.0f, 0.0f, 0.0f);
     [loop]

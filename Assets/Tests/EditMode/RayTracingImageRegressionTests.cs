@@ -26,6 +26,19 @@ namespace GPURayTracing.Tests
         }
 
         [StructLayout(LayoutKind.Sequential)]
+        private struct LightData
+        {
+            public Vector3 position;
+            public Vector3 emission;
+            public Vector3 u;
+            public float radius;
+            public Vector3 v;
+            public float area;
+            public Vector3 normal;
+            public int type;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
         private struct MeshTriangleData
         {
             public Vector3 vertex0;
@@ -142,6 +155,74 @@ namespace GPURayTracing.Tests
             AssertSignature("closed mesh glass", signature, ClosedMeshGlassBaseline);
         }
 
+        [TestCase(1, 1)]
+        [TestCase(3, 5)]
+        [TestCase(13, 7)]
+        public void NonMultipleOfEightDispatch_WritesEveryPixelWithoutOutOfBoundsAccess(int width, int height)
+        {
+            Vector4[] signature = RenderSignature(
+                Array.Empty<SphereData>(),
+                false,
+                new Vector3(0.0f, 1.6f, -4.5f),
+                Quaternion.identity,
+                width: width,
+                height: height);
+
+            foreach (Vector4 value in signature)
+            {
+                Assert.That(float.IsNaN(value.x) || float.IsInfinity(value.x), Is.False);
+                Assert.That(float.IsNaN(value.y) || float.IsInfinity(value.y), Is.False);
+                Assert.That(float.IsNaN(value.z) || float.IsInfinity(value.z), Is.False);
+                Assert.That(value.w, Is.EqualTo(1.0f).Within(0.0001f));
+            }
+        }
+
+        [Test]
+        public void TexturedMeshScene_CurrentImageBaseline_IsStable()
+        {
+            CreateTexturedQuad(out MeshTriangleData[] triangles, out MeshInfoData[] meshes, out BvhNodeData[] bvhNodes);
+            Texture2DArray textures = CreateCheckerTextureArray();
+            try
+            {
+                Vector4[] signature = RenderSignature(
+                    Array.Empty<SphereData>(), false, new Vector3(0.0f, 1.3f, -4.5f), Quaternion.identity,
+                    triangles, meshes, bvhNodes,
+                    new[] { SphereLight(new Vector3(-1.8f, 3.2f, -1.5f), new Vector3(14.0f, 14.0f, 14.0f), 0.3f) },
+                    textures);
+                AssertSignature("textured mesh", signature, TexturedMeshBaseline);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(textures);
+            }
+        }
+
+        [Test]
+        public void MeshLightScene_CurrentImageBaseline_IsStable()
+        {
+            CreateEmissiveQuad(out MeshTriangleData[] triangles, out MeshInfoData[] meshes, out BvhNodeData[] bvhNodes, out LightData[] lights);
+            Vector4[] signature = RenderSignature(
+                new[] { Sphere(new Vector3(0.0f, 0.75f, 1.5f), new Vector3(0.75f, 0.35f, 0.12f), 0.75f, 0.2f, 1.0f, 1.0f, 0) },
+                false, new Vector3(0.0f, 1.6f, -4.5f), Quaternion.Euler(4.0f, 0.0f, 0.0f),
+                triangles, meshes, bvhNodes, lights);
+            AssertSignature("mesh light", signature, MeshLightBaseline);
+        }
+
+        [TestCase(0)]
+        [TestCase(1)]
+        [TestCase(2)]
+        public void TransparentShadowScenes_CurrentImageBaselines_AreStable(int fixture)
+        {
+            CreateShadowFixture(fixture, out SphereData[] spheres, out MeshTriangleData[] triangles, out MeshInfoData[] meshes, out BvhNodeData[] bvhNodes);
+            var lights = new[] { SphereLight(new Vector3(1.8f, 4.0f, -0.8f), new Vector3(18.0f, 16.0f, 14.0f), 0.35f) };
+            Vector4[] signature = RenderSignature(
+                spheres, false, new Vector3(0.0f, 1.8f, -5.5f), Quaternion.Euler(12.0f, 0.0f, 0.0f),
+                triangles, meshes, bvhNodes, lights);
+
+            Vector4[][] baselines = { TransparentSphereShadowBaseline, TransparentMeshShadowBaseline, StackedTransparentShadowBaseline };
+            AssertSignature($"transparent shadow fixture {fixture}", signature, baselines[fixture]);
+        }
+
         // Average HDR color followed by eight fixed pixel probes. These values intentionally lock
         // current output, including approximations; update only after reviewing an expected change.
         private static readonly Vector4[] ReflectionBaseline =
@@ -172,16 +253,16 @@ namespace GPURayTracing.Tests
 
         private static readonly Vector4[] WaterBaseline =
         {
-            new Vector4(0.10158380f, 0.19616780f, 0.32085890f, 1.0f),
+            new Vector4(0.10111540f, 0.19415280f, 0.31678240f, 1.0f),
             new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
             new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.03365663f, 0.08516176f, 0.19658320f, 1.0f),
-            new Vector4(0.02643724f, 0.08810403f, 0.11557450f, 1.0f), new Vector4(0.01617341f, 0.07468688f, 0.20154250f, 1.0f),
+            new Vector4(0.01132319f, 0.02900140f, 0.07406791f, 1.0f), new Vector4(0.01617341f, 0.07468688f, 0.20154250f, 1.0f),
             new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f), new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f)
         };
 
         private static readonly Vector4[] NestedWaterGlassBaseline =
         {
-            new Vector4(0.10155270f, 0.19598400f, 0.32057390f, 1.0f),
+            new Vector4(0.10110180f, 0.19405520f, 0.31659620f, 1.0f),
             new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
             new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.03365663f, 0.08516176f, 0.19658320f, 1.0f),
             new Vector4(0.01132319f, 0.02900140f, 0.07406791f, 1.0f), new Vector4(0.01617341f, 0.07468688f, 0.20154250f, 1.0f),
@@ -190,10 +271,10 @@ namespace GPURayTracing.Tests
 
         private static readonly Vector4[] UnderwaterCameraBaseline =
         {
-            new Vector4(0.00145278f, 0.01631414f, 0.05592640f, 1.0f),
+            new Vector4(0.00065369f, 0.01063801f, 0.04030129f, 1.0f),
             new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
-            new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.01138539f, 0.08646619f, 0.24626650f, 1.0f),
-            new Vector4(0.00038464f, 0.00242334f, 0.00816626f, 1.0f), new Vector4(0.01115748f, 0.08535092f, 0.24409440f, 1.0f),
+            new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.00168944f, 0.02495992f, 0.09691052f, 1.0f),
+            new Vector4(0.00009245f, 0.00087927f, 0.00297273f, 1.0f), new Vector4(0.00166109f, 0.02461908f, 0.09583434f, 1.0f),
             new Vector4(0.00246564f, 0.02287684f, 0.07859048f, 1.0f), new Vector4(0.00112369f, 0.01974659f, 0.07859048f, 1.0f)
         };
 
@@ -204,6 +285,51 @@ namespace GPURayTracing.Tests
             new Vector4(0.20471280f, 0.38236340f, 0.59162720f, 1.0f), new Vector4(0.20471280f, 0.38236340f, 0.59162720f, 1.0f),
             new Vector4(0.10642110f, 0.14467890f, 0.28724830f, 1.0f), new Vector4(0.20471280f, 0.38236340f, 0.59162720f, 1.0f),
             new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f), new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f)
+        };
+
+        private static readonly Vector4[] TexturedMeshBaseline =
+        {
+            new Vector4(0.66644350f, 0.44557010f, 0.82882260f, 1.0f), new Vector4(0.97508000f, 0.00002457f, 0.95618470f, 1.0f),
+            new Vector4(0.95546660f, 0.00000784f, 0.96079920f, 1.0f), new Vector4(0.89144050f, 0.00000029f, 0.91804080f, 1.0f),
+            new Vector4(0.97313550f, 0.01514817f, 0.99068440f, 1.0f), new Vector4(0.95175840f, 0.00075266f, 0.95018200f, 1.0f),
+            new Vector4(0.91613910f, 0.00000660f, 0.89885240f, 1.0f), new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f),
+            new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f)
+        };
+
+        private static readonly Vector4[] MeshLightBaseline =
+        {
+            new Vector4(0.61611250f, 0.70159460f, 0.77816160f, 1.0f), new Vector4(1.0f, 1.0f, 0.99457820f, 1.0f),
+            new Vector4(0.01259302f, 0.00944683f, 0.00465952f, 1.0f), new Vector4(1.0f, 1.0f, 0.99132970f, 1.0f),
+            new Vector4(0.21515110f, 0.38496370f, 0.58750780f, 1.0f), new Vector4(1.0f, 0.99655140f, 0.89897720f, 1.0f),
+            new Vector4(0.21410150f, 0.38864730f, 0.59400840f, 1.0f), new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f),
+            new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f)
+        };
+
+        private static readonly Vector4[] TransparentSphereShadowBaseline =
+        {
+            new Vector4(0.67417510f, 0.74471530f, 0.82114350f, 1.0f), new Vector4(0.95968090f, 0.95407700f, 0.95036980f, 1.0f),
+            new Vector4(0.97766330f, 0.97265360f, 0.96821630f, 1.0f), new Vector4(0.98836910f, 0.98412730f, 0.98013760f, 1.0f),
+            new Vector4(0.84476920f, 0.84344210f, 0.85538310f, 1.0f), new Vector4(0.89204600f, 0.88718720f, 0.89049240f, 1.0f),
+            new Vector4(0.89949620f, 0.89429760f, 0.89648050f, 1.0f), new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f),
+            new Vector4(0.74902470f, 0.86729660f, 0.89976260f, 1.0f)
+        };
+
+        private static readonly Vector4[] TransparentMeshShadowBaseline =
+        {
+            new Vector4(0.66521620f, 0.73002660f, 0.80848420f, 1.0f), new Vector4(0.95968090f, 0.95407700f, 0.95036980f, 1.0f),
+            new Vector4(0.97830630f, 0.97300170f, 0.96822960f, 1.0f), new Vector4(0.98836910f, 0.98412730f, 0.98013760f, 1.0f),
+            new Vector4(0.84476920f, 0.84344210f, 0.85538310f, 1.0f), new Vector4(0.89204600f, 0.88718720f, 0.89049240f, 1.0f),
+            new Vector4(0.89949620f, 0.89429760f, 0.89648050f, 1.0f), new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f),
+            new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f)
+        };
+
+        private static readonly Vector4[] StackedTransparentShadowBaseline =
+        {
+            new Vector4(0.67545430f, 0.73982670f, 0.81464280f, 1.0f), new Vector4(0.95968090f, 0.95407700f, 0.95036980f, 1.0f),
+            new Vector4(0.97803340f, 0.97257240f, 0.96746020f, 1.0f), new Vector4(0.98836910f, 0.98412730f, 0.98013760f, 1.0f),
+            new Vector4(0.84476920f, 0.84344210f, 0.85538310f, 1.0f), new Vector4(0.89204600f, 0.88718720f, 0.89049240f, 1.0f),
+            new Vector4(0.89949620f, 0.89429760f, 0.89648050f, 1.0f), new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f),
+            new Vector4(0.74902470f, 0.86729660f, 0.89976260f, 1.0f)
         };
 
         private static SphereData Sphere(Vector3 position, Vector3 color, float radius, float smoothness, float opacity, float refraction, int materialType)
@@ -221,6 +347,17 @@ namespace GPURayTracing.Tests
             };
         }
 
+        private static LightData SphereLight(Vector3 position, Vector3 emission, float radius)
+        {
+            return new LightData
+            {
+                position = position,
+                emission = emission,
+                radius = radius,
+                type = 0
+            };
+        }
+
         private static Vector4[] RenderSignature(
             SphereData[] spheres,
             bool waterEnabled,
@@ -228,7 +365,11 @@ namespace GPURayTracing.Tests
             Quaternion cameraRotation,
             MeshTriangleData[] triangles = null,
             MeshInfoData[] meshes = null,
-            BvhNodeData[] bvhNodes = null)
+            BvhNodeData[] bvhNodes = null,
+            LightData[] lights = null,
+            Texture2DArray meshTextures = null,
+            int width = ImageSize,
+            int height = ImageSize)
         {
             if (!SystemInfo.supportsComputeShaders)
             {
@@ -246,12 +387,14 @@ namespace GPURayTracing.Tests
             triangles = triangles ?? Array.Empty<MeshTriangleData>();
             meshes = meshes ?? Array.Empty<MeshInfoData>();
             bvhNodes = bvhNodes ?? Array.Empty<BvhNodeData>();
-            var result = CreateRenderTexture(RenderTextureFormat.ARGBFloat);
-            var accumulation = CreateRenderTexture(RenderTextureFormat.ARGBFloat);
+            lights = lights ?? Array.Empty<LightData>();
+            var result = CreateRenderTexture(width, height, RenderTextureFormat.ARGBFloat);
+            var accumulation = CreateRenderTexture(width, height, RenderTextureFormat.ARGBFloat);
             var skybox = CreateSolidTexture(new Color(0.18f, 0.32f, 0.58f, 1.0f));
-            var meshTextures = CreateMeshTextureArray();
+            bool ownsMeshTextures = meshTextures == null;
+            meshTextures = meshTextures ?? CreateMeshTextureArray();
             ComputeBuffer sphereBuffer = CreateBuffer(spheres, 56);
-            ComputeBuffer lightBuffer = CreateDummyBuffer(72);
+            ComputeBuffer lightBuffer = CreateBuffer(lights, 72);
             ComputeBuffer triangleBuffer = CreateBuffer(triangles, 124);
             ComputeBuffer meshBuffer = CreateBuffer(meshes, 48);
             ComputeBuffer bvhBuffer = CreateBuffer(bvhNodes, 48);
@@ -289,7 +432,7 @@ namespace GPURayTracing.Tests
                 shader.SetInt("_DebugRenderMode", 0);
                 shader.SetInt("_UseFrameAccumulation", 0);
                 shader.SetInt("_AccumulatedFrameCount", 0);
-                shader.SetInt("_MaxLightSamples", 0);
+                shader.SetInt("_MaxLightSamples", lights.Length);
                 shader.SetInt("_LightSamplingStrategy", 0);
                 shader.SetInt("_LightSampleCount", 1);
                 shader.SetInt("_ShadowQuality", 0);
@@ -299,7 +442,7 @@ namespace GPURayTracing.Tests
                 shader.SetFloat("_GroundSmoothness", 0.9f);
                 shader.SetFloat("_Exposure", 1.0f);
                 shader.SetInt("_NumSpheres", spheres.Length);
-                shader.SetInt("_NumLights", 0);
+                shader.SetInt("_NumLights", lights.Length);
                 shader.SetInt("_NumTriangles", triangles.Length);
                 shader.SetInt("_NumMeshes", meshes.Length);
                 shader.SetInt("_NumTopLevelBvhNodes", 0);
@@ -309,8 +452,8 @@ namespace GPURayTracing.Tests
                 shader.SetInt("_HasTransparentShadowBlockers", hasTransparentSphere || hasTransparentMesh ? 1 : 0);
                 SetWater(shader, waterEnabled);
 
-                shader.Dispatch(kernel, ImageSize / 8, ImageSize / 8, 1);
-                return ReadSignature(result);
+                shader.Dispatch(kernel, Mathf.CeilToInt(width / 8.0f), Mathf.CeilToInt(height / 8.0f), 1);
+                return ReadSignature(result, width, height);
             }
             finally
             {
@@ -324,7 +467,10 @@ namespace GPURayTracing.Tests
                 result.Release();
                 accumulation.Release();
                 UnityEngine.Object.DestroyImmediate(skybox);
-                UnityEngine.Object.DestroyImmediate(meshTextures);
+                if (ownsMeshTextures)
+                {
+                    UnityEngine.Object.DestroyImmediate(meshTextures);
+                }
             }
         }
 
@@ -361,6 +507,175 @@ namespace GPURayTracing.Tests
                     triangleCount = triangles.Length,
                     meshIndex = 0,
                     isLight = 0
+                }
+            };
+            bvhNodes = new[]
+            {
+                new BvhNodeData
+                {
+                    boundsMin = min,
+                    leftChildIndex = -1,
+                    boundsMax = max,
+                    rightChildIndex = -1,
+                    triangleStart = 0,
+                    triangleCount = triangles.Length
+                }
+            };
+        }
+
+        private static void CreateTexturedQuad(out MeshTriangleData[] triangles, out MeshInfoData[] meshes, out BvhNodeData[] bvhNodes)
+        {
+            Vector3 min = new Vector3(-1.4f, 0.1f, 0.45f);
+            Vector3 max = new Vector3(1.4f, 2.3f, 0.45f);
+            triangles = new[]
+            {
+                SurfaceTriangle(new Vector3(min.x, min.y, min.z), new Vector3(max.x, min.y, min.z), new Vector3(max.x, max.y, min.z), Vector3.back, Vector3.one, 1),
+                SurfaceTriangle(new Vector3(min.x, min.y, min.z), new Vector3(max.x, max.y, min.z), new Vector3(min.x, max.y, min.z), Vector3.back, Vector3.one, 1)
+            };
+            triangles[0].uv0 = new Vector2(0.0f, 0.0f);
+            triangles[0].uv1 = new Vector2(1.0f, 0.0f);
+            triangles[0].uv2 = new Vector2(1.0f, 1.0f);
+            triangles[1].uv0 = new Vector2(0.0f, 0.0f);
+            triangles[1].uv1 = new Vector2(1.0f, 1.0f);
+            triangles[1].uv2 = new Vector2(0.0f, 1.0f);
+            CreateSingleLeafMesh(triangles, min - Vector3.one * 0.0001f, max + Vector3.one * 0.0001f, false, out meshes, out bvhNodes);
+        }
+
+        private static void CreateEmissiveQuad(
+            out MeshTriangleData[] triangles,
+            out MeshInfoData[] meshes,
+            out BvhNodeData[] bvhNodes,
+            out LightData[] lights)
+        {
+            Vector3 p0 = new Vector3(-1.0f, 3.6f, 0.0f);
+            Vector3 p1 = new Vector3(1.0f, 3.6f, 0.0f);
+            Vector3 p2 = new Vector3(1.0f, 3.6f, 2.0f);
+            Vector3 p3 = new Vector3(-1.0f, 3.6f, 2.0f);
+            Vector3 emission = new Vector3(8.0f, 7.0f, 5.0f);
+            triangles = new[]
+            {
+                SurfaceTriangle(p0, p2, p1, Vector3.down, Vector3.one, -1, emission, 3),
+                SurfaceTriangle(p0, p3, p2, Vector3.down, Vector3.one, -1, emission, 3)
+            };
+            CreateSingleLeafMesh(triangles, p0 - Vector3.one * 0.0001f, p2 + Vector3.one * 0.0001f, true, out meshes, out bvhNodes);
+            lights = new[]
+            {
+                TriangleLight(p0, p2 - p0, p1 - p0, Vector3.down, emission),
+                TriangleLight(p0, p3 - p0, p2 - p0, Vector3.down, emission)
+            };
+        }
+
+        private static LightData TriangleLight(Vector3 position, Vector3 u, Vector3 v, Vector3 normal, Vector3 emission)
+        {
+            return new LightData
+            {
+                position = position,
+                emission = emission,
+                u = u,
+                v = v,
+                area = Vector3.Cross(u, v).magnitude * 0.5f,
+                normal = normal,
+                type = 1
+            };
+        }
+
+        private static void CreateShadowFixture(
+            int fixture,
+            out SphereData[] spheres,
+            out MeshTriangleData[] triangles,
+            out MeshInfoData[] meshes,
+            out BvhNodeData[] bvhNodes)
+        {
+            spheres = fixture == 0 || fixture == 2
+                ? new[] { Sphere(new Vector3(0.6f, 1.55f, 0.35f), new Vector3(0.25f, 0.65f, 0.9f), 0.65f, 1.0f, 0.35f, 1.5f, 2) }
+                : Array.Empty<SphereData>();
+
+            if (fixture == 0)
+            {
+                triangles = Array.Empty<MeshTriangleData>();
+                meshes = Array.Empty<MeshInfoData>();
+                bvhNodes = Array.Empty<BvhNodeData>();
+                return;
+            }
+
+            CreateTransparentBox(new Vector3(-0.9f, 0.65f, -0.15f), new Vector3(-0.1f, 1.85f, 0.65f), out triangles, out meshes, out bvhNodes);
+        }
+
+        private static void CreateTransparentBox(
+            Vector3 min,
+            Vector3 max,
+            out MeshTriangleData[] triangles,
+            out MeshInfoData[] meshes,
+            out BvhNodeData[] bvhNodes)
+        {
+            Vector3 p000 = new Vector3(min.x, min.y, min.z);
+            Vector3 p001 = new Vector3(min.x, min.y, max.z);
+            Vector3 p010 = new Vector3(min.x, max.y, min.z);
+            Vector3 p011 = new Vector3(min.x, max.y, max.z);
+            Vector3 p100 = new Vector3(max.x, min.y, min.z);
+            Vector3 p101 = new Vector3(max.x, min.y, max.z);
+            Vector3 p110 = new Vector3(max.x, max.y, min.z);
+            Vector3 p111 = new Vector3(max.x, max.y, max.z);
+            Vector3 color = new Vector3(0.75f, 0.28f, 0.22f);
+            triangles = new[]
+            {
+                SurfaceTriangle(p000, p010, p110, Vector3.back, color, -1, opacity: 0.4f), SurfaceTriangle(p000, p110, p100, Vector3.back, color, -1, opacity: 0.4f),
+                SurfaceTriangle(p001, p101, p111, Vector3.forward, color, -1, opacity: 0.4f), SurfaceTriangle(p001, p111, p011, Vector3.forward, color, -1, opacity: 0.4f),
+                SurfaceTriangle(p000, p001, p011, Vector3.left, color, -1, opacity: 0.4f), SurfaceTriangle(p000, p011, p010, Vector3.left, color, -1, opacity: 0.4f),
+                SurfaceTriangle(p100, p110, p111, Vector3.right, color, -1, opacity: 0.4f), SurfaceTriangle(p100, p111, p101, Vector3.right, color, -1, opacity: 0.4f),
+                SurfaceTriangle(p000, p100, p101, Vector3.down, color, -1, opacity: 0.4f), SurfaceTriangle(p000, p101, p001, Vector3.down, color, -1, opacity: 0.4f),
+                SurfaceTriangle(p010, p011, p111, Vector3.up, color, -1, opacity: 0.4f), SurfaceTriangle(p010, p111, p110, Vector3.up, color, -1, opacity: 0.4f)
+            };
+            CreateSingleLeafMesh(triangles, min, max, false, out meshes, out bvhNodes);
+        }
+
+        private static MeshTriangleData SurfaceTriangle(
+            Vector3 vertex0,
+            Vector3 vertex1,
+            Vector3 vertex2,
+            Vector3 normal,
+            Vector3 color,
+            int textureIndex,
+            Vector3 emission = default(Vector3),
+            int materialType = 0,
+            float opacity = 1.0f)
+        {
+            return new MeshTriangleData
+            {
+                vertex0 = vertex0,
+                vertex1 = vertex1,
+                vertex2 = vertex2,
+                normal = normal,
+                color = color,
+                smoothness = 0.25f,
+                opacity = opacity,
+                emission = emission,
+                refraction = opacity < 1.0f ? 1.5f : 1.0f,
+                materialType = materialType,
+                meshIndex = 0,
+                textureIndex = textureIndex
+            };
+        }
+
+        private static void CreateSingleLeafMesh(
+            MeshTriangleData[] triangles,
+            Vector3 min,
+            Vector3 max,
+            bool isLight,
+            out MeshInfoData[] meshes,
+            out BvhNodeData[] bvhNodes)
+        {
+            meshes = new[]
+            {
+                new MeshInfoData
+                {
+                    boundsMin = min,
+                    rootNodeIndex = 0,
+                    boundsMax = max,
+                    triangleStart = 0,
+                    triangleCount = triangles.Length,
+                    meshIndex = 0,
+                    isLight = isLight ? 1 : 0
                 }
             };
             bvhNodes = new[]
@@ -415,12 +730,12 @@ namespace GPURayTracing.Tests
             shader.SetInt("_WaterRefinementSteps", 5);
         }
 
-        private static Vector4[] ReadSignature(RenderTexture source)
+        private static Vector4[] ReadSignature(RenderTexture source, int width, int height)
         {
-            var texture = new Texture2D(ImageSize, ImageSize, TextureFormat.RGBAFloat, false, true);
+            var texture = new Texture2D(width, height, TextureFormat.RGBAFloat, false, true);
             RenderTexture previous = RenderTexture.active;
             RenderTexture.active = source;
-            texture.ReadPixels(new Rect(0, 0, ImageSize, ImageSize), 0, 0);
+            texture.ReadPixels(new Rect(0, 0, width, height), 0, 0);
             texture.Apply(false, false);
             RenderTexture.active = previous;
             Color[] pixels = texture.GetPixels();
@@ -434,10 +749,12 @@ namespace GPURayTracing.Tests
             }
             signature[0] = average / pixels.Length;
 
-            int[,] probes = { { 8, 8 }, { 16, 8 }, { 24, 8 }, { 8, 16 }, { 16, 16 }, { 24, 16 }, { 12, 24 }, { 20, 24 } };
+            float[,] probes = { { 0.25f, 0.25f }, { 0.5f, 0.25f }, { 0.75f, 0.25f }, { 0.25f, 0.5f }, { 0.5f, 0.5f }, { 0.75f, 0.5f }, { 0.375f, 0.75f }, { 0.625f, 0.75f } };
             for (int i = 0; i < probes.GetLength(0); i++)
             {
-                signature[i + 1] = pixels[probes[i, 1] * ImageSize + probes[i, 0]];
+                int x = Mathf.Clamp(Mathf.FloorToInt(probes[i, 0] * width), 0, width - 1);
+                int y = Mathf.Clamp(Mathf.FloorToInt(probes[i, 1] * height), 0, height - 1);
+                signature[i + 1] = pixels[y * width + x];
             }
             return signature;
         }
@@ -450,11 +767,34 @@ namespace GPURayTracing.Tests
             }
 
             Assert.That(actual.Length, Is.EqualTo(expected.Length));
+            var mismatches = new System.Collections.Generic.List<string>();
             for (int i = 0; i < expected.Length; i++)
             {
-                Assert.That(actual[i].x, Is.EqualTo(expected[i].x).Within(SignatureTolerance), $"{scene} signature[{i}].r");
-                Assert.That(actual[i].y, Is.EqualTo(expected[i].y).Within(SignatureTolerance), $"{scene} signature[{i}].g");
-                Assert.That(actual[i].z, Is.EqualTo(expected[i].z).Within(SignatureTolerance), $"{scene} signature[{i}].b");
+                AddSignatureMismatch(mismatches, i, "r", actual[i].x, expected[i].x);
+                AddSignatureMismatch(mismatches, i, "g", actual[i].y, expected[i].y);
+                AddSignatureMismatch(mismatches, i, "b", actual[i].z, expected[i].z);
+            }
+
+            if (mismatches.Count > 0)
+            {
+                Assert.Fail(
+                    $"{scene} image signature changed:\n{string.Join("\n", mismatches)}\n\n" +
+                    $"Actual signature:\n{FormatSignature(actual)}");
+            }
+        }
+
+        private static void AddSignatureMismatch(
+            System.Collections.Generic.List<string> mismatches,
+            int signatureIndex,
+            string channel,
+            float actual,
+            float expected)
+        {
+            float delta = actual - expected;
+            if (Mathf.Abs(delta) > SignatureTolerance)
+            {
+                mismatches.Add(
+                    $"signature[{signatureIndex}].{channel}: expected {expected:F8}, actual {actual:F8}, delta {delta:+0.00000000;-0.00000000}");
             }
         }
 
@@ -464,9 +804,9 @@ namespace GPURayTracing.Tests
                 $"new Vector4({value.x:F8}f, {value.y:F8}f, {value.z:F8}f, {value.w:F8}f)"));
         }
 
-        private static RenderTexture CreateRenderTexture(RenderTextureFormat format)
+        private static RenderTexture CreateRenderTexture(int width, int height, RenderTextureFormat format)
         {
-            var texture = new RenderTexture(ImageSize, ImageSize, 0, format) { enableRandomWrite = true };
+            var texture = new RenderTexture(width, height, 0, format) { enableRandomWrite = true };
             texture.Create();
             return texture;
         }
@@ -483,6 +823,15 @@ namespace GPURayTracing.Tests
         {
             var texture = new Texture2DArray(1, 1, 1, TextureFormat.RGBA32, false, true);
             texture.SetPixels(new[] { Color.white }, 0);
+            texture.Apply(false, false);
+            return texture;
+        }
+
+        private static Texture2DArray CreateCheckerTextureArray()
+        {
+            var texture = new Texture2DArray(2, 2, 2, TextureFormat.RGBA32, false, true);
+            texture.SetPixels(new[] { Color.white, Color.white, Color.white, Color.white }, 0);
+            texture.SetPixels(new[] { Color.red, Color.blue, Color.blue, Color.red }, 1);
             texture.Apply(false, false);
             return texture;
         }
