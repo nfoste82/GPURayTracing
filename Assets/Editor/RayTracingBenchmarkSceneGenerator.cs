@@ -255,8 +255,10 @@ public static class RayTracingBenchmarkSceneGenerator
         AddTransmissionFilterStack(context.Root, "Yellow Then Blue", 1.8f, new[] { new Color32(255, 235, 50, 255), new Color32(55, 105, 255, 255) }, 0.35f, 1.0f);
         AddTransmissionFilterStack(context.Root, "Red Green Blue Stack", 3.6f, new[] { new Color32(255, 60, 45, 255), new Color32(55, 220, 75, 255), new Color32(55, 105, 255, 255) }, 0.35f, 1.0f);
 
-        AddPrimitiveMesh(context.Root, "Thick Blue Glass Block", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(5.4f, 2.0f, 0.0f), Vector3.zero, new Vector3(1.05f, 2.6f, 1.35f), new Color32(55, 105, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.28f, 1.5f);
-        AddPrimitiveMesh(context.Root, "Thin Blue Glass Plate", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(5.4f, 2.0f, -1.35f), Vector3.zero, new Vector3(1.05f, 2.6f, 0.14f), new Color32(55, 105, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.28f, 1.5f);
+        // Keep these side by side so their receiver-wall shadows directly expose distance-based
+        // mesh absorption instead of overlapping along the light direction.
+        AddPrimitiveMesh(context.Root, "Thick Blue Glass Block", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(4.75f, 2.0f, -0.3f), Vector3.zero, new Vector3(0.8f, 2.6f, 1.35f), new Color32(55, 105, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.28f, 1.5f);
+        AddPrimitiveMesh(context.Root, "Thin Blue Glass Plate", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(5.75f, 2.0f, -0.3f), Vector3.zero, new Vector3(0.8f, 2.6f, 0.14f), new Color32(55, 105, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.28f, 1.5f);
 
         AddSphere(context.Root, "Cyan Glass Sphere Shadow Test", new Vector3(-3.85f, 1.05f, 2.15f), 0.75f, new Color32(45, 255, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.32f, 1.5f);
         AddSphere(context.Root, "Yellow Glass Sphere Shadow Test", new Vector3(-2.9f, 1.05f, 2.15f), 0.75f, new Color32(255, 255, 55, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.25f, 1.5f);

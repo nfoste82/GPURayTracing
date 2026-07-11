@@ -17,8 +17,9 @@ The recent texture, mesh-light, glass, specular, imported-model, and procedural-
 
 - **Regression foundation: implemented.** CPU intersection/math tests, production GPU reflection/refraction/Fresnel/absorption probes, deterministic rendering signatures, transparent sphere/closed-mesh/stacked shadow fixtures, texture and mesh-light fixtures, deterministic BVH equivalence/depth checks, and tiny/odd-resolution GPU dispatch smoke tests are implemented. The water-family signature drift from finite-water AABB changes has been reviewed and recaptured.
 - **Medium identity and path state: implemented.** `TracePath()` carries a fixed-capacity stack with implicit air, initializes underwater camera rays, updates transmitted water/sphere/mesh paths, and exposes overflow/unmatched-exit status through regression probes. Refraction now consumes stack state; starting inside closed sphere/mesh glass remains unsupported.
-- **Segment absorption: implemented.** Production paths attenuate each traveled segment from the active medium; finite water clips against surface/XZ exits and finite-medium sky misses avoid infinite attenuation. Shadow boundary traversal, coherent BRDF/BSDF sampling, and MIS remain.
+- **Segment absorption: implemented.** Production paths attenuate each traveled segment from the active medium; finite water clips against surface/XZ exits and finite-medium sky misses avoid infinite attenuation. Coherent BRDF/BSDF sampling and MIS remain.
 - **Stack-driven refraction: implemented.** Path-selection Fresnel and sphere, mesh, and water transmission derive source/target IORs from the active medium and its entered/revealed neighbor. Reflection and TIR preserve stack state; production probes cover water -> glass -> water indices, direction, Fresnel, and water-surrounded TIR behavior.
+- **Shadow boundary traversal: implemented.** Transparent shadow rays process nearest boundaries in order, attenuate actual active-medium segments, pair closed mesh entries/exits, retain a thin/open fallback, and preserve the opaque-only fast path.
 
 ## Priority 0: Protect Upcoming Changes
 
@@ -35,7 +36,7 @@ The recent texture, mesh-light, glass, specular, imported-model, and procedural-
 - Define tested push, matching-pop, parent lookup, and current-medium operations. A boundary exit must match object identity, not only material type or IOR.
 - Initialize medium state for cameras/rays that begin inside the single water body. Define and test how starting inside closed sphere/mesh glass will be detected or explicitly unsupported in the first version.
 - Make stack overflow and unmatched exits detectable through probe/debug output. Do not silently discard entries or pop an unrelated medium.
-- Initially support properly nested closed volumes. Document arbitrary non-nested/interpenetrating volume ordering as unsupported until an active-medium-set model is justified.
+- Properly nested closed volumes are fully supported. Interpenetrating spheres retain the most recently entered active medium and can remove a non-current sphere on exit without corrupting state; arbitrary overlapping meshes/water and a physically complete active-medium-set model remain unsupported.
 
 Completion criteria: production paths carry stable, test-covered medium state across bounces, nested transition probes pass, mismatch/overflow behavior is explicit, and existing final-color baselines remain unchanged.
 
@@ -62,6 +63,8 @@ Status: implemented.
 Completion criteria: underwater glass refracts water -> glass -> water, reflected/TIR paths do not corrupt the stack, and source/target IOR probes agree with rendered nested-media fixtures.
 
 ## Priority 4: Shadow Boundary Traversal
+
+Status: implemented.
 
 - Treat a shadow ray as a finite ordered sequence of medium boundary events between the shaded point and sampled light.
 - Pair closed-mesh entry and exit crossings and apply absorption over the actual internal distance instead of applying `ThinTransparentSurfaceDistance` independently to each triangle.

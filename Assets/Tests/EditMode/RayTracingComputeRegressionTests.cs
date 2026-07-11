@@ -25,7 +25,7 @@ namespace GPURayTracing.Tests
             }
 
             int kernel = shader.FindKernel("CSRegressionProbe");
-            var buffer = new ComputeBuffer(24, sizeof(float) * 4);
+            var buffer = new ComputeBuffer(26, sizeof(float) * 4);
             var sphereBuffer = new ComputeBuffer(1, 56);
             try
             {
@@ -43,7 +43,7 @@ namespace GPURayTracing.Tests
                 shader.SetBuffer(kernel, "RegressionResults", buffer);
                 shader.Dispatch(kernel, 1, 1, 1);
 
-                var results = new Vector4[24];
+                var results = new Vector4[26];
                 buffer.GetData(results);
 
                 AssertVector(results[0], new Vector4(0.70710677f, 0.70710677f, 0.0f, 1.0f), "reflection");
@@ -70,6 +70,8 @@ namespace GPURayTracing.Tests
                 AssertVector(results[21], new Vector4(0.9428090f, -0.3333333f, 0.0f, 0.0225197f), "production water-to-glass direction and Fresnel", 0.0002f);
                 AssertVector(results[22], new Vector4(1.5f, 2.0f, 0.0f, 1.0f), "production glass-to-water transition avoids air TIR");
                 AssertVector(results[23], new Vector4(0.6495190f, 0.7603453f, 0.0f, 3.0f), "production glass-to-water direction preserves stack until transmission", 0.0002f);
+                AssertVector(results[24], new Vector4(1.0f, 1.0f, 0.0f, 0.0f), "overlapping sphere exit keeps active overlap medium");
+                AssertVector(results[25], new Vector4(8.0f, 1.0f, 2.0f, 0.0f), "overlapping sphere exit removes non-current medium");
             }
             finally
             {

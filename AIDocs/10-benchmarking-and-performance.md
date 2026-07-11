@@ -14,7 +14,7 @@ This document covers runtime benchmark tooling, performance hotspots, and benchm
 - `Benchmark_DenseMesh`: stresses per-mesh BVH traversal and leaf triangle tests.
 - `Benchmark_ManyMeshes`: stresses object-level culling for many registered mesh objects.
 - `Benchmark_Glass`: stresses transparent/refraction paths and transparent shadows.
-- `Benchmark_GlassTransmission`: visual test for light energy loss and RGB filtering through single colored panes, stacked colored panes, thin versus thick glass, and colored transparent sphere shadows.
+- `Benchmark_GlassTransmission`: visual test for light energy loss and RGB filtering through single colored panes, stacked colored panes, side-by-side thin versus thick closed glass, and colored transparent sphere shadows.
 - `Benchmark_Water`: stresses the finite water AABB's ray-marched top and flat side/bottom boundaries, Fresnel reflection/refraction, distance-based absorption, and distinct ground-only, water-only, and water-over-ground regions. Accumulation is disabled for animated water.
 - `Benchmark_GlassWaterPencil`: image-quality scene inspired by a pencil in a glass of water, stressing glass meshes, calm water refraction, nested transparent surfaces, and thin curved mesh highlights.
 - `Benchmark_Sparse`: catches acceleration-structure overhead regressions in small scenes.

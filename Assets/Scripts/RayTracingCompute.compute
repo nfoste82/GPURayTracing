@@ -95,6 +95,7 @@ static const int MediumTypeSphere = 1;
 static const int MediumTypeMesh = 2;
 static const int MediumTypeWater = 3;
 static const int MediumStackCapacity = 8;
+static const int MaxTransparentShadowBoundaries = 32;
 static const int MediumTransitionNone = 0;
 static const int MediumTransitionEnter = 1;
 static const int MediumTransitionExit = 2;
@@ -458,6 +459,54 @@ MediumStack CreateMediumStack(float3 rayOrigin)
     return stack;
 }
 
+MediumStack CreateShadowMediumStack(float3 rayOrigin)
+{
+    MediumStack stack;
+    MediumIdentity air = CreateAirMedium();
+    stack.count = 1;
+    stack.status = 0;
+    stack.entry0 = air;
+    stack.entry1 = air;
+    stack.entry2 = air;
+    stack.entry3 = air;
+    stack.entry4 = air;
+    stack.entry5 = air;
+    stack.entry6 = air;
+    stack.entry7 = air;
+
+    // Water remains handled by EstimateWaterDistanceAlongSegment(). Initialize only containing
+    // spheres here so transparent shadow traversal does not apply water absorption twice.
+    [loop]
+    while (stack.count < MediumStackCapacity)
+    {
+        int containingSphereIndex = -1;
+        float containingSphereRadius = -1.0f;
+        int sphereIndex;
+        [loop]
+        for (sphereIndex = 0; sphereIndex < _NumSpheres; sphereIndex++)
+        {
+            Sphere sphere = _Spheres[sphereIndex];
+            bool isGlass = sphere.materialType == MaterialGlass || sphere.opacity < 1.0f;
+            bool containsOrigin = dot(rayOrigin - sphere.position, rayOrigin - sphere.position) < sphere.radius * sphere.radius;
+            MediumIdentity sphereMedium = CreateSphereMedium(sphere, sphereIndex);
+            if (isGlass && containsOrigin && !MediumStackContains(stack, sphereMedium) && sphere.radius > containingSphereRadius)
+            {
+                containingSphereIndex = sphereIndex;
+                containingSphereRadius = sphere.radius;
+            }
+        }
+
+        if (containingSphereIndex < 0)
+        {
+            break;
+        }
+
+        stack = PushMedium(stack, CreateSphereMedium(_Spheres[containingSphereIndex], containingSphereIndex));
+    }
+
+    return stack;
+}
+
 MediumIdentity GetCurrentMedium(MediumStack stack)
 {
     int index = max(0, stack.count - 1);
@@ -514,6 +563,62 @@ MediumStack PopMatchingMedium(MediumStack stack, MediumIdentity medium)
     return stack;
 }
 
+MediumIdentity GetMediumStackEntry(MediumStack stack, int index)
+{
+    if (index == 7) return stack.entry7;
+    if (index == 6) return stack.entry6;
+    if (index == 5) return stack.entry5;
+    if (index == 4) return stack.entry4;
+    if (index == 3) return stack.entry3;
+    if (index == 2) return stack.entry2;
+    if (index == 1) return stack.entry1;
+    return stack.entry0;
+}
+
+void SetMediumStackEntry(inout MediumStack stack, int index, MediumIdentity medium)
+{
+    if (index == 7) stack.entry7 = medium;
+    else if (index == 6) stack.entry6 = medium;
+    else if (index == 5) stack.entry5 = medium;
+    else if (index == 4) stack.entry4 = medium;
+    else if (index == 3) stack.entry3 = medium;
+    else if (index == 2) stack.entry2 = medium;
+    else if (index == 1) stack.entry1 = medium;
+    else stack.entry0 = medium;
+}
+
+MediumStack RemoveMatchingMedium(MediumStack stack, MediumIdentity medium)
+{
+    int matchingIndex = -1;
+    int index;
+    [unroll]
+    for (index = 1; index < MediumStackCapacity; index++)
+    {
+        if (index < stack.count && IsSameMedium(GetMediumStackEntry(stack, index), medium))
+        {
+            matchingIndex = index;
+        }
+    }
+
+    if (matchingIndex < 0)
+    {
+        stack.status |= MediumStackStatusUnmatchedExit;
+        return stack;
+    }
+
+    [unroll]
+    for (index = 1; index < MediumStackCapacity - 1; index++)
+    {
+        if (index >= matchingIndex && index + 1 < stack.count)
+        {
+            SetMediumStackEntry(stack, index, GetMediumStackEntry(stack, index + 1));
+        }
+    }
+
+    stack.count--;
+    return stack;
+}
+
 void ApplyMediumTransition(inout MediumStack stack, RayHit hit, int transition)
 {
     if (transition == MediumTransitionEnter)
@@ -530,7 +635,7 @@ void ApplyMediumTransition(inout MediumStack stack, RayHit hit, int transition)
     }
     else if (transition == MediumTransitionExit)
     {
-        stack = PopMatchingMedium(stack, CreateHitMedium(hit));
+        stack = RemoveMatchingMedium(stack, CreateHitMedium(hit));
     }
 }
 
@@ -545,8 +650,14 @@ float2 GetMediumTransitionIndices(MediumIdentity currentMedium, MediumIdentity p
 float2 GetBoundaryTransitionIndices(MediumStack stack, RayHit hit, out bool entering)
 {
     MediumIdentity currentMedium = GetCurrentMedium(stack);
-    entering = !IsSameMedium(currentMedium, CreateHitMedium(hit));
-    return GetMediumTransitionIndices(currentMedium, GetParentMedium(stack), hit, entering);
+    MediumIdentity boundaryMedium = CreateHitMedium(hit);
+    entering = !MediumStackContains(stack, boundaryMedium);
+    MediumIdentity targetMedium = currentMedium;
+    if (IsSameMedium(currentMedium, boundaryMedium))
+    {
+        targetMedium = GetParentMedium(stack);
+    }
+    return GetMediumTransitionIndices(currentMedium, targetMedium, hit, entering);
 }
 
 RayHit CreateRayHit()
@@ -1085,6 +1196,12 @@ float3 GetTransparentShadowTransmittance(RayHit hit, float distanceThroughMedium
     return GetAbsorptionTransmittance(hit.color, hit.opacity, distanceThroughMedium) * saturate(1.0f - hit.opacity);
 }
 
+float3 GetTransparentShadowBoundaryTransmittance(RayHit hit)
+{
+    float boundaryTransmission = saturate(1.0f - hit.opacity);
+    return boundaryTransmission.xxx;
+}
+
 bool IntersectTriangleRaw(Ray ray, MeshTriangle meshTriangle, out float hitDistance, out float3 normal, out float2 barycentric)
 {
     float3 edge1 = meshTriangle.vertex1 - meshTriangle.vertex0;
@@ -1241,78 +1358,6 @@ void IntersectMeshBvh(Ray ray, inout RayHit bestHit, MeshInfo meshInfo)
             stack[stackCount++] = rightIndex;
         }
     }
-}
-
-bool IntersectMeshBvhForShadow(Ray ray, float maxDistance, inout float3 transmittance, MeshInfo meshInfo)
-{
-    float3 inverseDirection = 1.0f / ray.direction;
-    float ignoredEntry;
-    if (meshInfo.triangleCount <= 0 || !IntersectAabbInverse(ray.origin, inverseDirection, meshInfo.boundsMin, meshInfo.boundsMax, maxDistance, ignoredEntry))
-    {
-        return false;
-    }
-
-    int stack[BvhStackSize];
-    int stackCount = 0;
-    stack[stackCount++] = meshInfo.rootNodeIndex;
-
-    [loop]
-    while (stackCount > 0)
-    {
-        int nodeIndex = stack[--stackCount];
-        BvhNode node = _BvhNodes[nodeIndex];
-
-        if (node.triangleCount > 0)
-        {
-            [loop]
-            for (int i = 0; i < node.triangleCount; i++)
-            {
-                RayHit blockerHit = CreateRayHit();
-                blockerHit.distance = maxDistance;
-                IntersectTriangle(ray, blockerHit, _Triangles[node.triangleStart + i]);
-
-                if (blockerHit.distance >= maxDistance)
-                {
-                    continue;
-                }
-
-                if (blockerHit.opacity >= 1.0f)
-                {
-                    return true;
-                }
-
-                transmittance *= GetTransparentShadowTransmittance(blockerHit, ThinTransparentSurfaceDistance);
-            }
-            continue;
-        }
-
-        int leftIndex = node.leftChildIndex;
-        int rightIndex = node.rightChildIndex;
-        float leftEntry;
-        float rightEntry;
-        bool hitLeft = leftIndex >= 0 &&
-            IntersectAabbInverse(ray.origin, inverseDirection, _BvhNodes[leftIndex].boundsMin, _BvhNodes[leftIndex].boundsMax, maxDistance, leftEntry);
-        bool hitRight = rightIndex >= 0 &&
-            IntersectAabbInverse(ray.origin, inverseDirection, _BvhNodes[rightIndex].boundsMin, _BvhNodes[rightIndex].boundsMax, maxDistance, rightEntry);
-
-        if (hitLeft && hitRight)
-        {
-            int nearIndex = leftEntry <= rightEntry ? leftIndex : rightIndex;
-            int farIndex = leftEntry <= rightEntry ? rightIndex : leftIndex;
-            if (stackCount < BvhStackSize) { stack[stackCount++] = farIndex; }
-            if (stackCount < BvhStackSize) { stack[stackCount++] = nearIndex; }
-        }
-        else if (hitLeft && stackCount < BvhStackSize)
-        {
-            stack[stackCount++] = leftIndex;
-        }
-        else if (hitRight && stackCount < BvhStackSize)
-        {
-            stack[stackCount++] = rightIndex;
-        }
-    }
-
-    return false;
 }
 
 // Pure-occlusion mesh traversal for the opaque-only shadow fast path. Returns true on the first
@@ -1726,6 +1771,99 @@ bool IsShadowRayBlocked(Ray rayToLight, float distanceToLight)
     return false;
 }
 
+RayHit GetNearestShadowBlocker(Ray rayToLight, float distanceToLight)
+{
+    RayHit blockerHit = CreateRayHit();
+    blockerHit.distance = distanceToLight;
+
+    if (_NumShadowBvhNodes <= 0)
+    {
+        int objectIndex;
+        [loop]
+        for (objectIndex = 0; objectIndex < _NumSpheres; objectIndex++)
+        {
+            IntersectSphere(rayToLight, blockerHit, _Spheres[objectIndex], objectIndex);
+        }
+
+        [loop]
+        for (objectIndex = 0; objectIndex < _NumMeshes; objectIndex++)
+        {
+            if (_Meshes[objectIndex].isLight == 0)
+            {
+                IntersectMeshBvh(rayToLight, blockerHit, _Meshes[objectIndex]);
+            }
+        }
+
+        return blockerHit;
+    }
+
+    int stack[BvhStackSize];
+    int stackCount = 0;
+    stack[stackCount++] = 0;
+    float3 inverseDirection = 1.0f / rayToLight.direction;
+
+    [loop]
+    while (stackCount > 0)
+    {
+        int nodeIndex = stack[--stackCount];
+        TopLevelBvhNode node = _ShadowBvhNodes[nodeIndex];
+
+        if (node.objectType == TopLevelObjectTypeSphere)
+        {
+            IntersectSphere(rayToLight, blockerHit, _Spheres[node.objectIndex], node.objectIndex);
+            continue;
+        }
+
+        if (node.objectType == TopLevelObjectTypeMesh)
+        {
+            IntersectMeshBvh(rayToLight, blockerHit, _Meshes[node.objectIndex]);
+            continue;
+        }
+
+        int leftIndex = node.leftChildIndex;
+        int rightIndex = node.rightChildIndex;
+        float leftEntry;
+        float rightEntry;
+        bool hitLeft = leftIndex >= 0 &&
+            IntersectAabbInverse(rayToLight.origin, inverseDirection, _ShadowBvhNodes[leftIndex].boundsMin, _ShadowBvhNodes[leftIndex].boundsMax, blockerHit.distance, leftEntry);
+        bool hitRight = rightIndex >= 0 &&
+            IntersectAabbInverse(rayToLight.origin, inverseDirection, _ShadowBvhNodes[rightIndex].boundsMin, _ShadowBvhNodes[rightIndex].boundsMax, blockerHit.distance, rightEntry);
+
+        if (hitLeft && hitRight)
+        {
+            int nearIndex = leftEntry <= rightEntry ? leftIndex : rightIndex;
+            int farIndex = leftEntry <= rightEntry ? rightIndex : leftIndex;
+            if (stackCount < BvhStackSize) { stack[stackCount++] = farIndex; }
+            if (stackCount < BvhStackSize) { stack[stackCount++] = nearIndex; }
+        }
+        else if (hitLeft && stackCount < BvhStackSize)
+        {
+            stack[stackCount++] = leftIndex;
+        }
+        else if (hitRight && stackCount < BvhStackSize)
+        {
+            stack[stackCount++] = rightIndex;
+        }
+    }
+
+    return blockerHit;
+}
+
+bool HasPairedMeshShadowExit(Ray rayToLight, RayHit entryHit, float distanceToLight)
+{
+    float distanceAfterEntry = distanceToLight - entryHit.distance - 0.002f;
+    if (entryHit.meshIndex < 0 || distanceAfterEntry <= 0.0f)
+    {
+        return false;
+    }
+
+    Ray insideRay = CreateRay(entryHit.position + rayToLight.direction * 0.002f, rayToLight.direction);
+    RayHit exitHit = CreateRayHit();
+    exitHit.distance = distanceAfterEntry;
+    IntersectMeshBvh(insideRay, exitHit, _Meshes[entryHit.meshIndex]);
+    return exitHit.distance < distanceAfterEntry;
+}
+
 float3 GetShadowTransmittance(Ray rayToLight, float distanceToLight)
 {
     // Opaque-only fast path: a single occlusion query, no transparent-blocker tracking.
@@ -1737,125 +1875,70 @@ float3 GetShadowTransmittance(Ray rayToLight, float distanceToLight)
     }
 
     float3 transmittance = float3(1.0f, 1.0f, 1.0f);
+    MediumStack mediumStack = CreateShadowMediumStack(rayToLight.origin);
+    Ray segmentRay = rayToLight;
+    float remainingDistance = distanceToLight;
+    int boundaryIndex;
 
-    if (_NumShadowBvhNodes <= 0)
+    [loop]
+    for (boundaryIndex = 0; boundaryIndex < MaxTransparentShadowBoundaries && remainingDistance > 0.001f; boundaryIndex++)
     {
-        int j;
-        [loop]
-        for (j = 0; j < _NumSpheres; j++)
+        RayHit blockerHit = GetNearestShadowBlocker(segmentRay, remainingDistance);
+        float segmentDistance = min(blockerHit.distance, remainingDistance);
+        transmittance *= GetMediumSegmentTransmittance(GetCurrentMedium(mediumStack), segmentDistance);
+
+        if (max(transmittance.x, max(transmittance.y, transmittance.z)) <= 0.001f)
         {
-            RayHit blockerHit = CreateRayHit();
-            blockerHit.distance = distanceToLight;
-            IntersectSphere(rayToLight, blockerHit, _Spheres[j], j);
-
-            if (blockerHit.distance >= distanceToLight)
-            {
-                continue;
-            }
-
-            if (blockerHit.opacity >= 1.0f)
-            {
-                return float3(0.0f, 0.0f, 0.0f);
-            }
-
-            float distanceThroughMedium = blockerHit.obj_radius > 0.0f
-                ? GetSphereDistanceThroughMedium(rayToLight, _Spheres[j], distanceToLight)
-                : ThinTransparentSurfaceDistance;
-            transmittance *= GetTransparentShadowTransmittance(blockerHit, distanceThroughMedium);
+            return float3(0.0f, 0.0f, 0.0f);
         }
 
-        [loop]
-        for (j = 0; j < _NumMeshes; j++)
+        if (blockerHit.distance >= remainingDistance)
         {
-            if (_Meshes[j].isLight != 0)
-            {
-                continue;
-            }
-
-            if (IntersectMeshBvhForShadow(rayToLight, distanceToLight, transmittance, _Meshes[j]))
-            {
-                return float3(0.0f, 0.0f, 0.0f);
-            }
+            return transmittance;
         }
-    }
-    else
-    {
-        int stack[BvhStackSize];
-        int stackCount = 0;
-        stack[stackCount++] = 0;
 
-        float3 inverseDirection = 1.0f / rayToLight.direction;
-
-        [loop]
-        while (stackCount > 0)
+        if (blockerHit.opacity >= 1.0f)
         {
-            int nodeIndex = stack[--stackCount];
-            TopLevelBvhNode node = _ShadowBvhNodes[nodeIndex];
-
-            if (node.objectType == TopLevelObjectTypeSphere)
-            {
-                RayHit blockerHit = CreateRayHit();
-                blockerHit.distance = distanceToLight;
-                IntersectSphere(rayToLight, blockerHit, _Spheres[node.objectIndex], node.objectIndex);
-
-                if (blockerHit.distance >= distanceToLight)
-                {
-                    continue;
-                }
-
-                if (blockerHit.opacity >= 1.0f)
-                {
-                    return float3(0.0f, 0.0f, 0.0f);
-                }
-
-                float distanceThroughMedium = blockerHit.obj_radius > 0.0f
-                    ? GetSphereDistanceThroughMedium(rayToLight, _Spheres[node.objectIndex], distanceToLight)
-                    : ThinTransparentSurfaceDistance;
-                transmittance *= GetTransparentShadowTransmittance(blockerHit, distanceThroughMedium);
-
-                continue;
-            }
-
-            if (node.objectType == TopLevelObjectTypeMesh)
-            {
-                if (IntersectMeshBvhForShadow(rayToLight, distanceToLight, transmittance, _Meshes[node.objectIndex]))
-                {
-                    return float3(0.0f, 0.0f, 0.0f);
-                }
-
-                continue;
-            }
-
-            // Internal node: visit the nearer child first. For opaque blockers this finds the
-            // occluder sooner and lets the early-out (return black) skip the rest of the tree.
-            int leftIndex = node.leftChildIndex;
-            int rightIndex = node.rightChildIndex;
-            float leftEntry;
-            float rightEntry;
-            bool hitLeft = leftIndex >= 0 &&
-                IntersectAabbInverse(rayToLight.origin, inverseDirection, _ShadowBvhNodes[leftIndex].boundsMin, _ShadowBvhNodes[leftIndex].boundsMax, distanceToLight, leftEntry);
-            bool hitRight = rightIndex >= 0 &&
-                IntersectAabbInverse(rayToLight.origin, inverseDirection, _ShadowBvhNodes[rightIndex].boundsMin, _ShadowBvhNodes[rightIndex].boundsMax, distanceToLight, rightEntry);
-
-            if (hitLeft && hitRight)
-            {
-                int nearIndex = leftEntry <= rightEntry ? leftIndex : rightIndex;
-                int farIndex = leftEntry <= rightEntry ? rightIndex : leftIndex;
-                if (stackCount < BvhStackSize) { stack[stackCount++] = farIndex; }
-                if (stackCount < BvhStackSize) { stack[stackCount++] = nearIndex; }
-            }
-            else if (hitLeft && stackCount < BvhStackSize)
-            {
-                stack[stackCount++] = leftIndex;
-            }
-            else if (hitRight && stackCount < BvhStackSize)
-            {
-                stack[stackCount++] = rightIndex;
-            }
+            return float3(0.0f, 0.0f, 0.0f);
         }
+
+        MediumIdentity boundaryMedium = CreateHitMedium(blockerHit);
+        bool exiting = MediumStackContains(mediumStack, boundaryMedium);
+        bool isMeshBoundary = blockerHit.meshIndex >= 0;
+        bool useThinSurfaceFallback = isMeshBoundary && !exiting &&
+            !HasPairedMeshShadowExit(segmentRay, blockerHit, remainingDistance);
+
+        if (useThinSurfaceFallback)
+        {
+            transmittance *= GetTransparentShadowTransmittance(blockerHit, ThinTransparentSurfaceDistance);
+        }
+        else if (exiting)
+        {
+            mediumStack = RemoveMatchingMedium(mediumStack, boundaryMedium);
+        }
+        else
+        {
+            // Mesh opacity describes its transmissive boundary response. Spheres historically
+            // apply that factor once for the whole analytic volume, so preserve that behavior.
+            if (isMeshBoundary)
+            {
+                transmittance *= GetTransparentShadowBoundaryTransmittance(blockerHit);
+            }
+            mediumStack = PushMedium(mediumStack, boundaryMedium);
+        }
+
+        if (max(transmittance.x, max(transmittance.y, transmittance.z)) <= 0.001f)
+        {
+            return float3(0.0f, 0.0f, 0.0f);
+        }
+
+        float advanceDistance = blockerHit.distance + 0.002f;
+        segmentRay.origin += segmentRay.direction * advanceDistance;
+        remainingDistance -= advanceDistance;
     }
 
-    return transmittance;
+    // A malformed or excessively deep transparent boundary sequence must not leak full light.
+    return remainingDistance > 0.001f ? float3(0.0f, 0.0f, 0.0f) : transmittance;
 }
 
 float3 GetAlbedo(RayHit hit)
@@ -2860,6 +2943,17 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     bool didRefractNestedExit = RefractSnell(normalize(float3(0.8660254f, 0.5f, 0.0f)), nestedExitIndices.x, nestedExitIndices.y, -normal, nestedExitDirection);
     RegressionResults[22] = float4(nestedExitIndices, enteringNestedExit ? 1.0f : 0.0f, didRefractNestedExit ? 1.0f : 0.0f);
     RegressionResults[23] = float4(nestedExitDirection, glassInWaterStack.count);
+
+    RayHit overlappingGlassHit = glassHit;
+    overlappingGlassHit.objectIndex = 8;
+    overlappingGlassHit.refraction = 1.0f;
+    MediumStack overlappingStack = PushMedium(CreateMediumStack(float3(0.0f, 2.0f, 0.0f)), glass);
+    overlappingStack = PushMedium(overlappingStack, CreateHitMedium(overlappingGlassHit));
+    bool enteringOverlappingExit;
+    float2 overlappingExitIndices = GetBoundaryTransitionIndices(overlappingStack, glassHit, enteringOverlappingExit);
+    ApplyMediumTransition(overlappingStack, glassHit, MediumTransitionExit);
+    RegressionResults[24] = float4(overlappingExitIndices, enteringOverlappingExit ? 1.0f : 0.0f, overlappingStack.status);
+    RegressionResults[25] = float4(GetCurrentMedium(overlappingStack).objectIndex, GetCurrentMedium(overlappingStack).refractionIndex, overlappingStack.count, MediumStackContains(overlappingStack, glass) ? 1.0f : 0.0f);
 }
 
 [numthreads(8,8,1)]
