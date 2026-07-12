@@ -499,7 +499,7 @@ public static class RayTracingBenchmarkSceneGenerator
             return;
         }
 
-        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 2.2f, -5.2f), new Vector3(2.0f, 0.0f, 0.0f), passes: 1, bounces: 10, shadowQuality: 1);
+        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 2.2f, -5.2f), new Vector3(2.0f, 0.0f, 0.0f), passes: 1, bounces: 5, shadowQuality: 0);
         context.Manager.cameraFocalDistance = 6.5f;
         context.Manager.groundSmoothness = 0.18f;
         context.Manager.lightFalloffScale = 0.02f;
@@ -508,6 +508,7 @@ public static class RayTracingBenchmarkSceneGenerator
         context.Manager.shadowBvhMinObjectCount = 0;
         context.Manager._skyboxLightColor = new Color32(0, 0, 0, 255);
         context.Manager.enableFrameAccumulation = true;
+        context.Manager.lightSamplingStrategy = GameManager.LightSamplingStrategy.ImportanceSampled;
 
         const float roomWidth = 5.6f;
         const float roomHeight = 4.2f;
@@ -515,16 +516,16 @@ public static class RayTracingBenchmarkSceneGenerator
         const float roomCenterZ = 0.5f;
         float backZ = roomCenterZ + roomDepth * 0.5f;
 
-        AddPrimitiveMesh(context.Root, "Floor", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 0.02f, roomCenterZ), Vector3.zero, new Vector3(roomWidth, 0.04f, roomDepth), new Color32(230, 226, 214, 255), RayMaterial.MaterialType.Diffuse, 0.18f, 1.0f);
-        AddPrimitiveMesh(context.Root, "Ceiling", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, roomHeight, roomCenterZ), Vector3.zero, new Vector3(roomWidth, 0.04f, roomDepth), new Color32(226, 224, 214, 255), RayMaterial.MaterialType.Diffuse, 0.14f, 1.0f);
-        AddPrimitiveMesh(context.Root, "Left Green Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-roomWidth * 0.5f, roomHeight * 0.5f, roomCenterZ), Vector3.zero, new Vector3(0.04f, roomHeight, roomDepth), new Color32(34, 178, 58, 255), RayMaterial.MaterialType.Diffuse, 0.05f, 1.0f);
-        AddPrimitiveMesh(context.Root, "Right Red Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(roomWidth * 0.5f, roomHeight * 0.5f, roomCenterZ), Vector3.zero, new Vector3(0.04f, roomHeight, roomDepth), new Color32(226, 38, 20, 255), RayMaterial.MaterialType.Diffuse, 0.05f, 1.0f);
-        AddPrimitiveMesh(context.Root, "Back Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, roomHeight * 0.5f, backZ), Vector3.zero, new Vector3(roomWidth, roomHeight, 0.04f), new Color32(232, 230, 220, 255), RayMaterial.MaterialType.Diffuse, 0.12f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Floor", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 0.02f, roomCenterZ), Vector3.zero, new Vector3(roomWidth, 0.04f, roomDepth), new Color32(230, 226, 214, 255), RayMaterial.MaterialType.Diffuse, 0.5f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Ceiling", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, roomHeight, roomCenterZ), Vector3.zero, new Vector3(roomWidth, 0.04f, roomDepth), new Color32(226, 224, 214, 255), RayMaterial.MaterialType.Diffuse, 0.5f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Left Green Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-roomWidth * 0.5f, roomHeight * 0.5f, roomCenterZ), Vector3.zero, new Vector3(0.04f, roomHeight, roomDepth), new Color32(34, 178, 58, 255), RayMaterial.MaterialType.Diffuse, 0.5f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Right Red Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(roomWidth * 0.5f, roomHeight * 0.5f, roomCenterZ), Vector3.zero, new Vector3(0.04f, roomHeight, roomDepth), new Color32(230, 38, 20, 255), RayMaterial.MaterialType.Diffuse, 0.5f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Back Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, roomHeight * 0.5f, backZ), Vector3.zero, new Vector3(roomWidth, roomHeight, 0.04f), new Color32(232, 230, 220, 255), RayMaterial.MaterialType.Diffuse, 0.5f, 1.0f);
 
-        AddMeshLight(context.Root, "Rectangular Ceiling Light", CreateHorizontalQuadMesh("Rectangular Ceiling Light", 1.25f, 0.72f, 1.0f, 1.0f), new Vector3(0.0f, roomHeight - 0.035f, 0.2f), Vector3.zero, Vector3.one, new Color32(255, 248, 226, 255));
+        AddMeshLight(context.Root, "Rectangular Ceiling Light", CreateHorizontalQuadMesh("Rectangular Ceiling Light", 1.25f, 0.72f, 1.0f, 1.0f), new Vector3(0.0f, roomHeight - 0.035f, 0.7f), Vector3.zero, new Vector3(1.25f, 1.25f, 1.25f), new Color32(255, 255, 255, 255));
 
-        var dragon = AddRayMesh(context.Root, "Stanford Dragon", dragonMesh, new Vector3(0.0f, 0.02f, 0.15f), new Vector3(0.0f, 148.0f, 0.0f), Vector3.one, new Color32(48, 122, 255, 255), RayMaterial.MaterialType.Glass, 0.96f, 0.3f, 1.5f);
-        FitObjectToBox(dragon.transform, dragonMesh.bounds, new Vector3(0.0f, 0.04f, 0.15f), new Vector3(2.45f, 2.35f, 2.45f));
+        var dragon = AddRayMesh(context.Root, "Stanford Dragon", dragonMesh, new Vector3(0.0f, 0.0f, 0.0f), new Vector3(0.0f, 148.0f, 0.0f), new Vector3(3.0f, 3.0f, 3.0f), Color.white, RayMaterial.MaterialType.Diffuse, 0.75f, 1.0f, 1.0f);
+        //FitObjectToBox(dragon.transform, dragonMesh.bounds, new Vector3(0.0f, 0.04f, 0.15f), new Vector3(2.45f, 2.35f, 2.45f));
 
         Save(context.Scene, sceneName);
     }
