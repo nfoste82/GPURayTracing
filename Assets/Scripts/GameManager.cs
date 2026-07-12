@@ -193,10 +193,10 @@ public class GameManager : MonoBehaviour
     // build does not allocate per node.
     private float[] _sahSuffixArea = new float[0];
     
-    [Header("Render single frame")] 
+    [Header("Render single frame")]
+    [Tooltip("Freezes simulation time and progressively refines the current view. Camera and scene changes reset accumulation and render the updated view.")]
     public bool _singleFrame = false;
 
-    private bool _running = true;
     private bool _previousSingleFrame;
     private float _singleFrameRenderTime;
 
@@ -671,7 +671,6 @@ public class GameManager : MonoBehaviour
     {
         _singleFrame = enabled;
         _previousSingleFrame = enabled;
-        _running = true;
         ResetFrameAccumulation();
 
         if (enabled)
@@ -701,40 +700,42 @@ public class GameManager : MonoBehaviour
     
     private void HandleInputForCamera(Camera camera)
     {
+        float movementDelta = Time.unscaledDeltaTime;
+
         if (Input.GetKey(KeyCode.W))
         {
-            camera.transform.position += camera.transform.forward * Time.deltaTime * 3f;
+            camera.transform.position += camera.transform.forward * movementDelta * 3f;
         }
         else if (Input.GetKey(KeyCode.S))
         {
-            camera.transform.position -= camera.transform.forward * Time.deltaTime * 3f;
+            camera.transform.position -= camera.transform.forward * movementDelta * 3f;
         }
         
         if (Input.GetKey(KeyCode.A))
         {
-            camera.transform.position -= camera.transform.right * Time.deltaTime * 3f;
+            camera.transform.position -= camera.transform.right * movementDelta * 3f;
         }
         else if (Input.GetKey(KeyCode.D))
         {
-            camera.transform.position += camera.transform.right * Time.deltaTime * 3f;
+            camera.transform.position += camera.transform.right * movementDelta * 3f;
         }
         
         if (Input.GetKey(KeyCode.LeftArrow))
         {
-            camera.transform.eulerAngles += new Vector3(0f, -Time.deltaTime * 50f, 0f);
+            camera.transform.eulerAngles += new Vector3(0f, -movementDelta * 50f, 0f);
         }
         else if (Input.GetKey(KeyCode.RightArrow))
         {
-            camera.transform.eulerAngles += new Vector3(0f, Time.deltaTime * 50f, 0f);
+            camera.transform.eulerAngles += new Vector3(0f, movementDelta * 50f, 0f);
         }
         
         if (Input.GetKey(KeyCode.UpArrow))
         {
-            camera.transform.eulerAngles += new Vector3(Time.deltaTime * 50f, 0f, 0f);
+            camera.transform.eulerAngles += new Vector3(movementDelta * 50f, 0f, 0f);
         }
         else if (Input.GetKey(KeyCode.DownArrow))
         {
-            camera.transform.eulerAngles += new Vector3(-Time.deltaTime * 50f, 0f, 0f);
+            camera.transform.eulerAngles += new Vector3(-movementDelta * 50f, 0f, 0f);
         }
     }
     
@@ -809,7 +810,7 @@ public class GameManager : MonoBehaviour
 
     private void UpdateDynamicQuality()
     {
-        if (!enableDynamicQuality || (_singleFrame && !_running))
+        if (!enableDynamicQuality || _singleFrame)
         {
             return;
         }
@@ -1019,82 +1020,73 @@ public class GameManager : MonoBehaviour
             return;
         }
 
-        if (_running || _pendingVariantWarmup)
+        var autoFocusDistance = (cameraAutoFocus)
+            ? GetNearestIntersectionDistanceForAutoFocus(new Ray(renderTextureCamera.transform.position,
+                renderTextureCamera.transform.forward))
+            : cameraFocalDistance;
+
+        if (cameraAutoFocus && autoFocusDistance < 1.0f)
         {
-            var autoFocusDistance = (cameraAutoFocus)
-                ? GetNearestIntersectionDistanceForAutoFocus(new Ray(renderTextureCamera.transform.position,
-                    renderTextureCamera.transform.forward))
-                : cameraFocalDistance;
+            var modifier = Mathf.Lerp(1.75f, 1.0f, autoFocusDistance);
+            autoFocusDistance *= modifier;
 
-            if (cameraAutoFocus && autoFocusDistance < 1.0f)
+            autoFocusDistance = Mathf.Max(autoFocusDistance, 0.1f);
+            float targetFocusDistance = autoFocusDistance;
+
+            autoFocusDistance = Mathf.Lerp(previousFocalDistance, autoFocusDistance,
+                Mathf.SmoothStep(0.0f, 1.0f, timeSincePreviousFocusDistance));
+
+            if (Mathf.Abs(autoFocusDistance - targetFocusDistance) < 0.05f)
             {
-                var modifier = Mathf.Lerp(1.75f, 1.0f, autoFocusDistance);
-                autoFocusDistance *= modifier;
-
-                autoFocusDistance = Mathf.Max(autoFocusDistance, 0.1f);
-                float targetFocusDistance = autoFocusDistance;
-
-                autoFocusDistance = Mathf.Lerp(previousFocalDistance, autoFocusDistance,
-                    Mathf.SmoothStep(0.0f, 1.0f, timeSincePreviousFocusDistance));
-
-                if (Mathf.Abs(autoFocusDistance - targetFocusDistance) < 0.05f)
-                {
-                    previousFocalDistance = autoFocusDistance;
-                    timeSincePreviousFocusDistance = 0.0f;
-                }
-                else
-                {
-                    timeSincePreviousFocusDistance += Time.deltaTime;
-                }
-            }
-
-            cameraFocalDistance = autoFocusDistance;
-
-            UpdateSpheres();
-            UpdateTriangles();
-            UpdateTopLevelBvh();
-            UpdateShadowBvh();
-
-            bool useFrameAccumulation = ShouldUseFrameAccumulation();
-            if (useFrameAccumulation)
-            {
-                int stateHash = CalculateAccumulationStateHash();
-                if (!_hasAccumulationStateHash || stateHash != _accumulationStateHash)
-                {
-                    _accumulatedFrameCount = 0;
-                    _accumulationStateHash = stateHash;
-                    _hasAccumulationStateHash = true;
-                }
+                previousFocalDistance = autoFocusDistance;
+                timeSincePreviousFocusDistance = 0.0f;
             }
             else
             {
-                ResetFrameAccumulation();
-            }
-
-            var kernelHandle = shader.FindKernel("CSMain");
-
-            SetShaderParameters(kernelHandle);
-            UpdateTextureFromCompute(kernelHandle);
-            _renderedFrameCount++;
-
-            if (useFrameAccumulation)
-            {
-                _accumulatedFrameCount++;
-            }
-
-            // The dispatch above triggered (and blocked on) any first-time variant compile. Record
-            // that this debug mode is now warm so future switches to it are instant, and clear the
-            // overlay flag.
-            _warmedDebugModes.Add(debugRenderMode);
-            _appliedDebugRenderMode = debugRenderMode;
-            _pendingVariantWarmup = false;
-
-            if (_singleFrame)
-            {
-                _running = useFrameAccumulation;
-                EnableSingleFrameSettings();
+                timeSincePreviousFocusDistance += Time.unscaledDeltaTime;
             }
         }
+
+        cameraFocalDistance = autoFocusDistance;
+
+        UpdateSpheres();
+        UpdateTriangles();
+        UpdateTopLevelBvh();
+        UpdateShadowBvh();
+
+        bool useFrameAccumulation = ShouldUseFrameAccumulation();
+        if (useFrameAccumulation)
+        {
+            int stateHash = CalculateAccumulationStateHash();
+            if (!_hasAccumulationStateHash || stateHash != _accumulationStateHash)
+            {
+                _accumulatedFrameCount = 0;
+                _accumulationStateHash = stateHash;
+                _hasAccumulationStateHash = true;
+            }
+        }
+        else
+        {
+            ResetFrameAccumulation();
+        }
+
+        var kernelHandle = shader.FindKernel("CSMain");
+
+        SetShaderParameters(kernelHandle);
+        UpdateTextureFromCompute(kernelHandle);
+        _renderedFrameCount++;
+
+        if (useFrameAccumulation)
+        {
+            _accumulatedFrameCount++;
+        }
+
+        // The dispatch above triggered (and blocked on) any first-time variant compile. Record
+        // that this debug mode is now warm so future switches to it are instant, and clear the
+        // overlay flag.
+        _warmedDebugModes.Add(debugRenderMode);
+        _appliedDebugRenderMode = debugRenderMode;
+        _pendingVariantWarmup = false;
 
         Graphics.Blit(_outputTexture, dest);
     }

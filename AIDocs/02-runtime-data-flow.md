@@ -6,7 +6,7 @@
 
 On `Start()`, `GameManager` creates `_outputTexture` as a `RenderTexture` sized to the current screen dimensions with `enableRandomWrite = true`. This texture is bound as `Result` before dispatch and then blitted to the camera output. The blit is performed by `GameManager.RenderImage()`, which is invoked from `RayTracingCameraRenderer.OnRenderImage()`. The blit therefore happens on whichever camera holds the `RayTracingCameraRenderer` component; that is normally the camera wired into `GameManager.renderTextureCamera`, but the code does not enforce that they are the same camera.
 
-During `RenderImage()`, `GameManager` calls `EnsureOutputTextureSize(src.width, src.height)` to check the source render target dimensions and recreate `_outputTexture` and the HDR `_accumulationTexture` if the runtime render size changes. This runs every call, even when `_running` is false. It also updates `renderTextureCamera.aspect` from the active output texture size so the camera projection used for ray generation matches the resized render target.
+During `RenderImage()`, `GameManager` calls `EnsureOutputTextureSize(src.width, src.height)` to check the source render target dimensions and recreate `_outputTexture` and the HDR `_accumulationTexture` if the runtime render size changes. This runs every call. It also updates `renderTextureCamera.aspect` from the active output texture size so the camera projection used for ray generation matches the resized render target.
 
 ## Object Registration
 
@@ -35,9 +35,9 @@ Registration caches the `Transform`, `SphereCollider`, shared `Mesh`, and either
 
 `RayTracingCameraRenderer.OnRenderImage(RenderTexture src, RenderTexture dest)` is the render entry point. It delegates to `GameManager.RenderImage()`. This means the Unity camera that owns the `RayTracingCameraRenderer` component (the one whose `OnRenderImage` fires and is used for Game view gizmos) is intended to also be the camera whose transform/projection drives compute ray generation. In practice that camera should be the same object assigned to `GameManager.renderTextureCamera`, since `RenderImage()` reads camera matrices from `renderTextureCamera`, but nothing in code links the two automatically.
 
-When `_running` is true, it:
+Each render callback:
 
-1. Ensures `_outputTexture` matches the current source render target dimensions (this `EnsureOutputTextureSize` call actually runs before the `_running` check).
+1. Ensures `_outputTexture` matches the current source render target dimensions.
 2. Updates `renderTextureCamera.aspect` to match `_outputTexture`.
 3. `Update()` may adjust dynamic quality before render dispatch when `enableDynamicQuality` is enabled. It tracks an exponentially averaged unscaled frame time against `dynamicQualityTargetFrameRate`, waits at least `0.75` seconds between adjustments, and changes only `numberOfPasses`, `lightSamplingStrategy`, `lightSampleCount`, `shadowQuality`, or `numBounces` within their existing inspector slider ranges. It never changes `topLevelBvhMinObjectCount` or `shadowBvhMinObjectCount`.
 4. Computes autofocus distance if `cameraAutoFocus` is enabled, ignoring ray-traced objects whose opacity is at or below `autoFocusTransparentOpacityThreshold` so focus can pass through mostly transparent glass. The autofocus search starts from a `numberOfPasses`-derived near distance (`12 - min(8, numberOfPasses * 1.75)`) rather than a fixed near plane, and very close hits (under `1.0`) are remapped by an additional close-focus modifier and smoothed toward the previous focal distance over time.
@@ -51,13 +51,13 @@ When `_running` is true, it:
 12. Dispatches the compute shader through `UpdateTextureFromCompute()`.
 13. Increments `AccumulatedFrameCount` when accumulation is active.
 14. Marks the active `debugRenderMode` as warmed and clears the variant-warmup flag.
-15. In single-frame mode, keeps dispatching at the reduced single-frame presentation rate while accumulation is active; otherwise it stops rendering again after one dispatch.
+15. In single-frame mode, keeps dispatching at the reduced single-frame presentation rate. Final-color accumulation progressively refines an unchanged view and resets when the camera or scene changes.
 
-The dispatch block also runs when `_pendingVariantWarmup` is set, not only when `_running` is true, so an on-demand debug-variant compile happens even in single-frame mode.
+An on-demand debug-variant compile also happens in single-frame mode because render dispatch remains active.
 
 ### Debug Variant Warmup Deferral
 
-Before the `_running`/dispatch block, `RenderImage()` checks for a switch to a `debugRenderMode` whose `DEBUG_RENDER` shader variant has not been compiled yet (tracked in `_warmedDebugModes`, compared against `_appliedDebugRenderMode`). The first variant `Dispatch` compiles synchronously and freezes the main thread, so on detection `RenderImage()` sets `_pendingVariantWarmup`, re-blits the previous `_outputTexture`, and returns without the heavy dispatch. That extra frame lets `GameManager.OnGUI()` paint a centered "Compiling shader variant" notice; the next frame runs the stalling dispatch with the notice already on screen, then marks the mode warmed. See `10-benchmarking-and-performance.md` for the full rationale and `08-shader-debugging-and-randomness.md` for the variant split.
+Before dispatch, `RenderImage()` checks for a switch to a `debugRenderMode` whose `DEBUG_RENDER` shader variant has not been compiled yet (tracked in `_warmedDebugModes`, compared against `_appliedDebugRenderMode`). The first variant `Dispatch` compiles synchronously and freezes the main thread, so on detection `RenderImage()` sets `_pendingVariantWarmup`, re-blits the previous `_outputTexture`, and returns without the heavy dispatch. That extra frame lets `GameManager.OnGUI()` paint a centered "Compiling shader variant" notice; the next frame runs the stalling dispatch with the notice already on screen, then marks the mode warmed. See `10-benchmarking-and-performance.md` for the full rationale and `08-shader-debugging-and-randomness.md` for the variant split.
 
 After dispatch, it always calls:
 
@@ -181,7 +181,7 @@ When frame time is too high, dynamic quality reduces settings in this order: `nu
 
 When frame time has enough headroom, dynamic quality increases settings in this order: `numberOfPasses`, then light sample count / all-lights restoration, then `shadowQuality`, then `numBounces`. The existing `[Range]` slider limits are used as bounds: passes `1..32`, light sample count `1..64`, shadow quality `0..5`, and bounces `1..16`.
 
-Dynamic quality resets frame accumulation whenever it changes a setting. It is skipped while single-frame mode is fully paused (`_singleFrame && !_running`) so an idle single-frame view does not incorrectly appear to have huge performance headroom.
+Dynamic quality resets frame accumulation whenever it changes a setting. Adjustments are skipped in single-frame mode because its intentional 10 FPS presentation cap is not a useful measure of render performance.
 
 ## Controls And Modes
 
@@ -192,7 +192,7 @@ Dynamic quality resets frame accumulation whenever it changes a setting. It is s
 - `debugRenderMode` is exposed in the `GameManager` inspector and selects final color or one of the shader debug visualizations.
 - `enableDynamicQuality` and `dynamicQualityTargetFrameRate` are exposed in the inspector for optional adaptive quality scaling.
 
-Single-frame mode is exposed in the inspector through the serialized public field `_singleFrame` (under the "Render single frame" header). With frame accumulation disabled or unavailable, it renders one frame, then stops compute dispatch while the camera continues to blit the last `_outputTexture` into the Game view. With final-color frame accumulation enabled, single-frame mode keeps dispatching at the reduced single-frame presentation rate so the still image progressively refines. `EnableSingleFrameSettings()` sets `Application.targetFrameRate = 10`, disables vSync, and sets `Time.timeScale = 0`; toggling it off in the inspector, pressing `T`, or pressing `Space` resumes real-time rendering and currently restores hard-coded real-time settings (`targetFrameRate = 60`, `vSyncCount = 2`, and `timeScale = 1`). Preserving and restoring the caller's previous global settings is recommended in `09-roadmap-and-improvements.md`.
+Single-frame mode is exposed in the inspector through the serialized public field `_singleFrame` (under the "Render single frame" header). It freezes simulation time but keeps dispatching at a reduced presentation rate, allowing final-color frame accumulation to progressively refine the view. Camera controls use unscaled delta time, and camera or manually edited scene-object changes reset accumulation and immediately begin refining the updated view. `EnableSingleFrameSettings()` sets `Application.targetFrameRate = 10`, disables vSync, and sets `Time.timeScale = 0`; toggling it off in the inspector, pressing `T`, or pressing `Space` resumes real-time rendering and currently restores hard-coded real-time settings (`targetFrameRate = 60`, `vSyncCount = 2`, and `timeScale = 1`). Preserving and restoring the caller's previous global settings is recommended in `09-roadmap-and-improvements.md`.
 
 Unity's editor toolbar Pause freezes the player loop, so runtime code cannot keep dispatching or blitting new frames while that pause is active. `Assets/Editor/GameViewPauseFocus.cs` listens for editor pause events and refocuses/repaints the Game view so the editor remains on the last presented render instead of switching to the Scene tab.
 

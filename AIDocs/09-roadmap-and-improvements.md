@@ -25,8 +25,8 @@ The recent texture, mesh-light, glass, specular, imported-model, and procedural-
 
 ## Priority 0: Protect Upcoming Changes
 
-- Add deterministic mesh-glass image fixture data that exercises production triangle, mesh-info, and per-mesh BVH traversal. Cover visible refraction and total internal reflection rather than testing only isolated math.
-- Add a current-behavior nested-media fixture for air -> water -> glass -> water -> air before changing production transitions. Include camera-starting-underwater and, if practical, camera-starting-inside-glass cases.
+- Deterministic mesh-glass image fixture data exercises production triangle, mesh-info, and per-mesh BVH traversal, including standalone and submerged closed-mesh refraction.
+- Current-behavior nested-media fixtures cover air -> water -> sphere/closed-mesh glass -> water -> air, camera-starting-underwater, and camera-starting-inside-sphere-glass paths.
 - Deterministic transparent-shadow fixtures for a sphere, a closed mesh, and stacked blockers now protect later boundary-distance changes.
 - Deterministic randomized per-mesh, top-level, and shadow BVH reference traversals are compared against brute force and assert maximum depth against `BvhStackSize`.
 - Tiny and odd-resolution GPU smoke tests now cover the `CSMain` output-dimension guard.

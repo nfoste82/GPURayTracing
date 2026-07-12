@@ -13,7 +13,7 @@ The project uses EditMode tests under `Assets/Tests/EditMode/` to make rendering
 - Current Schlick Fresnel values at normal, 45-degree, and grazing incidence.
 - Current distance/color/opacity glass absorption approximation.
 - A GPU `CSRegressionProbe` kernel in the production compute shader that calls the same reflection, `RefractSnell()`, Fresnel formula, and `GetAbsorptionTransmittance()` behavior used by rendering. This catches divergence between CPU expectations and shader execution.
-- Deterministic `32x32` final-color image signatures for a reflective metal sphere, a refractive glass sphere with geometry behind it, a camera starting inside a translucent glass sphere, closed mesh glass through production triangle/mesh/BVH buffers, calm finite water with submerged geometry, nested water/sphere-glass, a camera starting underwater, textured geometry, triangle mesh lights, and transparent sphere/closed-mesh/stacked shadows. The shadow fixtures now exercise ordered boundary traversal and actual closed-mesh segment absorption. Each baseline stores the image average and eight fixed pixel probes after tone mapping.
+- Deterministic `32x32` final-color image signatures for a reflective metal sphere, a refractive glass sphere with geometry behind it, a camera starting inside a translucent glass sphere, closed mesh glass through production triangle/mesh/BVH buffers, calm finite water with submerged geometry, nested water with sphere and closed-mesh glass, a camera starting underwater, textured geometry, triangle mesh lights, and transparent sphere/closed-mesh/stacked shadows. The nested closed-mesh fixture targets submerged production mesh/BVH refraction pixels, while the shadow fixtures exercise ordered boundary traversal and actual closed-mesh segment absorption. Each baseline stores the image average and eight fixed pixel probes after tone mapping.
 - Medium-identity and stack probes for air -> water -> sphere glass -> water -> air, parent lookup, matching exits, overflow, unmatched exits, underwater initialization, and flat water-volume side/bottom intersections.
 - Deterministic randomized CPU reference comparisons for per-mesh, top-level, and shadow BVH traversal against brute force, with maximum build depth checked against the fixed stack capacity of `64`.
 - GPU dispatch smoke coverage at `1x1`, `3x5`, and `13x7`; `CSMain` now returns before accessing output textures for ceiling-dispatch threads outside their dimensions.
@@ -63,6 +63,5 @@ Stack overflow and genuinely unmatched exits set explicit status bits and preser
 
 ## Remaining Coverage
 
-- Extend nested-medium fixtures to closed mesh glass when deterministic production mesh/BVH fixture data is available.
 - Add production-GPU BVH-on versus flat-loop image equivalence in addition to the deterministic CPU traversal comparisons.
 - The water, nested-water/glass, and underwater-camera signatures were recaptured after tracing their drift to the intentional finite-water AABB change in `5fd1d33`, whose fixtures gained `_WaterDepth` without corresponding baseline updates.

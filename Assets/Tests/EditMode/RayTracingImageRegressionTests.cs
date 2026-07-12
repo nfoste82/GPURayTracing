@@ -205,6 +205,25 @@ namespace GPURayTracing.Tests
             AssertSignature("closed mesh glass", signature, ClosedMeshGlassBaseline);
         }
 
+        [Test]
+        public void NestedWaterAndClosedMeshGlassScene_CurrentImageBaseline_IsStable()
+        {
+            CreateSubmergedGlassCube(out MeshTriangleData[] triangles, out MeshInfoData[] meshes, out BvhNodeData[] bvhNodes);
+            float[,] probes =
+            {
+                { 0.375f, 0.3125f }, { 0.5f, 0.3125f }, { 0.625f, 0.3125f },
+                { 0.375f, 0.40625f }, { 0.5f, 0.40625f }, { 0.625f, 0.40625f },
+                { 0.4375f, 0.5f }, { 0.5625f, 0.5f }
+            };
+            Vector4[] signature = RenderSignature(new[]
+            {
+                Sphere(new Vector3(0.0f, 0.25f, 2.0f), new Vector3(0.95f, 0.18f, 0.06f), 0.28f, 0.2f, 1.0f, 1.0f, 0)
+            }, true, new Vector3(0.0f, 1.6f, -4.5f), Quaternion.Euler(10.0f, 0.0f, 0.0f),
+                triangles, meshes, bvhNodes, probes: probes);
+
+            AssertSignature("nested water and closed mesh glass", signature, NestedWaterClosedMeshGlassBaseline);
+        }
+
         [TestCase(1, 1)]
         [TestCase(3, 5)]
         [TestCase(13, 7)]
@@ -348,6 +367,19 @@ namespace GPURayTracing.Tests
             new Vector4(0.22758950f, 0.44474000f, 0.66269180f, 1.0f), new Vector4(0.37561950f, 0.57858080f, 0.75511220f, 1.0f),
             new Vector4(0.21477530f, 0.28875740f, 0.49372990f, 1.0f), new Vector4(0.45253880f, 0.64935810f, 0.80493390f, 1.0f),
             new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f), new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f)
+        };
+
+        private static readonly Vector4[] NestedWaterClosedMeshGlassBaseline =
+        {
+            new Vector4(0.11830510f, 0.21538760f, 0.33798480f, 1.0f),
+            new Vector4(0.00000000f, 0.00000000f, 0.00000000f, 1.0f),
+            new Vector4(0.00164686f, 0.02173078f, 0.07859048f, 1.0f),
+            new Vector4(0.00415459f, 0.06435721f, 0.20648710f, 1.0f),
+            new Vector4(0.00413778f, 0.06430230f, 0.20648710f, 1.0f),
+            new Vector4(0.00048196f, 0.00473505f, 0.01657836f, 1.0f),
+            new Vector4(0.01615874f, 0.07465777f, 0.20154250f, 1.0f),
+            new Vector4(0.00000000f, 0.00000000f, 0.00000000f, 1.0f),
+            new Vector4(0.03365663f, 0.08516176f, 0.19658320f, 1.0f)
         };
 
         private static readonly Vector4[] TexturedMeshBaseline =
@@ -548,6 +580,21 @@ namespace GPURayTracing.Tests
         {
             Vector3 min = new Vector3(-0.8f, 0.2f, -0.3f);
             Vector3 max = new Vector3(0.8f, 1.8f, 1.3f);
+            CreateGlassCube(min, max, out triangles, out meshes, out bvhNodes);
+        }
+
+        private static void CreateSubmergedGlassCube(out MeshTriangleData[] triangles, out MeshInfoData[] meshes, out BvhNodeData[] bvhNodes)
+        {
+            CreateGlassCube(new Vector3(-0.65f, 0.05f, 0.65f), new Vector3(0.65f, 0.65f, 1.65f), out triangles, out meshes, out bvhNodes);
+        }
+
+        private static void CreateGlassCube(
+            Vector3 min,
+            Vector3 max,
+            out MeshTriangleData[] triangles,
+            out MeshInfoData[] meshes,
+            out BvhNodeData[] bvhNodes)
+        {
             Vector3 p000 = new Vector3(min.x, min.y, min.z);
             Vector3 p001 = new Vector3(min.x, min.y, max.z);
             Vector3 p010 = new Vector3(min.x, max.y, min.z);
