@@ -240,7 +240,7 @@ public class GameManager : MonoBehaviour
     private const float DynamicQualitySmoothing = 0.08f;
     private const float DynamicQualityAdjustmentInterval = 0.75f;
     private const int MeshTextureSize = 128;
-    private const int TriangleStride = 160;
+    private const int TriangleStride = 164;
     private const int MeshInfoStride = 48;
     private const int BvhNodeStride = 48;
     private const int TopLevelBvhNodeStride = 48;
@@ -369,6 +369,7 @@ public class GameManager : MonoBehaviour
         public int meshIndex;
         public int textureIndex;
         public int interpolateNormals;
+        public int lightIndex;
 
         public float Intersect(Vector3 origin, Vector3 direction)
         {
@@ -1339,6 +1340,7 @@ public class GameManager : MonoBehaviour
                 var normal1 = interpolateNormals ? normalToWorld.MultiplyVector(normals[index1]).normalized : normal;
                 var normal2 = interpolateNormals ? normalToWorld.MultiplyVector(normals[index2]).normalized : normal;
 
+                int lightIndex = isLight ? _lights.Count : -1;
                 meshTriangles.Add(new Triangle
                 {
                     vertex0 = vertex0,
@@ -1359,7 +1361,8 @@ public class GameManager : MonoBehaviour
                     materialType = materialType,
                     meshIndex = meshIndex,
                     textureIndex = textureIndex,
-                    interpolateNormals = interpolateNormals ? 1 : 0
+                    interpolateNormals = interpolateNormals ? 1 : 0,
+                    lightIndex = lightIndex
                 });
 
                 if (isLight)

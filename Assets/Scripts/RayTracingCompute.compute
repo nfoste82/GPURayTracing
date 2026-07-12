@@ -201,6 +201,7 @@ struct MeshTriangle
     int meshIndex;
     int textureIndex;
     int interpolateNormals;
+    int lightIndex;
 };
 
 StructuredBuffer<MeshTriangle> _Triangles;
@@ -269,6 +270,7 @@ struct ScatterResult
     float3 attenuation;
     int bouncesConsumed;
     int mediumTransition;
+    float materialPdf;
 };
 
 struct BrdfSample
@@ -285,6 +287,7 @@ ScatterResult CreateScatterResult(Ray ray, float3 attenuation, int bouncesConsum
     result.attenuation = attenuation;
     result.bouncesConsumed = max(1, bouncesConsumed);
     result.mediumTransition = mediumTransition;
+    result.materialPdf = 0.0f;
     return result;
 }
 
@@ -324,6 +327,7 @@ struct RayHit
     int objectIndex;
     float2 uv;
     int textureIndex;
+    int lightIndex;
 };
 
 // Medium identity is separate from material type: two glass objects can have the same material
@@ -690,6 +694,7 @@ RayHit CreateRayHit()
     hit.objectIndex = -1;
     hit.uv = float2(0.0f, 0.0f);
     hit.textureIndex = -1;
+    hit.lightIndex = -1;
 
     return hit;
 }
@@ -717,6 +722,7 @@ void IntersectGroundPlane(Ray ray, inout RayHit bestHit)
         bestHit.objectIndex = -1;
         bestHit.uv = bestHit.position.xz;
         bestHit.textureIndex = -1;
+        bestHit.lightIndex = -1;
     }
 }
 
@@ -1081,6 +1087,7 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere, int objectInd
         bestHit.objectIndex = objectIndex;
         bestHit.uv = float2(0.0f, 0.0f);
         bestHit.textureIndex = -1;
+        bestHit.lightIndex = objectIndex;
     }
 }
 
@@ -1306,6 +1313,7 @@ void IntersectTriangle(Ray ray, inout RayHit bestHit, MeshTriangle meshTriangle)
             + meshTriangle.uv1 * barycentric.x
             + meshTriangle.uv2 * barycentric.y;
         bestHit.textureIndex = meshTriangle.textureIndex;
+        bestHit.lightIndex = meshTriangle.lightIndex;
     }
 }
 
@@ -2051,6 +2059,51 @@ float3 FresnelSchlick(float directionDotHalf, float3 f0)
     return f0 + (1.0f - f0) * pow(1.0f - directionDotHalf, 5.0f);
 }
 
+float PowerHeuristic(float firstPdf, float secondPdf)
+{
+    float firstSquared = firstPdf * firstPdf;
+    float secondSquared = secondPdf * secondPdf;
+    return firstSquared / max(firstSquared + secondSquared, 1e-12f);
+}
+
+// Returns the sampling density in solid angle for MIS weighting. The renderer's historical
+// light-strength model remains unchanged; these PDFs only decide how explicit-light and BRDF
+// samples share paths that both techniques can discover.
+float GetLightShapePdf(Light light, float3 shadingPosition, float3 lightPosition)
+{
+    float3 toLight = lightPosition - shadingPosition;
+    float distanceSquared = dot(toLight, toLight);
+    if (distanceSquared <= 1e-8f)
+    {
+        return 0.0f;
+    }
+
+    float3 directionToLight = toLight * rsqrt(distanceSquared);
+    if (light.type == LightTypeTriangle)
+    {
+        float lightFacing = saturate(dot(light.normal, -directionToLight));
+        return lightFacing > 1e-6f && light.area > 1e-6f
+            ? distanceSquared / (lightFacing * light.area)
+            : 0.0f;
+    }
+
+    float3 diskNormal = normalize(shadingPosition - light.position);
+    float directionDotDiskNormal = dot(directionToLight, -diskNormal);
+    if (directionDotDiskNormal <= 1e-6f)
+    {
+        return 0.0f;
+    }
+
+    float diskDistance = dot(light.position - shadingPosition, -diskNormal) / directionDotDiskNormal;
+    float3 diskPoint = shadingPosition + directionToLight * diskDistance;
+    float diskRadius = light.radius * max(0.0f, _ShadowRandomness);
+    float diskArea = PI * diskRadius * diskRadius;
+    float radialDistanceSquared = dot(diskPoint - light.position, diskPoint - light.position);
+    return diskArea > 1e-8f && radialDistanceSquared <= diskRadius * diskRadius
+        ? (diskDistance * diskDistance) / (directionDotDiskNormal * diskArea)
+        : 0.0f;
+}
+
 float3 EvaluateMaterialBrdf(Ray ray, RayHit hit, float3 lightDirection, out float pdf)
 {
     float3 normal = hit.normal;
@@ -2093,7 +2146,8 @@ float3 EvaluateMaterialBrdf(Ray ray, RayHit hit, float3 lightDirection, out floa
     return diffuse + specular;
 }
 
-float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount, inout uint rngState)
+float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
+                         float lightSelectionPdf, int lightTechniqueSampleCount, inout uint rngState)
 {
     float3 lightTotal = float3(0.0f, 0.0f, 0.0f);
     Light light = _Lights[lightIndex];
@@ -2148,18 +2202,65 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount, i
             continue;
         }
 
-        float lightStrength = GetDirectLightFalloff(distanceToLight, light.radius);
-        if (light.type == LightTypeTriangle)
-        {
-            lightStrength *= saturate(dot(light.normal, -ptToOffset)) * max(1.0f, light.area);
-        }
-
+        float lightShapePdf = GetLightShapePdf(light, hit.position, offsetPt);
         float materialPdf;
         float3 materialResponse = EvaluateMaterialBrdf(ray, hit, ptToOffset, materialPdf);
-        lightTotal += light.emission * lightStrength * shadowTransmittance * materialResponse * rayNormalDot;
+        if (lightShapePdf > 0.0f)
+        {
+            float lightPdf = lightSelectionPdf * lightShapePdf;
+            float misWeight = PowerHeuristic(lightTechniqueSampleCount * lightPdf, materialPdf);
+            float lightStrength = GetDirectLightFalloff(distanceToLight, light.radius);
+            if (light.type == LightTypeTriangle)
+            {
+                lightStrength *= saturate(dot(light.normal, -ptToOffset)) * max(1.0f, light.area);
+            }
+            lightTotal += light.emission * lightStrength * shadowTransmittance * materialResponse
+                * rayNormalDot * misWeight;
+        }
+        else
+        {
+            // Zero-radius disk sampling is a delta-light fallback and has no competing BRDF PDF.
+            float lightStrength = GetDirectLightFalloff(distanceToLight, light.radius);
+            lightTotal += light.emission * lightStrength * shadowTransmittance * materialResponse * rayNormalDot;
+        }
     }
 
     return lightTotal / sampleCount;
+}
+
+float LightImportanceWeight(int lightIndex, RayHit hit);
+
+float GetLightSelectionPdf(int lightIndex, int lightCount, bool sampleAllLights, RayHit hit)
+{
+    if (lightIndex < 0 || lightIndex >= lightCount)
+    {
+        return 0.0f;
+    }
+
+    if (sampleAllLights)
+    {
+        return 1.0f;
+    }
+
+    if (_LightSamplingStrategy == LightSamplingUniformRandom)
+    {
+        return 1.0f / lightCount;
+    }
+
+    int weightedCount = min(lightCount, MaxImportanceLights);
+    if (lightIndex >= weightedCount)
+    {
+        return 0.0f;
+    }
+
+    float totalWeight = 0.0f;
+    int i;
+    [loop]
+    for (i = 0; i < weightedCount; i++)
+    {
+        totalWeight += LightImportanceWeight(i, hit);
+    }
+    return totalWeight > 0.0f ? LightImportanceWeight(lightIndex, hit) / totalWeight : 0.0f;
 }
 
 // Cheap per-hit estimate of how much a light is likely to contribute, used to bias
@@ -2327,12 +2428,45 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight, inout uint
             continue;
         }
 
-        accumulated += SampleSingleLight(lightIndex, ray, hit, sampleCount, rngState) * weight;
+        float selectionPdf = GetLightSelectionPdf(lightIndex, lightCount, sampleAllLights, hit);
+        int lightTechniqueSampleCount = sampleCount * (sampleAllLights ? 1 : drawCount);
+        accumulated += SampleSingleLight(lightIndex, ray, hit, sampleCount,
+            selectionPdf, lightTechniqueSampleCount, rngState) * weight;
     }
 
     // For random strategies the per-draw weights already include the 1/drawCount averaging,
     // so no extra division is needed here.
     return accumulated;
+}
+
+float GetLightPdfForHit(RayHit shadingHit, RayHit lightHit, bool softShadows, out int sampleCount)
+{
+    sampleCount = 0;
+    int lightCount = _NumLights;
+    if (_MaxLightSamples > 0 && _MaxLightSamples < lightCount)
+    {
+        lightCount = _MaxLightSamples;
+    }
+    if (lightHit.lightIndex < 0 || lightHit.lightIndex >= lightCount)
+    {
+        return 0.0f;
+    }
+
+    bool sampleAllLights =
+        _LightSamplingStrategy != LightSamplingUniformRandom &&
+        _LightSamplingStrategy != LightSamplingImportance;
+    int drawCount = lightCount;
+    if (!sampleAllLights)
+    {
+        int requested = clamp(_LightSampleCount, 1, lightCount);
+        sampleAllLights = requested >= lightCount;
+        drawCount = sampleAllLights ? lightCount : requested;
+    }
+
+    int samplesPerLight = softShadows ? max(1, _ShadowQuality + 1) : 1;
+    sampleCount = samplesPerLight * (sampleAllLights ? 1 : drawCount);
+    float selectionPdf = GetLightSelectionPdf(lightHit.lightIndex, lightCount, sampleAllLights, shadingHit);
+    return selectionPdf * GetLightShapePdf(_Lights[lightHit.lightIndex], shadingHit.position, lightHit.position);
 }
 
 float3 GetSkyboxColor(float3 direction)
@@ -2720,7 +2854,9 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
     scatteredRay.direction = brdfSample.direction;
     float offsetSign = dot(scatteredRay.direction, hit.geometricNormal) >= 0.0f ? 1.0f : -1.0f;
     scatteredRay.origin = hit.position + hit.geometricNormal * (0.001f * offsetSign);
-    return CreateScatterResult(scatteredRay, brdfSample.weight, 1, MediumTransitionNone);
+    ScatterResult result = CreateScatterResult(scatteredRay, brdfSample.weight, 1, MediumTransitionNone);
+    result.materialPdf = brdfSample.pdf;
+    return result;
 }
 
 float3 GetDirectLight(Ray ray, RayHit hit, bool softShadows, inout uint rngState)
@@ -2751,6 +2887,10 @@ float3 TracePath(Ray ray, inout uint rngState)
     float3 radiance = float3(0.0f, 0.0f, 0.0f);
     float3 throughput = float3(1.0f, 1.0f, 1.0f);
     MediumStack mediumStack = CreateMediumStack(ray.origin);
+    RayHit previousSurfaceHit = CreateRayHit();
+    float previousMaterialPdf = 0.0f;
+    bool previousDirectLightSampled = false;
+    bool previousSoftShadows = false;
 
     [loop]
     for (int bounce = 0; bounce < _NumBounces; bounce++)
@@ -2773,20 +2913,36 @@ float3 TracePath(Ray ray, inout uint rngState)
         float3 emission = GetEmission(hit);
         if (DidHitLight(hit))
         {
-            radiance += throughput * emission;
+            float misWeight = 1.0f;
+            if (previousDirectLightSampled && previousMaterialPdf > 0.0f)
+            {
+                int lightSampleCount;
+                float lightPdf = GetLightPdfForHit(previousSurfaceHit, hit, previousSoftShadows, lightSampleCount);
+                if (lightPdf > 0.0f)
+                {
+                    misWeight = PowerHeuristic(previousMaterialPdf, lightSampleCount * lightPdf);
+                }
+            }
+            radiance += throughput * emission * misWeight;
             break;
         }
 
+        bool sampledDirectLight = false;
         if (ShouldSampleDirectLight(throughput))
         {
             bool softShadows = bounce == 0;
             float3 directLight = GetDirectLight(ray, hit, softShadows, rngState);
             radiance += throughput * directLight;
+            sampledDirectLight = true;
+            previousSoftShadows = softShadows;
         }
 
         int remainingBounces = _NumBounces - bounce;
         ScatterResult scatter = CreateScatteredRay(ray, hit, bounce, remainingBounces, mediumStack, rngState);
         ApplyMediumTransition(mediumStack, hit, scatter.mediumTransition);
+        previousSurfaceHit = hit;
+        previousMaterialPdf = scatter.materialPdf;
+        previousDirectLightSampled = sampledDirectLight;
         ray = scatter.ray;
         throughput *= scatter.attenuation;
         bounce += scatter.bouncesConsumed - 1;
@@ -3123,9 +3279,22 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     smoothTriangle.meshIndex = 0;
     smoothTriangle.textureIndex = -1;
     smoothTriangle.interpolateNormals = 1;
+    smoothTriangle.lightIndex = -1;
     RayHit smoothHit = CreateRayHit();
     IntersectTriangle(CreateRay(float3(0.0f, 0.0f, 1.0f), float3(0.0f, 0.0f, -1.0f)), smoothHit, smoothTriangle);
     RegressionResults[30] = float4(smoothHit.normal, dot(smoothHit.geometricNormal, float3(0.0f, 0.0f, 1.0f)));
+
+    Light triangleLight;
+    triangleLight.position = float3(-1.0f, 2.0f, -1.0f);
+    triangleLight.emission = 1.0f;
+    triangleLight.u = float3(2.0f, 0.0f, 0.0f);
+    triangleLight.radius = 0.0f;
+    triangleLight.v = float3(0.0f, 0.0f, 2.0f);
+    triangleLight.area = 2.0f;
+    triangleLight.normal = float3(0.0f, -1.0f, 0.0f);
+    triangleLight.type = LightTypeTriangle;
+    RegressionResults[31] = float4(PowerHeuristic(0.25f, 0.5f), PowerHeuristic(0.5f, 0.25f), PowerHeuristic(1.0f, 1.0f), 1.0f);
+    RegressionResults[32] = float4(GetLightShapePdf(triangleLight, float3(0.0f, 0.0f, 0.0f), float3(0.0f, 2.0f, 0.0f)), 0.0f, 0.0f, 1.0f);
 }
 
 [numthreads(8,8,1)]

@@ -147,7 +147,7 @@ Per bounce:
 2. Attenuate `throughput` for the actual finite distance traveled through the stack's active medium. Water segments stop at the nearest wavy-top, side, or bottom boundary; air is neutral and finite glass sky misses do not use infinite distance.
 3. If it hits sky, add `throughput * skyColor` and stop.
 4. If it hits a light, add `throughput * emission` and stop.
-5. Sample direct light if the path throughput is above `MinDirectLightThroughput`. Bounce 0 uses multiple stochastic soft-shadow samples; later bounces use one light sample. `EvaluateMaterialBrdf()` evaluates the same Lambert/GGX material model used to sample opaque continuation rays.
+5. Sample direct light if the path throughput is above `MinDirectLightThroughput`. Bounce 0 uses multiple stochastic soft-shadow samples; later bounces use one light sample. `EvaluateMaterialBrdf()` evaluates the same Lambert/GGX material model used to sample opaque continuation rays. Explicit-light and opaque BRDF samples use power-heuristic MIS weights when both can discover the same emissive sphere or triangle.
 6. Add direct contribution: `throughput * directLight`.
 7. Create the next ray using the hit material type.
 8. Update `throughput` with the scatter attenuation.

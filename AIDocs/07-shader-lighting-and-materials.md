@@ -14,6 +14,8 @@ Direct light from sampled light points is accumulated additively rather than com
 
 Direct-light segments that cross the procedural water volume are additionally attenuated by water absorption using an estimated underwater segment length. This affects underwater points lit from above the water, above-water points lit from underwater, and underwater-to-underwater lighting.
 
+Explicit light samples and opaque BRDF continuation samples are combined with power-heuristic multiple importance sampling. Sphere-disk and triangle area samples are converted to solid-angle PDFs, include the active light-selection probability, and account for the number of samples taken by each technique. Emissive hits reached by an opaque BRDF sample receive the complementary weight, preventing those paths from being counted at full strength by both techniques. Glass/water transmission and delta-style zero-radius light fallbacks retain their established behavior.
+
 ### Light Sampling Strategies
 
 `_LightSamplingStrategy` (from `GameManager.lightSamplingStrategy`) selects which lights each hit shades. The strategies trade per-frame noise for cost. Uniform and importance sampling are unbiased only over the set of lights they can select; the current importance cap described below can omit lights from that set.
@@ -55,6 +57,8 @@ For shadow-BVH traversal details, see `06-shader-intersections-and-bvh.md`.
 Mesh hits retain both a shading normal and the triangle's geometric normal. `RayMaterial.InterpolateNormals` barycentrically interpolates imported vertex normals for direct lighting, BRDF sampling, and opaque reflection. Ray offsets, transparent boundaries, and mesh refraction continue to use the geometric normal so smooth shading does not change the actual polygonal volume.
 
 Opaque continuation throughput uses `brdf * abs(N dot L) / pdf`. The common roughness conversion is `roughness = 1 - smoothness`, `alpha = roughness^2`, with a small roughness floor to keep mirror-like GGX evaluation finite. Glass/water transmission and Fresnel branch selection retain their medium-stack-specific path; their direct reflection uses the shared GGX evaluator.
+
+Each uploaded emissive triangle stores the matching `_Lights` index, and emissive sphere hits already use their light-buffer index. This identity lets a BRDF-sampled emissive hit reconstruct the same light-selection and shape PDF used by next-event estimation.
 
 The glass path is entered whenever `IsGlassMaterial(hit)` is true, which happens for `materialType == Glass` **or** for any hit with `opacity < 1.0`. A nominally `Diffuse` or `Metal` object with reduced opacity therefore scatters through the glass transmission/Fresnel path.
 

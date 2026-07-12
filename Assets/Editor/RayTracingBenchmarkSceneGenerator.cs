@@ -533,7 +533,7 @@ public static class RayTracingBenchmarkSceneGenerator
         AddPrimitiveMesh(context.Root, "Right Red Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(roomWidth * 0.5f, roomHeight * 0.5f, roomCenterZ), Vector3.zero, new Vector3(0.04f, roomHeight, roomDepth), new Color32(230, 38, 20, 255), RayMaterial.MaterialType.Diffuse, 0.5f, 1.0f);
         AddPrimitiveMesh(context.Root, "Back Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, roomHeight * 0.5f, backZ), Vector3.zero, new Vector3(roomWidth, roomHeight, 0.04f), new Color32(232, 230, 220, 255), RayMaterial.MaterialType.Diffuse, 0.5f, 1.0f);
 
-        AddMeshLight(context.Root, "Rectangular Ceiling Light", CreateHorizontalQuadMesh("Rectangular Ceiling Light", 1.25f, 0.72f, 1.0f, 1.0f), new Vector3(0.0f, roomHeight - 0.035f, 0.7f), Vector3.zero, new Vector3(1.25f, 1.25f, 1.25f), new Color32(255, 255, 255, 255));
+        AddMeshLight(context.Root, "Rectangular Ceiling Light", CreateHorizontalQuadMesh("Rectangular Ceiling Light", 1.25f, 0.72f, 1.0f, 1.0f), new Vector3(0.0f, roomHeight - 0.021f, 0.7f), Vector3.zero, new Vector3(1.25f, 1.25f, 1.25f), new Color32(255, 255, 255, 255));
 
         var dragon = AddRayMesh(context.Root, "Stanford Dragon", dragonMesh, new Vector3(0.0f, 0.0f, 0.0f), new Vector3(0.0f, 148.0f, 0.0f), new Vector3(3.0f, 3.0f, 3.0f), Color.white, RayMaterial.MaterialType.Diffuse, 0.75f, 1.0f, 1.0f);
         dragon.GetComponent<RayMaterial>().InterpolateNormals = true;

@@ -21,6 +21,7 @@ The recent texture, mesh-light, glass, specular, imported-model, and procedural-
 - **Stack-driven refraction: implemented.** Path-selection Fresnel and sphere, mesh, and water transmission derive source/target IORs from the active medium and its entered/revealed neighbor. Reflection and TIR preserve stack state; production probes cover water -> glass -> water indices, direction, Fresnel, and water-surrounded TIR behavior.
 - **Shadow boundary traversal: implemented.** Transparent shadow rays process nearest boundaries in order, attenuate actual active-medium segments, pair closed mesh entries/exits, retain a thin/open fallback, and preserve the opaque-only fast path.
 - **Shared BRDF evaluation and sampling: implemented.** Opaque diffuse and metal paths share Lambert/GGX evaluation, Schlick Fresnel, Smith masking-shadowing, mixture PDFs, and `f * abs(N dot L) / pdf` continuation weighting. Dielectric transmission remains on the established medium-stack path while direct dielectric reflection uses shared GGX evaluation.
+- **Multiple importance sampling: implemented for opaque reflection paths.** Explicit sphere/triangle light samples and opaque BRDF continuation samples use solid-angle PDFs and power-heuristic weights; emissive hits receive complementary weighting. Dielectric transmission and zero-radius delta-light fallbacks retain their established paths.
 
 ## Priority 0: Protect Upcoming Changes
 
@@ -89,6 +90,8 @@ Status: implemented for opaque diffuse/metal reflection and direct dielectric re
 Completion criteria: direct and continuation rays evaluate the same material model, sampled PDFs match their distributions, roughness behavior is shared, and numeric tests cover finite/non-NaN values and known-angle responses.
 
 ## Priority 6: Multiple Importance Sampling
+
+Status: implemented for opaque diffuse/metal continuation and explicit sphere/triangle light sampling. Full dielectric BSDF integration remains future material work.
 
 - Add light-sampling PDFs for sphere and triangle lights in the same measure used by material PDFs.
 - Combine explicit light samples and BRDF/BSDF samples with a documented MIS heuristic, initially the power heuristic.

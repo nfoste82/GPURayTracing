@@ -60,6 +60,7 @@ namespace GPURayTracing.Tests
             public int meshIndex;
             public int textureIndex;
             public int interpolateNormals;
+            public int lightIndex;
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -326,10 +327,10 @@ namespace GPURayTracing.Tests
 
         private static readonly Vector4[] MeshLightBaseline =
         {
-            new Vector4(0.59439330f, 0.68201690f, 0.75855770f, 1.0f), new Vector4(0.95775360f, 0.94961250f, 0.93172160f, 1.0f),
-            new Vector4(0.10867920f, 0.14275950f, 0.20699800f, 1.0f), new Vector4(0.97702120f, 0.97129950f, 0.95504250f, 1.0f),
-            new Vector4(0.42459930f, 0.62297920f, 0.78613290f, 1.0f), new Vector4(0.98865930f, 0.93403150f, 0.73870550f, 1.0f),
-            new Vector4(0.39620480f, 0.59732020f, 0.76823900f, 1.0f), new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f),
+            new Vector4(0.58991720f, 0.67719800f, 0.75332560f, 1.0f), new Vector4(0.95769670f, 0.94956930f, 0.93168690f, 1.0f),
+            new Vector4(0.10881560f, 0.14287760f, 0.20707400f, 1.0f), new Vector4(0.94579370f, 0.93877970f, 0.91988000f, 1.0f),
+            new Vector4(0.42459930f, 0.62297920f, 0.78613290f, 1.0f), new Vector4(0.98242520f, 0.92072470f, 0.70654600f, 1.0f),
+            new Vector4(0.39620480f, 0.59732020f, 0.76823890f, 1.0f), new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f),
             new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f)
         };
 
@@ -423,7 +424,7 @@ namespace GPURayTracing.Tests
             meshTextures = meshTextures ?? CreateMeshTextureArray();
             ComputeBuffer sphereBuffer = CreateBuffer(spheres, 56);
             ComputeBuffer lightBuffer = CreateBuffer(lights, 72);
-            ComputeBuffer triangleBuffer = CreateBuffer(triangles, 160);
+            ComputeBuffer triangleBuffer = CreateBuffer(triangles, 164);
             ComputeBuffer meshBuffer = CreateBuffer(meshes, 48);
             ComputeBuffer bvhBuffer = CreateBuffer(bvhNodes, 48);
             ComputeBuffer topLevelBuffer = CreateDummyBuffer(48);
@@ -585,6 +586,8 @@ namespace GPURayTracing.Tests
                 SurfaceTriangle(p0, p2, p1, Vector3.down, Vector3.one, -1, emission, 3),
                 SurfaceTriangle(p0, p3, p2, Vector3.down, Vector3.one, -1, emission, 3)
             };
+            triangles[0].lightIndex = 0;
+            triangles[1].lightIndex = 1;
             CreateSingleLeafMesh(triangles, p0 - Vector3.one * 0.0001f, p2 + Vector3.one * 0.0001f, true, out meshes, out bvhNodes);
             lights = new[]
             {
@@ -681,7 +684,8 @@ namespace GPURayTracing.Tests
                 refraction = opacity < 1.0f ? 1.5f : 1.0f,
                 materialType = materialType,
                 meshIndex = 0,
-                textureIndex = textureIndex
+                textureIndex = textureIndex,
+                lightIndex = materialType == 3 ? 0 : -1
             };
         }
 
@@ -735,7 +739,8 @@ namespace GPURayTracing.Tests
                 refraction = 1.5f,
                 materialType = 2,
                 meshIndex = 0,
-                textureIndex = -1
+                textureIndex = -1,
+                lightIndex = -1
             };
         }
 
