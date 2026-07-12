@@ -14,7 +14,7 @@ Direct light from sampled light points is accumulated additively rather than com
 
 Direct-light segments that cross the procedural water volume are additionally attenuated by water absorption using an estimated underwater segment length. This affects underwater points lit from above the water, above-water points lit from underwater, and underwater-to-underwater lighting.
 
-Explicit light samples and opaque BRDF continuation samples are combined with power-heuristic multiple importance sampling. Sphere-disk and triangle area samples are converted to solid-angle PDFs, include the active light-selection probability, and account for the number of samples taken by each technique. Emissive hits reached by an opaque BRDF sample receive the complementary weight, preventing those paths from being counted at full strength by both techniques. Glass/water transmission and delta-style zero-radius light fallbacks retain their established behavior.
+Explicit triangle-light samples and opaque BRDF continuation samples are combined with power-heuristic multiple importance sampling. Triangle area samples are converted to solid-angle PDFs, include the active light-selection probability, and account for the number of samples taken by each technique. Emissive triangle hits reached by an opaque BRDF sample receive the complementary weight. Sphere lights are excluded because their historical falloff-scaled direct-light contribution is not the same estimator as emissive-hit radiance; weighting them as complementary techniques creates dark centers in reflected sphere lights. Glass/water transmission and zero-radius light fallbacks retain their established behavior.
 
 ### Light Sampling Strategies
 

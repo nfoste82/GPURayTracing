@@ -101,6 +101,40 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void SphereLightReflection_HasNoDarkCenter()
+        {
+            float[,] probes =
+            {
+                { 0.5f, 0.5f },
+                { 0.5f, 0.4375f },
+                { 0.5f, 0.46875f },
+                { 0.5f, 0.53125f },
+                { 0.5f, 0.5625f },
+                { 0.46875f, 0.5f },
+                { 0.53125f, 0.5f }
+            };
+            Vector4[] signature = RenderSignature(
+                Array.Empty<SphereData>(),
+                false,
+                new Vector3(0.0f, 2.0f, -6.0f),
+                Quaternion.Euler(40.0f, 0.0f, 0.0f),
+                lights: new[] { SphereLight(new Vector3(0.0f, 3.0f, 0.0f), new Vector3(30.0f, 30.0f, 30.0f), 1.0f) },
+                width: 64,
+                height: 64,
+                shadowRandomness: 0.8f,
+                groundSmoothness: 1.0f,
+                skyboxColor: Color.black,
+                numberOfPasses: 256,
+                lightFalloffScale: 1000.0f,
+                probes: probes);
+
+            float center = signature[1].x;
+            float surroundingReflection = Mathf.Min(signature[3].x, signature[4].x);
+            Assert.That(center, Is.GreaterThan(surroundingReflection * 0.5f),
+                $"Sphere-light reflection center is dark. Probes:\n{FormatSignature(signature)}");
+        }
+
+        [Test]
         public void GlassSphereScene_CurrentImageBaseline_IsStable()
         {
             Vector4[] signature = RenderSignature(new[]
@@ -398,7 +432,13 @@ namespace GPURayTracing.Tests
             LightData[] lights = null,
             Texture2DArray meshTextures = null,
             int width = ImageSize,
-            int height = ImageSize)
+            int height = ImageSize,
+            float shadowRandomness = 0.0f,
+            float groundSmoothness = 0.9f,
+            Color? skyboxColor = null,
+            int numberOfPasses = 8,
+            float lightFalloffScale = 0.16f,
+            float[,] probes = null)
         {
             if (!SystemInfo.supportsComputeShaders)
             {
@@ -419,7 +459,7 @@ namespace GPURayTracing.Tests
             lights = lights ?? Array.Empty<LightData>();
             var result = CreateRenderTexture(width, height, RenderTextureFormat.ARGBFloat);
             var accumulation = CreateRenderTexture(width, height, RenderTextureFormat.ARGBFloat);
-            var skybox = CreateSolidTexture(new Color(0.18f, 0.32f, 0.58f, 1.0f));
+            var skybox = CreateSolidTexture(skyboxColor ?? new Color(0.18f, 0.32f, 0.58f, 1.0f));
             bool ownsMeshTextures = meshTextures == null;
             meshTextures = meshTextures ?? CreateMeshTextureArray();
             ComputeBuffer sphereBuffer = CreateBuffer(spheres, 56);
@@ -456,7 +496,7 @@ namespace GPURayTracing.Tests
                 shader.SetVector("_SkyboxLight", Vector4.one);
                 shader.SetInt("_Seed", 1);
                 shader.SetInt("_SampleOffset", 0);
-                shader.SetInt("_NumberOfPasses", 8);
+                shader.SetInt("_NumberOfPasses", numberOfPasses);
                 shader.SetInt("_NumBounces", 6);
                 shader.SetInt("_DebugRenderMode", 0);
                 shader.SetInt("_UseFrameAccumulation", 0);
@@ -465,10 +505,10 @@ namespace GPURayTracing.Tests
                 shader.SetInt("_LightSamplingStrategy", 0);
                 shader.SetInt("_LightSampleCount", 1);
                 shader.SetInt("_ShadowQuality", 0);
-                shader.SetFloat("_ShadowRandomness", 0.0f);
-                shader.SetFloat("_LightFalloffScale", 0.16f);
+                shader.SetFloat("_ShadowRandomness", shadowRandomness);
+                shader.SetFloat("_LightFalloffScale", lightFalloffScale);
                 shader.SetFloat("_FocalDistance", 100.0f);
-                shader.SetFloat("_GroundSmoothness", 0.9f);
+                shader.SetFloat("_GroundSmoothness", groundSmoothness);
                 shader.SetFloat("_Exposure", 1.0f);
                 shader.SetInt("_NumSpheres", spheres.Length);
                 shader.SetInt("_NumLights", lights.Length);
@@ -482,7 +522,7 @@ namespace GPURayTracing.Tests
                 SetWater(shader, waterEnabled);
 
                 shader.Dispatch(kernel, Mathf.CeilToInt(width / 8.0f), Mathf.CeilToInt(height / 8.0f), 1);
-                return ReadSignature(result, width, height);
+                return ReadSignature(result, width, height, probes);
             }
             finally
             {
@@ -763,7 +803,7 @@ namespace GPURayTracing.Tests
             shader.SetInt("_WaterRefinementSteps", 5);
         }
 
-        private static Vector4[] ReadSignature(RenderTexture source, int width, int height)
+        private static Vector4[] ReadSignature(RenderTexture source, int width, int height, float[,] probes = null)
         {
             var texture = new Texture2D(width, height, TextureFormat.RGBAFloat, false, true);
             RenderTexture previous = RenderTexture.active;
@@ -774,7 +814,9 @@ namespace GPURayTracing.Tests
             Color[] pixels = texture.GetPixels();
             UnityEngine.Object.DestroyImmediate(texture);
 
-            var signature = new Vector4[9];
+            float[,] defaultProbes = { { 0.25f, 0.25f }, { 0.5f, 0.25f }, { 0.75f, 0.25f }, { 0.25f, 0.5f }, { 0.5f, 0.5f }, { 0.75f, 0.5f }, { 0.375f, 0.75f }, { 0.625f, 0.75f } };
+            probes = probes ?? defaultProbes;
+            var signature = new Vector4[probes.GetLength(0) + 1];
             Vector4 average = Vector4.zero;
             foreach (Color pixel in pixels)
             {
@@ -782,7 +824,6 @@ namespace GPURayTracing.Tests
             }
             signature[0] = average / pixels.Length;
 
-            float[,] probes = { { 0.25f, 0.25f }, { 0.5f, 0.25f }, { 0.75f, 0.25f }, { 0.25f, 0.5f }, { 0.5f, 0.5f }, { 0.75f, 0.5f }, { 0.375f, 0.75f }, { 0.625f, 0.75f } };
             for (int i = 0; i < probes.GetLength(0); i++)
             {
                 int x = Mathf.Clamp(Mathf.FloorToInt(probes[i, 0] * width), 0, width - 1);

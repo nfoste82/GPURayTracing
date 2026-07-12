@@ -17,10 +17,10 @@ Features missing or approximate:
 * General nested-medium handling for overlapping glass and water volumes
 * Imported smooth vertex normals and material texture maps beyond mesh albedo
 
-There are multiple quality settings on the GameManager object in the root scene. At normal settings you should be able to easily sustain 60+ frames per second. At the highest settings you'll end up with frames taking one or more seconds to render.
+There are multiple quality settings on the GameManager object in the root scene. At normal settings you should be able to easily sustain 60+ frames per second. At the highest settings you'll end up with frames taking hundreds of milliseconds to render and you'll need image accumulation on to get good clarity.
 
-![Depth of field, soft shadows, surface reflections](https://imgur.com/ZR4qbcz.jpg)
+![Dragon model rendered in a Cornell box](dragon_cornell_box.png)
 
-![Transparency, refraction, colored shadows](https://i.imgur.com/vJXKV0J.png)
+![Default scene](default_scene.png)
 
-![Raytracing is fun](https://imgur.com/rXc3fBq.jpg)
+![Water with reflection, refraction, light absorption](water_scene.png)

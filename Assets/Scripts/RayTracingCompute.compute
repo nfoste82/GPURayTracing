@@ -2205,7 +2205,10 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
         float lightShapePdf = GetLightShapePdf(light, hit.position, offsetPt);
         float materialPdf;
         float3 materialResponse = EvaluateMaterialBrdf(ray, hit, ptToOffset, materialPdf);
-        if (lightShapePdf > 0.0f)
+        // Sphere lights retain the renderer's historical falloff-scaled direct-light model,
+        // which is not the same estimator as an emissive sphere hit. Applying complementary
+        // MIS weights between them removes energy from the center of reflected sphere lights.
+        if (light.type == LightTypeTriangle && lightShapePdf > 0.0f)
         {
             float lightPdf = lightSelectionPdf * lightShapePdf;
             float misWeight = PowerHeuristic(lightTechniqueSampleCount * lightPdf, materialPdf);
@@ -2448,6 +2451,10 @@ float GetLightPdfForHit(RayHit shadingHit, RayHit lightHit, bool softShadows, ou
         lightCount = _MaxLightSamples;
     }
     if (lightHit.lightIndex < 0 || lightHit.lightIndex >= lightCount)
+    {
+        return 0.0f;
+    }
+    if (_Lights[lightHit.lightIndex].type == LightTypeSphere)
     {
         return 0.0f;
     }

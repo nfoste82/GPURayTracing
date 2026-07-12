@@ -19,6 +19,7 @@ The project uses EditMode tests under `Assets/Tests/EditMode/` to make rendering
 - GPU dispatch smoke coverage at `1x1`, `3x5`, and `13x7`; `CSMain` now returns before accessing output textures for ceiling-dispatch threads outside their dimensions.
 - Production GPU probes cover shared Lambert/GGX BRDF values, PDFs, and finite positive sampled throughput.
 - Production GPU probes cover the MIS power heuristic and triangle area-to-solid-angle PDF conversion.
+- A focused high-sample image regression verifies that a reflected sphere light does not develop a dark center.
 
 ## Running Tests
 
