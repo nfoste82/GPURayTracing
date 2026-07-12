@@ -186,6 +186,9 @@ struct MeshTriangle
     float3 vertex1;
     float3 vertex2;
     float3 normal;
+    float3 normal0;
+    float3 normal1;
+    float3 normal2;
     float3 color;
     float smoothness;
     float2 uv0;
@@ -197,7 +200,7 @@ struct MeshTriangle
     int materialType;
     int meshIndex;
     int textureIndex;
-    int padding0;
+    int interpolateNormals;
 };
 
 StructuredBuffer<MeshTriangle> _Triangles;
@@ -308,6 +311,7 @@ struct RayHit
     float3 position;
     float3 obj_position;
     float3 normal;
+    float3 geometricNormal;
     float3 emission;
     float3 color;
     float obj_radius;
@@ -673,6 +677,7 @@ RayHit CreateRayHit()
     hit.position = float3(0.0f, 0.0f, 0.0f);
     hit.obj_position = float3(0.0f, 0.0f, 0.0f);
     hit.normal = float3(0.0f, 0.0f, 0.0f);
+    hit.geometricNormal = float3(0.0f, 0.0f, 0.0f);
     hit.emission = float3(0.0f, 0.0f, 0.0f);
     hit.color = float3(0.0f, 0.0f, 0.0f);
     hit.obj_radius = 0.0f;
@@ -699,6 +704,7 @@ void IntersectGroundPlane(Ray ray, inout RayHit bestHit)
         bestHit.distance = t;
         bestHit.position = ray.origin + t * ray.direction;
         bestHit.normal = float3(0.0f, 1.0f, 0.0f);
+        bestHit.geometricNormal = bestHit.normal;
         bestHit.color = float3(0.8f, 0.8f, 0.8f);
         bestHit.smoothness = _GroundSmoothness;
         bestHit.emission = float3(0.0f, 0.0f, 0.0f);
@@ -872,6 +878,7 @@ void SetWaterHit(Ray ray, float hitT, float3 outwardNormal, inout RayHit bestHit
     bestHit.position = ray.origin + hitT * ray.direction;
     bestHit.obj_position = _WaterCenter;
     bestHit.normal = dot(outwardNormal, ray.direction) > 0.0f ? -outwardNormal : outwardNormal;
+    bestHit.geometricNormal = bestHit.normal;
     bestHit.emission = float3(0.0f, 0.0f, 0.0f);
     bestHit.color = _WaterColor;
     bestHit.obj_radius = 0.0f;
@@ -1061,6 +1068,7 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere, int objectInd
         bestHit.position = ray.origin + t * ray.direction;
         bestHit.obj_position = sphere.position;
         bestHit.normal = normalize(bestHit.position - sphere.position);
+        bestHit.geometricNormal = bestHit.normal;
         bestHit.emission = sphere.emission;
         bestHit.color = sphere.color;
         bestHit.obj_radius = sphere.radius;
@@ -1259,14 +1267,31 @@ void IntersectTriangle(Ray ray, inout RayHit bestHit, MeshTriangle meshTriangle)
 
     if (hitDistance > 0.001f && hitDistance < bestHit.distance)
     {
+        float3 geometricNormal = normal;
+        if (meshTriangle.interpolateNormals != 0)
+        {
+            normal = normalize(meshTriangle.normal0 * (1.0f - barycentric.x - barycentric.y)
+                + meshTriangle.normal1 * barycentric.x
+                + meshTriangle.normal2 * barycentric.y);
+            if (dot(normal, geometricNormal) < 0.0f)
+            {
+                normal = -normal;
+            }
+        }
+
         if (dot(normal, ray.direction) > 0.0f)
         {
             normal = -normal;
+        }
+        if (dot(geometricNormal, ray.direction) > 0.0f)
+        {
+            geometricNormal = -geometricNormal;
         }
 
         bestHit.position = ray.origin + hitDistance * ray.direction;
         bestHit.obj_position = bestHit.position;
         bestHit.normal = normal;
+        bestHit.geometricNormal = geometricNormal;
         bestHit.emission = meshTriangle.emission;
         bestHit.color = meshTriangle.color;
         bestHit.obj_radius = 0.0f;
@@ -2103,7 +2128,7 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount, i
         float3 ptToOffset = offsetPt - hit.position;
         float distanceToLight = length(ptToOffset);
         ptToOffset = normalize(ptToOffset);
-        Ray rayToLight = CreateRay(hit.position + (hit.normal * 0.001f), ptToOffset);
+        Ray rayToLight = CreateRay(hit.position + (hit.geometricNormal * 0.001f), ptToOffset);
 
         float rayNormalDot = saturate(dot(ptToOffset, hit.normal));
         if (rayNormalDot <= 0.0f)
@@ -2368,7 +2393,8 @@ float GetFresnelReflectance(Ray ray, RayHit hit, float sourceRefraction, float t
     float r0 = (sourceIndex - targetIndex) / (sourceIndex + targetIndex);
     r0 *= r0;
 
-    float cosTheta = saturate(abs(dot(-ray.direction, hit.normal)));
+    float3 boundaryNormal = hit.meshIndex >= 0 ? hit.geometricNormal : hit.normal;
+    float cosTheta = saturate(abs(dot(-ray.direction, boundaryNormal)));
     float reflectance = r0 + (1.0f - r0) * pow(1.0f - cosTheta, 5.0f);
     return IsWaterMaterial(hit) ? reflectance * GetWaterReflectiveOpacity(hit) : reflectance;
 }
@@ -2520,7 +2546,7 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int
     mediumTransition = MediumTransitionNone;
     mediumDistanceTraveled = 0.0f;
 
-    float3 normal = dot(sourceRay.direction, hit.normal) < 0.0f ? hit.normal : -hit.normal;
+    float3 normal = dot(sourceRay.direction, hit.geometricNormal) < 0.0f ? hit.geometricNormal : -hit.geometricNormal;
 
     if (!entering)
     {
@@ -2532,7 +2558,7 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int
         }
         else
         {
-            ray.direction = reflect(sourceRay.direction, hit.normal);
+            ray.direction = reflect(sourceRay.direction, hit.geometricNormal);
         }
 
         ray.origin = hit.position + ray.direction * 0.001f;
@@ -2639,7 +2665,7 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
 {
     float3 albedo = GetAlbedo(hit);
     float3 roughNormal = GetRandomizedNormalBasedOnAmount(hit.normal, hit.smoothness, rngState);
-    Ray scatteredRay = CreateRay(hit.position + (hit.normal * 0.001f), reflect(sourceRay.direction, roughNormal));
+    Ray scatteredRay = CreateRay(hit.position + (hit.geometricNormal * 0.001f), reflect(sourceRay.direction, roughNormal));
 
     if (IsWaterMaterial(hit))
     {
@@ -2692,7 +2718,8 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
 
     BrdfSample brdfSample = SampleMaterialBrdf(sourceRay, hit, rngState);
     scatteredRay.direction = brdfSample.direction;
-    scatteredRay.origin = hit.position + scatteredRay.direction * 0.001f;
+    float offsetSign = dot(scatteredRay.direction, hit.geometricNormal) >= 0.0f ? 1.0f : -1.0f;
+    scatteredRay.origin = hit.position + hit.geometricNormal * (0.001f * offsetSign);
     return CreateScatterResult(scatteredRay, brdfSample.weight, 1, MediumTransitionNone);
 }
 
@@ -2974,6 +3001,7 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     glassHit.opacity = 0.6f;
     glassHit.color = float3(0.8f, 0.9f, 1.0f);
     glassHit.normal = normal;
+    glassHit.geometricNormal = normal;
     MediumIdentity glass = CreateHitMedium(glassHit);
 
     RegressionResults[5] = float4(GetMediumTransitionIndices(air, air, waterHit, true), water.type, water.objectIndex);
@@ -3074,6 +3102,30 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     BrdfSample brdfSample = SampleMaterialBrdf(normalIncidenceRay, diffuseBrdfHit, brdfRngState);
     RegressionResults[28] = float4(brdfSample.direction, brdfSample.pdf);
     RegressionResults[29] = float4(brdfSample.weight, dot(brdfSample.direction, normal));
+
+    MeshTriangle smoothTriangle;
+    smoothTriangle.vertex0 = float3(-1.0f, -1.0f, 0.0f);
+    smoothTriangle.vertex1 = float3(1.0f, -1.0f, 0.0f);
+    smoothTriangle.vertex2 = float3(0.0f, 1.0f, 0.0f);
+    smoothTriangle.normal = float3(0.0f, 0.0f, 1.0f);
+    smoothTriangle.normal0 = normalize(float3(-1.0f, 0.0f, 1.0f));
+    smoothTriangle.normal1 = normalize(float3(1.0f, 0.0f, 1.0f));
+    smoothTriangle.normal2 = normalize(float3(0.0f, 1.0f, 1.0f));
+    smoothTriangle.color = 1.0f;
+    smoothTriangle.smoothness = 0.0f;
+    smoothTriangle.uv0 = 0.0f;
+    smoothTriangle.uv1 = 0.0f;
+    smoothTriangle.uv2 = 0.0f;
+    smoothTriangle.opacity = 1.0f;
+    smoothTriangle.emission = 0.0f;
+    smoothTriangle.refraction = 1.0f;
+    smoothTriangle.materialType = MaterialDiffuse;
+    smoothTriangle.meshIndex = 0;
+    smoothTriangle.textureIndex = -1;
+    smoothTriangle.interpolateNormals = 1;
+    RayHit smoothHit = CreateRayHit();
+    IntersectTriangle(CreateRay(float3(0.0f, 0.0f, 1.0f), float3(0.0f, 0.0f, -1.0f)), smoothHit, smoothTriangle);
+    RegressionResults[30] = float4(smoothHit.normal, dot(smoothHit.geometricNormal, float3(0.0f, 0.0f, 1.0f)));
 }
 
 [numthreads(8,8,1)]

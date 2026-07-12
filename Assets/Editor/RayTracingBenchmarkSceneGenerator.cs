@@ -525,6 +525,7 @@ public static class RayTracingBenchmarkSceneGenerator
         AddMeshLight(context.Root, "Rectangular Ceiling Light", CreateHorizontalQuadMesh("Rectangular Ceiling Light", 1.25f, 0.72f, 1.0f, 1.0f), new Vector3(0.0f, roomHeight - 0.035f, 0.7f), Vector3.zero, new Vector3(1.25f, 1.25f, 1.25f), new Color32(255, 255, 255, 255));
 
         var dragon = AddRayMesh(context.Root, "Stanford Dragon", dragonMesh, new Vector3(0.0f, 0.0f, 0.0f), new Vector3(0.0f, 148.0f, 0.0f), new Vector3(3.0f, 3.0f, 3.0f), Color.white, RayMaterial.MaterialType.Diffuse, 0.75f, 1.0f, 1.0f);
+        dragon.GetComponent<RayMaterial>().InterpolateNormals = true;
         //FitObjectToBox(dragon.transform, dragonMesh.bounds, new Vector3(0.0f, 0.04f, 0.15f), new Vector3(2.45f, 2.35f, 2.45f));
 
         Save(context.Scene, sceneName);

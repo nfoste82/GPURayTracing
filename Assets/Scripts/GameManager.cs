@@ -240,7 +240,7 @@ public class GameManager : MonoBehaviour
     private const float DynamicQualitySmoothing = 0.08f;
     private const float DynamicQualityAdjustmentInterval = 0.75f;
     private const int MeshTextureSize = 128;
-    private const int TriangleStride = 124;
+    private const int TriangleStride = 160;
     private const int MeshInfoStride = 48;
     private const int BvhNodeStride = 48;
     private const int TopLevelBvhNodeStride = 48;
@@ -354,6 +354,9 @@ public class GameManager : MonoBehaviour
         public Vector3 vertex1;
         public Vector3 vertex2;
         public Vector3 normal;
+        public Vector3 normal0;
+        public Vector3 normal1;
+        public Vector3 normal2;
         public Vector3 color;
         public float smoothness;
         public Vector2 uv0;
@@ -365,7 +368,7 @@ public class GameManager : MonoBehaviour
         public int materialType;
         public int meshIndex;
         public int textureIndex;
-        public int padding0;
+        public int interpolateNormals;
 
         public float Intersect(Vector3 origin, Vector3 direction)
         {
@@ -470,6 +473,7 @@ public class GameManager : MonoBehaviour
         public float previousRefraction;
         public int previousMaterialType;
         public Texture2D previousAlbedoTexture;
+        public bool previousInterpolateNormals;
     }
 
     private Water _water;
@@ -1246,6 +1250,7 @@ public class GameManager : MonoBehaviour
             var refraction = material != null ? material.RefractionIndex : 1.0f;
             var materialType = light != null ? 3 : (int)material.Type;
             var albedoTexture = material != null ? material.AlbedoTexture : null;
+            bool interpolateNormals = material != null && material.InterpolateNormals;
 
             if (opacity < ShadowBlockerOpaqueThreshold)
             {
@@ -1259,7 +1264,8 @@ public class GameManager : MonoBehaviour
                 && Mathf.Approximately(meshObject.previousOpacity, opacity)
                 && Mathf.Approximately(meshObject.previousRefraction, refraction)
                 && meshObject.previousMaterialType == materialType
-                && meshObject.previousAlbedoTexture == albedoTexture)
+                && meshObject.previousAlbedoTexture == albedoTexture
+                && meshObject.previousInterpolateNormals == interpolateNormals)
             {
                 continue;
             }
@@ -1272,6 +1278,7 @@ public class GameManager : MonoBehaviour
             meshObject.previousRefraction = refraction;
             meshObject.previousMaterialType = materialType;
             meshObject.previousAlbedoTexture = albedoTexture;
+            meshObject.previousInterpolateNormals = interpolateNormals;
             _meshObjects[i] = meshObject;
             changed = true;
         }
@@ -1303,7 +1310,9 @@ public class GameManager : MonoBehaviour
             var vertices = mesh.vertices;
             var indices = mesh.triangles;
             var uvs = mesh.uv;
+            var normals = mesh.normals;
             var localToWorld = meshObject.transform.localToWorldMatrix;
+            var normalToWorld = localToWorld.inverse.transpose;
             var material = meshObject.material;
             var light = meshObject.light;
             bool isLight = light != null;
@@ -1314,6 +1323,7 @@ public class GameManager : MonoBehaviour
             var refraction = material != null ? material.RefractionIndex : 1.0f;
             int materialType = isLight ? 3 : (int)material.Type;
             int textureIndex = material != null ? GetMeshAlbedoTextureIndex(material.AlbedoTexture) : -1;
+            bool interpolateNormals = material != null && material.InterpolateNormals && normals.Length == vertices.Length;
             var meshTriangles = new List<Triangle>(indices.Length / 3);
 
             for (int i = 0; i + 2 < indices.Length; i += 3)
@@ -1325,6 +1335,9 @@ public class GameManager : MonoBehaviour
                 var vertex1 = localToWorld.MultiplyPoint3x4(vertices[index1]);
                 var vertex2 = localToWorld.MultiplyPoint3x4(vertices[index2]);
                 var normal = Vector3.Cross(vertex1 - vertex0, vertex2 - vertex0).normalized;
+                var normal0 = interpolateNormals ? normalToWorld.MultiplyVector(normals[index0]).normalized : normal;
+                var normal1 = interpolateNormals ? normalToWorld.MultiplyVector(normals[index1]).normalized : normal;
+                var normal2 = interpolateNormals ? normalToWorld.MultiplyVector(normals[index2]).normalized : normal;
 
                 meshTriangles.Add(new Triangle
                 {
@@ -1332,6 +1345,9 @@ public class GameManager : MonoBehaviour
                     vertex1 = vertex1,
                     vertex2 = vertex2,
                     normal = normal,
+                    normal0 = normal0,
+                    normal1 = normal1,
+                    normal2 = normal2,
                     color = color,
                     emission = emission,
                     uv0 = GetMeshUv(uvs, index0),
@@ -1342,7 +1358,8 @@ public class GameManager : MonoBehaviour
                     refraction = refraction,
                     materialType = materialType,
                     meshIndex = meshIndex,
-                    textureIndex = textureIndex
+                    textureIndex = textureIndex,
+                    interpolateNormals = interpolateNormals ? 1 : 0
                 });
 
                 if (isLight)
@@ -2108,7 +2125,8 @@ public class GameManager : MonoBehaviour
                 previousOpacity = material != null ? Mathf.Clamp01(material.Opacity) : 1.0f,
                 previousRefraction = material != null ? material.RefractionIndex : 1.0f,
                 previousMaterialType = rayLight != null ? 3 : (int)material.Type,
-                previousAlbedoTexture = material != null ? material.AlbedoTexture : null
+                previousAlbedoTexture = material != null ? material.AlbedoTexture : null,
+                previousInterpolateNormals = material != null && material.InterpolateNormals
             });
             RebuildTriangleData();
             return;
@@ -2540,6 +2558,7 @@ public class GameManager : MonoBehaviour
         hash = AddHash(hash, value.previousOpacity);
         hash = AddHash(hash, value.previousRefraction);
         hash = AddHash(hash, value.previousMaterialType);
-        return AddHash(hash, value.previousAlbedoTexture != null ? value.previousAlbedoTexture.GetInstanceID() : 0);
+        hash = AddHash(hash, value.previousAlbedoTexture != null ? value.previousAlbedoTexture.GetInstanceID() : 0);
+        return AddHash(hash, value.previousInterpolateNormals ? 1 : 0);
     }
 }

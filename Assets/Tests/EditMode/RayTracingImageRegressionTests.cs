@@ -45,6 +45,9 @@ namespace GPURayTracing.Tests
             public Vector3 vertex1;
             public Vector3 vertex2;
             public Vector3 normal;
+            public Vector3 normal0;
+            public Vector3 normal1;
+            public Vector3 normal2;
             public Vector3 color;
             public float smoothness;
             public Vector2 uv0;
@@ -56,7 +59,7 @@ namespace GPURayTracing.Tests
             public int materialType;
             public int meshIndex;
             public int textureIndex;
-            public int padding0;
+            public int interpolateNormals;
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -420,7 +423,7 @@ namespace GPURayTracing.Tests
             meshTextures = meshTextures ?? CreateMeshTextureArray();
             ComputeBuffer sphereBuffer = CreateBuffer(spheres, 56);
             ComputeBuffer lightBuffer = CreateBuffer(lights, 72);
-            ComputeBuffer triangleBuffer = CreateBuffer(triangles, 124);
+            ComputeBuffer triangleBuffer = CreateBuffer(triangles, 160);
             ComputeBuffer meshBuffer = CreateBuffer(meshes, 48);
             ComputeBuffer bvhBuffer = CreateBuffer(bvhNodes, 48);
             ComputeBuffer topLevelBuffer = CreateDummyBuffer(48);
