@@ -401,22 +401,24 @@ public static class RayTracingBenchmarkSceneGenerator
             return;
         }
 
-        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 2.75f, -7.2f), new Vector3(6.0f, 0.0f, 0.0f), passes: 4, bounces: 8, shadowQuality: 4);
+        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 3.9277854f, -6.0574317f), new Vector3(14.3395891f, 358.70932f, 0.0f), passes: 1, bounces: 10, shadowQuality: 0);
         context.Manager.numberOfPasses = 1;
-        context.Manager.numBounces = 4;
-        context.Manager.shadowQuality = 1;
+        context.Manager.enableFrameAccumulation = true;
+        context.Manager.numBounces = 10;
+        context.Manager.shadowQuality = 0;
         context.Manager.cameraFocalDistance = 7.5f;
         context.Manager.groundSmoothness = 0.28f;
-        context.Manager.lightFalloffScale = 0.08f;
+        context.Manager.lightFalloffScale = 0.003f;
         context.Manager.exposure = 1.0f;
         context.Manager.topLevelBvhMinObjectCount = 0;
         context.Manager.shadowBvhMinObjectCount = 1024;
         context.Manager.lightSamplingStrategy = GameManager.LightSamplingStrategy.ImportanceSampled;
         context.Manager.lightSampleCount = 1;
-        context.Manager._skyboxLightColor = new Color32(72, 76, 82, 255);
+        context.Manager._skyboxLightColor = new Color32(140, 149, 164, 255);
 
-        AddLight(context.Root, "Large Softbox", new Vector3(-3.5f, 5.6f, -3.8f), 1.6f, new Color32(255, 250, 236, 255));
-        AddLight(context.Root, "Rim Highlight", new Vector3(3.5f, 3.7f, -2.2f), 0.55f, new Color32(210, 230, 255, 255));
+        AddLight(context.Root, "Large Softbox", new Vector3(-3.5f, 5.6f, -3.8f), 1.6f, Color.white);
+        var rimHighlight = AddLight(context.Root, "Rim Highlight", new Vector3(3.5f, 3.7f, -2.2f), 0.55f, new Color32(210, 230, 255, 255));
+        rimHighlight.transform.localScale = Vector3.one * 0.1f;
 
         var tumblerRoot = new GameObject("Glass Tumbler");
         tumblerRoot.transform.SetParent(context.Root, false);
@@ -424,9 +426,12 @@ public static class RayTracingBenchmarkSceneGenerator
         tumblerRoot.transform.localRotation = Quaternion.identity;
         tumblerRoot.transform.localScale = Vector3.one;
 
-        AddRayMesh(tumblerRoot.transform, "Glass Wall", CreateOpenCylinderMesh("Glass Wall", 96, 1.36f, 3.05f, 0.055f), new Vector3(0.0f, 1.56f, 0.0f), Vector3.zero, Vector3.one, new Color32(212, 238, 245, 255), RayMaterial.MaterialType.Glass, 0.98f, 0.18f, 1.83f);
-        AddRayMesh(tumblerRoot.transform, "Water Volume", CreateCylinderMesh("Water Volume", 96, 1.24f, 1.86f), new Vector3(0.0f, 1.17f, 0.0f), Vector3.zero, Vector3.one, new Color32(190, 226, 238, 255), RayMaterial.MaterialType.Glass, 0.99f, 0.08f, 2.2f);
-        AddRayMesh(tumblerRoot.transform, "Top Rim", CreateTorusMesh("Top Rim", 96, 12, 1.36f, 0.055f), new Vector3(0.0f, 3.09f, 0.0f), Vector3.zero, Vector3.one, new Color32(220, 244, 250, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.16f, 1.52f);
+        var glassWall = AddRayMesh(tumblerRoot.transform, "Glass Wall", CreateOpenCylinderMesh("Glass Wall", 96, 1.36f, 3.05f, 0.055f), new Vector3(0.0f, 1.56f, 0.0f), Vector3.zero, Vector3.one, new Color32(212, 238, 245, 255), RayMaterial.MaterialType.Glass, 0.98f, 0.146f, 1.83f);
+        glassWall.GetComponent<RayMaterial>().InterpolateNormals = true;
+        var waterVolume = AddRayMesh(tumblerRoot.transform, "Water Volume", CreateCylinderMesh("Water Volume", 96, 1.24f, 1.86f), new Vector3(0.0f, 1.17f, 0.0f), Vector3.zero, Vector3.one, new Color32(190, 226, 238, 255), RayMaterial.MaterialType.Glass, 0.99f, 0.08f, 2.2f);
+        waterVolume.GetComponent<RayMaterial>().InterpolateNormals = true;
+        var topRim = AddRayMesh(tumblerRoot.transform, "Top Rim", CreateTorusMesh("Top Rim", 96, 12, 1.36f, 0.055f), new Vector3(0.0f, 3.09f, 0.0f), Vector3.zero, Vector3.one, new Color32(220, 244, 250, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.16f, 1.52f);
+        topRim.GetComponent<RayMaterial>().InterpolateNormals = true;
 
         var pencilRoot = new GameObject("Tilted Pencil");
         pencilRoot.transform.SetParent(context.Root, false);
