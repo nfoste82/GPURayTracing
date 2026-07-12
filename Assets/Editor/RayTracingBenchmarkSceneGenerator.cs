@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using UnityEditor;
+using UnityEditor.Experimental.GraphView;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -119,9 +120,10 @@ public static class RayTracingBenchmarkSceneGenerator
             return;
         }
 
-        var context = CreateBaseScene("Benchmark_ShadowBlockers", new Vector3(0.0f, 8.0f, -22.0f), new Vector3(18.0f, 0.0f, 0.0f), shadowQuality: 5);
+        var context = CreateBaseScene("Benchmark_ShadowBlockers", new Vector3(0.0f, 8.0f, -22.0f), new Vector3(18.0f, 0.0f, 0.0f),  passes: 1, bounces: 4, shadowQuality: 0);
         context.Manager.topLevelBvhMinObjectCount = 64;
-        context.Manager.shadowBvhMinObjectCount = 0;
+        context.Manager.shadowBvhMinObjectCount = 1024;
+        context.Manager.lightFalloffScale = 0.027f;
         AddLight(context.Root, "Wide Light", new Vector3(0.0f, 12.0f, -6.0f), 2.4f, new Color32(255, 240, 220, 255));
 
         for (int z = 0; z < 9; z++)
@@ -145,19 +147,23 @@ public static class RayTracingBenchmarkSceneGenerator
             return;
         }
 
-        var context = CreateBaseScene("Benchmark_ManyLights", new Vector3(0.0f, 6.5f, -20.0f), new Vector3(15.0f, 0.0f, 0.0f), shadowQuality: 1);
+        var context = CreateBaseScene("Benchmark_ManyLights", new Vector3(0.0f, 6.5f, -20.0f), new Vector3(15.0f, 0.0f, 0.0f), passes: 1, bounces: 3, shadowQuality: 0);
+        context.Manager.lightSamplingStrategy = GameManager.LightSamplingStrategy.ImportanceSampled;
+        context.Manager.shadowBvhMinObjectCount = 1024;
+        context.Manager.lightFalloffScale = 0.12f;
+        context.Manager.groundSmoothness = 0.955f;
 
-        for (int i = 0; i < 72; i++)
+        for (var i = 0; i < 72; i++)
         {
-            float angle = i * Mathf.PI * 2.0f / 72.0f;
-            float radius = 7.0f + (i % 3) * 1.6f;
+            var angle = i * Mathf.PI * 2.0f / 72.0f;
+            var radius = 7.0f + (i % 3) * 1.6f;
             var color = Color.HSVToRGB(i / 72.0f, 0.45f, 1.0f);
             AddLight(context.Root, "Light", new Vector3(Mathf.Cos(angle) * radius, 4.0f + (i % 5) * 0.7f, Mathf.Sin(angle) * radius + 5.0f), 0.28f, color);
         }
 
-        for (int i = 0; i < 40; i++)
+        for (var i = 0; i < 40; i++)
         {
-            float angle = i * Mathf.PI * 2.0f / 40.0f;
+            var angle = i * Mathf.PI * 2.0f / 40.0f;
             AddSphere(context.Root, "Receiver Sphere", new Vector3(Mathf.Cos(angle) * 4.2f, 0.6f, Mathf.Sin(angle) * 4.2f + 5.0f), 0.55f, new Color32(185, 185, 190, 255), RayMaterial.MaterialType.Diffuse, 0.1f);
         }
 
