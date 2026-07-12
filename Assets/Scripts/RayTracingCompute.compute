@@ -39,6 +39,7 @@ float _LightFalloffScale;
 float _FocalDistance;
 float _GroundSmoothness;
 float _Exposure;
+float _FireflyClamp;
 
 int _WaterEnabled;
 float3 _WaterCenter;
@@ -2022,8 +2023,12 @@ float3 GetSurfaceF0(RayHit hit, float3 albedo)
         float refraction = max(1.0f, hit.refraction);
         float dielectricF0 = (1.0f - refraction) / (1.0f + refraction);
         dielectricF0 = max(0.02f, dielectricF0 * dielectricF0);
-        float reflectiveOpacity = IsWaterMaterial(hit) ? GetWaterReflectiveOpacity(hit) : saturate(hit.opacity);
-        return lerp(dielectricF0.xxx * reflectiveOpacity, saturate(albedo), saturate(hit.opacity));
+        if (IsWaterMaterial(hit))
+        {
+            return dielectricF0.xxx * GetWaterReflectiveOpacity(hit);
+        }
+
+        return lerp(dielectricF0.xxx * saturate(hit.opacity), saturate(albedo), saturate(hit.opacity));
     }
 
     return float3(0.04f, 0.04f, 0.04f);
@@ -2968,6 +2973,20 @@ float3 TracePath(Ray ray, inout uint rngState)
     return radiance;
 }
 
+float3 ClampFirefly(float3 radiance)
+{
+    float maximumLuminance = max(0.0f, _FireflyClamp);
+    if (maximumLuminance <= 0.0f)
+    {
+        return radiance;
+    }
+
+    float luminance = dot(radiance, float3(0.2126f, 0.7152f, 0.0722f));
+    return luminance > maximumLuminance
+        ? radiance * (maximumLuminance / luminance)
+        : radiance;
+}
+
 #if DEBUG_RENDER
 float3 GetDebugRenderColor(Ray ray, inout uint rngState)
 {
@@ -3301,7 +3320,8 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     triangleLight.normal = float3(0.0f, -1.0f, 0.0f);
     triangleLight.type = LightTypeTriangle;
     RegressionResults[31] = float4(PowerHeuristic(0.25f, 0.5f), PowerHeuristic(0.5f, 0.25f), PowerHeuristic(1.0f, 1.0f), 1.0f);
-    RegressionResults[32] = float4(GetLightShapePdf(triangleLight, float3(0.0f, 0.0f, 0.0f), float3(0.0f, 2.0f, 0.0f)), 0.0f, 0.0f, 1.0f);
+    RegressionResults[32] = float4(GetLightShapePdf(triangleLight, float3(0.0f, 0.0f, 0.0f), float3(0.0f, 2.0f, 0.0f)), GetSurfaceF0(waterHit, waterHit.color));
+    RegressionResults[33] = float4(ClampFirefly(float3(4.0f, 2.0f, 1.0f)), 1.0f);
 }
 
 [numthreads(8,8,1)]
@@ -3339,9 +3359,9 @@ void CSMain (uint3 id : SV_DispatchThreadID)
         }
 
 #if DEBUG_RENDER
-        result += _DebugRenderMode == DebugFinalColor ? TracePath(ray, rngState) : GetDebugRenderColor(ray, rngState);
+        result += _DebugRenderMode == DebugFinalColor ? ClampFirefly(TracePath(ray, rngState)) : GetDebugRenderColor(ray, rngState);
 #else
-        result += TracePath(ray, rngState);
+        result += ClampFirefly(TracePath(ray, rngState));
 #endif
     }
 

@@ -510,6 +510,7 @@ namespace GPURayTracing.Tests
                 shader.SetFloat("_FocalDistance", 100.0f);
                 shader.SetFloat("_GroundSmoothness", groundSmoothness);
                 shader.SetFloat("_Exposure", 1.0f);
+                shader.SetFloat("_FireflyClamp", 0.0f);
                 shader.SetInt("_NumSpheres", spheres.Length);
                 shader.SetInt("_NumLights", lights.Length);
                 shader.SetInt("_NumTriangles", triangles.Length);

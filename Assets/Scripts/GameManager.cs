@@ -117,6 +117,10 @@ public class GameManager : MonoBehaviour
     [Range(0.0f, 8.0f)]
     public float exposure = 1.0f;
 
+    [Tooltip("Maximum luminance of one path sample before averaging. Reduces persistent fireflies from rare specular paths; 0 disables the clamp.")]
+    [Range(0.0f, 32.0f)]
+    public float fireflyClamp = 0.0f;
+
     private float previousFocalDistance = 100f;
     private float timeSincePreviousFocusDistance = 1f;
 
@@ -145,6 +149,7 @@ public class GameManager : MonoBehaviour
     private RenderTexture _accumulationTexture;
     private Vector2Int _textureSize;
     private int _accumulatedFrameCount;
+    private long _renderedFrameCount;
     private int _accumulationStateHash;
     private bool _hasAccumulationStateHash;
     private float _dynamicQualityAverageFrameMs;
@@ -1070,6 +1075,7 @@ public class GameManager : MonoBehaviour
 
             SetShaderParameters(kernelHandle);
             UpdateTextureFromCompute(kernelHandle);
+            _renderedFrameCount++;
 
             if (useFrameAccumulation)
             {
@@ -2383,6 +2389,7 @@ public class GameManager : MonoBehaviour
         shader.SetFloat("_FocalDistance", cameraFocalDistance);
         shader.SetFloat("_GroundSmoothness", groundSmoothness);
         shader.SetFloat("_Exposure", exposure);
+        shader.SetFloat("_FireflyClamp", Mathf.Max(0.0f, fireflyClamp));
         bool waterEnabled = _water != null;
         Vector3 waterCenter = waterEnabled ? _water.TopCenter : Vector3.zero;
         Vector2 waterSize = waterEnabled ? _water.Size : Vector2.one;
@@ -2422,12 +2429,8 @@ public class GameManager : MonoBehaviour
 
     private int CalculateSampleOffset()
     {
-        if (!ShouldUseFrameAccumulation())
-        {
-            return 0;
-        }
-
-        long sampleOffset = (long)_accumulatedFrameCount * Mathf.Max(1, numberOfPasses);
+        long frameIndex = ShouldUseFrameAccumulation() ? _accumulatedFrameCount : _renderedFrameCount;
+        long sampleOffset = frameIndex * Mathf.Max(1, numberOfPasses);
         return (int)Math.Min(int.MaxValue, sampleOffset);
     }
 
@@ -2450,6 +2453,7 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, lightFalloffScale);
             hash = AddHash(hash, cameraFocalDistance);
             hash = AddHash(hash, groundSmoothness);
+            hash = AddHash(hash, fireflyClamp);
             hash = AddHash(hash, _water != null ? _water.GetInstanceID() : 0);
             if (_water != null)
             {

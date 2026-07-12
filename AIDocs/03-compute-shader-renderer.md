@@ -14,7 +14,7 @@ Important shader globals:
 - `_MeshAlbedoTextures`: fixed-size `Texture2DArray` containing active mesh albedo textures. Triangle hits interpolate uploaded UVs and sample `textureIndex`; untextured meshes keep using `RayMaterial.Color` only.
 - `_SkyboxLight`: skybox lighting multiplier.
 - `_NumberOfPasses`: per-frame samples per pixel.
-- `_UseFrameAccumulation`, `_AccumulatedFrameCount`, `_SampleOffset`: control progressive final-color accumulation and advance deterministic sample indices across frames.
+- `_UseFrameAccumulation`, `_AccumulatedFrameCount`, `_SampleOffset`: control progressive final-color accumulation and advance deterministic sample indices across frames. The sample sequence also advances when accumulation is disabled, so animated scenes do not repeat the same stochastic samples every frame.
 - `_NumBounces`: maximum bounces for `TracePath()`.
 - `_DebugRenderMode`: selects final path-traced color or a debug visualization.
 - `_ShadowQuality`: soft-shadow sample budget control. Bounce-0 direct lighting takes `max(1, _ShadowQuality + 1)` stochastic area-light samples per light.
@@ -23,6 +23,7 @@ Important shader globals:
 - `_FocalDistance`: depth-of-field focal distance.
 - `_GroundSmoothness`: smoothness for the implicit ground plane.
 - `_Exposure`: master brightness multiplier applied before tone mapping. Acts like a camera exposure dial.
+- `_FireflyClamp`: optional maximum luminance for each complete path sample before per-pixel averaging. `0` disables it. This deliberately biased variance control suppresses rare specular samples that otherwise remain visible in low-sample animated scenes.
 - `_WaterAbsorptionStrength`: distance-based water-medium absorption density. When a path or direct-light segment travels underwater, the shader applies exponential transmittance from `_WaterColor` and this strength. The active `Water` component supplies these globals; its transform position is `_WaterCenter`, X/Z scale is `_WaterSize`, and Y scale is `_WaterDepth` below the wavy top.
 - `_LightSamplingStrategy`: selects how `GetLightHittingPoint()` samples scene lights (`0` = all lights, `1` = uniform random pick, `2` = importance-sampled pick). See `07-shader-lighting-and-materials.md`.
 - `_LightSampleCount`: for the random/importance strategies, how many lights each shading point draws per hit. Ignored by the all-lights strategy.
@@ -115,7 +116,7 @@ The scene also uploads a top-level BVH over ray-traced spheres, emissive light s
 
 ## Tone Mapping And Exposure
 
-After all passes are averaged, `CSMain` optionally blends final-color HDR radiance into `AccumulationResult` using `_AccumulatedFrameCount`. This happens before exposure/tone mapping, so exposure changes can remap the accumulated HDR result without changing the stored radiance. Debug visualizations skip accumulation and are written with their raw diagnostic values.
+Each final-color path sample is optionally luminance-clamped before averaging. After all passes are averaged, `CSMain` optionally blends final-color HDR radiance into `AccumulationResult` using `_AccumulatedFrameCount`. This happens before exposure/tone mapping, so exposure changes can remap the accumulated HDR result without changing the stored radiance. Debug visualizations skip both the clamp and accumulation and are written with their raw diagnostic values.
 
 `CSMain` applies exposure and tone mapping **only when `_DebugRenderMode == DebugFinalColor`**. The final color is computed as `ACESFilmicToneMap(color * _Exposure)`, where `ACESFilmicToneMap()` is the Narkowicz 2015 ACES filmic approximation. This maps open-ended HDR radiance into `[0, 1]` so bright values roll off smoothly instead of clipping hard to white. `_Exposure` comes from `GameManager.exposure`.
 

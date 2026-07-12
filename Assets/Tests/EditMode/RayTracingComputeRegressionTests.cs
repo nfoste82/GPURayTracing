@@ -25,7 +25,7 @@ namespace GPURayTracing.Tests
             }
 
             int kernel = shader.FindKernel("CSRegressionProbe");
-            var buffer = new ComputeBuffer(33, sizeof(float) * 4);
+            var buffer = new ComputeBuffer(34, sizeof(float) * 4);
             var sphereBuffer = new ComputeBuffer(1, 56);
             try
             {
@@ -39,11 +39,12 @@ namespace GPURayTracing.Tests
                 shader.SetFloat("_WaterAbsorptionStrength", 0.22f);
                 shader.SetFloat("_WaterRefraction", 2.0f);
                 shader.SetFloat("_WaterWaveAmplitude", 0.0f);
+                shader.SetFloat("_FireflyClamp", 1.0f);
                 shader.SetBuffer(kernel, "_Spheres", sphereBuffer);
                 shader.SetBuffer(kernel, "RegressionResults", buffer);
                 shader.Dispatch(kernel, 1, 1, 1);
 
-                var results = new Vector4[33];
+                var results = new Vector4[34];
                 buffer.GetData(results);
 
                 AssertVector(results[0], new Vector4(0.70710677f, 0.70710677f, 0.0f, 1.0f), "reflection");
@@ -77,7 +78,8 @@ namespace GPURayTracing.Tests
                 AssertFinitePositiveSample(results[28], results[29]);
                 AssertVector(results[30], new Vector4(0.0f, 0.4472136f, 0.8944272f, 1.0f), "interpolated shading and geometric normals", 0.0002f);
                 AssertVector(results[31], new Vector4(0.2f, 0.8f, 0.5f, 1.0f), "MIS power heuristic");
-                AssertVector(results[32], new Vector4(2.0f, 0.0f, 0.0f, 1.0f), "triangle-light solid-angle PDF");
+                AssertVector(results[32], new Vector4(2.0f, 0.0245556f, 0.0245556f, 0.0245556f), "triangle-light PDF and water F0");
+                AssertVector(results[33], new Vector4(1.6999575f, 0.8499787f, 0.4249894f, 1.0f), "firefly luminance clamp", 0.0002f);
             }
             finally
             {

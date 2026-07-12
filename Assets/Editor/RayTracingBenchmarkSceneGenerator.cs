@@ -339,6 +339,7 @@ public static class RayTracingBenchmarkSceneGenerator
         context.Manager.groundSmoothness = 0.72f;
         context.Manager.lightFalloffScale = 0.021f;
         context.Manager.exposure = 1.15f;
+        context.Manager.fireflyClamp = 1.0f;
         context.Manager.topLevelBvhMinObjectCount = 0;
         context.Manager.shadowBvhMinObjectCount = 0;
         context.Manager.lightSamplingStrategy = GameManager.LightSamplingStrategy.ImportanceSampled;

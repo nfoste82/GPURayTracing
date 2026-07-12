@@ -29,4 +29,4 @@ Debug modes still use the normal camera ray generation and depth-of-field jitter
 
 The RNG is used for subpixel camera jitter, depth-of-field aperture jitter, stochastic area-light samples, cosine-weighted diffuse bounce sampling, Russian roulette termination, and rough reflection normal randomization.
 
-When `randomNoise` is false, C# sends a fixed integer seed each frame for deterministic stable noise patterns. When `randomNoise` is true, C# sends a new random integer seed each frame.
+When `randomNoise` is false, C# sends a fixed integer seed, while `_SampleOffset` advances to provide deterministic but distinct samples each rendered frame. When `randomNoise` is true, C# additionally sends a new random integer seed each frame.
