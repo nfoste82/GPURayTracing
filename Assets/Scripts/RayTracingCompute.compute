@@ -268,6 +268,13 @@ struct ScatterResult
     int mediumTransition;
 };
 
+struct BrdfSample
+{
+    float3 direction;
+    float3 weight;
+    float pdf;
+};
+
 ScatterResult CreateScatterResult(Ray ray, float3 attenuation, int bouncesConsumed, int mediumTransition)
 {
     ScatterResult result;
@@ -1970,52 +1977,95 @@ float GetWaterReflectiveOpacity(RayHit hit)
     return lerp(WaterMinFresnelOpacity, 1.0f, saturate(hit.opacity));
 }
 
-float3 GetDirectMaterialResponse(Ray ray, RayHit hit, float3 lightDirection, float normalDotLight)
+float3 GetSurfaceF0(RayHit hit, float3 albedo)
 {
-    float3 albedo = GetAlbedo(hit);
-    float3 response = float3(0.0f, 0.0f, 0.0f);
-
-    if (!IsGlassMaterial(hit) && hit.materialType == MaterialDiffuse)
-    {
-        response += albedo * normalDotLight * hit.opacity;
-    }
-
-    float smoothness = saturate(hit.smoothness);
-    float specularScale = smoothness;
-    float3 f0 = float3(0.04f, 0.04f, 0.04f);
-
     if (hit.materialType == MaterialMetal)
     {
-        f0 = saturate(albedo);
-        specularScale = max(0.15f, smoothness);
+        return saturate(albedo);
     }
-    else if (IsGlassMaterial(hit))
+
+    if (IsGlassMaterial(hit))
     {
         float refraction = max(1.0f, hit.refraction);
         float dielectricF0 = (1.0f - refraction) / (1.0f + refraction);
         dielectricF0 = max(0.02f, dielectricF0 * dielectricF0);
         float reflectiveOpacity = IsWaterMaterial(hit) ? GetWaterReflectiveOpacity(hit) : saturate(hit.opacity);
-        f0 = lerp(dielectricF0.xxx * reflectiveOpacity, saturate(albedo), saturate(hit.opacity));
-        specularScale = max(0.2f, smoothness) * reflectiveOpacity;
+        return lerp(dielectricF0.xxx * reflectiveOpacity, saturate(albedo), saturate(hit.opacity));
     }
 
-    if (specularScale <= 0.0f)
-    {
-        return response;
-    }
+    return float3(0.04f, 0.04f, 0.04f);
+}
 
+float GetBrdfSpecularProbability(RayHit hit)
+{
+    return hit.materialType == MaterialMetal || IsGlassMaterial(hit) ? 1.0f : 0.5f;
+}
+
+float GetGgxAlpha(RayHit hit)
+{
+    float roughness = max(0.03f, 1.0f - saturate(hit.smoothness));
+    return roughness * roughness;
+}
+
+float GgxDistribution(float normalDotHalf, float alpha)
+{
+    float alphaSquared = alpha * alpha;
+    float denominator = normalDotHalf * normalDotHalf * (alphaSquared - 1.0f) + 1.0f;
+    return alphaSquared / max(PI * denominator * denominator, 1e-6f);
+}
+
+float GgxSmithG1(float normalDotDirection, float alpha)
+{
+    float alphaSquared = alpha * alpha;
+    float root = sqrt(alphaSquared + (1.0f - alphaSquared) * normalDotDirection * normalDotDirection);
+    return (2.0f * normalDotDirection) / max(normalDotDirection + root, 1e-6f);
+}
+
+float3 FresnelSchlick(float directionDotHalf, float3 f0)
+{
+    return f0 + (1.0f - f0) * pow(1.0f - directionDotHalf, 5.0f);
+}
+
+float3 EvaluateMaterialBrdf(Ray ray, RayHit hit, float3 lightDirection, out float pdf)
+{
+    float3 normal = hit.normal;
     float3 viewDirection = normalize(-ray.direction);
+    float normalDotView = saturate(dot(normal, viewDirection));
+    float normalDotLight = saturate(dot(normal, lightDirection));
+    pdf = 0.0f;
+    if (normalDotView <= 0.0f || normalDotLight <= 0.0f)
+    {
+        return float3(0.0f, 0.0f, 0.0f);
+    }
+
     float3 halfDirection = normalize(lightDirection + viewDirection);
-    float normalDotHalf = saturate(dot(hit.normal, halfDirection));
+    float normalDotHalf = saturate(dot(normal, halfDirection));
     float viewDotHalf = saturate(dot(viewDirection, halfDirection));
+    if (normalDotHalf <= 0.0f || viewDotHalf <= 0.0f)
+    {
+        return float3(0.0f, 0.0f, 0.0f);
+    }
 
-    float3 fresnel = f0 + (1.0f - f0) * pow(1.0f - viewDotHalf, 5.0f);
-    float specularPower = lerp(8.0f, 512.0f, smoothness * smoothness);
-    float specularNormalization = (specularPower + 2.0f) * 0.125f;
-    float specular = pow(normalDotHalf, specularPower) * specularNormalization * normalDotLight * specularScale;
+    float3 albedo = GetAlbedo(hit);
+    float3 fresnel = FresnelSchlick(viewDotHalf, GetSurfaceF0(hit, albedo));
+    float alpha = GetGgxAlpha(hit);
+    float distribution = GgxDistribution(normalDotHalf, alpha);
+    float geometry = GgxSmithG1(normalDotView, alpha) * GgxSmithG1(normalDotLight, alpha);
+    float3 specular = fresnel * distribution * geometry /
+        max(4.0f * normalDotView * normalDotLight, 1e-6f);
 
-    response += fresnel * specular;
-    return response;
+    float3 diffuse = float3(0.0f, 0.0f, 0.0f);
+    if (!IsGlassMaterial(hit) && hit.materialType == MaterialDiffuse)
+    {
+        diffuse = (1.0f - fresnel) * albedo * (1.0f / PI);
+    }
+
+    float specularPdf = distribution * normalDotHalf / max(4.0f * viewDotHalf, 1e-6f);
+    float diffusePdf = normalDotLight * (1.0f / PI);
+    float specularProbability = GetBrdfSpecularProbability(hit);
+    pdf = lerp(diffusePdf, specularPdf, specularProbability);
+
+    return diffuse + specular;
 }
 
 float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount, inout uint rngState)
@@ -2079,8 +2129,9 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount, i
             lightStrength *= saturate(dot(light.normal, -ptToOffset)) * max(1.0f, light.area);
         }
 
-        float3 materialResponse = GetDirectMaterialResponse(ray, hit, ptToOffset, rayNormalDot);
-        lightTotal += light.emission * lightStrength * shadowTransmittance * materialResponse;
+        float materialPdf;
+        float3 materialResponse = EvaluateMaterialBrdf(ray, hit, ptToOffset, materialPdf);
+        lightTotal += light.emission * lightStrength * shadowTransmittance * materialResponse * rayNormalDot;
     }
 
     return lightTotal / sampleCount;
@@ -2331,6 +2382,57 @@ float3 GetDiffuseScatterDirection(float3 normal, inout uint rngState)
     CreateBasisFromNormal(normal, tangent, bitangent);
 
     return normalize(tangent * diskSample.x + bitangent * diskSample.y + normal * z);
+}
+
+float3 SampleGgxHalfDirection(float3 normal, float alpha, inout uint rngState)
+{
+    float u1 = rand(rngState);
+    float u2 = rand(rngState);
+    float alphaSquared = alpha * alpha;
+    float cosTheta = sqrt((1.0f - u1) / max(1.0f + (alphaSquared - 1.0f) * u1, 1e-6f));
+    float sinTheta = sqrt(max(0.0f, 1.0f - cosTheta * cosTheta));
+    float phi = 2.0f * PI * u2;
+    float3 tangent;
+    float3 bitangent;
+    CreateBasisFromNormal(normal, tangent, bitangent);
+    return normalize(tangent * (cos(phi) * sinTheta) + bitangent * (sin(phi) * sinTheta) + normal * cosTheta);
+}
+
+BrdfSample SampleMaterialBrdf(Ray ray, RayHit hit, inout uint rngState)
+{
+    BrdfSample sample;
+    sample.direction = hit.normal;
+    sample.weight = float3(0.0f, 0.0f, 0.0f);
+    sample.pdf = 0.0f;
+
+    float specularProbability = GetBrdfSpecularProbability(hit);
+    if (rand(rngState) < specularProbability)
+    {
+        float3 viewDirection = normalize(-ray.direction);
+        float3 halfDirection = SampleGgxHalfDirection(hit.normal, GetGgxAlpha(hit), rngState);
+        if (dot(viewDirection, halfDirection) <= 0.0f)
+        {
+            return sample;
+        }
+        sample.direction = normalize(reflect(ray.direction, halfDirection));
+    }
+    else
+    {
+        sample.direction = GetDiffuseScatterDirection(hit.normal, rngState);
+    }
+
+    float normalDotDirection = saturate(dot(hit.normal, sample.direction));
+    if (normalDotDirection <= 0.0f)
+    {
+        return sample;
+    }
+
+    float3 brdf = EvaluateMaterialBrdf(ray, hit, sample.direction, sample.pdf);
+    if (sample.pdf > 1e-6f)
+    {
+        sample.weight = brdf * normalDotDirection / sample.pdf;
+    }
+    return sample;
 }
 
 bool HasPathEnergy(float3 throughput)
@@ -2588,14 +2690,10 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
         return CreateScatterResult(scatteredRay, reflectionTint, 1, MediumTransitionNone);
     }
 
-    if (hit.materialType == MaterialDiffuse)
-    {
-        scatteredRay.direction = bounce == 0
-            ? normalize(lerp(GetDiffuseScatterDirection(hit.normal, rngState), reflect(sourceRay.direction, roughNormal), hit.smoothness))
-            : GetDiffuseScatterDirection(hit.normal, rngState);
-    }
-
-    return CreateScatterResult(scatteredRay, albedo, 1, MediumTransitionNone);
+    BrdfSample brdfSample = SampleMaterialBrdf(sourceRay, hit, rngState);
+    scatteredRay.direction = brdfSample.direction;
+    scatteredRay.origin = hit.position + scatteredRay.direction * 0.001f;
+    return CreateScatterResult(scatteredRay, brdfSample.weight, 1, MediumTransitionNone);
 }
 
 float3 GetDirectLight(Ray ray, RayHit hit, bool softShadows, inout uint rngState)
@@ -2954,6 +3052,28 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     ApplyMediumTransition(overlappingStack, glassHit, MediumTransitionExit);
     RegressionResults[24] = float4(overlappingExitIndices, enteringOverlappingExit ? 1.0f : 0.0f, overlappingStack.status);
     RegressionResults[25] = float4(GetCurrentMedium(overlappingStack).objectIndex, GetCurrentMedium(overlappingStack).refractionIndex, overlappingStack.count, MediumStackContains(overlappingStack, glass) ? 1.0f : 0.0f);
+
+    RayHit diffuseBrdfHit = CreateRayHit();
+    diffuseBrdfHit.normal = normal;
+    diffuseBrdfHit.color = float3(0.8f, 0.4f, 0.2f);
+    diffuseBrdfHit.smoothness = 0.5f;
+    diffuseBrdfHit.opacity = 1.0f;
+    diffuseBrdfHit.materialType = MaterialDiffuse;
+    Ray normalIncidenceRay = CreateRay(float3(0.0f, 0.0f, 0.0f), float3(0.0f, -1.0f, 0.0f));
+    float diffusePdf;
+    float3 diffuseBrdf = EvaluateMaterialBrdf(normalIncidenceRay, diffuseBrdfHit, normal, diffusePdf);
+    RegressionResults[26] = float4(diffuseBrdf, diffusePdf);
+
+    RayHit metalBrdfHit = diffuseBrdfHit;
+    metalBrdfHit.materialType = MaterialMetal;
+    float metalPdf;
+    float3 metalBrdf = EvaluateMaterialBrdf(normalIncidenceRay, metalBrdfHit, normal, metalPdf);
+    RegressionResults[27] = float4(metalBrdf, metalPdf);
+
+    uint brdfRngState = 12345u;
+    BrdfSample brdfSample = SampleMaterialBrdf(normalIncidenceRay, diffuseBrdfHit, brdfRngState);
+    RegressionResults[28] = float4(brdfSample.direction, brdfSample.pdf);
+    RegressionResults[29] = float4(brdfSample.weight, dot(brdfSample.direction, normal));
 }
 
 [numthreads(8,8,1)]

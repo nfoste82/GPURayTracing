@@ -20,6 +20,7 @@ The recent texture, mesh-light, glass, specular, imported-model, and procedural-
 - **Segment absorption: implemented.** Production paths attenuate each traveled segment from the active medium; finite water clips against surface/XZ exits and finite-medium sky misses avoid infinite attenuation. Coherent BRDF/BSDF sampling and MIS remain.
 - **Stack-driven refraction: implemented.** Path-selection Fresnel and sphere, mesh, and water transmission derive source/target IORs from the active medium and its entered/revealed neighbor. Reflection and TIR preserve stack state; production probes cover water -> glass -> water indices, direction, Fresnel, and water-surrounded TIR behavior.
 - **Shadow boundary traversal: implemented.** Transparent shadow rays process nearest boundaries in order, attenuate actual active-medium segments, pair closed mesh entries/exits, retain a thin/open fallback, and preserve the opaque-only fast path.
+- **Shared BRDF evaluation and sampling: implemented.** Opaque diffuse and metal paths share Lambert/GGX evaluation, Schlick Fresnel, Smith masking-shadowing, mixture PDFs, and `f * abs(N dot L) / pdf` continuation weighting. Dielectric transmission remains on the established medium-stack path while direct dielectric reflection uses shared GGX evaluation.
 
 ## Priority 0: Protect Upcoming Changes
 
@@ -75,6 +76,8 @@ Status: implemented.
 Completion criteria: thick and thin closed mesh blockers produce distance-dependent attenuation, stacked/nested blockers are processed in order, and opaque scenes retain their current fast path.
 
 ## Priority 5: Shared BRDF/BSDF Evaluation And Sampling
+
+Status: implemented for opaque diffuse/metal reflection and direct dielectric reflection. Full sampled dielectric transmission remains part of future BSDF/MIS refinement.
 
 - Replace the separate direct-light specular approximation and continuation-ray logic with shared material evaluation and sampling functions.
 - Start with matched Lambert evaluation/cosine sampling, then add GGX reflection with Schlick Fresnel and Smith masking-shadowing.

@@ -147,7 +147,7 @@ Per bounce:
 2. Attenuate `throughput` for the actual finite distance traveled through the stack's active medium. Water segments stop at the nearest wavy-top, side, or bottom boundary; air is neutral and finite glass sky misses do not use infinite distance.
 3. If it hits sky, add `throughput * skyColor` and stop.
 4. If it hits a light, add `throughput * emission` and stop.
-5. Sample direct light if the path throughput is above `MinDirectLightThroughput`. Bounce 0 uses multiple stochastic soft-shadow samples; later bounces use one light sample. `GetDirectMaterialResponse()` applies albedo/diffuse and approximate specular response while evaluating each sampled light.
+5. Sample direct light if the path throughput is above `MinDirectLightThroughput`. Bounce 0 uses multiple stochastic soft-shadow samples; later bounces use one light sample. `EvaluateMaterialBrdf()` evaluates the same Lambert/GGX material model used to sample opaque continuation rays.
 6. Add direct contribution: `throughput * directLight`.
 7. Create the next ray using the hit material type.
 8. Update `throughput` with the scatter attenuation.
@@ -156,8 +156,8 @@ Per bounce:
 
 Material scattering currently supports:
 
-- `Diffuse`: uses direct lighting and cosine-weighted hemisphere scattering on later bounces, attenuated by albedo. On bounce 0, smoothness blends the continuation ray between diffuse scattering and reflection, which allows the implicit ground plane's `_GroundSmoothness` to affect visible reflections.
-- `Metal`: reflects around the surface normal, with smoothness controlling rough reflection direction randomization, and attenuates by albedo.
+- `Diffuse`: mixes cosine-weighted Lambert and GGX continuation samples and weights throughput by `brdf * abs(N dot L) / pdf`.
+- `Metal`: samples a GGX reflection lobe using albedo as Fresnel F0 and the same evaluation used for direct highlights.
 - `Glass`: uses opacity-scaled Schlick Fresnel reflectance to choose reflection versus approximate transmission. Fresnel and Snell calculations use source/target IORs from the path medium stack. Transmitted paths are filtered by distance-based absorption. For spheres, the transmitted path refracts into the sphere, checks the bounded internal segment before the sphere exit for any closer scene object, and only refracts back out when no interior/interpenetrating hit is found. For mesh triangles, it uses an approximate closed-mesh entry/exit path that refracts into the mesh, finds the nearest exit triangle with the same `meshIndex`, then checks the top-level scene traversal for any closer object inside that bounded internal segment. If an interior object is found, tracing continues inside the transparent object; otherwise the ray refracts back out and continues from the exit point.
 
 Note: the glass/refraction path is selected by `IsGlassMaterial(hit)`, which returns true when `materialType == Glass` **or** when `hit.opacity < 1.0`. A `Diffuse` or `Metal` object with opacity below `1` therefore takes the glass transmission/Fresnel path regardless of its declared material type.

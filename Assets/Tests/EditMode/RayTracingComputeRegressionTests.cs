@@ -25,7 +25,7 @@ namespace GPURayTracing.Tests
             }
 
             int kernel = shader.FindKernel("CSRegressionProbe");
-            var buffer = new ComputeBuffer(26, sizeof(float) * 4);
+            var buffer = new ComputeBuffer(30, sizeof(float) * 4);
             var sphereBuffer = new ComputeBuffer(1, 56);
             try
             {
@@ -43,7 +43,7 @@ namespace GPURayTracing.Tests
                 shader.SetBuffer(kernel, "RegressionResults", buffer);
                 shader.Dispatch(kernel, 1, 1, 1);
 
-                var results = new Vector4[26];
+                var results = new Vector4[30];
                 buffer.GetData(results);
 
                 AssertVector(results[0], new Vector4(0.70710677f, 0.70710677f, 0.0f, 1.0f), "reflection");
@@ -72,6 +72,9 @@ namespace GPURayTracing.Tests
                 AssertVector(results[23], new Vector4(0.6495190f, 0.7603453f, 0.0f, 3.0f), "production glass-to-water direction preserves stack until transmission", 0.0002f);
                 AssertVector(results[24], new Vector4(1.0f, 1.0f, 0.0f, 0.0f), "overlapping sphere exit keeps active overlap medium");
                 AssertVector(results[25], new Vector4(8.0f, 1.0f, 2.0f, 0.0f), "overlapping sphere exit removes non-current medium");
+                AssertVector(results[26], new Vector4(0.2953915f, 0.1731606f, 0.1120451f, 0.7957747f), "Lambert and GGX mixture evaluation", 0.0002f);
+                AssertVector(results[27], new Vector4(1.0185916f, 0.5092958f, 0.2546479f, 1.2732395f), "GGX metal evaluation", 0.0002f);
+                AssertFinitePositiveSample(results[28], results[29]);
             }
             finally
             {
@@ -86,6 +89,24 @@ namespace GPURayTracing.Tests
             Assert.That(actual.y, Is.EqualTo(expected.y).Within(tolerance), $"{label} y");
             Assert.That(actual.z, Is.EqualTo(expected.z).Within(tolerance), $"{label} z");
             Assert.That(actual.w, Is.EqualTo(expected.w).Within(tolerance), $"{label} w");
+        }
+
+        private static void AssertFinitePositiveSample(Vector4 directionAndPdf, Vector4 weightAndNormalDot)
+        {
+            foreach (float value in new[]
+                     {
+                         directionAndPdf.x, directionAndPdf.y, directionAndPdf.z, directionAndPdf.w,
+                         weightAndNormalDot.x, weightAndNormalDot.y, weightAndNormalDot.z, weightAndNormalDot.w
+                     })
+            {
+                Assert.That(float.IsNaN(value) || float.IsInfinity(value), Is.False, "BRDF sample must be finite");
+            }
+
+            Assert.That(directionAndPdf.w, Is.GreaterThan(0.0f), "BRDF sample PDF");
+            Assert.That(weightAndNormalDot.x, Is.GreaterThanOrEqualTo(0.0f), "BRDF sample red weight");
+            Assert.That(weightAndNormalDot.y, Is.GreaterThanOrEqualTo(0.0f), "BRDF sample green weight");
+            Assert.That(weightAndNormalDot.z, Is.GreaterThanOrEqualTo(0.0f), "BRDF sample blue weight");
+            Assert.That(weightAndNormalDot.w, Is.GreaterThan(0.0f), "BRDF sample must be above the surface");
         }
     }
 }

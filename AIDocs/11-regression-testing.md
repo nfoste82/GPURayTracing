@@ -17,6 +17,7 @@ The project uses EditMode tests under `Assets/Tests/EditMode/` to make rendering
 - Medium-identity and stack probes for air -> water -> sphere glass -> water -> air, parent lookup, matching exits, overflow, unmatched exits, underwater initialization, and flat water-volume side/bottom intersections.
 - Deterministic randomized CPU reference comparisons for per-mesh, top-level, and shadow BVH traversal against brute force, with maximum build depth checked against the fixed stack capacity of `64`.
 - GPU dispatch smoke coverage at `1x1`, `3x5`, and `13x7`; `CSMain` now returns before accessing output textures for ceiling-dispatch threads outside their dimensions.
+- Production GPU probes cover shared Lambert/GGX BRDF values, PDFs, and finite positive sampled throughput.
 
 ## Running Tests
 
