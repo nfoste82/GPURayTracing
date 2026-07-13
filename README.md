@@ -13,8 +13,7 @@ Features:
 * Frame accumulation, dynamic quality, debug views, and benchmark scenes
 
 Features missing or approximate:
-* Caustics and a fully consistent energy-conserving BRDF/PDF formulation
-* General nested-medium handling for overlapping glass and water volumes
+* Caustics
 * Imported smooth vertex normals and material texture maps beyond mesh albedo
 
 There are multiple quality settings on the GameManager object in the root scene. At normal settings you should be able to easily sustain 60+ frames per second. At the highest settings you'll end up with frames taking hundreds of milliseconds to render and you'll need image accumulation on to get good clarity.
