@@ -3,6 +3,8 @@
 #pragma kernel CSRegressionProbe
 #pragma kernel ClearCausticPhotons CAUSTICS_ENABLED
 #pragma kernel TraceCausticPhotons CAUSTICS_ENABLED
+#pragma kernel ClearCausticGrid CAUSTICS_ENABLED
+#pragma kernel BuildCausticGrid CAUSTICS_ENABLED
 #pragma kernel CSCausticsRegressionImage CAUSTICS_ENABLED
 
 // Debug render modes (normals, albedo, BVH visualization, etc.) pull in a second set of
@@ -82,6 +84,10 @@ int _CausticPhotonAttemptCount;
 uint _CausticSeed;
 float _CausticGatherRadius;
 float _CausticIntensity;
+float3 _CausticGridMin;
+float _CausticGridCellSize;
+int3 _CausticGridDimensions;
+int _CausticGridCellCount;
 #endif
 
 static const float PI = 3.141593f;
@@ -272,6 +278,8 @@ struct CausticPhoton
 
 RWStructuredBuffer<CausticPhoton> _CausticPhotons;
 RWStructuredBuffer<uint> _CausticPhotonMetadata;
+RWStructuredBuffer<int> _CausticGridCellHeads;
+RWStructuredBuffer<int> _CausticPhotonNext;
 #endif
 
 // =======================================================
@@ -2932,18 +2940,40 @@ float3 GatherCausticRadiance(RayHit hit)
         return float3(0.0f, 0.0f, 0.0f);
     }
 
-    uint storedPhotonCount = min(_CausticPhotonMetadata[0], (uint)max(0, _CausticPhotonCapacity));
     float radiusSquared = _CausticGatherRadius * _CausticGatherRadius;
     float3 photonPower = float3(0.0f, 0.0f, 0.0f);
+    int3 centerCell = (int3)floor((hit.position - _CausticGridMin) / _CausticGridCellSize);
+    int cellRadius = max(1, (int)ceil(_CausticGatherRadius / _CausticGridCellSize));
 
     [loop]
-    for (uint photonIndex = 0; photonIndex < storedPhotonCount; photonIndex++)
+    for (int z = -cellRadius; z <= cellRadius; z++)
     {
-        CausticPhoton photon = _CausticPhotons[photonIndex];
-        float3 offset = photon.position - hit.position;
-        if (dot(offset, offset) <= radiusSquared && dot(hit.normal, -photon.incomingDirection) > 0.0f)
+        [loop]
+        for (int y = -cellRadius; y <= cellRadius; y++)
         {
-            photonPower += photon.power;
+            [loop]
+            for (int x = -cellRadius; x <= cellRadius; x++)
+            {
+                int3 cell = centerCell + int3(x, y, z);
+                if (any(cell < 0) || any(cell >= _CausticGridDimensions))
+                {
+                    continue;
+                }
+
+                int cellIndex = cell.x + _CausticGridDimensions.x * (cell.y + _CausticGridDimensions.y * cell.z);
+                int photonIndex = _CausticGridCellHeads[cellIndex];
+                [loop]
+                while (photonIndex >= 0)
+                {
+                    CausticPhoton photon = _CausticPhotons[photonIndex];
+                    float3 offset = photon.position - hit.position;
+                    if (dot(offset, offset) <= radiusSquared && dot(hit.normal, -photon.incomingDirection) > 0.0f)
+                    {
+                        photonPower += photon.power;
+                    }
+                    photonIndex = _CausticPhotonNext[photonIndex];
+                }
+            }
         }
     }
 
@@ -3276,6 +3306,17 @@ void ClearCausticPhotons(uint3 id : SV_DispatchThreadID)
     _CausticPhotonMetadata[1] = 0;
     _CausticPhotonMetadata[2] = 0;
     _CausticPhotonMetadata[3] = 0;
+    _CausticPhotonMetadata[4] = 0;
+    _CausticPhotonMetadata[5] = 0;
+}
+
+[numthreads(64,1,1)]
+void ClearCausticGrid(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x < (uint)max(0, _CausticGridCellCount))
+    {
+        _CausticGridCellHeads[id.x] = -1;
+    }
 }
 
 [numthreads(64,1,1)]
@@ -3427,6 +3468,30 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
     {
         InterlockedAdd(_CausticPhotonMetadata[1], 1);
     }
+}
+
+[numthreads(64,1,1)]
+void BuildCausticGrid(uint3 id : SV_DispatchThreadID)
+{
+    uint storedPhotonCount = min(_CausticPhotonMetadata[0], (uint)max(0, _CausticPhotonCapacity));
+    if (id.x >= storedPhotonCount)
+    {
+        return;
+    }
+
+    int3 cell = (int3)floor((_CausticPhotons[id.x].position - _CausticGridMin) / _CausticGridCellSize);
+    if (any(cell < 0) || any(cell >= _CausticGridDimensions))
+    {
+        _CausticPhotonNext[id.x] = -1;
+        InterlockedAdd(_CausticPhotonMetadata[4], 1);
+        return;
+    }
+
+    int cellIndex = cell.x + _CausticGridDimensions.x * (cell.y + _CausticGridDimensions.y * cell.z);
+    int previousHead;
+    InterlockedExchange(_CausticGridCellHeads[cellIndex], (int)id.x, previousHead);
+    _CausticPhotonNext[id.x] = previousHead;
+    InterlockedAdd(_CausticPhotonMetadata[5], 1);
 }
 #endif
 

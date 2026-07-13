@@ -109,17 +109,23 @@ namespace GPURayTracing.Tests
         {
             public readonly ComputeBuffer photons;
             public readonly ComputeBuffer metadata;
+            public readonly ComputeBuffer gridCellHeads;
+            public readonly ComputeBuffer photonNext;
 
             public CausticMap(int photonCapacity)
             {
                 photons = new ComputeBuffer(photonCapacity, 36);
-                metadata = new ComputeBuffer(4, sizeof(uint));
+                metadata = new ComputeBuffer(6, sizeof(uint));
+                gridCellHeads = new ComputeBuffer(65536, sizeof(int));
+                photonNext = new ComputeBuffer(photonCapacity, sizeof(int));
             }
 
             public void Dispose()
             {
                 photons.Release();
                 metadata.Release();
+                gridCellHeads.Release();
+                photonNext.Release();
             }
         }
 
@@ -341,6 +347,8 @@ namespace GPURayTracing.Tests
             Assert.That(firstMetadata[0], Is.GreaterThan(0u), "receiver-hit photon count");
             Assert.That(firstMetadata[1], Is.EqualTo(0u), "overflow count");
             Assert.That(firstMetadata[3], Is.EqualTo(firstMetadata[0]), "stored photon count");
+            Assert.That(firstMetadata[4], Is.EqualTo(0u), "grid out-of-bounds count");
+            Assert.That(firstMetadata[5], Is.EqualTo(firstMetadata[3]), "grid-indexed photon count");
 
             SortPhotons(first);
             SortPhotons(second);
@@ -621,8 +629,7 @@ namespace GPURayTracing.Tests
                         shader, sphereBuffer, lightBuffer, triangleBuffer, meshBuffer, bvhBuffer,
                         topLevelBuffer, shadowBuffer, spheres.Length, lights.Length, triangles.Length,
                         meshes.Length, caustics);
-                    shader.SetBuffer(kernel, "_CausticPhotons", causticMap.photons);
-                    shader.SetBuffer(kernel, "_CausticPhotonMetadata", causticMap.metadata);
+                    SetCausticBuffers(shader, kernel, causticMap);
                     SetCausticParameters(shader, caustics);
                 }
                 shader.SetTexture(kernel, "Result", result);
@@ -770,7 +777,7 @@ namespace GPURayTracing.Tests
                 map = DispatchCausticPhotons(
                     shader, sphereBuffer, lightBuffer, triangleBuffer, meshBuffer, bvhBuffer,
                     topLevelBuffer, shadowBuffer, spheres.Length, lights.Length, 0, 0, options);
-                metadata = new uint[4];
+                metadata = new uint[6];
                 map.metadata.GetData(metadata);
                 var photons = new CausticPhotonData[checked((int)metadata[3])];
                 if (photons.Length > 0)
@@ -810,6 +817,8 @@ namespace GPURayTracing.Tests
         {
             int clearKernel = shader.FindKernel("ClearCausticPhotons");
             int traceKernel = shader.FindKernel("TraceCausticPhotons");
+            int clearGridKernel = shader.FindKernel("ClearCausticGrid");
+            int buildGridKernel = shader.FindKernel("BuildCausticGrid");
             var map = new CausticMap(options.photonCount);
             SetCausticParameters(shader, options);
             shader.SetInt("_NumSpheres", sphereCount);
@@ -822,6 +831,8 @@ namespace GPURayTracing.Tests
             SetWater(shader, false);
             SetCausticBuffers(shader, clearKernel, map);
             SetCausticBuffers(shader, traceKernel, map);
+            SetCausticBuffers(shader, clearGridKernel, map);
+            SetCausticBuffers(shader, buildGridKernel, map);
             shader.SetBuffer(traceKernel, "_Spheres", sphereBuffer);
             shader.SetBuffer(traceKernel, "_Lights", lightBuffer);
             shader.SetBuffer(traceKernel, "_Triangles", triangleBuffer);
@@ -831,6 +842,8 @@ namespace GPURayTracing.Tests
             shader.SetBuffer(traceKernel, "_ShadowBvhNodes", shadowBuffer);
             shader.Dispatch(clearKernel, 1, 1, 1);
             shader.Dispatch(traceKernel, Mathf.CeilToInt(options.photonCount / 64.0f), 1, 1);
+            shader.Dispatch(clearGridKernel, 1024, 1, 1);
+            shader.Dispatch(buildGridKernel, Mathf.CeilToInt(options.photonCount / 64.0f), 1, 1);
             return map;
         }
 
@@ -841,12 +854,18 @@ namespace GPURayTracing.Tests
             shader.SetInt("_CausticSeed", options.seed);
             shader.SetFloat("_CausticGatherRadius", options.gatherRadius);
             shader.SetFloat("_CausticIntensity", options.intensity);
+            shader.SetVector("_CausticGridMin", new Vector3(-9.0f, -1.0f, -9.0f));
+            shader.SetFloat("_CausticGridCellSize", options.gatherRadius);
+            shader.SetInts("_CausticGridDimensions", 64, 16, 64);
+            shader.SetInt("_CausticGridCellCount", 65536);
         }
 
         private static void SetCausticBuffers(ComputeShader shader, int kernel, CausticMap map)
         {
             shader.SetBuffer(kernel, "_CausticPhotons", map.photons);
             shader.SetBuffer(kernel, "_CausticPhotonMetadata", map.metadata);
+            shader.SetBuffer(kernel, "_CausticGridCellHeads", map.gridCellHeads);
+            shader.SetBuffer(kernel, "_CausticPhotonNext", map.photonNext);
         }
 
         private static void SortPhotons(CausticPhotonData[] photons)

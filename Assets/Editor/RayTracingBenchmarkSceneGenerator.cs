@@ -296,7 +296,7 @@ public static class RayTracingBenchmarkSceneGenerator
             return;
         }
 
-        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 5.4f, -10.5f), new Vector3(19.0f, 0.0f, 0.0f), passes: 32, bounces: 10, shadowQuality: 0);
+        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 5.4f, -10.5f), new Vector3(19.0f, 0.0f, 0.0f), passes: 1, bounces: 10, shadowQuality: 0);
         context.Manager.enableFrameAccumulation = true;
         context.Manager.cameraFocalDistance = 12.0f;
         context.Manager.groundSmoothness = 0.05f;
@@ -304,13 +304,14 @@ public static class RayTracingBenchmarkSceneGenerator
         context.Manager.exposure = 1.0f;
         context.Manager.fireflyClamp = 0.0f;
         context.Manager.enableCaustics = true;
-        context.Manager.causticPhotonCount = 4096;
+        context.Manager.causticPhotonCount = 2048;
         context.Manager.causticGatherRadius = 0.28f;
         context.Manager.causticSeed = 1;
         context.Manager.topLevelBvhMinObjectCount = 1024;
         context.Manager.shadowBvhMinObjectCount = 1024;
         context.Manager.lightSamplingStrategy = GameManager.LightSamplingStrategy.AllLights;
         context.Manager._skyboxLightColor = new Color32(2, 2, 3, 255);
+        context.Manager.renderTextureCamera.gameObject.AddComponent<CausticsBenchmarkRunner>().gameManager = context.Manager;
 
         AddPrimitiveMesh(context.Root, "Matte Caustic Receiver", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 0.02f, 2.2f), Vector3.zero, new Vector3(10.0f, 0.04f, 9.0f), new Color32(225, 225, 218, 255), RayMaterial.MaterialType.Diffuse, 0.02f, 1.0f);
 

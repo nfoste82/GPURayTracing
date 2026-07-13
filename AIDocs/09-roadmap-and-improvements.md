@@ -131,7 +131,7 @@ Completion criteria: light and material sampling can both discover the same path
 
 - Prototype photon-mapped caustics as an optional, default-disabled feature. The disabled path must not allocate photon resources, dispatch caustics kernels, or add photon gathering to the default final-color shader variant.
 - Begin with sphere lights, one glass-sphere transmission, diffuse receivers, and a small linear photon gather. Validate estimator energy and feature value before adding a world-space grid, glass meshes, or water.
-- The isolated sphere prototype, deterministic photon/image fixtures, and photon-count/gather-radius energy checks are implemented. Next, benchmark the disabled and enabled variants, identify the linear-gather cost limit, and then decide whether to proceed with the world-space grid.
+- The isolated sphere prototype, deterministic photon/image fixtures, photon-count/gather-radius energy checks, and bounded world-space photon grid are implemented. The visually sufficient 2,048-photon setting measured 15.7% overhead and is now the practical default. Broader transport support can proceed after final disabled-path performance validation.
 - See `12-caustics-prototype.md` for the proposed architecture, invalidation rules, diagnostics, testing, and acceptance criteria.
 
 ## Priority 7: Lighting And Geometry Quality

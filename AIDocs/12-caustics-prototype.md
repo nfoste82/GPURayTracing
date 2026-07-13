@@ -43,7 +43,8 @@ Use separate forward photon generation and normal camera rendering:
 If caustics enabled and photon map dirty:
     ClearCausticPhotons
     TraceCausticPhotons
-    BuildPhotonLookupStructure (later milestone)
+    ClearCausticGrid
+    BuildCausticGrid
 
 CSMain:
     Trace the existing camera path
@@ -139,19 +140,19 @@ camera diffuse hits * stored photon count
 
 Keep the initial buffer small and use the benchmark scene at a modest render resolution. The linear gather is a proof of the transport and normalization, not the intended production implementation.
 
-The gather must be compiled only into the caustics-enabled final-color variant. It should not add a loop or buffer access to the default renderer.
+The initial gather was compiled only into the caustics-enabled final-color variant so it did not add a loop or buffer access to the default renderer. Milestone 4 has replaced this linear scan with the spatial lookup below.
 
-## Spatial Lookup Follow-Up
+## Spatial Lookup
 
-Once the visual result and estimator are validated, replace the linear scan with a fixed world-space grid:
+The implemented lookup uses a fixed world-space grid:
 
-1. Compute each photon's grid cell.
-2. Count photons per cell.
-3. Prefix-sum cell counts or use bounded fixed-capacity cell lists.
-4. Reorder or index photons by cell.
-5. Gather only from cells overlapping the search radius.
+1. Derive padded grid bounds from registered sphere and mesh geometry.
+2. Use the gather radius as the target cell size, increasing it only when needed to stay below 262,144 cells.
+3. Clear one integer head per cell.
+4. Insert stored photons into per-cell linked lists using one integer next index per photon.
+5. Gather only from cells overlapping the search radius and retain the exact radius and receiver-facing tests.
 
-A bounded grid is preferable to a pointer-heavy hash table on the GPU. The scene or active caustic receiver bounds can define the grid extent. Expose overflow and out-of-bounds counts in diagnostics rather than silently dropping data.
+The benchmark overlay reports total cells, indexed photons, and out-of-bounds photons. Photon-buffer overflow remains separately observable through metadata. The grid is rebuilt only when the world-space photon map is dirty, not when the camera moves.
 
 ## Runtime State And Dirtiness
 
@@ -238,14 +239,16 @@ Milestones 1 and 2 are implemented as the initial prototype. Milestone 3 correct
 - Implemented: energy-stability checks across photon counts and gather radii, including the expected sharper peak at a smaller radius.
 - Implemented: photon power now includes material transmission and the gather applies the Lambert factor once rather than twice.
 - Implemented: the unsupported prism light is disabled in the checked-in benchmark and omitted by the generator so it cannot be redirected through the sphere prototype.
-- Measure cost and identify the photon count at which linear gathering becomes impractical.
+- Implemented: an `F4` benchmark matrix measures the disabled variant and 64-16384-photon enabled variants after warmup, displays results, and writes CSV output for repeatable comparison.
+- Run the matrix on target hardware and record the practical linear-gather limit before deciding whether to start Milestone 4.
 
 ### Milestone 4: Spatial Grid
 
-- Build a world-space photon grid.
-- Gather only neighboring cells.
-- Add grid diagnostics and overflow handling.
-- Rebenchmark and choose practical defaults.
+- Implemented: a bounded world-space photon grid with atomic per-cell linked lists.
+- Implemented: gathering visits only neighboring cells overlapping the radius.
+- Implemented: grid cell, indexed-photon, and out-of-bounds diagnostics appear in the benchmark overlay; photon capacity overflow remains bounded.
+- Implemented: on an Apple M3 Max, the 2,048-photon grid benchmark measured 2.838 ms versus 2.452 ms disabled (15.7% overhead); performance stayed approximately flat through 4,096 photons and rose to 3.886 ms at 16,384 photons.
+- Implemented: 2,048 photons is the practical default based on visual sufficiency and measured cost.
 
 ### Milestone 5: Broader Transport
 

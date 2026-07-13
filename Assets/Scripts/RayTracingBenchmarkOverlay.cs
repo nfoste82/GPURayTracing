@@ -71,6 +71,14 @@ public class RayTracingBenchmarkOverlay : MonoBehaviour
             .Append("  Avg: ").Append(gameManager.DynamicQualityAverageFrameMs.ToString("0.00")).AppendLine(" ms");
         _builder.Append("Accumulation: ").Append(gameManager.enableFrameAccumulation ? "on" : "off")
             .Append("  Frames: ").AppendLine(gameManager.AccumulatedFrameCount.ToString());
+        _builder.Append("Caustics: ").Append(gameManager.enableCaustics ? "on" : "off");
+        if (gameManager.enableCaustics)
+        {
+            _builder.Append("  Photons: ").Append(gameManager.CausticGridPhotonCount)
+                .Append("  Grid cells: ").Append(gameManager.CausticGridCellCount)
+                .Append("  OOB: ").Append(gameManager.CausticGridOutOfBoundsCount);
+        }
+        _builder.AppendLine();
         _builder.Append("Spheres: ").Append(gameManager.SphereCount).Append("  Lights: ").Append(gameManager.LightCount).Append("  Meshes: ").Append(gameManager.MeshCount).AppendLine();
         _builder.Append("Triangles: ").AppendLine(gameManager.TriangleCount.ToString());
         _builder.Append("TLAS: ").Append(gameManager.IsTopLevelBvhActive ? "on" : "off")
@@ -83,6 +91,6 @@ public class RayTracingBenchmarkOverlay : MonoBehaviour
             .Append("  Threshold: ").AppendLine(gameManager.shadowBvhMinObjectCount.ToString());
         _builder.Append("Toggle: ").Append(toggleKey);
 
-        GUI.Box(new Rect(12, 12, 410, 250), _builder.ToString(), _style);
+        GUI.Box(new Rect(12, 12, 520, 270), _builder.ToString(), _style);
     }
 }

@@ -135,6 +135,7 @@ GameObject:
   - component: {fileID: 38244193}
   - component: {fileID: 38244192}
   - component: {fileID: 38244191}
+  - component: {fileID: 38244195}
   m_Layer: 0
   m_Name: Ray Tracing Camera
   m_TagString: Untagged
@@ -209,6 +210,32 @@ MonoBehaviour:
   showOverlay: 1
   averageFrameCount: 120
   toggleKey: 284
+--- !u!114 &38244195
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 38244189}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 68bf15e15c544b2585f1754ce3f8cb6d, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  gameManager: {fileID: 1308049777}
+  runKey: 285
+  warmupFrames: 30
+  measurementFrames: 120
+  trialsPerConfiguration: 3
+  impracticalOverheadPercent: 25
+  targetFrameRate: 60
+  photonCounts:
+  - 64
+  - 256
+  - 1024
+  - 2048
+  - 4096
+  - 16384
 --- !u!114 &38244192
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1020,7 +1047,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   shader: {fileID: 7200000, guid: adaed5b09d5374556b1cda0917c8f291, type: 3}
   renderTextureCamera: {fileID: 38244190}
-  numberOfPasses: 32
+  numberOfPasses: 1
   enableFrameAccumulation: 1
   numBounces: 10
   shadowQuality: 0
@@ -1031,7 +1058,7 @@ MonoBehaviour:
   lightSamplingStrategy: 0
   lightSampleCount: 1
   enableCaustics: 1
-  causticPhotonCount: 4096
+  causticPhotonCount: 2048
   causticGatherRadius: 0.28
   causticSeed: 1
   causticIntensity: 1

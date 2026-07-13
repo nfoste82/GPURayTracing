@@ -198,6 +198,14 @@ public class GameManager : MonoBehaviour
     private ComputeBuffer _shadowBvhNodeBuffer;
     private ComputeBuffer _causticPhotonBuffer;
     private ComputeBuffer _causticPhotonMetadataBuffer;
+    private ComputeBuffer _causticGridCellHeadBuffer;
+    private ComputeBuffer _causticPhotonNextBuffer;
+    private Vector3 _causticGridMin;
+    private Vector3Int _causticGridDimensions;
+    private float _causticGridCellSize;
+    private int _causticGridCellCount;
+    private int _causticGridOutOfBoundsCount;
+    private int _causticGridPhotonCount;
     private int _causticPhotonStateHash;
     private bool _hasCausticPhotonStateHash;
     private bool _previousCausticsEnabled;
@@ -250,8 +258,12 @@ public class GameManager : MonoBehaviour
     public Vector2Int TextureSize => _textureSize;
     public int AccumulatedFrameCount => _accumulatedFrameCount;
     public float DynamicQualityAverageFrameMs => _dynamicQualityAverageFrameMs;
-    public bool HasCausticResources => _causticPhotonBuffer != null && _causticPhotonMetadataBuffer != null;
+    public bool HasCausticResources => _causticPhotonBuffer != null && _causticPhotonMetadataBuffer != null
+        && _causticGridCellHeadBuffer != null && _causticPhotonNextBuffer != null;
     public int CausticDispatchCount => _causticDispatchCount;
+    public int CausticGridCellCount => _causticGridCellCount;
+    public int CausticGridPhotonCount => _causticGridPhotonCount;
+    public int CausticGridOutOfBoundsCount => _causticGridOutOfBoundsCount;
 
     private static bool _buffersNeedRebuilding = false;
     private static readonly List<RayTracingObject> _rayTracingObjects = new List<RayTracingObject>();
@@ -275,8 +287,9 @@ public class GameManager : MonoBehaviour
     private const int BvhNodeStride = 48;
     private const int TopLevelBvhNodeStride = 48;
     private const int CausticPhotonStride = 36;
-    private const int CausticMetadataCount = 4;
+    private const int CausticMetadataCount = 6;
     private const int CausticTraceThreadCount = 64;
+    private const int MaxCausticGridCells = 262144;
     private const int BvhLeafTriangleCount = 4;
     private const int BvhStackSize = 64;
     private const float BvhBoundsPadding = 0.0001f;
@@ -821,23 +834,100 @@ public class GameManager : MonoBehaviour
     private void EnsureCausticResources()
     {
         int photonCapacity = Mathf.Max(1, causticPhotonCount);
-        if (_causticPhotonBuffer != null && _causticPhotonBuffer.count == photonCapacity && _causticPhotonMetadataBuffer != null)
+        CalculateCausticGridLayout();
+        if (_causticPhotonBuffer != null && _causticPhotonBuffer.count == photonCapacity
+            && _causticPhotonMetadataBuffer != null
+            && _causticPhotonNextBuffer != null && _causticPhotonNextBuffer.count == photonCapacity
+            && _causticGridCellHeadBuffer != null && _causticGridCellHeadBuffer.count == _causticGridCellCount)
         {
             return;
         }
 
         ReleaseCausticResources();
+        CalculateCausticGridLayout();
         _causticPhotonBuffer = new ComputeBuffer(photonCapacity, CausticPhotonStride);
         _causticPhotonMetadataBuffer = new ComputeBuffer(CausticMetadataCount, sizeof(uint));
+        _causticPhotonNextBuffer = new ComputeBuffer(photonCapacity, sizeof(int));
+        _causticGridCellHeadBuffer = new ComputeBuffer(_causticGridCellCount, sizeof(int));
         _hasCausticPhotonStateHash = false;
+    }
+
+    private void CalculateCausticGridLayout()
+    {
+        bool hasBounds = false;
+        Vector3 boundsMin = Vector3.zero;
+        Vector3 boundsMax = Vector3.zero;
+        for (int i = 0; i < _spheres.Count; i++)
+        {
+            Vector3 radius = Vector3.one * _spheres[i].radius;
+            EncapsulateCausticBounds(_spheres[i].position - radius, _spheres[i].position + radius,
+                ref hasBounds, ref boundsMin, ref boundsMax);
+        }
+        for (int i = 0; i < _meshInfos.Count; i++)
+        {
+            EncapsulateCausticBounds(_meshInfos[i].boundsMin, _meshInfos[i].boundsMax,
+                ref hasBounds, ref boundsMin, ref boundsMax);
+        }
+
+        if (!hasBounds)
+        {
+            boundsMin = new Vector3(-10.0f, -1.0f, -10.0f);
+            boundsMax = new Vector3(10.0f, 10.0f, 10.0f);
+        }
+
+        float padding = Mathf.Max(0.01f, causticGatherRadius);
+        boundsMin -= Vector3.one * padding;
+        boundsMax += Vector3.one * padding;
+        Vector3 size = Vector3.Max(boundsMax - boundsMin, Vector3.one * padding);
+        float cellSize = padding;
+        Vector3Int dimensions = CalculateCausticGridDimensions(size, cellSize);
+        while ((long)dimensions.x * dimensions.y * dimensions.z > MaxCausticGridCells)
+        {
+            cellSize *= 1.25f;
+            dimensions = CalculateCausticGridDimensions(size, cellSize);
+        }
+
+        _causticGridMin = boundsMin;
+        _causticGridCellSize = cellSize;
+        _causticGridDimensions = dimensions;
+        _causticGridCellCount = dimensions.x * dimensions.y * dimensions.z;
+    }
+
+    private static Vector3Int CalculateCausticGridDimensions(Vector3 size, float cellSize)
+    {
+        return new Vector3Int(
+            Mathf.Max(1, Mathf.CeilToInt(size.x / cellSize)),
+            Mathf.Max(1, Mathf.CeilToInt(size.y / cellSize)),
+            Mathf.Max(1, Mathf.CeilToInt(size.z / cellSize)));
+    }
+
+    private static void EncapsulateCausticBounds(Vector3 min, Vector3 max, ref bool hasBounds, ref Vector3 boundsMin, ref Vector3 boundsMax)
+    {
+        if (!hasBounds)
+        {
+            boundsMin = min;
+            boundsMax = max;
+            hasBounds = true;
+            return;
+        }
+
+        boundsMin = Vector3.Min(boundsMin, min);
+        boundsMax = Vector3.Max(boundsMax, max);
     }
 
     private void ReleaseCausticResources()
     {
         _causticPhotonBuffer?.Release();
         _causticPhotonMetadataBuffer?.Release();
+        _causticGridCellHeadBuffer?.Release();
+        _causticPhotonNextBuffer?.Release();
         _causticPhotonBuffer = null;
         _causticPhotonMetadataBuffer = null;
+        _causticGridCellHeadBuffer = null;
+        _causticPhotonNextBuffer = null;
+        _causticGridCellCount = 0;
+        _causticGridPhotonCount = 0;
+        _causticGridOutOfBoundsCount = 0;
         _hasCausticPhotonStateHash = false;
     }
 
@@ -865,12 +955,22 @@ public class GameManager : MonoBehaviour
         shader.EnableKeyword("CAUSTICS_ENABLED");
         int clearKernel = shader.FindKernel("ClearCausticPhotons");
         int traceKernel = shader.FindKernel("TraceCausticPhotons");
+        int clearGridKernel = shader.FindKernel("ClearCausticGrid");
+        int buildGridKernel = shader.FindKernel("BuildCausticGrid");
         SetPhotonTraceSceneParameters();
         SetCausticShaderParameters(clearKernel);
         SetCausticShaderParameters(traceKernel);
+        SetCausticShaderParameters(clearGridKernel);
+        SetCausticShaderParameters(buildGridKernel);
         SetSceneBuffers(traceKernel);
         shader.Dispatch(clearKernel, 1, 1, 1);
         shader.Dispatch(traceKernel, Mathf.CeilToInt(Mathf.Max(1, causticPhotonCount) / (float)CausticTraceThreadCount), 1, 1);
+        shader.Dispatch(clearGridKernel, Mathf.CeilToInt(_causticGridCellCount / (float)CausticTraceThreadCount), 1, 1);
+        shader.Dispatch(buildGridKernel, Mathf.CeilToInt(Mathf.Max(1, causticPhotonCount) / (float)CausticTraceThreadCount), 1, 1);
+        var metadata = new uint[CausticMetadataCount];
+        _causticPhotonMetadataBuffer.GetData(metadata);
+        _causticGridOutOfBoundsCount = (int)metadata[4];
+        _causticGridPhotonCount = (int)metadata[5];
         _causticDispatchCount++;
         _causticPhotonStateHash = stateHash;
         _hasCausticPhotonStateHash = true;
@@ -2356,8 +2456,14 @@ public class GameManager : MonoBehaviour
         shader.SetInt("_CausticSeed", causticSeed);
         shader.SetFloat("_CausticGatherRadius", Mathf.Max(0.001f, causticGatherRadius));
         shader.SetFloat("_CausticIntensity", Mathf.Max(0.0f, causticIntensity));
+        shader.SetVector("_CausticGridMin", _causticGridMin);
+        shader.SetFloat("_CausticGridCellSize", _causticGridCellSize);
+        shader.SetInts("_CausticGridDimensions", _causticGridDimensions.x, _causticGridDimensions.y, _causticGridDimensions.z);
+        shader.SetInt("_CausticGridCellCount", _causticGridCellCount);
         SetComputeBuffer("_CausticPhotons", _causticPhotonBuffer, kernelHandle);
         SetComputeBuffer("_CausticPhotonMetadata", _causticPhotonMetadataBuffer, kernelHandle);
+        SetComputeBuffer("_CausticGridCellHeads", _causticGridCellHeadBuffer, kernelHandle);
+        SetComputeBuffer("_CausticPhotonNext", _causticPhotonNextBuffer, kernelHandle);
     }
 
     private static float GetWorldSphereRadius(SphereCollider sphereCollider, Transform sphereTransform)
@@ -2641,8 +2747,9 @@ public class GameManager : MonoBehaviour
         unchecked
         {
             int hash = 17;
-            hash = AddHash(hash, 1); // Photon-map algorithm version.
+            hash = AddHash(hash, 2); // Photon-map algorithm version.
             hash = AddHash(hash, causticPhotonCount);
+            hash = AddHash(hash, causticGatherRadius);
             hash = AddHash(hash, causticSeed);
             hash = AddHash(hash, _spheres.Count);
             for (int i = 0; i < _spheres.Count; i++)

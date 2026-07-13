@@ -6,6 +6,8 @@ This document covers runtime benchmark tooling, performance hotspots, and benchm
 
 `Assets/Scripts/RayTracingBenchmarkOverlay.cs` can be attached to the camera and references the active `GameManager`. It shows averaged frame time, render size, quality settings, dynamic-quality status, accumulated frame count, sphere/light/mesh/triangle counts, top-level BVH status, shadow BVH status, and thresholds. Press `F3` to toggle the overlay.
 
+`Benchmark_Caustics` also includes `CausticsBenchmarkRunner`. Press `F4` in Play mode to disable dynamic quality and vSync temporarily, warm each shader configuration for 30 frames, then run three 120-frame trials with caustics disabled and at 64, 256, 1024, 2048, 4096, and 16384 photons. Results show each configuration's median and the first count that either exceeds the disabled baseline by 25% or misses the 60 FPS frame budget. Detailed trials and summaries are written as CSV under `Application.persistentDataPath/Benchmarks`. The overlay also reports caustic grid cells, indexed photons, and out-of-bounds photons. Keep the Game view resolution and all renderer settings fixed between runs. The CSV reports CPU-observed frame duration; use a GPU profiler alongside it when determining whether the gather is GPU-bound.
+
 `Tools > Ray Tracing > Generate Benchmark Scenes` runs `RayTracingBenchmarkSceneGenerator` and creates focused scenes under `Assets/Scenes/Benchmarks/`:
 
 - `Benchmark_ManySpheres`: stresses flat sphere loops versus the general top-level BVH.
@@ -15,7 +17,7 @@ This document covers runtime benchmark tooling, performance hotspots, and benchm
 - `Benchmark_ManyMeshes`: stresses object-level culling for many registered mesh objects.
 - `Benchmark_Glass`: stresses transparent/refraction paths and transparent shadows.
 - `Benchmark_GlassTransmission`: visual test for light energy loss and RGB filtering through single colored panes, stacked colored panes, side-by-side thin versus thick closed glass, and colored transparent sphere shadows.
-- `Benchmark_Caustics`: focused static scene with compact lights aligned above a clear glass sphere and glass prism over a matte receiver. It uses 32 passes, 10 bounces, a dark environment, final-color accumulation, and disables the firefly clamp so rare caustic paths remain measurable. The `Caustics` debug mode isolates those paths without direct-light contamination.
+- `Benchmark_Caustics`: focused static scene with compact lights aligned above a clear glass sphere and glass prism over a matte receiver. It uses 1 pass with final-color accumulation, 10 bounces, a dark environment, and disables the firefly clamp so rare caustic paths remain measurable. The `Caustics` debug mode isolates those paths without direct-light contamination.
 - `Benchmark_Water`: stresses the finite water AABB's ray-marched top and flat side/bottom boundaries, Fresnel reflection/refraction, distance-based absorption, and distinct ground-only, water-only, and water-over-ground regions. Accumulation is disabled for animated water.
 - `Benchmark_GlassWaterPencil`: image-quality scene inspired by a pencil in a glass of water, stressing glass meshes, calm water refraction, nested transparent surfaces, and thin curved mesh highlights.
 - `Benchmark_Sparse`: catches acceleration-structure overhead regressions in small scenes.
@@ -57,6 +59,11 @@ This also means generator changes do not automatically update an already-created
 - Use `DebugRenderMode.AccelerationStructures` and the overlay to confirm the intended BVH path is actually active before comparing frame times.
 - In shadow-heavy scenes, the shadow-only BVH has shown measurable benefit. In `Benchmark_ShadowBlockers`, the general top-level BVH is not expected to move performance much because the workload is dominated by shadow rays, not first-hit object lookup.
 - Use `Benchmark_ManyLights` to evaluate `lightSamplingStrategy` and `lightSampleCount`. Acceleration-structure thresholds (`topLevelBvhMinObjectCount`, `shadowBvhMinObjectCount`) are not expected to help here because the cost is the per-hit light loop, not object lookup. Compare `AllLights` against `UniformRandom`/`ImportanceSampled` at matched `lightSampleCount`, and compare `UniformRandom` against `ImportanceSampled` at the same `lightSampleCount` to weigh noise versus the extra weight-pass cost. The `maxLightSamples` diagnostic cap can clamp the considered light count to confirm the light loop is the bottleneck.
+- Use the `Benchmark_Caustics` `F4` matrix to compare the disabled renderer against the caustics variants and locate the linear-gather knee. It reports the median of three trials and treats the first photon count whose median frame time exceeds the disabled baseline by 25% or misses the target frame budget as the practical linear-gather limit. Proceed with the world-space grid if useful caustic quality requires that count or higher.
+
+### Caustics Grid Results
+
+Measured on an Apple M3 Max at the checked-in benchmark resolution and settings, the world-space grid reduced the 2,048-photon median from an estimated 8.5-9 ms with linear gathering to 2.838 ms, versus a 2.452 ms disabled baseline (15.7% overhead). Performance remained effectively flat from 256 through 4,096 photons at approximately 2.8-2.9 ms. At 16,384 photons the median rose to 3.886 ms (58.5% overhead). The checked-in benchmark therefore uses 2,048 photons: this was visually sufficient and remains below the benchmark's 25% overhead threshold.
 
 ## Compile-Time Notes
 

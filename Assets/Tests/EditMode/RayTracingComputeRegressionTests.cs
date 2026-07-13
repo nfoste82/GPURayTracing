@@ -126,6 +126,42 @@ namespace GPURayTracing.Tests
             }
         }
 
+        [Test]
+        public void CausticResourceCreation_AllocatesNonEmptyGrid()
+        {
+            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+            Assert.That(managerType, Is.Not.Null, "Could not load GameManager from Assembly-CSharp");
+
+            var gameObject = new GameObject("Caustic Grid Resource Test");
+            try
+            {
+                Component manager = gameObject.AddComponent(managerType);
+                MethodInfo ensureMethod = managerType.GetMethod(
+                    "EnsureCausticResources",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                MethodInfo releaseMethod = managerType.GetMethod(
+                    "ReleaseCausticResources",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                PropertyInfo resourcesProperty = managerType.GetProperty("HasCausticResources");
+                PropertyInfo cellCountProperty = managerType.GetProperty("CausticGridCellCount");
+
+                Assert.That(ensureMethod, Is.Not.Null);
+                Assert.That(releaseMethod, Is.Not.Null);
+                Assert.That(resourcesProperty, Is.Not.Null);
+                Assert.That(cellCountProperty, Is.Not.Null);
+
+                ensureMethod.Invoke(manager, null);
+
+                Assert.That(resourcesProperty.GetValue(manager), Is.True);
+                Assert.That(cellCountProperty.GetValue(manager), Is.GreaterThan(0));
+                releaseMethod.Invoke(manager, null);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(gameObject);
+            }
+        }
+
         private static void AssertVector(Vector4 actual, Vector4 expected, string label, float tolerance = Epsilon)
         {
             Assert.That(actual.x, Is.EqualTo(expected.x).Within(tolerance), $"{label} x");
