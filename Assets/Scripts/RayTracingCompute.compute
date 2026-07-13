@@ -81,6 +81,7 @@ int _HasTransparentShadowBlockers;
 #if defined(CAUSTICS_ENABLED)
 int _CausticPhotonCapacity;
 int _CausticPhotonAttemptCount;
+int _CausticMaxBounces;
 uint _CausticSeed;
 float _CausticGatherRadius;
 float _CausticIntensity;
@@ -3319,6 +3320,86 @@ void ClearCausticGrid(uint3 id : SV_DispatchThreadID)
     }
 }
 
+bool TraceCausticPhotonTransport(
+    Ray photonRay,
+    RayHit firstHit,
+    float3 initialPower,
+    inout uint rngState,
+    out CausticPhoton photon)
+{
+    photon.position = float3(0.0f, 0.0f, 0.0f);
+    photon.incomingDirection = float3(0.0f, 0.0f, 0.0f);
+    photon.power = float3(0.0f, 0.0f, 0.0f);
+
+    float3 throughput = initialPower;
+    MediumStack mediumStack = CreateMediumStack(photonRay.origin);
+    RayHit hit = firstHit;
+    bool hasSpecularEvent = false;
+    int maxBounces = clamp(_CausticMaxBounces, 1, 16);
+
+    [loop]
+    for (int bounce = 0; bounce < maxBounces; bounce++)
+    {
+        throughput *= GetActiveMediumSegmentTransmittance(photonRay, hit.distance, mediumStack);
+        if (!HasPathEnergy(throughput) || DidHitSky(hit) || DidHitLight(hit))
+        {
+            return false;
+        }
+
+        if (IsCausticReceiver(hit))
+        {
+            if (!hasSpecularEvent || dot(hit.normal, -photonRay.direction) <= 0.0f)
+            {
+                return false;
+            }
+
+            photon.position = hit.position;
+            photon.incomingDirection = photonRay.direction;
+            photon.power = throughput;
+            return true;
+        }
+
+        // Transport state is geometry-neutral; this milestone enables only sphere boundaries.
+        // Closed mesh glass can use this same loop once its boundary transition is enabled here.
+        if (!IsGlassMaterial(hit) || IsWaterMaterial(hit) || hit.obj_radius <= 0.0f)
+        {
+            return false;
+        }
+
+        bool entering;
+        float2 transitionIndices = GetBoundaryTransitionIndices(mediumStack, hit, entering);
+        float fresnelReflectance = GetFresnelReflectance(photonRay, hit, transitionIndices.x, transitionIndices.y);
+        float transmissionProbability = GetTransmissionAmount(hit) * (1.0f - fresnelReflectance);
+        float3 transmittedDirection;
+        bool canTransmit = RefractSnell(
+            photonRay.direction,
+            transitionIndices.x,
+            transitionIndices.y,
+            hit.geometricNormal,
+            transmittedDirection);
+
+        if (canTransmit && rand(rngState) < transmissionProbability)
+        {
+            photonRay.direction = transmittedDirection;
+            ApplyMediumTransition(
+                mediumStack,
+                hit,
+                entering ? MediumTransitionEnter : MediumTransitionExit);
+        }
+        else
+        {
+            photonRay.direction = normalize(reflect(photonRay.direction, hit.geometricNormal));
+            throughput *= lerp(float3(1.0f, 1.0f, 1.0f), saturate(hit.color), hit.opacity);
+        }
+
+        hasSpecularEvent = true;
+        photonRay.origin = hit.position + photonRay.direction * 0.001f;
+        hit = GetNearestIntersection(photonRay);
+    }
+
+    return false;
+}
+
 [numthreads(64,1,1)]
 void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
 {
@@ -3438,49 +3519,18 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
         return;
     }
 
-    float3 insideDirection;
-    if (!RefractSnell(photonRay.direction, 1.0f, max(1.0f, refractor.refraction), refractorHit.normal, insideDirection))
-    {
-        return;
-    }
-
-    Ray insideRay = CreateRay(refractorHit.position + insideDirection * 0.001f, insideDirection);
-    float exitDistance = GetSphereExitDistance(insideRay, refractor.position, refractor.radius);
-    if (exitDistance <= 0.001f)
-    {
-        return;
-    }
-
-    float3 exitPosition = insideRay.origin + insideDirection * exitDistance;
-    float3 exitNormal = normalize(exitPosition - refractor.position);
-    float3 exitDirection;
-    if (!RefractSnell(insideDirection, max(1.0f, refractor.refraction), 1.0f, -exitNormal, exitDirection))
-    {
-        return;
-    }
-
-    Ray exitRay = CreateRay(exitPosition + exitDirection * 0.001f, exitDirection);
-    RayHit receiverHit = GetNearestIntersectionBounded(exitRay, 1.#INF, -2, refractorIndex);
-    if (!IsCausticReceiver(receiverHit) || dot(receiverHit.normal, -exitDirection) <= 0.0f)
-    {
-        return;
-    }
-
-    float entryCosine = saturate(dot(-photonRay.direction, refractorHit.normal));
-    float exitCosine = saturate(dot(insideDirection, exitNormal));
-    float entryR0 = (1.0f - refractor.refraction) / (1.0f + refractor.refraction);
-    entryR0 *= entryR0;
-    float entryTransmission = 1.0f - (entryR0 + (1.0f - entryR0) * pow(1.0f - entryCosine, 5.0f));
-    float exitTransmission = 1.0f - (entryR0 + (1.0f - entryR0) * pow(1.0f - exitCosine, 5.0f));
     float coneSolidAngle = 2.0f * PI * max(1e-6f, 1.0f - cosThetaMax);
     float selectionScale = lightCount * refractorCount * coneSolidAngle * emissionAreaScale * emitterCosine;
-    float3 absorption = GetMediumSegmentTransmittance(CreateHitMedium(refractorHit), exitDistance);
-    float materialTransmission = GetTransmissionAmount(refractorHit);
-
     CausticPhoton photon;
-    photon.position = receiverHit.position;
-    photon.incomingDirection = exitDirection;
-    photon.power = light.emission * absorption * materialTransmission * entryTransmission * exitTransmission * selectionScale;
+    if (!TraceCausticPhotonTransport(
+        photonRay,
+        refractorHit,
+        light.emission * selectionScale,
+        rngState,
+        photon))
+    {
+        return;
+    }
 
     uint writeIndex;
     InterlockedAdd(_CausticPhotonMetadata[0], 1, writeIndex);

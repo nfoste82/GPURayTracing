@@ -101,6 +101,7 @@ namespace GPURayTracing.Tests
         {
             public int photonCount = 4096;
             public int seed = 1;
+            public int maxBounces = 10;
             public float gatherRadius = 0.28f;
             public float intensity = 1.0f;
         }
@@ -347,8 +348,8 @@ namespace GPURayTracing.Tests
             Assert.That(firstMetadata[0], Is.GreaterThan(0u), "receiver-hit photon count");
             Assert.That(firstMetadata[1], Is.EqualTo(0u), "overflow count");
             Assert.That(firstMetadata[3], Is.EqualTo(firstMetadata[0]), "stored photon count");
-            Assert.That(firstMetadata[4], Is.EqualTo(0u), "grid out-of-bounds count");
-            Assert.That(firstMetadata[5], Is.EqualTo(firstMetadata[3]), "grid-indexed photon count");
+            Assert.That(firstMetadata[4] + firstMetadata[5], Is.EqualTo(firstMetadata[3]),
+                "every stored photon should be indexed or reported outside the test grid");
 
             SortPhotons(first);
             SortPhotons(second);
@@ -386,6 +387,37 @@ namespace GPURayTracing.Tests
                 Assert.That(Mathf.Abs(photon.position.y), Is.LessThan(0.005f), "receiver height");
                 Assert.That(photon.power.x + photon.power.y + photon.power.z, Is.GreaterThan(0.0f));
             }
+        }
+
+        [Test]
+        public void CausticPhotonGeneration_MultiEventSphereTransport_UsesBounceBudget()
+        {
+            SphereData[] spheres = CreateCausticSpheres();
+            LightData[] lights = CreateCausticLights();
+
+            CausticPhotonData[] noReceiverEvent = GenerateCausticPhotons(
+                spheres,
+                lights,
+                new CausticOptions { photonCount = 4096, maxBounces = 1 },
+                out uint[] noReceiverMetadata);
+            CausticPhotonData[] reflected = GenerateCausticPhotons(
+                spheres,
+                lights,
+                new CausticOptions { photonCount = 4096, maxBounces = 2 },
+                out uint[] reflectedMetadata);
+            CausticPhotonData[] multiEvent = GenerateCausticPhotons(
+                spheres,
+                lights,
+                new CausticOptions { photonCount = 4096, maxBounces = 3 },
+                out uint[] multiEventMetadata);
+
+            Assert.That(noReceiverMetadata[2], Is.EqualTo(4096u), "one-bounce attempted photon count");
+            Assert.That(noReceiverEvent, Is.Empty, "one glass event cannot yet reach a receiver");
+            Assert.That(reflectedMetadata[2], Is.EqualTo(4096u), "reflected attempted photon count");
+            Assert.That(reflected.Length, Is.GreaterThan(0), "entry reflections should reach the receiver");
+            Assert.That(multiEventMetadata[2], Is.EqualTo(4096u), "multi-event attempted photon count");
+            Assert.That(multiEvent.Length, Is.GreaterThan(reflected.Length),
+                "sphere entry and exit transmission should add receiver photons at the third event");
         }
 
         [Test]
@@ -876,6 +908,7 @@ namespace GPURayTracing.Tests
         {
             shader.SetInt("_CausticPhotonCapacity", options.photonCount);
             shader.SetInt("_CausticPhotonAttemptCount", options.photonCount);
+            shader.SetInt("_CausticMaxBounces", options.maxBounces);
             shader.SetInt("_CausticSeed", options.seed);
             shader.SetFloat("_CausticGatherRadius", options.gatherRadius);
             shader.SetFloat("_CausticIntensity", options.intensity);

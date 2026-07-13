@@ -20,7 +20,7 @@ The project uses EditMode tests under `Assets/Tests/EditMode/` to make rendering
 - Production GPU probes cover shared Lambert/GGX BRDF values, PDFs, and finite positive sampled throughput.
 - Production GPU probes cover the MIS power heuristic and triangle area-to-solid-angle PDF conversion.
 - A focused high-sample image regression verifies that a reflected sphere light does not develop a dark center.
-- Caustics coverage dispatches the production clear/trace kernels with a fixed seed, compares canonically sorted photon records, verifies sphere and triangle emitters produce receiver photons, verifies default-disabled resource isolation, locks a focused sphere-caustic image signature, and checks energy stability across photon counts and gather radii.
+- Caustics coverage dispatches the production clear/trace kernels with a fixed seed, compares canonically sorted photon records, verifies sphere and triangle emitters produce receiver photons, checks the multi-event sphere transport bounce budget, verifies default-disabled resource isolation, locks a focused sphere-caustic image signature, and checks energy stability across photon counts and gather radii.
 
 ## Running Tests
 

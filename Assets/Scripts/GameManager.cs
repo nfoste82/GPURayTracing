@@ -2453,6 +2453,7 @@ public class GameManager : MonoBehaviour
     {
         shader.SetInt("_CausticPhotonCapacity", Mathf.Max(1, causticPhotonCount));
         shader.SetInt("_CausticPhotonAttemptCount", Mathf.Max(1, causticPhotonCount));
+        shader.SetInt("_CausticMaxBounces", Mathf.Clamp(numBounces, MinNumBounces, MaxNumBounces));
         shader.SetInt("_CausticSeed", causticSeed);
         shader.SetFloat("_CausticGatherRadius", Mathf.Max(0.001f, causticGatherRadius));
         shader.SetFloat("_CausticIntensity", Mathf.Max(0.0f, causticIntensity));
@@ -2747,10 +2748,11 @@ public class GameManager : MonoBehaviour
         unchecked
         {
             int hash = 17;
-            hash = AddHash(hash, 3); // Photon-map algorithm version.
+            hash = AddHash(hash, 4); // Photon-map algorithm version.
             hash = AddHash(hash, causticPhotonCount);
             hash = AddHash(hash, causticGatherRadius);
             hash = AddHash(hash, causticSeed);
+            hash = AddHash(hash, numBounces);
             hash = AddHash(hash, _spheres.Count);
             for (int i = 0; i < _spheres.Count; i++)
             {
