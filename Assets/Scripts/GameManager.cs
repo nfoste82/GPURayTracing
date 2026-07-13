@@ -57,6 +57,21 @@ public class GameManager : MonoBehaviour
     [Tooltip("UniformRandom/ImportanceSampled only: how many lights each shading point samples per pass. 1 is fastest/noisiest; higher values reduce noise toward AllLights quality at proportional cost.")]
     [Range(1, 64)]
     public int lightSampleCount = 1;
+
+    [Header("Caustics prototype")]
+    [Tooltip("Builds a photon map for sphere-light caustics through glass spheres. Disabled by default.")]
+    public bool enableCaustics = false;
+
+    [Range(64, 16384)]
+    public int causticPhotonCount = 2048;
+
+    [Range(0.01f, 2.0f)]
+    public float causticGatherRadius = 0.3f;
+
+    public int causticSeed = 1;
+
+    [Range(0.0f, 4.0f)]
+    public float causticIntensity = 1.0f;
     
     [Header("Dynamic quality")]
     [Tooltip("Dynamically adjusts passes, light sampling, shadow quality, and bounces to approach the target frame rate. BVH thresholds are never changed.")]
@@ -90,7 +105,8 @@ public class GameManager : MonoBehaviour
         BounceCount = 6,
         HitDistance = 7,
         AccelerationStructures = 8,
-        GlassScatter = 9
+        GlassScatter = 9,
+        Caustics = 10
     }
 
     [Header("Debug render modes")]
@@ -180,6 +196,12 @@ public class GameManager : MonoBehaviour
     private ComputeBuffer _bvhNodeBuffer;
     private ComputeBuffer _topLevelBvhNodeBuffer;
     private ComputeBuffer _shadowBvhNodeBuffer;
+    private ComputeBuffer _causticPhotonBuffer;
+    private ComputeBuffer _causticPhotonMetadataBuffer;
+    private int _causticPhotonStateHash;
+    private bool _hasCausticPhotonStateHash;
+    private bool _previousCausticsEnabled;
+    private int _causticDispatchCount;
 
     // Tracks whether any shadow-casting blocker (regular sphere or mesh triangle) is transparent
     // (opacity < 1). When false, shadow rays in the shader take a cheaper pure-occlusion path that
@@ -205,8 +227,9 @@ public class GameManager : MonoBehaviour
     // track which debug variants have already been dispatched, and when a new one is requested we
     // show an on-screen overlay for one frame BEFORE running the stalling dispatch, so the user
     // sees a "compiling" message instead of an apparently locked-up app.
-    private readonly HashSet<DebugRenderMode> _warmedDebugModes = new HashSet<DebugRenderMode>();
+    private readonly HashSet<int> _warmedShaderVariants = new HashSet<int>();
     private DebugRenderMode _appliedDebugRenderMode = DebugRenderMode.FinalColor;
+    private bool _appliedCausticsEnabled;
     private bool _pendingVariantWarmup;
 
     // True for the single frame where the "Compiling shader variant" overlay should be shown
@@ -227,6 +250,8 @@ public class GameManager : MonoBehaviour
     public Vector2Int TextureSize => _textureSize;
     public int AccumulatedFrameCount => _accumulatedFrameCount;
     public float DynamicQualityAverageFrameMs => _dynamicQualityAverageFrameMs;
+    public bool HasCausticResources => _causticPhotonBuffer != null && _causticPhotonMetadataBuffer != null;
+    public int CausticDispatchCount => _causticDispatchCount;
 
     private static bool _buffersNeedRebuilding = false;
     private static readonly List<RayTracingObject> _rayTracingObjects = new List<RayTracingObject>();
@@ -249,6 +274,9 @@ public class GameManager : MonoBehaviour
     private const int MeshInfoStride = 48;
     private const int BvhNodeStride = 48;
     private const int TopLevelBvhNodeStride = 48;
+    private const int CausticPhotonStride = 36;
+    private const int CausticMetadataCount = 4;
+    private const int CausticTraceThreadCount = 64;
     private const int BvhLeafTriangleCount = 4;
     private const int BvhStackSize = 64;
     private const float BvhBoundsPadding = 0.0001f;
@@ -750,6 +778,7 @@ public class GameManager : MonoBehaviour
         _bvhNodeBuffer?.Release();
         _topLevelBvhNodeBuffer?.Release();
         _shadowBvhNodeBuffer?.Release();
+        ReleaseCausticResources();
         DestroyRuntimeTextureArray();
     }
 
@@ -787,6 +816,77 @@ public class GameManager : MonoBehaviour
     {
         _accumulatedFrameCount = 0;
         _hasAccumulationStateHash = false;
+    }
+
+    private void EnsureCausticResources()
+    {
+        int photonCapacity = Mathf.Max(1, causticPhotonCount);
+        if (_causticPhotonBuffer != null && _causticPhotonBuffer.count == photonCapacity && _causticPhotonMetadataBuffer != null)
+        {
+            return;
+        }
+
+        ReleaseCausticResources();
+        _causticPhotonBuffer = new ComputeBuffer(photonCapacity, CausticPhotonStride);
+        _causticPhotonMetadataBuffer = new ComputeBuffer(CausticMetadataCount, sizeof(uint));
+        _hasCausticPhotonStateHash = false;
+    }
+
+    private void ReleaseCausticResources()
+    {
+        _causticPhotonBuffer?.Release();
+        _causticPhotonMetadataBuffer?.Release();
+        _causticPhotonBuffer = null;
+        _causticPhotonMetadataBuffer = null;
+        _hasCausticPhotonStateHash = false;
+    }
+
+    private void UpdateCausticPhotonMap()
+    {
+        if (!enableCaustics)
+        {
+            if (_previousCausticsEnabled || HasCausticResources)
+            {
+                ReleaseCausticResources();
+                ResetFrameAccumulation();
+            }
+            _previousCausticsEnabled = false;
+            return;
+        }
+
+        EnsureCausticResources();
+        int stateHash = CalculateCausticPhotonStateHash();
+        if (_hasCausticPhotonStateHash && stateHash == _causticPhotonStateHash)
+        {
+            _previousCausticsEnabled = true;
+            return;
+        }
+
+        shader.EnableKeyword("CAUSTICS_ENABLED");
+        int clearKernel = shader.FindKernel("ClearCausticPhotons");
+        int traceKernel = shader.FindKernel("TraceCausticPhotons");
+        SetPhotonTraceSceneParameters();
+        SetCausticShaderParameters(clearKernel);
+        SetCausticShaderParameters(traceKernel);
+        SetSceneBuffers(traceKernel);
+        shader.Dispatch(clearKernel, 1, 1, 1);
+        shader.Dispatch(traceKernel, Mathf.CeilToInt(Mathf.Max(1, causticPhotonCount) / (float)CausticTraceThreadCount), 1, 1);
+        _causticDispatchCount++;
+        _causticPhotonStateHash = stateHash;
+        _hasCausticPhotonStateHash = true;
+        _previousCausticsEnabled = true;
+        ResetFrameAccumulation();
+    }
+
+    private void SetPhotonTraceSceneParameters()
+    {
+        shader.SetInt("_NumSpheres", _spheres.Count);
+        shader.SetInt("_NumLights", _lights.Count);
+        shader.SetInt("_NumTriangles", _triangles.Count);
+        shader.SetInt("_NumMeshes", _meshInfos.Count);
+        shader.SetInt("_NumTopLevelBvhNodes", _topLevelBvhNodes.Count);
+        shader.SetInt("_NumShadowBvhNodes", _shadowBvhNodes.Count);
+        shader.SetInt("_WaterEnabled", 0);
     }
 
     private bool ShouldUseFrameAccumulation()
@@ -1011,9 +1111,11 @@ public class GameManager : MonoBehaviour
         // overlay flag and re-show the previous output (no heavy dispatch), so OnGUI can paint the
         // "Compiling shader variant" message; next frame we run the stalling dispatch with that
         // message already on screen.
+        int requestedVariant = GetShaderVariantKey(debugRenderMode, enableCaustics);
+        bool shaderVariantChanged = debugRenderMode != _appliedDebugRenderMode || enableCaustics != _appliedCausticsEnabled;
         if (!_pendingVariantWarmup
-            && debugRenderMode != _appliedDebugRenderMode
-            && !_warmedDebugModes.Contains(debugRenderMode))
+            && shaderVariantChanged
+            && !_warmedShaderVariants.Contains(requestedVariant))
         {
             _pendingVariantWarmup = true;
             Graphics.Blit(_outputTexture, dest);
@@ -1053,6 +1155,7 @@ public class GameManager : MonoBehaviour
         UpdateTriangles();
         UpdateTopLevelBvh();
         UpdateShadowBvh();
+        UpdateCausticPhotonMap();
 
         bool useFrameAccumulation = ShouldUseFrameAccumulation();
         if (useFrameAccumulation)
@@ -1084,11 +1187,17 @@ public class GameManager : MonoBehaviour
         // The dispatch above triggered (and blocked on) any first-time variant compile. Record
         // that this debug mode is now warm so future switches to it are instant, and clear the
         // overlay flag.
-        _warmedDebugModes.Add(debugRenderMode);
+        _warmedShaderVariants.Add(requestedVariant);
         _appliedDebugRenderMode = debugRenderMode;
+        _appliedCausticsEnabled = enableCaustics;
         _pendingVariantWarmup = false;
 
         Graphics.Blit(_outputTexture, dest);
+    }
+
+    private static int GetShaderVariantKey(DebugRenderMode mode, bool causticsEnabled)
+    {
+        return ((int)mode << 1) | (causticsEnabled ? 1 : 0);
     }
 
     private void UpdateSpheres()
@@ -2229,6 +2338,28 @@ public class GameManager : MonoBehaviour
         }
     }
 
+    private void SetSceneBuffers(int kernelHandle)
+    {
+        SetComputeBuffer("_Spheres", _sphereBuffer, kernelHandle);
+        SetComputeBuffer("_Lights", _lightBuffer, kernelHandle);
+        SetComputeBuffer("_Triangles", _triangleBuffer, kernelHandle);
+        SetComputeBuffer("_Meshes", _meshBuffer, kernelHandle);
+        SetComputeBuffer("_BvhNodes", _bvhNodeBuffer, kernelHandle);
+        SetComputeBuffer("_TopLevelBvhNodes", _topLevelBvhNodeBuffer, kernelHandle);
+        SetComputeBuffer("_ShadowBvhNodes", _shadowBvhNodeBuffer, kernelHandle);
+    }
+
+    private void SetCausticShaderParameters(int kernelHandle)
+    {
+        shader.SetInt("_CausticPhotonCapacity", Mathf.Max(1, causticPhotonCount));
+        shader.SetInt("_CausticPhotonAttemptCount", Mathf.Max(1, causticPhotonCount));
+        shader.SetInt("_CausticSeed", causticSeed);
+        shader.SetFloat("_CausticGatherRadius", Mathf.Max(0.001f, causticGatherRadius));
+        shader.SetFloat("_CausticIntensity", Mathf.Max(0.0f, causticIntensity));
+        SetComputeBuffer("_CausticPhotons", _causticPhotonBuffer, kernelHandle);
+        SetComputeBuffer("_CausticPhotonMetadata", _causticPhotonMetadataBuffer, kernelHandle);
+    }
+
     private static float GetWorldSphereRadius(SphereCollider sphereCollider, Transform sphereTransform)
     {
         var scale = sphereTransform.lossyScale;
@@ -2352,6 +2483,15 @@ public class GameManager : MonoBehaviour
         {
             shader.EnableKeyword("DEBUG_RENDER");
         }
+        if (enableCaustics)
+        {
+            shader.EnableKeyword("CAUSTICS_ENABLED");
+            SetCausticShaderParameters(kernelHandle);
+        }
+        else
+        {
+            shader.DisableKeyword("CAUSTICS_ENABLED");
+        }
         shader.SetInt("_MaxLightSamples", maxLightSamples);
         shader.SetInt("_LightSamplingStrategy", (int)lightSamplingStrategy);
         shader.SetInt("_LightSampleCount", lightSampleCount);
@@ -2410,13 +2550,7 @@ public class GameManager : MonoBehaviour
         // pure-occlusion shadow path that early-outs on the first opaque blocker.
         bool hasTransparentShadowBlockers = _hasTransparentSphereBlockers || _hasTransparentMeshBlockers;
         shader.SetInt("_HasTransparentShadowBlockers", hasTransparentShadowBlockers ? 1 : 0);
-        SetComputeBuffer("_Spheres", _sphereBuffer, kernelHandle);
-        SetComputeBuffer("_Lights", _lightBuffer, kernelHandle);
-        SetComputeBuffer("_Triangles", _triangleBuffer, kernelHandle);
-        SetComputeBuffer("_Meshes", _meshBuffer, kernelHandle);
-        SetComputeBuffer("_BvhNodes", _bvhNodeBuffer, kernelHandle);
-        SetComputeBuffer("_TopLevelBvhNodes", _topLevelBvhNodeBuffer, kernelHandle);
-        SetComputeBuffer("_ShadowBvhNodes", _shadowBvhNodeBuffer, kernelHandle);
+        SetSceneBuffers(kernelHandle);
     }
 
     private int CalculateSampleOffset()
@@ -2446,6 +2580,14 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, cameraFocalDistance);
             hash = AddHash(hash, groundSmoothness);
             hash = AddHash(hash, fireflyClamp);
+            if (enableCaustics)
+            {
+                hash = AddHash(hash, causticPhotonCount);
+                hash = AddHash(hash, causticGatherRadius);
+                hash = AddHash(hash, causticSeed);
+                hash = AddHash(hash, causticIntensity);
+                hash = AddHash(hash, _causticPhotonStateHash);
+            }
             hash = AddHash(hash, _water != null ? _water.GetInstanceID() : 0);
             if (_water != null)
             {
@@ -2490,6 +2632,36 @@ public class GameManager : MonoBehaviour
                 hash = AddHash(hash, _meshObjects[i]);
             }
 
+            return hash;
+        }
+    }
+
+    private int CalculateCausticPhotonStateHash()
+    {
+        unchecked
+        {
+            int hash = 17;
+            hash = AddHash(hash, 1); // Photon-map algorithm version.
+            hash = AddHash(hash, causticPhotonCount);
+            hash = AddHash(hash, causticSeed);
+            hash = AddHash(hash, _spheres.Count);
+            for (int i = 0; i < _spheres.Count; i++)
+            {
+                hash = AddHash(hash, _spheres[i]);
+            }
+
+            hash = AddHash(hash, _lights.Count);
+            for (int i = 0; i < _lights.Count; i++)
+            {
+                hash = AddHash(hash, _lights[i]);
+            }
+
+            hash = AddHash(hash, _triangles.Count);
+            hash = AddHash(hash, _meshInfos.Count);
+            for (int i = 0; i < _meshObjects.Count; i++)
+            {
+                hash = AddHash(hash, _meshObjects[i]);
+            }
             return hash;
         }
     }

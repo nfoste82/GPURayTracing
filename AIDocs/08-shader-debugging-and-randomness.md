@@ -20,6 +20,7 @@ Available modes:
 - `HitDistance`: first-hit distance divided by `25`, clamped to grayscale `[0, 1]`; sky renders white.
 - `AccelerationStructures`: visualizes whether the top-level and shadow BVHs are active. First-hit surfaces encode top-level activity in red and shadow-BVH activity in green, with blue used to distinguish glass/mesh/non-mesh hits. Sky shows BVH node-count intensity.
 - `GlassScatter`: first-hit glass scattering diagnostic. Non-glass surfaces render as dim albedo for context. Glass pixels render red when the sampled reflection branch is chosen and blue when it transmits; green is the Schlick Fresnel reflectance probability, and blue intensity is the opacity-derived material transmission amount.
+- `Caustics`: isolates currently discoverable caustic transport. It suppresses direct lighting and returns emissive radiance only for stochastic camera paths that hit a diffuse receiver, subsequently scatter from glass or water, and then reach an emitter. Black output is expected until one of these rare paths is sampled; use high `numberOfPasses` when diagnosing the current estimator.
 
 Debug modes still use the normal camera ray generation and depth-of-field jitter path, so high `numberOfPasses` can average noisy debug samples for modes involving randomized normals, direct light, or throughput.
 

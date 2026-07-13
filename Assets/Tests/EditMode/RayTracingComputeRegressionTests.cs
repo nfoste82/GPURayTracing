@@ -1,3 +1,5 @@
+using System;
+using System.Reflection;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
@@ -85,6 +87,42 @@ namespace GPURayTracing.Tests
             {
                 sphereBuffer.Release();
                 buffer.Release();
+            }
+        }
+
+        [Test]
+        public void CausticsDisabled_DoesNotAllocateResourcesOrDispatchPhotonKernels()
+        {
+            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+            Assert.That(managerType, Is.Not.Null, "Could not load GameManager from Assembly-CSharp");
+
+            var gameObject = new GameObject("Disabled Caustics Test");
+            try
+            {
+                Component manager = gameObject.AddComponent(managerType);
+                FieldInfo enabledField = managerType.GetField("enableCaustics");
+                PropertyInfo resourcesProperty = managerType.GetProperty("HasCausticResources");
+                PropertyInfo dispatchProperty = managerType.GetProperty("CausticDispatchCount");
+                MethodInfo updateMethod = managerType.GetMethod(
+                    "UpdateCausticPhotonMap",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+
+                Assert.That(enabledField, Is.Not.Null);
+                Assert.That(resourcesProperty, Is.Not.Null);
+                Assert.That(dispatchProperty, Is.Not.Null);
+                Assert.That(updateMethod, Is.Not.Null);
+                Assert.That(enabledField.GetValue(manager), Is.False, "Caustics must default to disabled");
+                Assert.That(resourcesProperty.GetValue(manager), Is.False);
+                Assert.That(dispatchProperty.GetValue(manager), Is.EqualTo(0));
+
+                updateMethod.Invoke(manager, null);
+
+                Assert.That(resourcesProperty.GetValue(manager), Is.False);
+                Assert.That(dispatchProperty.GetValue(manager), Is.EqualTo(0));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(gameObject);
             }
         }
 

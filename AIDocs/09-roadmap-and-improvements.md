@@ -127,6 +127,13 @@ Completion criteria: light and material sampling can both discover the same path
 - Harden sphere and mesh glass for repeated internal reflection, concave/non-manifold/open meshes, exhausted bounce budgets inside a medium, and analytic Snell/TIR validation. Basic Snell transmission, distance absorption, bounded interior-object tests, and mesh TIR are already implemented.
 - Improve wavy-top intersection with adaptive/root-finding behavior and optionally support multiple/transformed water volumes.
 
+## Caustics Prototype
+
+- Prototype photon-mapped caustics as an optional, default-disabled feature. The disabled path must not allocate photon resources, dispatch caustics kernels, or add photon gathering to the default final-color shader variant.
+- Begin with sphere lights, one glass-sphere transmission, diffuse receivers, and a small linear photon gather. Validate estimator energy and feature value before adding a world-space grid, glass meshes, or water.
+- The isolated sphere prototype, deterministic photon/image fixtures, and photon-count/gather-radius energy checks are implemented. Next, benchmark the disabled and enabled variants, identify the linear-gather cost limit, and then decide whether to proceed with the world-space grid.
+- See `12-caustics-prototype.md` for the proposed architecture, invalidation rules, diagnostics, testing, and acceptance criteria.
+
 ## Priority 7: Lighting And Geometry Quality
 
 - Add imported vertex normals and interpolate them barycentrically. This is now high-value because the Stanford Dragon benchmark and direct specular highlights make flat triangle normals visibly facet smooth models.

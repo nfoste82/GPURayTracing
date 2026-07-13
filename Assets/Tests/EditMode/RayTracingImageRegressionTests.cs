@@ -89,6 +89,40 @@ namespace GPURayTracing.Tests
             public int padding1;
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        private struct CausticPhotonData
+        {
+            public Vector3 position;
+            public Vector3 incomingDirection;
+            public Vector3 power;
+        }
+
+        private sealed class CausticOptions
+        {
+            public int photonCount = 4096;
+            public int seed = 1;
+            public float gatherRadius = 0.28f;
+            public float intensity = 1.0f;
+        }
+
+        private sealed class CausticMap : IDisposable
+        {
+            public readonly ComputeBuffer photons;
+            public readonly ComputeBuffer metadata;
+
+            public CausticMap(int photonCapacity)
+            {
+                photons = new ComputeBuffer(photonCapacity, 36);
+                metadata = new ComputeBuffer(4, sizeof(uint));
+            }
+
+            public void Dispose()
+            {
+                photons.Release();
+                metadata.Release();
+            }
+        }
+
         [Test]
         public void ReflectionScene_CurrentImageBaseline_IsStable()
         {
@@ -292,6 +326,62 @@ namespace GPURayTracing.Tests
             AssertSignature($"transparent shadow fixture {fixture}", signature, baselines[fixture]);
         }
 
+        [Test]
+        public void CausticPhotonGeneration_FixedSeed_IsDeterministic()
+        {
+            CausticOptions options = new CausticOptions { photonCount = 2048 };
+            SphereData[] spheres = CreateCausticSpheres();
+            LightData[] lights = CreateCausticLights();
+
+            CausticPhotonData[] first = GenerateCausticPhotons(spheres, lights, options, out uint[] firstMetadata);
+            CausticPhotonData[] second = GenerateCausticPhotons(spheres, lights, options, out uint[] secondMetadata);
+
+            CollectionAssert.AreEqual(firstMetadata, secondMetadata);
+            Assert.That(firstMetadata[2], Is.EqualTo((uint)options.photonCount), "attempted photon count");
+            Assert.That(firstMetadata[0], Is.GreaterThan(0u), "receiver-hit photon count");
+            Assert.That(firstMetadata[1], Is.EqualTo(0u), "overflow count");
+            Assert.That(firstMetadata[3], Is.EqualTo(firstMetadata[0]), "stored photon count");
+
+            SortPhotons(first);
+            SortPhotons(second);
+            Assert.That(first.Length, Is.EqualTo(second.Length));
+            for (int i = 0; i < first.Length; i++)
+            {
+                AssertVector3(first[i].position, second[i].position, $"photon {i} position");
+                AssertVector3(first[i].incomingDirection, second[i].incomingDirection, $"photon {i} direction");
+                AssertVector3(first[i].power, second[i].power, $"photon {i} power");
+                Assert.That(Mathf.Abs(first[i].position.y), Is.LessThan(0.005f), $"photon {i} receiver height");
+                Assert.That(first[i].power.x + first[i].power.y + first[i].power.z, Is.GreaterThan(0.0f));
+            }
+        }
+
+        [Test]
+        public void SphereCaustic_DebugImageBaseline_IsStable()
+        {
+            Vector4[] signature = RenderCausticSignature(new CausticOptions());
+            AssertSignature("sphere photon caustic", signature, SphereCausticBaseline);
+        }
+
+        [Test]
+        public void CausticDebugImage_PhotonCountChange_PreservesAverageEnergy()
+        {
+            Vector4[] low = RenderCausticSignature(new CausticOptions { photonCount = 2048 });
+            Vector4[] high = RenderCausticSignature(new CausticOptions { photonCount = 8192 });
+
+            AssertRelativeEnergy(low[0], high[0], 0.18f, "photon count");
+        }
+
+        [Test]
+        public void CausticDebugImage_GatherRadiusChange_PreservesAverageEnergyAndSharpensPeak()
+        {
+            Vector4[] narrow = RenderCausticSignature(new CausticOptions { photonCount = 8192, gatherRadius = 0.20f });
+            Vector4[] wide = RenderCausticSignature(new CausticOptions { photonCount = 8192, gatherRadius = 0.40f });
+
+            AssertRelativeEnergy(narrow[0], wide[0], 0.25f, "gather radius");
+            Assert.That(MaxProbeLuminance(narrow), Is.GreaterThan(MaxProbeLuminance(wide)),
+                $"A narrower gather should have a sharper sampled peak.\nNarrow:\n{FormatSignature(narrow)}\nWide:\n{FormatSignature(wide)}");
+        }
+
         // Average HDR color followed by eight fixed pixel probes. These values intentionally lock
         // current output, including approximations; update only after reviewing an expected change.
         private static readonly Vector4[] ReflectionBaseline =
@@ -427,6 +517,16 @@ namespace GPURayTracing.Tests
             new Vector4(0.29516810f, 0.48179030f, 0.63754430f, 1.0f)
         };
 
+        private static readonly Vector4[] SphereCausticBaseline =
+        {
+            new Vector4(0.00182217f, 0.00173758f, 0.00155864f, 1.0f),
+            new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
+            new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
+            new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
+            new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
+            new Vector4(1.10349500f, 1.05230600f, 0.94395580f, 1.0f)
+        };
+
         private static SphereData Sphere(Vector3 position, Vector3 color, float radius, float smoothness, float opacity, float refraction, int materialType)
         {
             return new SphereData
@@ -470,7 +570,9 @@ namespace GPURayTracing.Tests
             Color? skyboxColor = null,
             int numberOfPasses = 8,
             float lightFalloffScale = 0.16f,
-            float[,] probes = null)
+            float[,] probes = null,
+            CausticOptions caustics = null,
+            bool includePeak = false)
         {
             if (!SystemInfo.supportsComputeShaders)
             {
@@ -479,12 +581,13 @@ namespace GPURayTracing.Tests
 
             ComputeShader shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
             Assert.That(shader, Is.Not.Null);
-            if (!shader.HasKernel("CSMain"))
+            string kernelName = caustics == null ? "CSMain" : "CSCausticsRegressionImage";
+            if (!shader.HasKernel(kernelName))
             {
-                Assert.Ignore("The active graphics device did not compile CSMain. Run without -nographics.");
+                Assert.Ignore($"The active graphics device did not compile {kernelName}. Run without -nographics.");
             }
 
-            int kernel = shader.FindKernel("CSMain");
+            int kernel = shader.FindKernel(kernelName);
             triangles = triangles ?? Array.Empty<MeshTriangleData>();
             meshes = meshes ?? Array.Empty<MeshInfoData>();
             bvhNodes = bvhNodes ?? Array.Empty<BvhNodeData>();
@@ -501,10 +604,27 @@ namespace GPURayTracing.Tests
             ComputeBuffer bvhBuffer = CreateBuffer(bvhNodes, 48);
             ComputeBuffer topLevelBuffer = CreateDummyBuffer(48);
             ComputeBuffer shadowBuffer = CreateDummyBuffer(48);
+            CausticMap causticMap = null;
 
             try
             {
-                shader.DisableKeyword("DEBUG_RENDER");
+                if (caustics == null)
+                {
+                    shader.DisableKeyword("DEBUG_RENDER");
+                    shader.DisableKeyword("CAUSTICS_ENABLED");
+                }
+                else
+                {
+                    shader.DisableKeyword("DEBUG_RENDER");
+                    shader.EnableKeyword("CAUSTICS_ENABLED");
+                    causticMap = DispatchCausticPhotons(
+                        shader, sphereBuffer, lightBuffer, triangleBuffer, meshBuffer, bvhBuffer,
+                        topLevelBuffer, shadowBuffer, spheres.Length, lights.Length, triangles.Length,
+                        meshes.Length, caustics);
+                    shader.SetBuffer(kernel, "_CausticPhotons", causticMap.photons);
+                    shader.SetBuffer(kernel, "_CausticPhotonMetadata", causticMap.metadata);
+                    SetCausticParameters(shader, caustics);
+                }
                 shader.SetTexture(kernel, "Result", result);
                 shader.SetTexture(kernel, "AccumulationResult", accumulation);
                 shader.SetTexture(kernel, "_SkyboxTexture", skybox);
@@ -555,10 +675,13 @@ namespace GPURayTracing.Tests
                 SetWater(shader, waterEnabled);
 
                 shader.Dispatch(kernel, Mathf.CeilToInt(width / 8.0f), Mathf.CeilToInt(height / 8.0f), 1);
-                return ReadSignature(result, width, height, probes);
+                return ReadSignature(result, width, height, probes, includePeak);
             }
             finally
             {
+                shader.DisableKeyword("DEBUG_RENDER");
+                shader.DisableKeyword("CAUSTICS_ENABLED");
+                causticMap?.Dispose();
                 sphereBuffer.Release();
                 lightBuffer.Release();
                 triangleBuffer.Release();
@@ -574,6 +697,201 @@ namespace GPURayTracing.Tests
                     UnityEngine.Object.DestroyImmediate(meshTextures);
                 }
             }
+        }
+
+        private static Vector4[] RenderCausticSignature(CausticOptions options)
+        {
+            float[,] probes =
+            {
+                { 0.375f, 0.0625f }, { 0.5f, 0.0625f }, { 0.625f, 0.0625f },
+                { 0.375f, 0.125f }, { 0.5f, 0.125f }, { 0.625f, 0.125f },
+                { 0.4375f, 0.1875f }, { 0.5625f, 0.1875f }
+            };
+            return RenderSignature(
+                CreateCausticSpheres(),
+                false,
+                new Vector3(0.0f, 5.4f, -10.5f),
+                Quaternion.Euler(19.0f, 0.0f, 0.0f),
+                lights: CreateCausticLights(),
+                width: 48,
+                height: 48,
+                groundSmoothness: 0.05f,
+                skyboxColor: Color.black,
+                numberOfPasses: 8,
+                probes: probes,
+                caustics: options,
+                includePeak: true);
+        }
+
+        private static SphereData[] CreateCausticSpheres()
+        {
+            return new[]
+            {
+                Sphere(new Vector3(0.0f, 1.32f, 2.5f), new Vector3(238.0f / 255.0f, 248.0f / 255.0f, 1.0f),
+                    1.3f, 1.0f, 0.04f, 1.52f, 2)
+            };
+        }
+
+        private static LightData[] CreateCausticLights()
+        {
+            return new[] { SphereLight(new Vector3(0.0f, 6.8f, 2.5f), new Vector3(20.0f, 19.0f, 17.0f), 0.24f) };
+        }
+
+        private static CausticPhotonData[] GenerateCausticPhotons(
+            SphereData[] spheres,
+            LightData[] lights,
+            CausticOptions options,
+            out uint[] metadata)
+        {
+            if (!SystemInfo.supportsComputeShaders)
+            {
+                Assert.Ignore("Compute shaders are not supported by the active graphics device.");
+            }
+
+            ComputeShader shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
+            Assert.That(shader, Is.Not.Null);
+            shader.EnableKeyword("CAUSTICS_ENABLED");
+            if (!shader.HasKernel("TraceCausticPhotons"))
+            {
+                shader.DisableKeyword("CAUSTICS_ENABLED");
+                Assert.Ignore("The active graphics device did not compile the caustics kernels. Run without -nographics.");
+            }
+
+            ComputeBuffer sphereBuffer = CreateBuffer(spheres, 56);
+            ComputeBuffer lightBuffer = CreateBuffer(lights, 72);
+            ComputeBuffer triangleBuffer = CreateBuffer(Array.Empty<MeshTriangleData>(), 164);
+            ComputeBuffer meshBuffer = CreateBuffer(Array.Empty<MeshInfoData>(), 48);
+            ComputeBuffer bvhBuffer = CreateBuffer(Array.Empty<BvhNodeData>(), 48);
+            ComputeBuffer topLevelBuffer = CreateDummyBuffer(48);
+            ComputeBuffer shadowBuffer = CreateDummyBuffer(48);
+            CausticMap map = null;
+            try
+            {
+                map = DispatchCausticPhotons(
+                    shader, sphereBuffer, lightBuffer, triangleBuffer, meshBuffer, bvhBuffer,
+                    topLevelBuffer, shadowBuffer, spheres.Length, lights.Length, 0, 0, options);
+                metadata = new uint[4];
+                map.metadata.GetData(metadata);
+                var photons = new CausticPhotonData[checked((int)metadata[3])];
+                if (photons.Length > 0)
+                {
+                    map.photons.GetData(photons, 0, 0, photons.Length);
+                }
+                return photons;
+            }
+            finally
+            {
+                shader.DisableKeyword("CAUSTICS_ENABLED");
+                map?.Dispose();
+                sphereBuffer.Release();
+                lightBuffer.Release();
+                triangleBuffer.Release();
+                meshBuffer.Release();
+                bvhBuffer.Release();
+                topLevelBuffer.Release();
+                shadowBuffer.Release();
+            }
+        }
+
+        private static CausticMap DispatchCausticPhotons(
+            ComputeShader shader,
+            ComputeBuffer sphereBuffer,
+            ComputeBuffer lightBuffer,
+            ComputeBuffer triangleBuffer,
+            ComputeBuffer meshBuffer,
+            ComputeBuffer bvhBuffer,
+            ComputeBuffer topLevelBuffer,
+            ComputeBuffer shadowBuffer,
+            int sphereCount,
+            int lightCount,
+            int triangleCount,
+            int meshCount,
+            CausticOptions options)
+        {
+            int clearKernel = shader.FindKernel("ClearCausticPhotons");
+            int traceKernel = shader.FindKernel("TraceCausticPhotons");
+            var map = new CausticMap(options.photonCount);
+            SetCausticParameters(shader, options);
+            shader.SetInt("_NumSpheres", sphereCount);
+            shader.SetInt("_NumLights", lightCount);
+            shader.SetInt("_NumTriangles", triangleCount);
+            shader.SetInt("_NumMeshes", meshCount);
+            shader.SetInt("_NumTopLevelBvhNodes", 0);
+            shader.SetInt("_NumShadowBvhNodes", 0);
+            shader.SetFloat("_GroundSmoothness", 0.05f);
+            SetWater(shader, false);
+            SetCausticBuffers(shader, clearKernel, map);
+            SetCausticBuffers(shader, traceKernel, map);
+            shader.SetBuffer(traceKernel, "_Spheres", sphereBuffer);
+            shader.SetBuffer(traceKernel, "_Lights", lightBuffer);
+            shader.SetBuffer(traceKernel, "_Triangles", triangleBuffer);
+            shader.SetBuffer(traceKernel, "_Meshes", meshBuffer);
+            shader.SetBuffer(traceKernel, "_BvhNodes", bvhBuffer);
+            shader.SetBuffer(traceKernel, "_TopLevelBvhNodes", topLevelBuffer);
+            shader.SetBuffer(traceKernel, "_ShadowBvhNodes", shadowBuffer);
+            shader.Dispatch(clearKernel, 1, 1, 1);
+            shader.Dispatch(traceKernel, Mathf.CeilToInt(options.photonCount / 64.0f), 1, 1);
+            return map;
+        }
+
+        private static void SetCausticParameters(ComputeShader shader, CausticOptions options)
+        {
+            shader.SetInt("_CausticPhotonCapacity", options.photonCount);
+            shader.SetInt("_CausticPhotonAttemptCount", options.photonCount);
+            shader.SetInt("_CausticSeed", options.seed);
+            shader.SetFloat("_CausticGatherRadius", options.gatherRadius);
+            shader.SetFloat("_CausticIntensity", options.intensity);
+        }
+
+        private static void SetCausticBuffers(ComputeShader shader, int kernel, CausticMap map)
+        {
+            shader.SetBuffer(kernel, "_CausticPhotons", map.photons);
+            shader.SetBuffer(kernel, "_CausticPhotonMetadata", map.metadata);
+        }
+
+        private static void SortPhotons(CausticPhotonData[] photons)
+        {
+            Array.Sort(photons, (left, right) =>
+            {
+                int result = left.position.x.CompareTo(right.position.x);
+                if (result == 0) result = left.position.z.CompareTo(right.position.z);
+                if (result == 0) result = left.incomingDirection.x.CompareTo(right.incomingDirection.x);
+                if (result == 0) result = left.power.x.CompareTo(right.power.x);
+                return result;
+            });
+        }
+
+        private static void AssertVector3(Vector3 actual, Vector3 expected, string label)
+        {
+            Assert.That(actual.x, Is.EqualTo(expected.x).Within(0.0002f), $"{label} x");
+            Assert.That(actual.y, Is.EqualTo(expected.y).Within(0.0002f), $"{label} y");
+            Assert.That(actual.z, Is.EqualTo(expected.z).Within(0.0002f), $"{label} z");
+        }
+
+        private static void AssertRelativeEnergy(Vector4 left, Vector4 right, float tolerance, string label)
+        {
+            float leftEnergy = Luminance(left);
+            float rightEnergy = Luminance(right);
+            float drift = Mathf.Abs(leftEnergy - rightEnergy) / Mathf.Max(1e-6f, (leftEnergy + rightEnergy) * 0.5f);
+            Assert.That(leftEnergy, Is.GreaterThan(0.0f));
+            Assert.That(rightEnergy, Is.GreaterThan(0.0f));
+            Assert.That(drift, Is.LessThan(tolerance),
+                $"Caustic {label} energy drift was {drift:P2}: {leftEnergy:F8} versus {rightEnergy:F8}");
+        }
+
+        private static float MaxProbeLuminance(Vector4[] signature)
+        {
+            float maximum = 0.0f;
+            for (int i = 1; i < signature.Length; i++)
+            {
+                maximum = Mathf.Max(maximum, Luminance(signature[i]));
+            }
+            return maximum;
+        }
+
+        private static float Luminance(Vector4 color)
+        {
+            return color.x * 0.2126f + color.y * 0.7152f + color.z * 0.0722f;
         }
 
         private static void CreateGlassCube(out MeshTriangleData[] triangles, out MeshInfoData[] meshes, out BvhNodeData[] bvhNodes)
@@ -851,7 +1169,12 @@ namespace GPURayTracing.Tests
             shader.SetInt("_WaterRefinementSteps", 5);
         }
 
-        private static Vector4[] ReadSignature(RenderTexture source, int width, int height, float[,] probes = null)
+        private static Vector4[] ReadSignature(
+            RenderTexture source,
+            int width,
+            int height,
+            float[,] probes = null,
+            bool includePeak = false)
         {
             var texture = new Texture2D(width, height, TextureFormat.RGBAFloat, false, true);
             RenderTexture previous = RenderTexture.active;
@@ -864,11 +1187,16 @@ namespace GPURayTracing.Tests
 
             float[,] defaultProbes = { { 0.25f, 0.25f }, { 0.5f, 0.25f }, { 0.75f, 0.25f }, { 0.25f, 0.5f }, { 0.5f, 0.5f }, { 0.75f, 0.5f }, { 0.375f, 0.75f }, { 0.625f, 0.75f } };
             probes = probes ?? defaultProbes;
-            var signature = new Vector4[probes.GetLength(0) + 1];
+            var signature = new Vector4[probes.GetLength(0) + 1 + (includePeak ? 1 : 0)];
             Vector4 average = Vector4.zero;
+            Vector4 peak = Vector4.zero;
             foreach (Color pixel in pixels)
             {
                 average += (Vector4)pixel;
+                if (Luminance(pixel) > Luminance(peak))
+                {
+                    peak = pixel;
+                }
             }
             signature[0] = average / pixels.Length;
 
@@ -877,6 +1205,10 @@ namespace GPURayTracing.Tests
                 int x = Mathf.Clamp(Mathf.FloorToInt(probes[i, 0] * width), 0, width - 1);
                 int y = Mathf.Clamp(Mathf.FloorToInt(probes[i, 1] * height), 0, height - 1);
                 signature[i + 1] = pixels[y * width + x];
+            }
+            if (includePeak)
+            {
+                signature[signature.Length - 1] = peak;
             }
             return signature;
         }

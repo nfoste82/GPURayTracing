@@ -29,6 +29,7 @@ public static class RayTracingBenchmarkSceneGenerator
         CreateManyMeshesScene();
         CreateGlassScene();
         CreateGlassTransmissionScene();
+        CreateCausticsScene();
         CreateSparseScene();
         CreateDynamicScene();
         CreateWaterScene();
@@ -285,6 +286,41 @@ public static class RayTracingBenchmarkSceneGenerator
             float z = -0.55f + i * 0.42f;
             AddPrimitiveMesh(parent, $"{name} Filter {i + 1}", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(x, 2.0f, z), Vector3.zero, new Vector3(1.05f, 2.8f, 0.12f), colors[i], RayMaterial.MaterialType.Glass, 1.0f, opacity, refraction);
         }
+    }
+
+    private static void CreateCausticsScene()
+    {
+        const string sceneName = "Benchmark_Caustics";
+        if (ShouldSkipExistingScene(sceneName))
+        {
+            return;
+        }
+
+        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 5.4f, -10.5f), new Vector3(19.0f, 0.0f, 0.0f), passes: 32, bounces: 10, shadowQuality: 0);
+        context.Manager.enableFrameAccumulation = true;
+        context.Manager.cameraFocalDistance = 12.0f;
+        context.Manager.groundSmoothness = 0.05f;
+        context.Manager.lightFalloffScale = 0.012f;
+        context.Manager.exposure = 1.0f;
+        context.Manager.fireflyClamp = 0.0f;
+        context.Manager.enableCaustics = true;
+        context.Manager.causticPhotonCount = 4096;
+        context.Manager.causticGatherRadius = 0.28f;
+        context.Manager.causticSeed = 1;
+        context.Manager.topLevelBvhMinObjectCount = 1024;
+        context.Manager.shadowBvhMinObjectCount = 1024;
+        context.Manager.lightSamplingStrategy = GameManager.LightSamplingStrategy.AllLights;
+        context.Manager._skyboxLightColor = new Color32(2, 2, 3, 255);
+
+        AddPrimitiveMesh(context.Root, "Matte Caustic Receiver", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 0.02f, 2.2f), Vector3.zero, new Vector3(10.0f, 0.04f, 9.0f), new Color32(225, 225, 218, 255), RayMaterial.MaterialType.Diffuse, 0.02f, 1.0f);
+
+        AddLight(context.Root, "Sphere Caustic Light", new Vector3(-1.9f, 6.8f, 2.5f), 0.24f, new Color32(255, 244, 218, 255));
+        AddSphere(context.Root, "Clear Glass Sphere", new Vector3(-1.9f, 1.32f, 2.5f), 1.3f, new Color32(238, 248, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.04f, 1.52f);
+
+        AddPrimitiveMesh(context.Root, "Glass Prism", RayMeshPrimitive.PrimitiveType.Pyramid, new Vector3(2.0f, 1.35f, 2.9f), new Vector3(0.0f, 32.0f, 0.0f), new Vector3(2.1f, 2.4f, 2.1f), new Color32(220, 240, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.05f, 1.62f);
+
+        AddSphere(context.Root, "Diffuse Scale Reference", new Vector3(0.0f, 0.45f, 6.2f), 0.45f, new Color32(185, 78, 52, 255), RayMaterial.MaterialType.Diffuse, 0.08f);
+        Save(context.Scene, sceneName);
     }
 
     private static void CreateSparseScene()

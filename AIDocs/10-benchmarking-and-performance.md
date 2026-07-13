@@ -15,6 +15,7 @@ This document covers runtime benchmark tooling, performance hotspots, and benchm
 - `Benchmark_ManyMeshes`: stresses object-level culling for many registered mesh objects.
 - `Benchmark_Glass`: stresses transparent/refraction paths and transparent shadows.
 - `Benchmark_GlassTransmission`: visual test for light energy loss and RGB filtering through single colored panes, stacked colored panes, side-by-side thin versus thick closed glass, and colored transparent sphere shadows.
+- `Benchmark_Caustics`: focused static scene with compact lights aligned above a clear glass sphere and glass prism over a matte receiver. It uses 32 passes, 10 bounces, a dark environment, final-color accumulation, and disables the firefly clamp so rare caustic paths remain measurable. The `Caustics` debug mode isolates those paths without direct-light contamination.
 - `Benchmark_Water`: stresses the finite water AABB's ray-marched top and flat side/bottom boundaries, Fresnel reflection/refraction, distance-based absorption, and distinct ground-only, water-only, and water-over-ground regions. Accumulation is disabled for animated water.
 - `Benchmark_GlassWaterPencil`: image-quality scene inspired by a pencil in a glass of water, stressing glass meshes, calm water refraction, nested transparent surfaces, and thin curved mesh highlights.
 - `Benchmark_Sparse`: catches acceleration-structure overhead regressions in small scenes.

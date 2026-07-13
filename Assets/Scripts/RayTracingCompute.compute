@@ -1,6 +1,9 @@
 ﻿// Each #kernel tells which function to compile; you can have many kernels
 #pragma kernel CSMain
 #pragma kernel CSRegressionProbe
+#pragma kernel ClearCausticPhotons CAUSTICS_ENABLED
+#pragma kernel TraceCausticPhotons CAUSTICS_ENABLED
+#pragma kernel CSCausticsRegressionImage CAUSTICS_ENABLED
 
 // Debug render modes (normals, albedo, BVH visualization, etc.) pull in a second set of
 // scene-intersection/scatter code. Compiling that into the default final-color variant roughly
@@ -8,6 +11,7 @@
 // debug code out of the default variant; GameManager enables DEBUG_RENDER only when a debug mode
 // is selected. The non-debug variant (the hot path) compiles without any debug intersection code.
 #pragma multi_compile _ DEBUG_RENDER
+#pragma multi_compile _ CAUSTICS_ENABLED
 
 // Create a RenderTexture with enableRandomWrite flag and set it
 // with cs.SetTexture
@@ -72,6 +76,14 @@ int _NumShadowBvhNodes;
 // the first opaque blocker and never does nearest-transparent-blocker bookkeeping.
 int _HasTransparentShadowBlockers;
 
+#if defined(CAUSTICS_ENABLED)
+int _CausticPhotonCapacity;
+int _CausticPhotonAttemptCount;
+uint _CausticSeed;
+float _CausticGatherRadius;
+float _CausticIntensity;
+#endif
+
 static const float PI = 3.141593f;
 
 static const int DebugFinalColor = 0;
@@ -84,6 +96,7 @@ static const int DebugBounceCount = 6;
 static const int DebugHitDistance = 7;
 static const int DebugAccelerationStructures = 8;
 static const int DebugGlassScatter = 9;
+static const int DebugCaustics = 10;
 
 static const int MaterialDiffuse = 0;
 static const int MaterialMetal = 1;
@@ -248,6 +261,18 @@ struct TopLevelBvhNode
 
 StructuredBuffer<TopLevelBvhNode> _TopLevelBvhNodes;
 StructuredBuffer<TopLevelBvhNode> _ShadowBvhNodes;
+
+#if defined(CAUSTICS_ENABLED)
+struct CausticPhoton
+{
+    float3 position;
+    float3 incomingDirection;
+    float3 power;
+};
+
+RWStructuredBuffer<CausticPhoton> _CausticPhotons;
+RWStructuredBuffer<uint> _CausticPhotonMetadata;
+#endif
 
 // =======================================================
 // Ray
@@ -2894,6 +2919,39 @@ bool ApplyRussianRoulette(inout float3 throughput, int bounce, inout uint rngSta
     return true;
 }
 
+#if defined(CAUSTICS_ENABLED)
+bool IsCausticReceiver(RayHit hit)
+{
+    return !DidHitSky(hit) && !DidHitLight(hit) && hit.materialType == MaterialDiffuse && hit.opacity >= 1.0f;
+}
+
+float3 GatherCausticRadiance(RayHit hit)
+{
+    if (!IsCausticReceiver(hit) || _CausticPhotonAttemptCount <= 0 || _CausticGatherRadius <= 0.0f)
+    {
+        return float3(0.0f, 0.0f, 0.0f);
+    }
+
+    uint storedPhotonCount = min(_CausticPhotonMetadata[0], (uint)max(0, _CausticPhotonCapacity));
+    float radiusSquared = _CausticGatherRadius * _CausticGatherRadius;
+    float3 photonPower = float3(0.0f, 0.0f, 0.0f);
+
+    [loop]
+    for (uint photonIndex = 0; photonIndex < storedPhotonCount; photonIndex++)
+    {
+        CausticPhoton photon = _CausticPhotons[photonIndex];
+        float3 offset = photon.position - hit.position;
+        if (dot(offset, offset) <= radiusSquared && dot(hit.normal, -photon.incomingDirection) > 0.0f)
+        {
+            photonPower += photon.power;
+        }
+    }
+
+    float normalization = max(1.0f, _CausticPhotonAttemptCount * PI * radiusSquared);
+    return photonPower * GetAlbedo(hit) * (_CausticIntensity / normalization);
+}
+#endif
+
 float3 TracePath(Ray ray, inout uint rngState)
 {
     float3 radiance = float3(0.0f, 0.0f, 0.0f);
@@ -2938,6 +2996,13 @@ float3 TracePath(Ray ray, inout uint rngState)
             radiance += throughput * emission * misWeight;
             break;
         }
+
+#if defined(CAUSTICS_ENABLED)
+        if (bounce == 0)
+        {
+            radiance += throughput * GatherCausticRadiance(hit);
+        }
+#endif
 
         bool sampledDirectLight = false;
         if (ShouldSampleDirectLight(throughput))
@@ -2988,8 +3053,72 @@ float3 ClampFirefly(float3 radiance)
 }
 
 #if DEBUG_RENDER
+float3 TraceCausticPaths(Ray ray, inout uint rngState)
+{
+#if defined(CAUSTICS_ENABLED)
+    RayHit visibleHit = GetNearestIntersection(ray);
+    return GatherCausticRadiance(visibleHit);
+#else
+    float3 throughput = float3(1.0f, 1.0f, 1.0f);
+    MediumStack mediumStack = CreateMediumStack(ray.origin);
+    bool hitDiffuseReceiver = false;
+    bool sampledDielectricAfterDiffuse = false;
+
+    [loop]
+    for (int bounce = 0; bounce < _NumBounces; bounce++)
+    {
+        RayHit hit = GetNearestIntersection(ray);
+        throughput *= GetActiveMediumSegmentTransmittance(ray, hit.distance, mediumStack);
+        if (!HasPathEnergy(throughput))
+        {
+            break;
+        }
+        ApplyFiniteMediumExitAfterSegment(mediumStack, ray, hit);
+
+        if (DidHitSky(hit))
+        {
+            break;
+        }
+
+        if (DidHitLight(hit))
+        {
+            return sampledDielectricAfterDiffuse ? throughput * GetEmission(hit) : float3(0.0f, 0.0f, 0.0f);
+        }
+
+        bool isDielectric = IsGlassMaterial(hit) || IsWaterMaterial(hit);
+        if (hitDiffuseReceiver && isDielectric)
+        {
+            sampledDielectricAfterDiffuse = true;
+        }
+        if (!isDielectric && hit.materialType == MaterialDiffuse)
+        {
+            hitDiffuseReceiver = true;
+        }
+
+        int remainingBounces = _NumBounces - bounce;
+        ScatterResult scatter = CreateScatteredRay(ray, hit, bounce, remainingBounces, mediumStack, rngState);
+        ApplyMediumTransition(mediumStack, hit, scatter.mediumTransition);
+        ray = scatter.ray;
+        throughput *= scatter.attenuation;
+        bounce += scatter.bouncesConsumed - 1;
+
+        if (!HasPathEnergy(throughput) || !ApplyRussianRoulette(throughput, bounce, rngState))
+        {
+            break;
+        }
+    }
+
+    return float3(0.0f, 0.0f, 0.0f);
+#endif
+}
+
 float3 GetDebugRenderColor(Ray ray, inout uint rngState)
 {
+    if (_DebugRenderMode == DebugCaustics)
+    {
+        return TraceCausticPaths(ray, rngState);
+    }
+
     RayHit hit = GetNearestIntersection(ray);
 
     if (_DebugRenderMode == DebugAccelerationStructures)
@@ -3138,6 +3267,168 @@ float3 ACESFilmicToneMap(float3 color)
     const float e = 0.14f;
     return saturate((color * (a * color + b)) / (color * (c * color + d) + e));
 }
+
+#if defined(CAUSTICS_ENABLED)
+[numthreads(1,1,1)]
+void ClearCausticPhotons(uint3 id : SV_DispatchThreadID)
+{
+    _CausticPhotonMetadata[0] = 0;
+    _CausticPhotonMetadata[1] = 0;
+    _CausticPhotonMetadata[2] = 0;
+    _CausticPhotonMetadata[3] = 0;
+}
+
+[numthreads(64,1,1)]
+void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)max(0, _CausticPhotonAttemptCount))
+    {
+        return;
+    }
+
+    InterlockedAdd(_CausticPhotonMetadata[2], 1);
+
+    int sphereLightCount = 0;
+    int sphereIndex;
+    [loop]
+    for (sphereIndex = 0; sphereIndex < _NumLights; sphereIndex++)
+    {
+        sphereLightCount += _Lights[sphereIndex].type == LightTypeSphere ? 1 : 0;
+    }
+
+    int refractorCount = 0;
+    [loop]
+    for (sphereIndex = 0; sphereIndex < _NumSpheres; sphereIndex++)
+    {
+        Sphere candidate = _Spheres[sphereIndex];
+        refractorCount += (candidate.materialType == MaterialGlass || candidate.opacity < 1.0f) && candidate.opacity < 1.0f ? 1 : 0;
+    }
+
+    if (sphereLightCount == 0 || refractorCount == 0)
+    {
+        return;
+    }
+
+    uint rngState = Hash(_CausticSeed ^ (id.x * 26699u));
+    int selectedLightRank = min((int)(rand(rngState) * sphereLightCount), sphereLightCount - 1);
+    int selectedRefractorRank = min((int)(rand(rngState) * refractorCount), refractorCount - 1);
+    Light light;
+    int foundRank = 0;
+    [loop]
+    for (sphereIndex = 0; sphereIndex < _NumLights; sphereIndex++)
+    {
+        if (_Lights[sphereIndex].type != LightTypeSphere)
+        {
+            continue;
+        }
+        if (foundRank++ == selectedLightRank)
+        {
+            light = _Lights[sphereIndex];
+            break;
+        }
+    }
+
+    Sphere refractor;
+    int refractorIndex = -1;
+    foundRank = 0;
+    [loop]
+    for (sphereIndex = 0; sphereIndex < _NumSpheres; sphereIndex++)
+    {
+        Sphere candidate = _Spheres[sphereIndex];
+        if (!((candidate.materialType == MaterialGlass || candidate.opacity < 1.0f) && candidate.opacity < 1.0f))
+        {
+            continue;
+        }
+        if (foundRank++ == selectedRefractorRank)
+        {
+            refractor = candidate;
+            refractorIndex = sphereIndex;
+            break;
+        }
+    }
+
+    float3 toRefractor = refractor.position - light.position;
+    float distanceToRefractor = length(toRefractor);
+    if (distanceToRefractor <= refractor.radius + light.radius + 0.001f)
+    {
+        return;
+    }
+
+    float3 coneAxis = toRefractor / distanceToRefractor;
+    float sinThetaMax = saturate(refractor.radius / distanceToRefractor);
+    float cosThetaMax = sqrt(max(0.0f, 1.0f - sinThetaMax * sinThetaMax));
+    float cosTheta = lerp(1.0f, cosThetaMax, rand(rngState));
+    float sinTheta = sqrt(max(0.0f, 1.0f - cosTheta * cosTheta));
+    float phi = 2.0f * PI * rand(rngState);
+    float3 tangent;
+    float3 bitangent;
+    CreateBasisFromNormal(coneAxis, tangent, bitangent);
+    float3 photonDirection = normalize(coneAxis * cosTheta + tangent * (cos(phi) * sinTheta) + bitangent * (sin(phi) * sinTheta));
+    Ray photonRay = CreateRay(light.position + photonDirection * max(0.001f, light.radius), photonDirection);
+    RayHit refractorHit = CreateRayHit();
+    IntersectSphere(photonRay, refractorHit, refractor, refractorIndex);
+    if (DidHitSky(refractorHit))
+    {
+        return;
+    }
+
+    float3 insideDirection;
+    if (!RefractSnell(photonRay.direction, 1.0f, max(1.0f, refractor.refraction), refractorHit.normal, insideDirection))
+    {
+        return;
+    }
+
+    Ray insideRay = CreateRay(refractorHit.position + insideDirection * 0.001f, insideDirection);
+    float exitDistance = GetSphereExitDistance(insideRay, refractor.position, refractor.radius);
+    if (exitDistance <= 0.001f)
+    {
+        return;
+    }
+
+    float3 exitPosition = insideRay.origin + insideDirection * exitDistance;
+    float3 exitNormal = normalize(exitPosition - refractor.position);
+    float3 exitDirection;
+    if (!RefractSnell(insideDirection, max(1.0f, refractor.refraction), 1.0f, -exitNormal, exitDirection))
+    {
+        return;
+    }
+
+    Ray exitRay = CreateRay(exitPosition + exitDirection * 0.001f, exitDirection);
+    RayHit receiverHit = GetNearestIntersectionBounded(exitRay, 1.#INF, -2, refractorIndex);
+    if (!IsCausticReceiver(receiverHit) || dot(receiverHit.normal, -exitDirection) <= 0.0f)
+    {
+        return;
+    }
+
+    float entryCosine = saturate(dot(-photonRay.direction, refractorHit.normal));
+    float exitCosine = saturate(dot(insideDirection, exitNormal));
+    float entryR0 = (1.0f - refractor.refraction) / (1.0f + refractor.refraction);
+    entryR0 *= entryR0;
+    float entryTransmission = 1.0f - (entryR0 + (1.0f - entryR0) * pow(1.0f - entryCosine, 5.0f));
+    float exitTransmission = 1.0f - (entryR0 + (1.0f - entryR0) * pow(1.0f - exitCosine, 5.0f));
+    float coneSolidAngle = 2.0f * PI * max(1e-6f, 1.0f - cosThetaMax);
+    float selectionScale = sphereLightCount * refractorCount * coneSolidAngle;
+    float3 absorption = GetMediumSegmentTransmittance(CreateHitMedium(refractorHit), exitDistance);
+    float materialTransmission = GetTransmissionAmount(refractorHit);
+
+    CausticPhoton photon;
+    photon.position = receiverHit.position;
+    photon.incomingDirection = exitDirection;
+    photon.power = light.emission * absorption * materialTransmission * entryTransmission * exitTransmission * selectionScale;
+
+    uint writeIndex;
+    InterlockedAdd(_CausticPhotonMetadata[0], 1, writeIndex);
+    if (writeIndex < (uint)max(0, _CausticPhotonCapacity))
+    {
+        _CausticPhotons[writeIndex] = photon;
+        InterlockedAdd(_CausticPhotonMetadata[3], 1);
+    }
+    else
+    {
+        InterlockedAdd(_CausticPhotonMetadata[1], 1);
+    }
+}
+#endif
 
 // Deterministic probes for EditMode regression tests. These call the renderer's production helpers
 // directly so reflection/refraction changes cannot silently diverge from a separate test shader.
@@ -3323,6 +3614,30 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     RegressionResults[32] = float4(GetLightShapePdf(triangleLight, float3(0.0f, 0.0f, 0.0f), float3(0.0f, 2.0f, 0.0f)), GetSurfaceF0(waterHit, waterHit.color));
     RegressionResults[33] = float4(ClampFirefly(float3(4.0f, 2.0f, 1.0f)), 1.0f);
 }
+
+#if defined(CAUSTICS_ENABLED)
+[numthreads(8,8,1)]
+void CSCausticsRegressionImage(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    Result.GetDimensions(width, height);
+    if (id.x >= width || id.y >= height)
+    {
+        return;
+    }
+
+    float3 result = 0.0f;
+    [loop]
+    for (int i = 0; i < _NumberOfPasses; i++)
+    {
+        uint rngState = CreateRngState(id.xy, _SampleOffset + (uint)i);
+        float2 uv = ((id.xy + float2(rand(rngState), rand(rngState))) / float2(width, height)) * 2.0f - 1.0f;
+        RayHit visibleHit = GetNearestIntersection(CreateCameraRay(uv));
+        result += GatherCausticRadiance(visibleHit);
+    }
+    Result[id.xy] = float4(result / max(1, _NumberOfPasses), 1.0f);
+}
+#endif
 
 [numthreads(8,8,1)]
 void CSMain (uint3 id : SV_DispatchThreadID)
