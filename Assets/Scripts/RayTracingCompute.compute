@@ -83,6 +83,7 @@ int _CausticPhotonCapacity;
 int _CausticPhotonAttemptCount;
 int _CausticMaxBounces;
 uint _CausticSeed;
+uint _CausticFrameIndex;
 float _CausticGatherRadius;
 float _CausticIntensity;
 float3 _CausticGridMin;
@@ -155,6 +156,16 @@ uint Hash(uint value)
     value ^= value >> 16;
     return value;
 }
+
+#if defined(CAUSTICS_ENABLED)
+float CausticSequenceSample(uint photonIndex, uint dimension)
+{
+    uint scramble = Hash(_CausticSeed ^ (_CausticFrameIndex * 2246822519u) ^ (dimension * 3266489917u));
+    uint permutation = Hash(dimension * 668265263u) | 1u;
+    uint bits = reversebits(photonIndex * permutation + scramble);
+    return min((bits + 0.5f) * 2.3283064365386963e-10f, 0.99999994f);
+}
+#endif
 
 uint CreateRngState(uint2 pixel, uint sampleIndex)
 {
@@ -3446,9 +3457,9 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
         return;
     }
 
-    uint rngState = Hash(_CausticSeed ^ (id.x * 26699u));
-    int selectedLightRank = min((int)(rand(rngState) * lightCount), lightCount - 1);
-    int selectedRefractorRank = min((int)(rand(rngState) * refractorCount), refractorCount - 1);
+    uint rngState = Hash(_CausticSeed ^ (_CausticFrameIndex * 2246822519u) ^ (id.x * 26699u));
+    int selectedLightRank = min((int)(CausticSequenceSample(id.x, 0u) * lightCount), lightCount - 1);
+    int selectedRefractorRank = min((int)(CausticSequenceSample(id.x, 1u) * refractorCount), refractorCount - 1);
     Light light;
     int foundRank = 0;
     [loop]
@@ -3509,7 +3520,7 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
             refractorRadius = length(candidate.boundsMax - candidate.boundsMin) * 0.5f;
             refractorMeshIndex = meshIndex;
             refractorTriangleIndex = candidate.triangleStart
-                + min((int)(rand(rngState) * candidate.triangleCount), candidate.triangleCount - 1);
+                + min((int)(CausticSequenceSample(id.x, 2u) * candidate.triangleCount), candidate.triangleCount - 1);
             break;
         }
     }
@@ -3518,8 +3529,8 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
     float emissionAreaScale = 1.0f;
     if (light.type == LightTypeTriangle)
     {
-        float r1 = rand(rngState);
-        float r2 = rand(rngState);
+        float r1 = CausticSequenceSample(id.x, 3u);
+        float r2 = CausticSequenceSample(id.x, 4u);
         if (r1 + r2 > 1.0f)
         {
             r1 = 1.0f - r1;
@@ -3533,8 +3544,8 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
     if (refractorMeshIndex >= 0)
     {
         MeshTriangle targetTriangle = _Triangles[refractorTriangleIndex];
-        float sampleU = rand(rngState);
-        float sampleV = rand(rngState);
+        float sampleU = CausticSequenceSample(id.x, 5u);
+        float sampleV = CausticSequenceSample(id.x, 6u);
         if (sampleU + sampleV > 1.0f)
         {
             sampleU = 1.0f - sampleU;
@@ -3574,9 +3585,9 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
     float3 coneAxis = toRefractor / distanceToRefractor;
     float sinThetaMax = refractorIndex >= 0 ? saturate(refractorRadius / distanceToRefractor) : 0.0f;
     float cosThetaMax = sqrt(max(0.0f, 1.0f - sinThetaMax * sinThetaMax));
-    float cosTheta = lerp(1.0f, cosThetaMax, rand(rngState));
+    float cosTheta = lerp(1.0f, cosThetaMax, CausticSequenceSample(id.x, 7u));
     float sinTheta = sqrt(max(0.0f, 1.0f - cosTheta * cosTheta));
-    float phi = 2.0f * PI * rand(rngState);
+    float phi = 2.0f * PI * CausticSequenceSample(id.x, 8u);
     float3 tangent;
     float3 bitangent;
     CreateBasisFromNormal(coneAxis, tangent, bitangent);

@@ -63,6 +63,7 @@ public class GameManager : MonoBehaviour
     public bool enableCaustics = false;
 
     [Range(64, 4194200)]
+    [Tooltip("Photon attempts traced for each rendered frame. Independent batches are averaged by final-color frame accumulation.")]
     public int causticPhotonCount = 4096;
 
     [Range(0.01f, 2.0f)]
@@ -208,6 +209,7 @@ public class GameManager : MonoBehaviour
     private int _causticGridPhotonCount;
     private int _causticPhotonStateHash;
     private bool _hasCausticPhotonStateHash;
+    private int _causticFrameIndex;
     private bool _previousCausticsEnabled;
     private int _causticDispatchCount;
 
@@ -929,6 +931,7 @@ public class GameManager : MonoBehaviour
         _causticGridPhotonCount = 0;
         _causticGridOutOfBoundsCount = 0;
         _hasCausticPhotonStateHash = false;
+        _causticFrameIndex = 0;
     }
 
     private void UpdateCausticPhotonMap()
@@ -946,7 +949,15 @@ public class GameManager : MonoBehaviour
 
         EnsureCausticResources();
         int stateHash = CalculateCausticPhotonStateHash();
-        if (_hasCausticPhotonStateHash && stateHash == _causticPhotonStateHash)
+        bool stateChanged = !_hasCausticPhotonStateHash || stateHash != _causticPhotonStateHash;
+        if (stateChanged)
+        {
+            _causticPhotonStateHash = stateHash;
+            _hasCausticPhotonStateHash = true;
+            _causticFrameIndex = 0;
+            ResetFrameAccumulation();
+        }
+        else if (!ShouldUseFrameAccumulation())
         {
             _previousCausticsEnabled = true;
             return;
@@ -972,10 +983,11 @@ public class GameManager : MonoBehaviour
         _causticGridOutOfBoundsCount = (int)metadata[4];
         _causticGridPhotonCount = (int)metadata[5];
         _causticDispatchCount++;
-        _causticPhotonStateHash = stateHash;
-        _hasCausticPhotonStateHash = true;
+        if (ShouldUseFrameAccumulation())
+        {
+            _causticFrameIndex = _causticFrameIndex == int.MaxValue ? 0 : _causticFrameIndex + 1;
+        }
         _previousCausticsEnabled = true;
-        ResetFrameAccumulation();
     }
 
     private void SetPhotonTraceSceneParameters()
@@ -2455,6 +2467,7 @@ public class GameManager : MonoBehaviour
         shader.SetInt("_CausticPhotonAttemptCount", Mathf.Max(1, causticPhotonCount));
         shader.SetInt("_CausticMaxBounces", Mathf.Clamp(numBounces, MinNumBounces, MaxNumBounces));
         shader.SetInt("_CausticSeed", causticSeed);
+        shader.SetInt("_CausticFrameIndex", _causticFrameIndex);
         shader.SetFloat("_CausticGatherRadius", Mathf.Max(0.001f, causticGatherRadius));
         shader.SetFloat("_CausticIntensity", Mathf.Max(0.0f, causticIntensity));
         shader.SetVector("_CausticGridMin", _causticGridMin);
@@ -2748,7 +2761,7 @@ public class GameManager : MonoBehaviour
         unchecked
         {
             int hash = 17;
-            hash = AddHash(hash, 4); // Photon-map algorithm version.
+            hash = AddHash(hash, 5); // Progressive, low-discrepancy photon-map algorithm version.
             hash = AddHash(hash, causticPhotonCount);
             hash = AddHash(hash, causticGatherRadius);
             hash = AddHash(hash, causticSeed);

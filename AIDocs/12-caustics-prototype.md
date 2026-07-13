@@ -52,7 +52,7 @@ CSMain:
     Add gathered caustic radiance
 ```
 
-The photon map is world-space lighting data, not camera-space data. Camera movement alone should therefore reset normal frame accumulation but should not regenerate photons.
+The photon map is world-space lighting data, not camera-space data. Static final-color rendering with HDR frame accumulation now traces an independent fixed-size photon batch each rendered frame and averages those complete caustic estimates. When accumulation is unavailable, the current batch remains fixed instead of flickering. Scene, light, material, or caustic-setting changes reset both accumulation and the progressive photon sequence; advancing the photon frame index does not reset accumulation.
 
 ## Initial Supported Path
 
@@ -102,7 +102,7 @@ For each photon:
 
 Reusing the production sphere-refraction behavior is important, but its current helper is coupled to camera-path `RayHit`, bounce accounting, and medium-stack state. Refactor only the smallest shared optical operation needed by both paths. Do not make the normal path call a more generic or more expensive abstraction merely to support photons.
 
-Photon generation should use its own deterministic seed and sample offset. Changing camera sampling must not change the photon map.
+Photon generation uses its own deterministic base seed and progressive frame index. Light/refractor selection, triangle-light emission positions, mesh target positions, and sphere-target cone directions use scrambled low-discrepancy samples; the scramble changes each photon frame while remaining deterministic. Changing camera sampling does not change the photon sequence.
 
 ## Estimator And Energy Accounting
 
@@ -161,7 +161,7 @@ The benchmark overlay reports total cells, indexed photons, and out-of-bounds ph
 Initial controls:
 
 - `enableCaustics`, default `false`.
-- `causticPhotonCount`.
+- `causticPhotonCount`, interpreted as attempted photons per rendered batch.
 - `causticGatherRadius`.
 - `causticSeed`.
 - Optional `causticIntensity`, default `1.0` and not used to hide normalization errors.

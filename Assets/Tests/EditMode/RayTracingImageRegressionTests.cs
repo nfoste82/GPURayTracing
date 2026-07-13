@@ -101,6 +101,7 @@ namespace GPURayTracing.Tests
         {
             public int photonCount = 4096;
             public int seed = 1;
+            public int frameIndex;
             public int maxBounces = 10;
             public float gatherRadius = 0.28f;
             public float intensity = 1.0f;
@@ -365,6 +366,30 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void CausticPhotonGeneration_ProgressiveFrameIndex_ChangesPhotonBatch()
+        {
+            SphereData[] spheres = CreateCausticSpheres();
+            LightData[] lights = CreateCausticLights();
+            CausticPhotonData[] first = GenerateCausticPhotons(
+                spheres, lights, new CausticOptions { photonCount = 2048, frameIndex = 0 }, out uint[] firstMetadata);
+            CausticPhotonData[] second = GenerateCausticPhotons(
+                spheres, lights, new CausticOptions { photonCount = 2048, frameIndex = 1 }, out uint[] secondMetadata);
+
+            Assert.That(firstMetadata[2], Is.EqualTo(2048u));
+            Assert.That(secondMetadata[2], Is.EqualTo(2048u));
+            Assert.That(first.Length, Is.GreaterThan(0));
+            Assert.That(second.Length, Is.GreaterThan(0));
+            SortPhotons(first);
+            SortPhotons(second);
+            bool differs = first.Length != second.Length;
+            for (int i = 0; i < Mathf.Min(first.Length, second.Length) && !differs; i++)
+            {
+                differs = Vector3.SqrMagnitude(first[i].position - second[i].position) > 1e-8f;
+            }
+            Assert.That(differs, Is.True, "successive progressive batches should not reuse the same photon map");
+        }
+
+        [Test]
         public void CausticPhotonGeneration_TriangleLight_ProducesReceiverPhotons()
         {
             CausticOptions options = new CausticOptions { photonCount = 4096 };
@@ -610,12 +635,12 @@ namespace GPURayTracing.Tests
 
         private static readonly Vector4[] SphereCausticBaseline =
         {
-            new Vector4(0.00219408f, 0.00209142f, 0.00187557f, 1.0f),
-            new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
-            new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.00014625f, 0.00013915f, 0.00012464f, 1.0f),
+            new Vector4(0.00201454f, 0.00192074f, 0.00172278f, 1.0f),
             new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
             new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
-            new Vector4(1.24191200f, 1.18428500f, 1.06233600f, 1.0f)
+            new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
+            new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
+            new Vector4(1.31163200f, 1.25106800f, 1.12242300f, 1.0f)
         };
 
         private static SphereData Sphere(Vector3 position, Vector3 color, float radius, float smoothness, float opacity, float refraction, int materialType)
@@ -950,6 +975,7 @@ namespace GPURayTracing.Tests
             shader.SetInt("_CausticPhotonAttemptCount", options.photonCount);
             shader.SetInt("_CausticMaxBounces", options.maxBounces);
             shader.SetInt("_CausticSeed", options.seed);
+            shader.SetInt("_CausticFrameIndex", options.frameIndex);
             shader.SetFloat("_CausticGatherRadius", options.gatherRadius);
             shader.SetFloat("_CausticIntensity", options.intensity);
             shader.SetVector("_CausticGridMin", new Vector3(-9.0f, -1.0f, -9.0f));
