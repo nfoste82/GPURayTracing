@@ -379,7 +379,7 @@ namespace GPURayTracing.Tests
             CausticPhotonData[] photons = GenerateCausticPhotons(spheres, lights, options, out uint[] metadata);
 
             Assert.That(metadata[2], Is.EqualTo((uint)options.photonCount), "attempted photon count");
-            Assert.That(metadata[0], Is.GreaterThan(0u), "receiver-hit photon count");
+            Assert.That(metadata[0], Is.GreaterThan(128u), "receiver-hit photon count");
             Assert.That(metadata[1], Is.EqualTo(0u), "overflow count");
             Assert.That(photons.Length, Is.EqualTo((int)metadata[3]));
             foreach (CausticPhotonData photon in photons)
@@ -418,6 +418,32 @@ namespace GPURayTracing.Tests
             Assert.That(multiEventMetadata[2], Is.EqualTo(4096u), "multi-event attempted photon count");
             Assert.That(multiEvent.Length, Is.GreaterThan(reflected.Length),
                 "sphere entry and exit transmission should add receiver photons at the third event");
+        }
+
+        [Test]
+        public void CausticPhotonGeneration_ClosedGlassMesh_ProducesReceiverPhotons()
+        {
+            CreateGlassCube(
+                new Vector3(-0.8f, 0.2f, 1.7f),
+                new Vector3(0.8f, 2.8f, 3.3f),
+                out MeshTriangleData[] triangles,
+                out MeshInfoData[] meshes,
+                out BvhNodeData[] bvhNodes);
+            LightData[] lights = { SphereLight(new Vector3(0.0f, 6.8f, 2.5f), new Vector3(20.0f, 19.0f, 17.0f), 0.24f) };
+
+            CausticPhotonData[] photons = GenerateCausticPhotons(
+                Array.Empty<SphereData>(), lights, triangles, meshes, bvhNodes,
+                new CausticOptions { photonCount = 4096 }, out uint[] metadata);
+
+            Assert.That(metadata[2], Is.EqualTo(4096u), "attempted photon count");
+            Assert.That(metadata[0], Is.GreaterThan(0u), "receiver-hit photon count");
+            Assert.That(metadata[1], Is.EqualTo(0u), "overflow count");
+            Assert.That(photons.Length, Is.EqualTo((int)metadata[3]));
+            foreach (CausticPhotonData photon in photons)
+            {
+                Assert.That(Mathf.Abs(photon.position.y), Is.LessThan(0.005f), "receiver height");
+                Assert.That(photon.power.x + photon.power.y + photon.power.z, Is.GreaterThan(0.0f));
+            }
         }
 
         [Test]
@@ -584,12 +610,12 @@ namespace GPURayTracing.Tests
 
         private static readonly Vector4[] SphereCausticBaseline =
         {
-            new Vector4(0.00182217f, 0.00173758f, 0.00155864f, 1.0f),
+            new Vector4(0.00219408f, 0.00209142f, 0.00187557f, 1.0f),
+            new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
+            new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.00014625f, 0.00013915f, 0.00012464f, 1.0f),
             new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
             new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
-            new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
-            new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
-            new Vector4(1.10349500f, 1.05230600f, 0.94395580f, 1.0f)
+            new Vector4(1.24191200f, 1.18428500f, 1.06233600f, 1.0f)
         };
 
         private static SphereData Sphere(Vector3 position, Vector3 color, float radius, float smoothness, float opacity, float refraction, int materialType)
@@ -807,6 +833,20 @@ namespace GPURayTracing.Tests
             CausticOptions options,
             out uint[] metadata)
         {
+            return GenerateCausticPhotons(
+                spheres, lights, Array.Empty<MeshTriangleData>(), Array.Empty<MeshInfoData>(),
+                Array.Empty<BvhNodeData>(), options, out metadata);
+        }
+
+        private static CausticPhotonData[] GenerateCausticPhotons(
+            SphereData[] spheres,
+            LightData[] lights,
+            MeshTriangleData[] triangles,
+            MeshInfoData[] meshes,
+            BvhNodeData[] bvhNodes,
+            CausticOptions options,
+            out uint[] metadata)
+        {
             if (!SystemInfo.supportsComputeShaders)
             {
                 Assert.Ignore("Compute shaders are not supported by the active graphics device.");
@@ -823,9 +863,9 @@ namespace GPURayTracing.Tests
 
             ComputeBuffer sphereBuffer = CreateBuffer(spheres, 56);
             ComputeBuffer lightBuffer = CreateBuffer(lights, 72);
-            ComputeBuffer triangleBuffer = CreateBuffer(Array.Empty<MeshTriangleData>(), 164);
-            ComputeBuffer meshBuffer = CreateBuffer(Array.Empty<MeshInfoData>(), 48);
-            ComputeBuffer bvhBuffer = CreateBuffer(Array.Empty<BvhNodeData>(), 48);
+            ComputeBuffer triangleBuffer = CreateBuffer(triangles, 164);
+            ComputeBuffer meshBuffer = CreateBuffer(meshes, 48);
+            ComputeBuffer bvhBuffer = CreateBuffer(bvhNodes, 48);
             ComputeBuffer topLevelBuffer = CreateDummyBuffer(48);
             ComputeBuffer shadowBuffer = CreateDummyBuffer(48);
             CausticMap map = null;
@@ -833,7 +873,7 @@ namespace GPURayTracing.Tests
             {
                 map = DispatchCausticPhotons(
                     shader, sphereBuffer, lightBuffer, triangleBuffer, meshBuffer, bvhBuffer,
-                    topLevelBuffer, shadowBuffer, spheres.Length, lights.Length, 0, 0, options);
+                    topLevelBuffer, shadowBuffer, spheres.Length, lights.Length, triangles.Length, meshes.Length, options);
                 metadata = new uint[6];
                 map.metadata.GetData(metadata);
                 var photons = new CausticPhotonData[checked((int)metadata[3])];

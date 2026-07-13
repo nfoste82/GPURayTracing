@@ -2968,9 +2968,11 @@ float3 GatherCausticRadiance(RayHit hit)
                 {
                     CausticPhoton photon = _CausticPhotons[photonIndex];
                     float3 offset = photon.position - hit.position;
-                    if (dot(offset, offset) <= radiusSquared && dot(hit.normal, -photon.incomingDirection) > 0.0f)
+                    float distanceSquared = dot(offset, offset);
+                    if (distanceSquared <= radiusSquared && dot(hit.normal, -photon.incomingDirection) > 0.0f)
                     {
-                        photonPower += photon.power;
+                        float kernelWeight = 2.0f * (1.0f - distanceSquared / radiusSquared);
+                        photonPower += photon.power * kernelWeight;
                     }
                     photonIndex = _CausticPhotonNext[photonIndex];
                 }
@@ -3359,9 +3361,7 @@ bool TraceCausticPhotonTransport(
             return true;
         }
 
-        // Transport state is geometry-neutral; this milestone enables only sphere boundaries.
-        // Closed mesh glass can use this same loop once its boundary transition is enabled here.
-        if (!IsGlassMaterial(hit) || IsWaterMaterial(hit) || hit.obj_radius <= 0.0f)
+        if (!IsGlassMaterial(hit) || IsWaterMaterial(hit))
         {
             return false;
         }
@@ -3427,6 +3427,19 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
         Sphere candidate = _Spheres[sphereIndex];
         refractorCount += (candidate.materialType == MaterialGlass || candidate.opacity < 1.0f) && candidate.opacity < 1.0f ? 1 : 0;
     }
+    int meshIndex;
+    [loop]
+    for (meshIndex = 0; meshIndex < _NumMeshes; meshIndex++)
+    {
+        MeshInfo candidate = _Meshes[meshIndex];
+        if (candidate.isLight != 0 || candidate.triangleCount <= 0)
+        {
+            continue;
+        }
+
+        MeshTriangle material = _Triangles[candidate.triangleStart];
+        refractorCount += (material.materialType == MaterialGlass || material.opacity < 1.0f) && material.opacity < 1.0f ? 1 : 0;
+    }
 
     if (lightCount == 0 || refractorCount == 0)
     {
@@ -3454,8 +3467,11 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
         }
     }
 
-    Sphere refractor;
+    float3 refractorPosition = float3(0.0f, 0.0f, 0.0f);
+    float refractorRadius = 0.0f;
     int refractorIndex = -1;
+    int refractorMeshIndex = -1;
+    int refractorTriangleIndex = -1;
     foundRank = 0;
     [loop]
     for (sphereIndex = 0; sphereIndex < _NumSpheres; sphereIndex++)
@@ -3467,8 +3483,33 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
         }
         if (foundRank++ == selectedRefractorRank)
         {
-            refractor = candidate;
+            refractorPosition = candidate.position;
+            refractorRadius = candidate.radius;
             refractorIndex = sphereIndex;
+            break;
+        }
+    }
+    [loop]
+    for (meshIndex = 0; meshIndex < _NumMeshes && refractorIndex < 0; meshIndex++)
+    {
+        MeshInfo candidate = _Meshes[meshIndex];
+        if (candidate.isLight != 0 || candidate.triangleCount <= 0)
+        {
+            continue;
+        }
+
+        MeshTriangle material = _Triangles[candidate.triangleStart];
+        if (!((material.materialType == MaterialGlass || material.opacity < 1.0f) && material.opacity < 1.0f))
+        {
+            continue;
+        }
+        if (foundRank++ == selectedRefractorRank)
+        {
+            refractorPosition = (candidate.boundsMin + candidate.boundsMax) * 0.5f;
+            refractorRadius = length(candidate.boundsMax - candidate.boundsMin) * 0.5f;
+            refractorMeshIndex = meshIndex;
+            refractorTriangleIndex = candidate.triangleStart
+                + min((int)(rand(rngState) * candidate.triangleCount), candidate.triangleCount - 1);
             break;
         }
     }
@@ -3488,16 +3529,50 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
         emissionAreaScale = light.area;
     }
 
-    float3 toRefractor = refractor.position - emissionPosition;
+    float meshTargetInversePdf = 0.0f;
+    if (refractorMeshIndex >= 0)
+    {
+        MeshTriangle targetTriangle = _Triangles[refractorTriangleIndex];
+        float sampleU = rand(rngState);
+        float sampleV = rand(rngState);
+        if (sampleU + sampleV > 1.0f)
+        {
+            sampleU = 1.0f - sampleU;
+            sampleV = 1.0f - sampleV;
+        }
+
+        float3 edgeU = targetTriangle.vertex1 - targetTriangle.vertex0;
+        float3 edgeV = targetTriangle.vertex2 - targetTriangle.vertex0;
+        refractorPosition = targetTriangle.vertex0 + edgeU * sampleU + edgeV * sampleV;
+        float triangleArea = 0.5f * length(cross(edgeU, edgeV));
+        float3 toTarget = refractorPosition - emissionPosition;
+        float targetDistanceSquared = dot(toTarget, toTarget);
+        if (triangleArea <= 1e-8f || targetDistanceSquared <= 1e-8f)
+        {
+            return;
+        }
+
+        float3 targetDirection = toTarget * rsqrt(targetDistanceSquared);
+        float targetCosine = abs(dot(targetTriangle.normal, -targetDirection));
+        if (targetCosine <= 1e-6f)
+        {
+            return;
+        }
+
+        MeshInfo targetMesh = _Meshes[refractorMeshIndex];
+        meshTargetInversePdf = targetMesh.triangleCount * triangleArea * targetCosine / targetDistanceSquared;
+    }
+
+    float3 toRefractor = refractorPosition - emissionPosition;
     float distanceToRefractor = length(toRefractor);
     float emitterRadius = light.type == LightTypeSphere ? light.radius : 0.0f;
-    if (distanceToRefractor <= refractor.radius + emitterRadius + 0.001f)
+    if (distanceToRefractor <= (refractorIndex >= 0 ? refractorRadius : 0.0f) + emitterRadius + 0.001f)
     {
         return;
     }
 
     float3 coneAxis = toRefractor / distanceToRefractor;
-    float sinThetaMax = saturate(refractor.radius / distanceToRefractor);
+    float sinThetaMax = refractorIndex >= 0 ? saturate(refractorRadius / distanceToRefractor) : 0.0f;
     float cosThetaMax = sqrt(max(0.0f, 1.0f - sinThetaMax * sinThetaMax));
     float cosTheta = lerp(1.0f, cosThetaMax, rand(rngState));
     float sinTheta = sqrt(max(0.0f, 1.0f - cosTheta * cosTheta));
@@ -3513,14 +3588,28 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
     }
     Ray photonRay = CreateRay(emissionPosition + photonDirection * max(0.001f, emitterRadius), photonDirection);
     RayHit refractorHit = CreateRayHit();
-    IntersectSphere(photonRay, refractorHit, refractor, refractorIndex);
+    if (refractorIndex >= 0)
+    {
+        IntersectSphere(photonRay, refractorHit, _Spheres[refractorIndex], refractorIndex);
+    }
+    else if (refractorMeshIndex >= 0)
+    {
+        IntersectMeshBvh(photonRay, refractorHit, _Meshes[refractorMeshIndex]);
+        float targetTolerance = max(0.002f, distanceToRefractor * 1e-5f);
+        if (!DidHitSky(refractorHit)
+            && length(refractorHit.position - refractorPosition) > targetTolerance)
+        {
+            return;
+        }
+    }
     if (DidHitSky(refractorHit))
     {
         return;
     }
 
     float coneSolidAngle = 2.0f * PI * max(1e-6f, 1.0f - cosThetaMax);
-    float selectionScale = lightCount * refractorCount * coneSolidAngle * emissionAreaScale * emitterCosine;
+    float inverseDirectionalPdf = refractorMeshIndex >= 0 ? meshTargetInversePdf : coneSolidAngle;
+    float selectionScale = lightCount * refractorCount * inverseDirectionalPdf * emissionAreaScale * emitterCosine;
     CausticPhoton photon;
     if (!TraceCausticPhotonTransport(
         photonRay,

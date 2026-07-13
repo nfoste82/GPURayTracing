@@ -59,11 +59,11 @@ public class GameManager : MonoBehaviour
     public int lightSampleCount = 1;
 
     [Header("Caustics prototype")]
-    [Tooltip("Builds a photon map for sphere-light caustics through glass spheres. Disabled by default.")]
+    [Tooltip("Builds a photon map for sphere and triangle-light caustics through glass spheres and closed meshes. Disabled by default.")]
     public bool enableCaustics = false;
 
-    [Range(64, 16384)]
-    public int causticPhotonCount = 2048;
+    [Range(64, 4194200)]
+    public int causticPhotonCount = 4096;
 
     [Range(0.01f, 2.0f)]
     public float causticGatherRadius = 0.3f;

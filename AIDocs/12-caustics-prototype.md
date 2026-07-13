@@ -118,13 +118,15 @@ Track these probabilities explicitly:
 
 Photon power should include the corresponding inverse-PDF factors, emitter power, transmission throughput, and distance-based glass absorption. Avoid a free intensity multiplier as the primary normalization mechanism. A user-facing intensity control may be useful for art direction later, but the default value should represent neutral scaling.
 
-The initial gather can use a normalized disk or cone kernel. For a uniform disk kernel:
+The gather uses a normalized Epanechnikov disk kernel. A photon at squared receiver distance `d2` within radius `r` receives weight `2 * (1 - d2 / r2)`; the factor of two gives the kernel the same integrated energy as a uniform disk. The estimator remains:
 
 ```text
 irradiance = sum(photon power * receiver terms) / (photonAttemptCount * PI * radius^2)
 ```
 
 Use the number of attempted photons for normalization, not only the number successfully stored. Otherwise changing targeting efficiency changes image brightness.
+
+The smooth kernel fades each photon contribution to zero at the gather boundary, avoiding visible hard circular splats without changing the expected total energy. It does not replace the need for adequate photon density; isolated photons remain visible as smooth spots until enough useful paths overlap.
 
 Reject photons whose incoming direction lies behind the receiver normal. Define whether diffuse albedo and the Lambert factor are applied when storing or gathering, and apply them exactly once.
 
@@ -253,8 +255,8 @@ Milestones 1 and 2 are implemented as the initial prototype. Milestone 3 correct
 ### Milestone 5: Broader Transport
 
 - Implemented: emissive triangle lights can emit targeted photons through supported glass spheres, with uniform area sampling, one-sided emission, and area/cosine power weighting.
-- Implemented: reflected and multi-event glass-sphere caustics use an iterative photon transport loop with shared scene intersections, medium-stack transitions, Fresnel/Snell behavior, absorption, and a bounded bounce budget. Refractor targeting remains sphere-specific, while transport state is structured so closed mesh boundaries can join the same loop.
-- Evaluate closed glass meshes using the existing approximate mesh transmission.
+- Implemented: reflected and multi-event glass-sphere caustics use an iterative photon transport loop with shared scene intersections, medium-stack transitions, Fresnel/Snell behavior, absorption, and a bounded bounce budget.
+- Implemented: closed glass meshes are targeted by sampling their triangle surfaces with an area-to-solid-angle PDF correction, validating visibility against their mesh BVHs, and transporting boundary-by-boundary through the same medium-stack loop. This avoids the sparse photon maps produced by loose bounding-sphere targeting on non-convex meshes.
 - Add procedural water only after static glass behavior and photon-map invalidation are stable.
 
 ## Prototype Acceptance Criteria
