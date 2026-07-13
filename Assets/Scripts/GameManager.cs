@@ -2747,7 +2747,7 @@ public class GameManager : MonoBehaviour
         unchecked
         {
             int hash = 17;
-            hash = AddHash(hash, 2); // Photon-map algorithm version.
+            hash = AddHash(hash, 3); // Photon-map algorithm version.
             hash = AddHash(hash, causticPhotonCount);
             hash = AddHash(hash, causticGatherRadius);
             hash = AddHash(hash, causticSeed);

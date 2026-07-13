@@ -30,6 +30,7 @@ public static class RayTracingBenchmarkSceneGenerator
         CreateGlassScene();
         CreateGlassTransmissionScene();
         CreateCausticsScene();
+        CreateTriangleLightCausticsScene();
         CreateSparseScene();
         CreateDynamicScene();
         CreateWaterScene();
@@ -321,6 +322,38 @@ public static class RayTracingBenchmarkSceneGenerator
         AddPrimitiveMesh(context.Root, "Glass Prism", RayMeshPrimitive.PrimitiveType.Pyramid, new Vector3(2.0f, 1.35f, 2.9f), new Vector3(0.0f, 32.0f, 0.0f), new Vector3(2.1f, 2.4f, 2.1f), new Color32(220, 240, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.05f, 1.62f);
 
         AddSphere(context.Root, "Diffuse Scale Reference", new Vector3(0.0f, 0.45f, 6.2f), 0.45f, new Color32(185, 78, 52, 255), RayMaterial.MaterialType.Diffuse, 0.08f);
+        Save(context.Scene, sceneName);
+    }
+
+    private static void CreateTriangleLightCausticsScene()
+    {
+        const string sceneName = "Benchmark_CausticsTriangleLight";
+        if (ShouldSkipExistingScene(sceneName))
+        {
+            return;
+        }
+
+        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 5.4f, -10.5f), new Vector3(19.0f, 0.0f, 0.0f), passes: 1, bounces: 10, shadowQuality: 0);
+        context.Manager.enableFrameAccumulation = true;
+        context.Manager.cameraFocalDistance = 12.0f;
+        context.Manager.groundSmoothness = 0.05f;
+        context.Manager.lightFalloffScale = 0.012f;
+        context.Manager.exposure = 1.0f;
+        context.Manager.fireflyClamp = 0.0f;
+        context.Manager.enableCaustics = true;
+        context.Manager.causticPhotonCount = 2048;
+        context.Manager.causticGatherRadius = 0.28f;
+        context.Manager.causticSeed = 1;
+        context.Manager.topLevelBvhMinObjectCount = 1024;
+        context.Manager.shadowBvhMinObjectCount = 1024;
+        context.Manager.lightSamplingStrategy = GameManager.LightSamplingStrategy.AllLights;
+        context.Manager._skyboxLightColor = new Color32(2, 2, 3, 255);
+        context.Manager.renderTextureCamera.gameObject.AddComponent<CausticsBenchmarkRunner>().gameManager = context.Manager;
+
+        AddPrimitiveMesh(context.Root, "Matte Caustic Receiver", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 0.02f, 2.2f), Vector3.zero, new Vector3(10.0f, 0.04f, 9.0f), new Color32(225, 225, 218, 255), RayMaterial.MaterialType.Diffuse, 0.02f, 1.0f);
+        AddMeshLight(context.Root, "Triangle Caustic Light", CreateHorizontalTriangleMesh("Triangle Caustic Light", 2.8f, 1.8f), new Vector3(0.0f, 6.8f, 2.5f), Vector3.zero, Vector3.one, new Color32(255, 244, 218, 255));
+        AddSphere(context.Root, "Clear Glass Sphere", new Vector3(0.0f, 1.32f, 2.5f), 1.3f, new Color32(238, 248, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.04f, 1.52f);
+        AddSphere(context.Root, "Diffuse Scale Reference", new Vector3(2.6f, 0.45f, 6.2f), 0.45f, new Color32(185, 78, 52, 255), RayMaterial.MaterialType.Diffuse, 0.08f);
         Save(context.Scene, sceneName);
     }
 
@@ -869,6 +902,24 @@ public static class RayTracingBenchmarkSceneGenerator
                 new Vector2(0.0f, vScale)
             },
             triangles = new[] { 0, 1, 2, 0, 2, 3 }
+        };
+        mesh.RecalculateNormals();
+        mesh.RecalculateBounds();
+        return mesh;
+    }
+
+    private static Mesh CreateHorizontalTriangleMesh(string name, float width, float depth)
+    {
+        var mesh = new Mesh
+        {
+            name = name,
+            vertices = new[]
+            {
+                new Vector3(-width * 0.5f, 0.0f, -depth * 0.5f),
+                new Vector3(0.0f, 0.0f, depth * 0.5f),
+                new Vector3(width * 0.5f, 0.0f, -depth * 0.5f)
+            },
+            triangles = new[] { 0, 2, 1 }
         };
         mesh.RecalculateNormals();
         mesh.RecalculateBounds();

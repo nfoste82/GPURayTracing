@@ -364,6 +364,31 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void CausticPhotonGeneration_TriangleLight_ProducesReceiverPhotons()
+        {
+            CausticOptions options = new CausticOptions { photonCount = 4096 };
+            SphereData[] spheres = CreateCausticSpheres();
+            Vector3 p0 = new Vector3(-1.4f, 6.8f, 1.7f);
+            LightData[] lights =
+            {
+                TriangleLight(p0, new Vector3(2.8f, 0.0f, 0.0f), new Vector3(0.0f, 0.0f, 1.6f),
+                    Vector3.down, new Vector3(20.0f, 19.0f, 17.0f))
+            };
+
+            CausticPhotonData[] photons = GenerateCausticPhotons(spheres, lights, options, out uint[] metadata);
+
+            Assert.That(metadata[2], Is.EqualTo((uint)options.photonCount), "attempted photon count");
+            Assert.That(metadata[0], Is.GreaterThan(0u), "receiver-hit photon count");
+            Assert.That(metadata[1], Is.EqualTo(0u), "overflow count");
+            Assert.That(photons.Length, Is.EqualTo((int)metadata[3]));
+            foreach (CausticPhotonData photon in photons)
+            {
+                Assert.That(Mathf.Abs(photon.position.y), Is.LessThan(0.005f), "receiver height");
+                Assert.That(photon.power.x + photon.power.y + photon.power.z, Is.GreaterThan(0.0f));
+            }
+        }
+
+        [Test]
         public void SphereCaustic_DebugImageBaseline_IsStable()
         {
             Vector4[] signature = RenderCausticSignature(new CausticOptions());

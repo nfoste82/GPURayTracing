@@ -252,7 +252,7 @@ Milestones 1 and 2 are implemented as the initial prototype. Milestone 3 correct
 
 ### Milestone 5: Broader Transport
 
-- Add triangle lights.
+- Implemented: emissive triangle lights can emit targeted photons through supported glass spheres, with uniform area sampling, one-sided emission, and area/cosine power weighting.
 - Add reflected and multi-event glass-sphere caustics.
 - Evaluate closed glass meshes using the existing approximate mesh transmission.
 - Add procedural water only after static glass behavior and photon-map invalidation are stable.

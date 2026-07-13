@@ -3329,12 +3329,14 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
 
     InterlockedAdd(_CausticPhotonMetadata[2], 1);
 
-    int sphereLightCount = 0;
+    int lightCount = 0;
     int sphereIndex;
     [loop]
     for (sphereIndex = 0; sphereIndex < _NumLights; sphereIndex++)
     {
-        sphereLightCount += _Lights[sphereIndex].type == LightTypeSphere ? 1 : 0;
+        Light candidate = _Lights[sphereIndex];
+        lightCount += candidate.type == LightTypeSphere
+            || (candidate.type == LightTypeTriangle && candidate.area > 1e-6f) ? 1 : 0;
     }
 
     int refractorCount = 0;
@@ -3345,26 +3347,28 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
         refractorCount += (candidate.materialType == MaterialGlass || candidate.opacity < 1.0f) && candidate.opacity < 1.0f ? 1 : 0;
     }
 
-    if (sphereLightCount == 0 || refractorCount == 0)
+    if (lightCount == 0 || refractorCount == 0)
     {
         return;
     }
 
     uint rngState = Hash(_CausticSeed ^ (id.x * 26699u));
-    int selectedLightRank = min((int)(rand(rngState) * sphereLightCount), sphereLightCount - 1);
+    int selectedLightRank = min((int)(rand(rngState) * lightCount), lightCount - 1);
     int selectedRefractorRank = min((int)(rand(rngState) * refractorCount), refractorCount - 1);
     Light light;
     int foundRank = 0;
     [loop]
     for (sphereIndex = 0; sphereIndex < _NumLights; sphereIndex++)
     {
-        if (_Lights[sphereIndex].type != LightTypeSphere)
+        Light candidate = _Lights[sphereIndex];
+        if (candidate.type != LightTypeSphere
+            && (candidate.type != LightTypeTriangle || candidate.area <= 1e-6f))
         {
             continue;
         }
         if (foundRank++ == selectedLightRank)
         {
-            light = _Lights[sphereIndex];
+            light = candidate;
             break;
         }
     }
@@ -3388,9 +3392,25 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
         }
     }
 
-    float3 toRefractor = refractor.position - light.position;
+    float3 emissionPosition = light.position;
+    float emissionAreaScale = 1.0f;
+    if (light.type == LightTypeTriangle)
+    {
+        float r1 = rand(rngState);
+        float r2 = rand(rngState);
+        if (r1 + r2 > 1.0f)
+        {
+            r1 = 1.0f - r1;
+            r2 = 1.0f - r2;
+        }
+        emissionPosition += light.u * r1 + light.v * r2;
+        emissionAreaScale = light.area;
+    }
+
+    float3 toRefractor = refractor.position - emissionPosition;
     float distanceToRefractor = length(toRefractor);
-    if (distanceToRefractor <= refractor.radius + light.radius + 0.001f)
+    float emitterRadius = light.type == LightTypeSphere ? light.radius : 0.0f;
+    if (distanceToRefractor <= refractor.radius + emitterRadius + 0.001f)
     {
         return;
     }
@@ -3405,7 +3425,12 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
     float3 bitangent;
     CreateBasisFromNormal(coneAxis, tangent, bitangent);
     float3 photonDirection = normalize(coneAxis * cosTheta + tangent * (cos(phi) * sinTheta) + bitangent * (sin(phi) * sinTheta));
-    Ray photonRay = CreateRay(light.position + photonDirection * max(0.001f, light.radius), photonDirection);
+    float emitterCosine = light.type == LightTypeTriangle ? dot(light.normal, photonDirection) : 1.0f;
+    if (emitterCosine <= 0.0f)
+    {
+        return;
+    }
+    Ray photonRay = CreateRay(emissionPosition + photonDirection * max(0.001f, emitterRadius), photonDirection);
     RayHit refractorHit = CreateRayHit();
     IntersectSphere(photonRay, refractorHit, refractor, refractorIndex);
     if (DidHitSky(refractorHit))
@@ -3448,7 +3473,7 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
     float entryTransmission = 1.0f - (entryR0 + (1.0f - entryR0) * pow(1.0f - entryCosine, 5.0f));
     float exitTransmission = 1.0f - (entryR0 + (1.0f - entryR0) * pow(1.0f - exitCosine, 5.0f));
     float coneSolidAngle = 2.0f * PI * max(1e-6f, 1.0f - cosThetaMax);
-    float selectionScale = sphereLightCount * refractorCount * coneSolidAngle;
+    float selectionScale = lightCount * refractorCount * coneSolidAngle * emissionAreaScale * emitterCosine;
     float3 absorption = GetMediumSegmentTransmittance(CreateHitMedium(refractorHit), exitDistance);
     float materialTransmission = GetTransmissionAmount(refractorHit);
 
