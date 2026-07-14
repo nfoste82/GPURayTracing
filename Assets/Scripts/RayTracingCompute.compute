@@ -1308,6 +1308,19 @@ bool IntersectTriangleRaw(Ray ray, MeshTriangle meshTriangle, out float hitDista
     return hitDistance > 0.001f;
 }
 
+float3 GetTriangleOpticalNormal(MeshTriangle meshTriangle, float3 geometricNormal, float2 barycentric)
+{
+    if (meshTriangle.interpolateNormals == 0)
+    {
+        return geometricNormal;
+    }
+
+    float3 opticalNormal = normalize(meshTriangle.normal0 * (1.0f - barycentric.x - barycentric.y)
+        + meshTriangle.normal1 * barycentric.x
+        + meshTriangle.normal2 * barycentric.y);
+    return dot(opticalNormal, geometricNormal) < 0.0f ? -opticalNormal : opticalNormal;
+}
+
 void IntersectTriangle(Ray ray, inout RayHit bestHit, MeshTriangle meshTriangle)
 {
     float hitDistance;
@@ -1321,16 +1334,7 @@ void IntersectTriangle(Ray ray, inout RayHit bestHit, MeshTriangle meshTriangle)
     if (hitDistance > 0.001f && hitDistance < bestHit.distance)
     {
         float3 geometricNormal = normal;
-        if (meshTriangle.interpolateNormals != 0)
-        {
-            normal = normalize(meshTriangle.normal0 * (1.0f - barycentric.x - barycentric.y)
-                + meshTriangle.normal1 * barycentric.x
-                + meshTriangle.normal2 * barycentric.y);
-            if (dot(normal, geometricNormal) < 0.0f)
-            {
-                normal = -normal;
-            }
-        }
+        normal = GetTriangleOpticalNormal(meshTriangle, geometricNormal, barycentric);
 
         if (dot(normal, ray.direction) > 0.0f)
         {
@@ -1505,10 +1509,11 @@ bool MeshBvhOccludes(Ray ray, float maxDistance, MeshInfo meshInfo)
     return false;
 }
 
-bool IntersectMeshBvhForExit(Ray ray, MeshInfo meshInfo, out float exitDistance, out float3 exitNormal)
+bool IntersectMeshBvhForExit(Ray ray, MeshInfo meshInfo, out float exitDistance, out float3 exitGeometricNormal, out float3 exitOpticalNormal)
 {
     exitDistance = 1.#INF;
-    exitNormal = float3(0.0f, 1.0f, 0.0f);
+    exitGeometricNormal = float3(0.0f, 1.0f, 0.0f);
+    exitOpticalNormal = exitGeometricNormal;
 
     float3 inverseDirection = 1.0f / ray.direction;
     float ignoredEntry;
@@ -1535,10 +1540,12 @@ bool IntersectMeshBvhForExit(Ray ray, MeshInfo meshInfo, out float exitDistance,
                 float triangleDistance;
                 float3 triangleNormal;
                 float2 triangleBarycentric;
-                if (IntersectTriangleRaw(ray, _Triangles[node.triangleStart + i], triangleDistance, triangleNormal, triangleBarycentric) && triangleDistance < exitDistance)
+                MeshTriangle meshTriangle = _Triangles[node.triangleStart + i];
+                if (IntersectTriangleRaw(ray, meshTriangle, triangleDistance, triangleNormal, triangleBarycentric) && triangleDistance < exitDistance)
                 {
                     exitDistance = triangleDistance;
-                    exitNormal = triangleNormal;
+                    exitGeometricNormal = triangleNormal;
+                    exitOpticalNormal = GetTriangleOpticalNormal(meshTriangle, triangleNormal, triangleBarycentric);
                 }
             }
             continue;
@@ -2577,17 +2584,26 @@ float GetTransmissionAmount(RayHit hit)
     return saturate(1.0f - hit.opacity);
 }
 
-float GetFresnelReflectance(Ray ray, RayHit hit, float sourceRefraction, float targetRefraction)
+float GetFresnelReflectanceForNormal(Ray ray, RayHit hit, float sourceRefraction, float targetRefraction, float3 boundaryNormal)
 {
     float sourceIndex = max(0.001f, sourceRefraction);
     float targetIndex = max(0.001f, targetRefraction);
     float r0 = (sourceIndex - targetIndex) / (sourceIndex + targetIndex);
     r0 *= r0;
 
-    float3 boundaryNormal = hit.meshIndex >= 0 ? hit.geometricNormal : hit.normal;
     float cosTheta = saturate(abs(dot(-ray.direction, boundaryNormal)));
     float reflectance = r0 + (1.0f - r0) * pow(1.0f - cosTheta, 5.0f);
     return IsWaterMaterial(hit) ? reflectance * GetWaterReflectiveOpacity(hit) : reflectance;
+}
+
+float GetFresnelReflectance(Ray ray, RayHit hit, float sourceRefraction, float targetRefraction)
+{
+    return GetFresnelReflectanceForNormal(ray, hit, sourceRefraction, targetRefraction, hit.normal);
+}
+
+float3 GetCausticOpticalNormal(RayHit hit)
+{
+    return hit.normal;
 }
 
 float3 GetDiffuseScatterDirection(float3 normal, inout uint rngState)
@@ -2737,7 +2753,7 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int
     mediumTransition = MediumTransitionNone;
     mediumDistanceTraveled = 0.0f;
 
-    float3 normal = dot(sourceRay.direction, hit.geometricNormal) < 0.0f ? hit.geometricNormal : -hit.geometricNormal;
+    float3 normal = dot(sourceRay.direction, hit.normal) < 0.0f ? hit.normal : -hit.normal;
 
     if (!entering)
     {
@@ -2749,7 +2765,7 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int
         }
         else
         {
-            ray.direction = reflect(sourceRay.direction, hit.geometricNormal);
+            ray.direction = reflect(sourceRay.direction, normal);
         }
 
         ray.origin = hit.position + ray.direction * 0.001f;
@@ -2772,7 +2788,8 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int
     while (bouncesConsumed < remainingBounces)
     {
         float exitDistance = 1.#INF;
-        float3 exitNormal = normal;
+        float3 exitGeometricNormal = hit.geometricNormal;
+        float3 exitOpticalNormal = normal;
 
         int i;
         [loop]
@@ -2785,11 +2802,13 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int
             }
 
             float meshExitDistance;
-            float3 meshExitNormal;
-            if (IntersectMeshBvhForExit(insideRay, meshInfo, meshExitDistance, meshExitNormal) && meshExitDistance < exitDistance)
+            float3 meshExitGeometricNormal;
+            float3 meshExitOpticalNormal;
+            if (IntersectMeshBvhForExit(insideRay, meshInfo, meshExitDistance, meshExitGeometricNormal, meshExitOpticalNormal) && meshExitDistance < exitDistance)
             {
                 exitDistance = meshExitDistance;
-                exitNormal = meshExitNormal;
+                exitGeometricNormal = meshExitGeometricNormal;
+                exitOpticalNormal = meshExitOpticalNormal;
             }
         }
 
@@ -2801,9 +2820,10 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int
             return;
         }
 
-        if (dot(exitNormal, insideRay.direction) < 0.0f)
+        if (dot(exitGeometricNormal, insideRay.direction) < 0.0f)
         {
-            exitNormal = -exitNormal;
+            exitGeometricNormal = -exitGeometricNormal;
+            exitOpticalNormal = -exitOpticalNormal;
         }
 
         float3 exitPoint = insideRay.origin + insideRay.direction * exitDistance;
@@ -2821,7 +2841,7 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int
         bouncesConsumed++;
 
         float3 exitDirection;
-        if (RefractSnell(insideRay.direction, targetRefraction, sourceRefraction, -exitNormal, exitDirection))
+        if (RefractSnell(insideRay.direction, targetRefraction, sourceRefraction, -exitOpticalNormal, exitDirection))
         {
             mediumDistanceTraveled = distanceThroughMedium;
             ray.direction = exitDirection;
@@ -2829,7 +2849,7 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int
             return;
         }
 
-        float3 reflectedDirection = normalize(reflect(insideRay.direction, exitNormal));
+        float3 reflectedDirection = normalize(reflect(insideRay.direction, exitOpticalNormal));
         insideRay = CreateRay(exitPoint + reflectedDirection * 0.001f, reflectedDirection);
     }
 
@@ -3379,14 +3399,20 @@ bool TraceCausticPhotonTransport(
 
         bool entering;
         float2 transitionIndices = GetBoundaryTransitionIndices(mediumStack, hit, entering);
-        float fresnelReflectance = GetFresnelReflectance(photonRay, hit, transitionIndices.x, transitionIndices.y);
+        float3 opticalNormal = GetCausticOpticalNormal(hit);
+        float fresnelReflectance = GetFresnelReflectanceForNormal(
+            photonRay,
+            hit,
+            transitionIndices.x,
+            transitionIndices.y,
+            opticalNormal);
         float transmissionProbability = GetTransmissionAmount(hit) * (1.0f - fresnelReflectance);
         float3 transmittedDirection;
         bool canTransmit = RefractSnell(
             photonRay.direction,
             transitionIndices.x,
             transitionIndices.y,
-            hit.geometricNormal,
+            opticalNormal,
             transmittedDirection);
 
         if (canTransmit && rand(rngState) < transmissionProbability)
@@ -3399,7 +3425,7 @@ bool TraceCausticPhotonTransport(
         }
         else
         {
-            photonRay.direction = normalize(reflect(photonRay.direction, hit.geometricNormal));
+            photonRay.direction = normalize(reflect(photonRay.direction, opticalNormal));
             throughput *= lerp(float3(1.0f, 1.0f, 1.0f), saturate(hit.color), hit.opacity);
         }
 
@@ -3840,6 +3866,15 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     RayHit smoothHit = CreateRayHit();
     IntersectTriangle(CreateRay(float3(0.0f, 0.0f, 1.0f), float3(0.0f, 0.0f, -1.0f)), smoothHit, smoothTriangle);
     RegressionResults[30] = float4(smoothHit.normal, dot(smoothHit.geometricNormal, float3(0.0f, 0.0f, 1.0f)));
+    RegressionResults[34] = float4(GetCausticOpticalNormal(smoothHit), 1.0f);
+    smoothHit.materialType = MaterialGlass;
+    smoothHit.opacity = 0.0f;
+    smoothHit.refraction = 1.5f;
+    float3 smoothRefractionDirection;
+    bool didSmoothRefraction = RefractSnell(float3(0.0f, 0.0f, -1.0f), 1.0f, smoothHit.refraction, smoothHit.normal, smoothRefractionDirection);
+    RegressionResults[35] = float4(smoothRefractionDirection, didSmoothRefraction
+        ? GetFresnelReflectance(CreateRay(float3(0.0f, 0.0f, 1.0f), float3(0.0f, 0.0f, -1.0f)), smoothHit, 1.0f, smoothHit.refraction)
+        : -1.0f);
 
     Light triangleLight;
     triangleLight.position = float3(-1.0f, 2.0f, -1.0f);

@@ -16,7 +16,7 @@ public class RayMaterial : MonoBehaviour
     [Tooltip("Optional albedo texture for mesh objects. Sphere materials still use Color only.")]
     public Texture2D AlbedoTexture;
 
-    [Tooltip("Interpolate imported mesh vertex normals for smooth shading. Intersections and refraction still use the triangle geometry.")]
+    [Tooltip("Interpolate imported mesh vertex normals for smooth shading, refraction, and caustic photon optics. Intersections still use the triangle geometry.")]
     public bool InterpolateNormals;
 
     [Range(0f, 1f)]

@@ -257,6 +257,7 @@ Milestones 1 and 2 are implemented as the initial prototype. Milestone 3 correct
 - Implemented: emissive triangle lights can emit targeted photons through supported glass spheres, with uniform area sampling, one-sided emission, and area/cosine power weighting.
 - Implemented: reflected and multi-event glass-sphere caustics use an iterative photon transport loop with shared scene intersections, medium-stack transitions, Fresnel/Snell behavior, absorption, and a bounded bounce budget.
 - Implemented: closed glass meshes are targeted by sampling their triangle surfaces with an area-to-solid-angle PDF correction, validating visibility against their mesh BVHs, and transporting boundary-by-boundary through the same medium-stack loop. This avoids the sparse photon maps produced by loose bounding-sphere targeting on non-convex meshes.
+- Implemented: glass mesh photon Fresnel, transmission, and reflection use interpolated vertex normals when `InterpolateNormals` is enabled, while intersections and boundary identity remain geometric.
 - Add procedural water only after static glass behavior and photon-map invalidation are stable.
 
 ## Prototype Acceptance Criteria

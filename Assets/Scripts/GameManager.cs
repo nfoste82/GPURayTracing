@@ -64,7 +64,7 @@ public class GameManager : MonoBehaviour
 
     [Range(64, 4194200)]
     [Tooltip("Photon attempts traced for each rendered frame. Independent batches are averaged by final-color frame accumulation.")]
-    public int causticPhotonCount = 4096;
+    public int causticPhotonCount = 131072;
 
     [Range(0.01f, 2.0f)]
     public float causticGatherRadius = 0.3f;
