@@ -43,7 +43,6 @@ int _AccumulatedFrameCount;
 float _ShadowRandomness;
 float _LightFalloffScale;
 float _FocalDistance;
-float _GroundSmoothness;
 float _Exposure;
 float _FireflyClamp;
 
@@ -745,32 +744,6 @@ RayHit CreateRayHit()
     return hit;
 }
 // =======================================================
-
-void IntersectGroundPlane(Ray ray, inout RayHit bestHit)
-{
-    // Calculate distance along the ray where the ground plane is intersected
-    float t = -ray.origin.y / ray.direction.y;
-    if (t > 0 && t < bestHit.distance)
-    {
-        bestHit.distance = t;
-        bestHit.position = ray.origin + t * ray.direction;
-        bestHit.normal = float3(0.0f, 1.0f, 0.0f);
-        bestHit.geometricNormal = bestHit.normal;
-        bestHit.color = float3(0.8f, 0.8f, 0.8f);
-        bestHit.smoothness = _GroundSmoothness;
-        bestHit.emission = float3(0.0f, 0.0f, 0.0f);
-        bestHit.obj_position = float3(0.0f, 0.0f, 0.0f);
-        bestHit.obj_radius = 0.0f;
-        bestHit.opacity = 1.0f;
-        bestHit.refraction = 1.0f;
-        bestHit.materialType = MaterialDiffuse;
-        bestHit.meshIndex = -1;
-        bestHit.objectIndex = -1;
-        bestHit.uv = bestHit.position.xz;
-        bestHit.textureIndex = -1;
-        bestHit.lightIndex = -1;
-    }
-}
 
 float GetWaterWaveHeight(float2 worldXZ)
 {
@@ -1585,7 +1558,6 @@ RayHit GetNearestIntersectionBounded(Ray ray, float maxDistance, int ignoredMesh
 	RayHit bestHit = CreateRayHit();
 	bestHit.distance = maxDistance;
 
-	IntersectGroundPlane(ray, bestHit);
 	IntersectWater(ray, bestHit);
 
 	if (_NumTopLevelBvhNodes <= 0)
@@ -2631,6 +2603,32 @@ float3 SampleGgxHalfDirection(float3 normal, float alpha, inout uint rngState)
     return normalize(tangent * (cos(phi) * sinTheta) + bitangent * (sin(phi) * sinTheta) + normal * cosTheta);
 }
 
+float3 SampleDielectricBoundaryNormal(float3 opticalNormal, float3 geometricNormal, float3 incidentDirection, float smoothness, float sourceRefraction, float targetRefraction, inout uint rngState)
+{
+    float3 geometricBoundaryNormal = dot(incidentDirection, geometricNormal) < 0.0f ? geometricNormal : -geometricNormal;
+    float3 opticalBoundaryNormal = dot(opticalNormal, geometricBoundaryNormal) >= 0.0f ? opticalNormal : -opticalNormal;
+    int sampleCount = smoothness >= 0.9999f ? 1 : 8;
+    float roughness = max(0.03f, 1.0f - saturate(smoothness));
+
+    [loop]
+    for (int sampleIndex = 0; sampleIndex < sampleCount; sampleIndex++)
+    {
+        float3 microfacetNormal = sampleCount == 1
+            ? opticalBoundaryNormal
+            : SampleGgxHalfDirection(opticalBoundaryNormal, roughness * roughness, rngState);
+        float3 reflectedDirection = reflect(incidentDirection, microfacetNormal);
+        float3 transmittedDirection;
+        bool canTransmit = RefractSnell(incidentDirection, sourceRefraction, targetRefraction, microfacetNormal, transmittedDirection);
+        bool crossesBoundary = !canTransmit || dot(transmittedDirection, geometricBoundaryNormal) < -1e-5f;
+        if (dot(reflectedDirection, geometricBoundaryNormal) > 1e-5f && crossesBoundary)
+        {
+            return microfacetNormal;
+        }
+    }
+
+    return geometricBoundaryNormal;
+}
+
 BrdfSample SampleMaterialBrdf(Ray ray, RayHit hit, inout uint rngState)
 {
     BrdfSample sample;
@@ -2678,7 +2676,7 @@ bool ShouldSampleDirectLight(float3 throughput)
     return max(throughput.x, max(throughput.y, throughput.z)) > MinDirectLightThroughput;
 }
 
-void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int remainingBounces, bool entering, float sourceRefraction, float targetRefraction, out int bouncesConsumed, out int mediumTransition, out float mediumDistanceTraveled)
+void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int remainingBounces, bool entering, float sourceRefraction, float targetRefraction, float3 boundaryNormal, inout uint rngState, out int bouncesConsumed, out int mediumTransition, out float mediumDistanceTraveled)
 {
     bouncesConsumed = 1;
     mediumTransition = MediumTransitionNone;
@@ -2687,13 +2685,13 @@ void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int r
     if (!entering)
     {
         float3 exitDirection;
-        if (RefractSnell(sourceRay.direction, sourceRefraction, targetRefraction, -hit.normal, exitDirection))
+        if (RefractSnell(sourceRay.direction, sourceRefraction, targetRefraction, boundaryNormal, exitDirection))
         {
             mediumTransition = MediumTransitionExit;
         }
         else
         {
-            exitDirection = reflect(sourceRay.direction, hit.normal);
+            exitDirection = reflect(sourceRay.direction, boundaryNormal);
         }
 
         ray.direction = exitDirection;
@@ -2702,9 +2700,9 @@ void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int r
     }
 
     float3 entryDirection;
-    if (!RefractSnell(sourceRay.direction, sourceRefraction, targetRefraction, hit.normal, entryDirection))
+    if (!RefractSnell(sourceRay.direction, sourceRefraction, targetRefraction, boundaryNormal, entryDirection))
     {
-        ray.direction = reflect(sourceRay.direction, hit.normal);
+        ray.direction = reflect(sourceRay.direction, boundaryNormal);
         ray.origin = hit.position + (ray.direction * 0.001f);
         return;
     }
@@ -2738,22 +2736,23 @@ void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int r
     bouncesConsumed++;
 
     float3 exitDirection;
-    if (!RefractSnell(ray.direction, targetRefraction, sourceRefraction, -exitPointNormal, exitDirection))
+    float3 exitBoundaryNormal = SampleDielectricBoundaryNormal(-exitPointNormal, -exitPointNormal, ray.direction, hit.smoothness, targetRefraction, sourceRefraction, rngState);
+    if (!RefractSnell(ray.direction, targetRefraction, sourceRefraction, exitBoundaryNormal, exitDirection))
     {
-        exitDirection = reflect(ray.direction, exitPointNormal);
+        exitDirection = reflect(ray.direction, exitBoundaryNormal);
         mediumTransition = MediumTransitionEnter;
     }
 
     ray.direction = exitDirection;
 }
 
-void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int remainingBounces, bool entering, float sourceRefraction, float targetRefraction, out int bouncesConsumed, out int mediumTransition, out float mediumDistanceTraveled)
+void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int remainingBounces, bool entering, float sourceRefraction, float targetRefraction, float3 boundaryNormal, inout uint rngState, out int bouncesConsumed, out int mediumTransition, out float mediumDistanceTraveled)
 {
     bouncesConsumed = 1;
     mediumTransition = MediumTransitionNone;
     mediumDistanceTraveled = 0.0f;
 
-    float3 normal = dot(sourceRay.direction, hit.normal) < 0.0f ? hit.normal : -hit.normal;
+    float3 normal = boundaryNormal;
 
     if (!entering)
     {
@@ -2841,7 +2840,8 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int
         bouncesConsumed++;
 
         float3 exitDirection;
-        if (RefractSnell(insideRay.direction, targetRefraction, sourceRefraction, -exitOpticalNormal, exitDirection))
+        float3 exitBoundaryNormal = SampleDielectricBoundaryNormal(-exitOpticalNormal, -exitGeometricNormal, insideRay.direction, hit.smoothness, targetRefraction, sourceRefraction, rngState);
+        if (RefractSnell(insideRay.direction, targetRefraction, sourceRefraction, exitBoundaryNormal, exitDirection))
         {
             mediumDistanceTraveled = distanceThroughMedium;
             ray.direction = exitDirection;
@@ -2849,7 +2849,7 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int
             return;
         }
 
-        float3 reflectedDirection = normalize(reflect(insideRay.direction, exitOpticalNormal));
+        float3 reflectedDirection = normalize(reflect(insideRay.direction, exitBoundaryNormal));
         insideRay = CreateRay(exitPoint + reflectedDirection * 0.001f, reflectedDirection);
     }
 
@@ -2899,8 +2899,9 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
     {
         bool entering;
         float2 transitionIndices = GetBoundaryTransitionIndices(mediumStack, hit, entering);
+        float3 boundaryNormal = SampleDielectricBoundaryNormal(hit.normal, hit.geometricNormal, sourceRay.direction, hit.smoothness, transitionIndices.x, transitionIndices.y, rngState);
         float transmission = GetTransmissionAmount(hit);
-        float fresnelReflectance = GetFresnelReflectance(sourceRay, hit, transitionIndices.x, transitionIndices.y);
+        float fresnelReflectance = GetFresnelReflectanceForNormal(sourceRay, hit, transitionIndices.x, transitionIndices.y, boundaryNormal);
         float transmissionProbability = transmission * (1.0f - fresnelReflectance);
 
         if (rand(rngState) < transmissionProbability)
@@ -2910,18 +2911,18 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
             float mediumDistanceTraveled = 0.0f;
             if (hit.obj_radius > 0.0f)
             {
-                ApplySphereRefraction(scatteredRay, sourceRay, hit, remainingBounces, entering, transitionIndices.x, transitionIndices.y, bouncesConsumed, mediumTransition, mediumDistanceTraveled);
+                ApplySphereRefraction(scatteredRay, sourceRay, hit, remainingBounces, entering, transitionIndices.x, transitionIndices.y, boundaryNormal, rngState, bouncesConsumed, mediumTransition, mediumDistanceTraveled);
             }
             else
             {
-                ApplyPlanarTransmission(scatteredRay, sourceRay, hit, remainingBounces, entering, transitionIndices.x, transitionIndices.y, bouncesConsumed, mediumTransition, mediumDistanceTraveled);
+                ApplyPlanarTransmission(scatteredRay, sourceRay, hit, remainingBounces, entering, transitionIndices.x, transitionIndices.y, boundaryNormal, rngState, bouncesConsumed, mediumTransition, mediumDistanceTraveled);
             }
 
             float3 tint = GetMediumSegmentTransmittance(CreateHitMedium(hit), mediumDistanceTraveled);
             return CreateScatterResult(scatteredRay, tint, bouncesConsumed, mediumTransition);
         }
 
-        scatteredRay.direction = reflect(sourceRay.direction, roughNormal);
+        scatteredRay.direction = reflect(sourceRay.direction, boundaryNormal);
         scatteredRay.origin = hit.position + scatteredRay.direction * 0.001f;
         float3 reflectionTint = lerp(float3(1.0f, 1.0f, 1.0f), albedo, hit.opacity);
         return CreateScatterResult(scatteredRay, reflectionTint, 1, MediumTransitionNone);
@@ -3399,7 +3400,14 @@ bool TraceCausticPhotonTransport(
 
         bool entering;
         float2 transitionIndices = GetBoundaryTransitionIndices(mediumStack, hit, entering);
-        float3 opticalNormal = GetCausticOpticalNormal(hit);
+        float3 opticalNormal = SampleDielectricBoundaryNormal(
+            GetCausticOpticalNormal(hit),
+            hit.geometricNormal,
+            photonRay.direction,
+            hit.smoothness,
+            transitionIndices.x,
+            transitionIndices.y,
+            rngState);
         float fresnelReflectance = GetFresnelReflectanceForNormal(
             photonRay,
             hit,
@@ -3875,6 +3883,17 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     RegressionResults[35] = float4(smoothRefractionDirection, didSmoothRefraction
         ? GetFresnelReflectance(CreateRay(float3(0.0f, 0.0f, 1.0f), float3(0.0f, 0.0f, -1.0f)), smoothHit, 1.0f, smoothHit.refraction)
         : -1.0f);
+
+    uint smoothGlassRngState = 9182u;
+    uint roughGlassRngState = 9182u;
+    float3 smoothGlassNormal = SampleDielectricBoundaryNormal(normal, normal, incident45, 1.0f, 1.0f, 1.5f, smoothGlassRngState);
+    float3 roughGlassNormal = SampleDielectricBoundaryNormal(normal, normal, incident45, 0.0f, 1.0f, 1.5f, roughGlassRngState);
+    float3 smoothGlassDirection;
+    float3 roughGlassDirection;
+    bool smoothGlassTransmitted = RefractSnell(incident45, 1.0f, 1.5f, smoothGlassNormal, smoothGlassDirection);
+    bool roughGlassTransmitted = RefractSnell(incident45, 1.0f, 1.5f, roughGlassNormal, roughGlassDirection);
+    RegressionResults[36] = float4(smoothGlassNormal, smoothGlassTransmitted ? 1.0f : 0.0f);
+    RegressionResults[37] = float4(roughGlassNormal, roughGlassTransmitted ? length(roughGlassDirection - smoothGlassDirection) : -1.0f);
 
     Light triangleLight;
     triangleLight.position = float3(-1.0f, 2.0f, -1.0f);

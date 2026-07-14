@@ -21,7 +21,6 @@ Important shader globals:
 - `_ShadowRandomness`: area-light sampling radius multiplier for soft shadow samples.
 - `_LightFalloffScale`: distance falloff scale for direct light. Higher values make light intensity decrease faster with distance.
 - `_FocalDistance`: depth-of-field focal distance.
-- `_GroundSmoothness`: smoothness for the implicit ground plane.
 - `_Exposure`: master brightness multiplier applied before tone mapping. Acts like a camera exposure dial.
 - `_FireflyClamp`: optional maximum luminance for each complete path sample before per-pixel averaging. `0` disables it. This deliberately biased variance control suppresses rare specular samples that otherwise remain visible in low-sample animated scenes.
 - `_WaterAbsorptionStrength`: distance-based water-medium absorption density. When a path or direct-light segment travels underwater, the shader applies exponential transmittance from `_WaterColor` and this strength. The active `Water` component supplies these globals; its transform position is `_WaterCenter`, X/Z scale is `_WaterSize`, and Y scale is `_WaterDepth` below the wavy top.

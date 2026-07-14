@@ -67,7 +67,6 @@ public static class RayTracingBenchmarkSceneGenerator
         manager.randomNoise = false;
         manager.cameraAutoFocus = false;
         manager.cameraFocalDistance = 18.0f;
-        manager.groundSmoothness = 0.5f;
         manager.lightFalloffScale = 0.08f;
         manager.topLevelBvhMinObjectCount = 64;
         manager.shadowBvhMinObjectCount = 64;
@@ -97,6 +96,7 @@ public static class RayTracingBenchmarkSceneGenerator
         context.Manager.shadowBvhMinObjectCount = 1024;
         context.Manager.shadowQuality = 1;
         AddLight(context.Root, "Key Light", new Vector3(0.0f, 13.0f, -4.0f), 1.8f, new Color32(255, 235, 210, 255));
+        AddFloor(context.Root, new Vector2(0.0f, 6.0f), new Vector2(32.0f, 28.0f), 0.5f);
 
         const int gridX = 24;
         const int gridZ = 16;
@@ -127,6 +127,7 @@ public static class RayTracingBenchmarkSceneGenerator
         context.Manager.shadowBvhMinObjectCount = 1024;
         context.Manager.lightFalloffScale = 0.027f;
         AddLight(context.Root, "Wide Light", new Vector3(0.0f, 12.0f, -6.0f), 2.4f, new Color32(255, 240, 220, 255));
+        AddFloor(context.Root, new Vector2(0.0f, 5.0f), new Vector2(26.0f, 18.0f), 0.5f);
 
         for (int z = 0; z < 9; z++)
         {
@@ -153,7 +154,7 @@ public static class RayTracingBenchmarkSceneGenerator
         context.Manager.lightSamplingStrategy = GameManager.LightSamplingStrategy.ImportanceSampled;
         context.Manager.shadowBvhMinObjectCount = 1024;
         context.Manager.lightFalloffScale = 0.12f;
-        context.Manager.groundSmoothness = 0.955f;
+        AddFloor(context.Root, new Vector2(0.0f, 5.0f), new Vector2(24.0f, 24.0f), 0.955f);
 
         for (var i = 0; i < 72; i++)
         {
@@ -195,6 +196,7 @@ public static class RayTracingBenchmarkSceneGenerator
         var context = CreateBaseScene("Benchmark_ManyMeshes", new Vector3(0.0f, 8.0f, -22.0f), new Vector3(18.0f, 0.0f, 0.0f));
         context.Manager.topLevelBvhMinObjectCount = 0;
         AddLight(context.Root, "Key Light", new Vector3(0.0f, 14.0f, -5.0f), 2.0f, new Color32(255, 238, 218, 255));
+        AddFloor(context.Root, new Vector2(0.0f, 6.0f), new Vector2(24.0f, 18.0f), 0.5f);
 
         for (int z = 0; z < 10; z++)
         {
@@ -218,6 +220,7 @@ public static class RayTracingBenchmarkSceneGenerator
 
         var context = CreateBaseScene("Benchmark_Glass", new Vector3(0.0f, 5.5f, -16.0f), new Vector3(12.0f, 0.0f, 0.0f), passes: 1, bounces: 8, shadowQuality: 1);
         context.Manager.enableFrameAccumulation = true;
+        AddFloor(context.Root, new Vector2(0.0f, 3.0f), new Vector2(16.0f, 16.0f), 0.5f);
         AddLight(context.Root, "Key Light", new Vector3(-3.0f, 9.0f, -4.0f), 1.5f, new Color32(255, 235, 220, 255));
         AddLight(context.Root, "Blue Light", new Vector3(4.0f, 5.5f, 4.0f), 0.8f, new Color32(110, 165, 255, 255));
 
@@ -245,7 +248,6 @@ public static class RayTracingBenchmarkSceneGenerator
         context.Manager.enableFrameAccumulation = true;
         context.Manager.lightFalloffScale = 0.015f;
         context.Manager._skyboxLightColor = new Color32(18, 18, 22, 255);
-        context.Manager.groundSmoothness = 1.0f;
         context.Manager.topLevelBvhMinObjectCount = 1024;
         context.Manager.shadowBvhMinObjectCount = 0;
 
@@ -308,7 +310,6 @@ public static class RayTracingBenchmarkSceneGenerator
         var context = CreateBaseScene(sceneName, new Vector3(-8.194436f, 5.217021f, 0.4341397f), new Vector3(28.573532f, 85.03342f, 0.0f), passes: 1, bounces: 10, shadowQuality: 0);
         context.Manager.enableFrameAccumulation = true;
         context.Manager.cameraFocalDistance = 12.0f;
-        context.Manager.groundSmoothness = 0.05f;
         context.Manager.lightFalloffScale = 0.002f;
         context.Manager.exposure = 1.0f;
         context.Manager.fireflyClamp = 0.0f;
@@ -355,7 +356,6 @@ public static class RayTracingBenchmarkSceneGenerator
         var context = CreateBaseScene(sceneName, new Vector3(0.0f, 5.4f, -10.5f), new Vector3(19.0f, 0.0f, 0.0f), passes: 1, bounces: 10, shadowQuality: 0);
         context.Manager.enableFrameAccumulation = true;
         context.Manager.cameraFocalDistance = 12.0f;
-        context.Manager.groundSmoothness = 0.05f;
         context.Manager.lightFalloffScale = 0.012f;
         context.Manager.exposure = 1.0f;
         context.Manager.fireflyClamp = 0.0f;
@@ -384,6 +384,7 @@ public static class RayTracingBenchmarkSceneGenerator
         }
 
         var context = CreateBaseScene("Benchmark_Sparse", new Vector3(0.0f, 4.0f, -12.0f), new Vector3(10.0f, 0.0f, 0.0f));
+        AddFloor(context.Root, new Vector2(0.0f, 3.0f), new Vector2(8.0f, 8.0f), 0.5f);
         AddLight(context.Root, "Key Light", new Vector3(-2.0f, 8.0f, -2.0f), 1.0f, new Color32(255, 240, 220, 255));
         AddSphere(context.Root, "Single Sphere", new Vector3(0.0f, 1.0f, 3.0f), 1.0f, new Color32(210, 80, 75, 255), RayMaterial.MaterialType.Metal, 0.9f);
         Save(context.Scene, "Benchmark_Sparse");
@@ -397,6 +398,7 @@ public static class RayTracingBenchmarkSceneGenerator
         }
 
         var context = CreateBaseScene("Benchmark_Dynamic", new Vector3(0.0f, 7.0f, -22.0f), new Vector3(15.0f, 0.0f, 0.0f));
+        AddFloor(context.Root, new Vector2(0.0f, 5.0f), new Vector2(22.0f, 22.0f), 0.5f);
         AddLight(context.Root, "Key Light", new Vector3(0.0f, 12.0f, -5.0f), 1.7f, new Color32(255, 238, 218, 255));
 
         for (int i = 0; i < 96; i++)
@@ -425,7 +427,6 @@ public static class RayTracingBenchmarkSceneGenerator
 
         var context = CreateBaseScene(sceneName, new Vector3(11.72f, 6.48f, 26.0f), new Vector3(15.954f, -151.8f, 0.0f), passes: 3, bounces: 8, shadowQuality: 1);
         context.Manager.cameraFocalDistance = 18.0f;
-        context.Manager.groundSmoothness = 0.72f;
         context.Manager.lightFalloffScale = 0.021f;
         context.Manager.exposure = 1.15f;
         context.Manager.fireflyClamp = 1.0f;
@@ -452,9 +453,12 @@ public static class RayTracingBenchmarkSceneGenerator
         AddLight(context.Root, "Low Sun Reflection Light", new Vector3(-5.0f, 4.0f, -5.5f), 1.2f, new Color32(255, 226, 188, 255));
         AddLight(context.Root, "Cool Sky Fill", new Vector3(8.0f, 15f, 8.0f), 1.8f, new Color32(255, 253, 155, 255));
 
-        // The implicit y=0 plane remains visible around the volume (ground only). The raised
-        // half-bed intersects the right half of the volume, while the left half exposes the
-        // suspended water bottom with no geometry inside it.
+        // Finite shore strips surround the water without filling the intentionally empty
+        // water-only region. The raised half-bed covers only the right side of the volume.
+        AddFloor(context.Root, new Vector2(-2.0f, -18.0f), new Vector2(48.0f, 8.0f), 0.72f, "Near Shore");
+        AddFloor(context.Root, new Vector2(-2.0f, 24.0f), new Vector2(48.0f, 8.0f), 0.72f, "Far Shore");
+        AddFloor(context.Root, new Vector2(-26.0f, 3.0f), new Vector2(8.0f, 34.0f), 0.72f, "Left Shore");
+        AddFloor(context.Root, new Vector2(22.0f, 3.0f), new Vector2(8.0f, 34.0f), 0.72f, "Right Shore");
         AddPrimitiveMesh(context.Root, "Raised Bed Inside Water", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(10.0f, 0.43f, 10.0f), new Vector3(0.0f, 0.0f, 25.0f), new Vector3(15.0f, 5.0f, 40.0f), new Color32(88, 78, 48, 255), RayMaterial.MaterialType.Diffuse, 0.38f, 1.0f);
 
         for (var i = 0; i < 24; i++)
@@ -503,7 +507,6 @@ public static class RayTracingBenchmarkSceneGenerator
         context.Manager.numBounces = 10;
         context.Manager.shadowQuality = 0;
         context.Manager.cameraFocalDistance = 7.5f;
-        context.Manager.groundSmoothness = 0.28f;
         context.Manager.lightFalloffScale = 0.003f;
         context.Manager.exposure = 1.0f;
         context.Manager.topLevelBvhMinObjectCount = 0;
@@ -513,6 +516,7 @@ public static class RayTracingBenchmarkSceneGenerator
         context.Manager._skyboxLightColor = new Color32(140, 149, 164, 255);
 
         AddLight(context.Root, "Large Softbox", new Vector3(-3.5f, 5.6f, -3.8f), 1.6f, Color.white);
+        AddFloor(context.Root, Vector2.zero, new Vector2(12.0f, 10.0f), 0.28f, "Tabletop");
         var rimHighlight = AddLight(context.Root, "Rim Highlight", new Vector3(3.5f, 3.7f, -2.2f), 0.55f, new Color32(210, 230, 255, 255));
         rimHighlight.transform.localScale = Vector3.one * 0.1f;
 
@@ -550,7 +554,6 @@ public static class RayTracingBenchmarkSceneGenerator
 
         var context = CreateBaseScene(sceneName, new Vector3(0.0f, 2.05f, -4.85f), new Vector3(0.0f, 0.0f, 0.0f), passes: 1, bounces: 9, shadowQuality: 1);
         context.Manager.cameraFocalDistance = 9.5f;
-        context.Manager.groundSmoothness = 0.2f;
         context.Manager.lightFalloffScale = 0.075f;
         context.Manager.exposure = 1.0f;
         context.Manager.topLevelBvhMinObjectCount = 0;
@@ -602,7 +605,6 @@ public static class RayTracingBenchmarkSceneGenerator
 
         var context = CreateBaseScene(sceneName, new Vector3(0.0f, 2.2f, -5.2f), new Vector3(2.0f, 0.0f, 0.0f), passes: 1, bounces: 5, shadowQuality: 0);
         context.Manager.cameraFocalDistance = 6.5f;
-        context.Manager.groundSmoothness = 0.18f;
         context.Manager.lightFalloffScale = 0.02f;
         context.Manager.exposure = 1.0f;
         context.Manager.topLevelBvhMinObjectCount = 0;
@@ -643,7 +645,6 @@ public static class RayTracingBenchmarkSceneGenerator
         var wallTexture = GetOrCreateWolfensteinWallTexture();
         var context = CreateBaseScene(sceneName, new Vector3(5.4f, 1.29f, 0.99f), new Vector3(2.0f, -60.55f, 0.0f), passes: 2, bounces: 6, shadowQuality: 1);
         context.Manager.cameraFocalDistance = 10.0f;
-        context.Manager.groundSmoothness = 1.0f;
         context.Manager.lightFalloffScale = 0.035f;
         context.Manager.exposure = 1.25f;
         context.Manager._skyboxLightColor = new Color32(8, 8, 8, 255);
@@ -692,6 +693,21 @@ public static class RayTracingBenchmarkSceneGenerator
 
         obj.AddComponent<RayTracingObject>();
         return obj;
+    }
+
+    private static GameObject AddFloor(Transform parent, Vector2 center, Vector2 size, float smoothness, string name = "Floor")
+    {
+        return AddPrimitiveMesh(
+            parent,
+            name,
+            RayMeshPrimitive.PrimitiveType.Cube,
+            new Vector3(center.x, -0.02f, center.y),
+            Vector3.zero,
+            new Vector3(size.x, 0.04f, size.y),
+            new Color32(204, 204, 204, 255),
+            RayMaterial.MaterialType.Diffuse,
+            smoothness,
+            1.0f);
     }
 
     private static GameObject AddLight(Transform parent, string name, Vector3 position, float radius, Color color)

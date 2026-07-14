@@ -27,7 +27,7 @@ namespace GPURayTracing.Tests
             }
 
             int kernel = shader.FindKernel("CSRegressionProbe");
-            var buffer = new ComputeBuffer(36, sizeof(float) * 4);
+            var buffer = new ComputeBuffer(38, sizeof(float) * 4);
             var sphereBuffer = new ComputeBuffer(1, 56);
             try
             {
@@ -46,7 +46,7 @@ namespace GPURayTracing.Tests
                 shader.SetBuffer(kernel, "RegressionResults", buffer);
                 shader.Dispatch(kernel, 1, 1, 1);
 
-                var results = new Vector4[36];
+                var results = new Vector4[38];
                 buffer.GetData(results);
 
                 AssertVector(results[0], new Vector4(0.70710677f, 0.70710677f, 0.0f, 1.0f), "reflection");
@@ -84,6 +84,10 @@ namespace GPURayTracing.Tests
                 AssertVector(results[33], new Vector4(1.6999575f, 0.8499787f, 0.4249894f, 1.0f), "firefly luminance clamp", 0.0002f);
                 AssertVector(results[34], new Vector4(0.0f, 0.4472136f, 0.8944272f, 1.0f), "caustic optical normal", 0.0002f);
                 AssertVector(results[35], new Vector4(0.0f, -0.1602089f, -0.9870830f, 0.0400126f), "interpolated mesh refraction and Fresnel", 0.0002f);
+                AssertVector(results[36], new Vector4(0.0f, 1.0f, 0.0f, 1.0f), "fully smooth glass preserves the optical normal");
+                Assert.That(results[37].w, Is.GreaterThan(0.01f), "rough glass should perturb its transmitted direction");
+                Assert.That(new Vector3(results[37].x, results[37].y, results[37].z).sqrMagnitude,
+                    Is.EqualTo(1.0f).Within(0.001f), "rough glass microfacet normal should remain normalized");
             }
             finally
             {

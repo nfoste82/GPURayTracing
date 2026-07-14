@@ -164,7 +164,7 @@ namespace GPURayTracing.Tests
                 width: 64,
                 height: 64,
                 shadowRandomness: 0.8f,
-                groundSmoothness: 1.0f,
+                receiverSmoothness: 1.0f,
                 skyboxColor: Color.black,
                 numberOfPasses: 256,
                 lightFalloffScale: 1000.0f,
@@ -276,6 +276,7 @@ namespace GPURayTracing.Tests
                 false,
                 new Vector3(0.0f, 1.6f, -4.5f),
                 Quaternion.identity,
+                includeReceiver: false,
                 width: width,
                 height: height);
 
@@ -682,13 +683,14 @@ namespace GPURayTracing.Tests
             int width = ImageSize,
             int height = ImageSize,
             float shadowRandomness = 0.0f,
-            float groundSmoothness = 0.9f,
+            float receiverSmoothness = 0.9f,
             Color? skyboxColor = null,
             int numberOfPasses = 8,
             float lightFalloffScale = 0.16f,
             float[,] probes = null,
             CausticOptions caustics = null,
-            bool includePeak = false)
+            bool includePeak = false,
+            bool includeReceiver = true)
         {
             if (!SystemInfo.supportsComputeShaders)
             {
@@ -707,6 +709,10 @@ namespace GPURayTracing.Tests
             triangles = triangles ?? Array.Empty<MeshTriangleData>();
             meshes = meshes ?? Array.Empty<MeshInfoData>();
             bvhNodes = bvhNodes ?? Array.Empty<BvhNodeData>();
+            if (includeReceiver)
+            {
+                AppendReceiver(ref triangles, ref meshes, ref bvhNodes, receiverSmoothness);
+            }
             lights = lights ?? Array.Empty<LightData>();
             var result = CreateRenderTexture(width, height, RenderTextureFormat.ARGBFloat);
             var accumulation = CreateRenderTexture(width, height, RenderTextureFormat.ARGBFloat);
@@ -775,7 +781,6 @@ namespace GPURayTracing.Tests
                 shader.SetFloat("_ShadowRandomness", shadowRandomness);
                 shader.SetFloat("_LightFalloffScale", lightFalloffScale);
                 shader.SetFloat("_FocalDistance", 100.0f);
-                shader.SetFloat("_GroundSmoothness", groundSmoothness);
                 shader.SetFloat("_Exposure", 1.0f);
                 shader.SetFloat("_FireflyClamp", 0.0f);
                 shader.SetInt("_NumSpheres", spheres.Length);
@@ -830,7 +835,7 @@ namespace GPURayTracing.Tests
                 lights: CreateCausticLights(),
                 width: 48,
                 height: 48,
-                groundSmoothness: 0.05f,
+                receiverSmoothness: 0.05f,
                 skyboxColor: Color.black,
                 numberOfPasses: 8,
                 probes: probes,
@@ -872,6 +877,7 @@ namespace GPURayTracing.Tests
             CausticOptions options,
             out uint[] metadata)
         {
+            AppendReceiver(ref triangles, ref meshes, ref bvhNodes, 0.05f);
             if (!SystemInfo.supportsComputeShaders)
             {
                 Assert.Ignore("Compute shaders are not supported by the active graphics device.");
@@ -949,7 +955,6 @@ namespace GPURayTracing.Tests
             shader.SetInt("_NumMeshes", meshCount);
             shader.SetInt("_NumTopLevelBvhNodes", 0);
             shader.SetInt("_NumShadowBvhNodes", 0);
-            shader.SetFloat("_GroundSmoothness", 0.05f);
             SetWater(shader, false);
             SetCausticBuffers(shader, clearKernel, map);
             SetCausticBuffers(shader, traceKernel, map);
@@ -1235,6 +1240,59 @@ namespace GPURayTracing.Tests
                 meshIndex = 0,
                 textureIndex = textureIndex,
                 lightIndex = materialType == 3 ? 0 : -1
+            };
+        }
+
+        private static void AppendReceiver(
+            ref MeshTriangleData[] triangles,
+            ref MeshInfoData[] meshes,
+            ref BvhNodeData[] bvhNodes,
+            float smoothness)
+        {
+            const float extent = 20.0f;
+            int triangleStart = triangles.Length;
+            int meshIndex = meshes.Length;
+            int rootNodeIndex = bvhNodes.Length;
+            Vector3 min = new Vector3(-extent, -0.0001f, -extent);
+            Vector3 max = new Vector3(extent, 0.0001f, extent);
+            Vector3 p0 = new Vector3(-extent, 0.0f, -extent);
+            Vector3 p1 = new Vector3(-extent, 0.0f, extent);
+            Vector3 p2 = new Vector3(extent, 0.0f, extent);
+            Vector3 p3 = new Vector3(extent, 0.0f, -extent);
+            Vector3 color = new Vector3(0.8f, 0.8f, 0.8f);
+
+            MeshTriangleData first = SurfaceTriangle(p0, p1, p2, Vector3.up, color, -1);
+            MeshTriangleData second = SurfaceTriangle(p0, p2, p3, Vector3.up, color, -1);
+            first.smoothness = smoothness;
+            second.smoothness = smoothness;
+            first.meshIndex = meshIndex;
+            second.meshIndex = meshIndex;
+
+            Array.Resize(ref triangles, triangleStart + 2);
+            triangles[triangleStart] = first;
+            triangles[triangleStart + 1] = second;
+
+            Array.Resize(ref meshes, meshIndex + 1);
+            meshes[meshIndex] = new MeshInfoData
+            {
+                boundsMin = min,
+                rootNodeIndex = rootNodeIndex,
+                boundsMax = max,
+                triangleStart = triangleStart,
+                triangleCount = 2,
+                meshIndex = meshIndex,
+                isLight = 0
+            };
+
+            Array.Resize(ref bvhNodes, rootNodeIndex + 1);
+            bvhNodes[rootNodeIndex] = new BvhNodeData
+            {
+                boundsMin = min,
+                leftChildIndex = -1,
+                boundsMax = max,
+                rightChildIndex = -1,
+                triangleStart = triangleStart,
+                triangleCount = 2
             };
         }
 

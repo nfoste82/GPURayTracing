@@ -52,7 +52,7 @@ The generated primitive material defaults are intended for glass/refraction test
 
 `RayObjectPreview` is an optional preview helper for ray-traced sphere and light-sphere objects. It requires a `SphereCollider`, creates/adds a `MeshFilter` and `MeshRenderer` using a generated sphere mesh sized from the collider, and hides the rasterized mesh in Play mode by default. For `RayLight` objects it can also add/update a Unity point light so light positions are visible and useful while composing the scene. These preview renderers/lights are editor/Unity-scene aids; they are not used by the compute shader for ray-traced shading.
 
-`GameObject > Ray Tracing > Sphere` and `GameObject > Ray Tracing > Light Sphere` create objects with the ray-tracing components plus `RayObjectPreview`. `GameObject > Ray Tracing > Ground Preview Plane` creates a rasterized scene-building reference plane; the actual ray-traced ground remains implicit.
+`GameObject > Ray Tracing > Sphere` and `GameObject > Ray Tracing > Light Sphere` create objects with the ray-tracing components plus `RayObjectPreview`.
 
 ## Lights
 
@@ -65,19 +65,6 @@ Fields:
 Light objects are stored in `_Lights` using a compact light layout. Sphere lights also participate in the top-level BVH as directly visible light objects. Mesh lights are uploaded through `_Triangles` with emissive material data, so when a camera/path ray directly hits a mesh-light triangle, `TracePath()` adds its emission and terminates the path.
 
 Direct lighting also samples `_Lights` explicitly in `GetLightHittingPoint()`. Sphere lights use disk samples across their radius. Mesh lights add one direct-light entry per emissive triangle and sample barycentric points across each triangle. Bounce 0 uses multiple stochastic area-light samples per shaded light, while later bounces use one sample per shaded light. Sampled light contributions are accumulated additively. How many lights are shaded per hit depends on `GameManager.lightSamplingStrategy` (all lights, uniform random, or importance-sampled) and `lightSampleCount`; see `07-shader-lighting-and-materials.md`.
-
-## Ground Plane
-
-The ray-traced ground is not the Unity scene mesh. It is an implicit infinite plane at world `y = 0` inside `IntersectGroundPlane()`.
-
-Ground properties:
-
-- Color is hard-coded to `float3(0.8f, 0.8f, 0.8f)`.
-- Normal is hard-coded to `float3(0.0f, 1.0f, 0.0f)`.
-- Smoothness comes from `_GroundSmoothness` and blends the first continuation ray between diffuse scatter and reflection.
-- Opacity is always `1`.
-
-`GameManager` draws an opaque Scene view preview for the implicit ground plane. In the editor this preview is drawn with depth-tested `Handles` to avoid the transparent gizmo draw-order problems that can otherwise make the ground appear in front of sphere gizmos.
 
 ## Skybox Preview
 

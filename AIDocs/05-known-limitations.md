@@ -4,7 +4,7 @@ This document captures current implementation limits and broad architectural dir
 
 ## Known Limitations
 
-- Spheres, emissive sphere lights, emissive mesh lights, registered triangle meshes, an implicit infinite ground plane, and one finite procedural water surface are ray traced.
+- Spheres, emissive sphere lights, emissive mesh lights, registered triangle meshes, and one finite procedural water surface are ray traced.
 - Unity meshes are traced only when registered through `RayTracingObject` plus `RayMaterial` and `MeshFilter`; box colliders and the scene `Directional Light` are not used by the compute shader renderer.
 - First-hit rays use a top-level BVH over spheres, emissive light spheres, and registered mesh AABBs once the scene has enough objects to amortize traversal overhead. Shadow rays use a separate top-level BVH over blocker objects only: regular spheres and meshes. Smaller scenes use flat object loops. Triangle meshes also use per-mesh AABB culling and per-mesh BVHs to skip most triangle tests. Current default BVH thresholds are conservative so benchmark scenes can opt into BVHs deliberately.
 - `UpdateSpheres()` uploads all sphere/light data every rendered frame, even though component references are cached.
@@ -25,7 +25,7 @@ This document captures current implementation limits and broad architectural dir
 - Mesh change tracking watches transforms and material values but not replacement or in-place mutation of `MeshFilter.sharedMesh`; runtime topology, vertex, or UV changes can leave uploaded triangles/BVHs stale.
 - Single-frame mode overwrites global vSync, target-frame-rate, and time-scale settings and restores hard-coded values rather than preserving previous application settings.
 - BVH traversal (per-mesh, top-level, and shadow, on both GPU and the CPU autofocus path) uses a fixed-size stack of `64`. If a node's children would overflow the stack, those children are silently dropped rather than handled, which could in theory miss intersections for pathologically deep trees. The current SAH builds make this unlikely, but their maximum depth is not checked against the traversal capacity.
-- Scene-view sphere, light, ground, water-bounds, and skybox previews are composition aids. They approximate the ray-traced result but are not guaranteed to match all compute shader shading, reflection, refraction, exposure, or sampling behavior exactly.
+- Scene-view sphere, light, water-bounds, and skybox previews are composition aids. They approximate the ray-traced result but are not guaranteed to match all compute shader shading, reflection, refraction, exposure, or sampling behavior exactly.
 
 ## Recently Completed
 
@@ -58,7 +58,6 @@ This document captures current implementation limits and broad architectural dir
 - Deeper paths use Russian roulette termination once throughput is low enough.
 - Direct lighting uses clamped inverse-square-style falloff scaled by light radius.
 - `GameManager.lightFalloffScale` exposes direct light falloff tuning to the inspector.
-- Ground smoothness affects the implicit ground plane's first continuation ray instead of always behaving like a mirror.
 - Single-frame mode can be disabled from the inspector, `T`, or `Space` to resume real-time rendering, and it keeps blitting the last compute output in the Game view while dispatch is paused.
 - Unused ambient/checkerboard shader parameters, unused shader helpers, and inactive mesh-buffer scaffolding were removed.
 - Direct light sampling is skipped when path throughput is below `MinDirectLightThroughput`.
@@ -70,7 +69,7 @@ This document captures current implementation limits and broad architectural dir
 - Triangle meshes now build and upload per-mesh AABBs and BVH nodes so first-hit, shadow, and mesh-refraction rays do not need to test every triangle.
 - First-hit and shadow rays now traverse a top-level scene BVH so they can skip groups of spheres, lights, and meshes before object-specific tests.
 - `RayObjectPreview` and additional `GameObject > Ray Tracing` menu items were added for visible ray-traced sphere/light composition in Scene view.
-- `GameManager` now draws a depth-tested editor preview for the implicit ground plane and can sync Unity's skybox preview from the ray tracer's skybox texture/tint settings.
+- `GameManager` can sync Unity's skybox preview from the ray tracer's skybox texture/tint settings.
 - Editor pause now refocuses/repaints the Game view through an editor-only callback so the last presented compute render remains visible when the Unity toolbar Pause button is used.
 
 ## Architectural Direction

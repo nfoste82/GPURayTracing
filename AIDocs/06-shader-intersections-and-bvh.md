@@ -6,7 +6,7 @@ This document covers intersection flow and acceleration structures in `Assets/Sc
 
 `GetNearestIntersection()` checks:
 
-1. `IntersectGroundPlane()` for an infinite plane at world `y = 0`.
+1. The finite procedural water volume, when enabled.
 2. The top-level object BVH in `_TopLevelBvhNodes`, when the object count is high enough to justify it.
 3. Flat sphere/light/mesh loops when the top-level BVH is disabled for small scenes.
 4. Intersected sphere or light leaves directly.

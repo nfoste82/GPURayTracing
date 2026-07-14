@@ -39,21 +39,6 @@ public static class RaySceneObjectMenu
         FinishCreate(gameObject, "Create Ray Traced Light");
     }
 
-    [MenuItem("GameObject/Ray Tracing/Ground Preview Plane", false, 3)]
-    private static void CreateGroundPreviewPlane(MenuCommand command)
-    {
-        var gameObject = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        gameObject.name = "Ray Traced Ground Preview";
-        GameObjectUtility.SetParentAndAlign(gameObject, command.context as GameObject);
-        gameObject.transform.position = new Vector3(0.0f, -0.01f, 0.0f);
-        gameObject.transform.localScale = new Vector3(40.0f, 0.02f, 40.0f);
-
-        var renderer = gameObject.GetComponent<MeshRenderer>();
-        renderer.sharedMaterial = CreatePreviewMaterial(new Color(0.8f, 0.8f, 0.8f));
-
-        FinishCreate(gameObject, "Create Ray Traced Ground Preview");
-    }
-
     private static GameObject CreateBaseObject(MenuCommand command, string name)
     {
         var gameObject = new GameObject(name);
@@ -67,14 +52,4 @@ public static class RaySceneObjectMenu
         Selection.activeGameObject = gameObject;
     }
 
-    private static Material CreatePreviewMaterial(Color color)
-    {
-        var shader = Shader.Find("Standard") ?? Shader.Find("Diffuse");
-        var material = new Material(shader)
-        {
-            name = "Ray Preview Material",
-            color = color
-        };
-        return material;
-    }
 }

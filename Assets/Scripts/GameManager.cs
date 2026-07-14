@@ -2,10 +2,6 @@
 using System.Collections.Generic;
 using DefaultNamespace;
 using UnityEngine;
-#if UNITY_EDITOR
-using UnityEditor;
-using UnityEngine.Rendering;
-#endif
 
 public class GameManager : MonoBehaviour
 {
@@ -122,9 +118,6 @@ public class GameManager : MonoBehaviour
     
     [Range(0.1f, 100f)]
     public float cameraFocalDistance = 100f;
-
-    [Range(0.0f, 1.0f)]
-    public float groundSmoothness = 0.98f;
 
     [Tooltip("Higher values make direct light fall off faster with distance.")]
     [Range(0.001f, 1.0f)]
@@ -295,7 +288,6 @@ public class GameManager : MonoBehaviour
     private const int BvhLeafTriangleCount = 4;
     private const int BvhStackSize = 64;
     private const float BvhBoundsPadding = 0.0001f;
-    private const float GroundPreviewSize = 40.0f;
     private const int TopLevelObjectTypeInternal = -1;
     private const int TopLevelObjectTypeSphere = 0;
     private const int TopLevelObjectTypeLight = 1;
@@ -537,57 +529,6 @@ public class GameManager : MonoBehaviour
     private void OnValidate()
     {
         SyncUnitySkyboxPreview();
-    }
-
-    private void OnDrawGizmos()
-    {
-        DrawGroundPreview();
-    }
-
-    private void OnDrawGizmosSelected()
-    {
-        DrawGroundPreview();
-    }
-
-    private static void DrawGroundPreview()
-    {
-#if UNITY_EDITOR
-        var vertices = new[]
-        {
-            new Vector3(-GroundPreviewSize * 0.5f, 0.0f, -GroundPreviewSize * 0.5f),
-            new Vector3(-GroundPreviewSize * 0.5f, 0.0f, GroundPreviewSize * 0.5f),
-            new Vector3(GroundPreviewSize * 0.5f, 0.0f, GroundPreviewSize * 0.5f),
-            new Vector3(GroundPreviewSize * 0.5f, 0.0f, -GroundPreviewSize * 0.5f)
-        };
-
-        var previousZTest = Handles.zTest;
-        Handles.zTest = CompareFunction.LessEqual;
-        Handles.DrawSolidRectangleWithOutline(vertices, new Color(0.8f, 0.8f, 0.8f, 1.0f), new Color(0.8f, 0.8f, 0.8f, 1.0f));
-
-        float halfSize = GroundPreviewSize * 0.5f;
-        const float gridSpacing = 2.0f;
-        Handles.color = new Color(0.55f, 0.55f, 0.55f, 1.0f);
-        for (float offset = -halfSize; offset <= halfSize; offset += gridSpacing)
-        {
-            Handles.DrawLine(new Vector3(-halfSize, 0.001f, offset), new Vector3(halfSize, 0.001f, offset));
-            Handles.DrawLine(new Vector3(offset, 0.001f, -halfSize), new Vector3(offset, 0.001f, halfSize));
-        }
-        Handles.zTest = previousZTest;
-#else
-        var center = new Vector3(0.0f, -0.001f, 0.0f);
-        var size = new Vector3(GroundPreviewSize, 0.02f, GroundPreviewSize);
-        float halfSize = GroundPreviewSize * 0.5f;
-        const float gridSpacing = 2.0f;
-
-        Gizmos.color = new Color(0.8f, 0.8f, 0.8f, 1.0f);
-        Gizmos.DrawWireCube(center, size);
-
-        for (float offset = -halfSize; offset <= halfSize; offset += gridSpacing)
-        {
-            Gizmos.DrawLine(new Vector3(-halfSize, 0.0f, offset), new Vector3(halfSize, 0.0f, offset));
-            Gizmos.DrawLine(new Vector3(offset, 0.0f, -halfSize), new Vector3(offset, 0.0f, halfSize));
-        }
-#endif
     }
 
     private void SyncUnitySkyboxPreview()
@@ -2530,16 +2471,6 @@ public class GameManager : MonoBehaviour
             nearestDistance = GetNearestMeshIntersectionDistance(ray, meshInfo, nearestDistance);
         }
         
-        // Ground plane
-        {
-            var hitDistance = -ray.origin.y / ray.direction.y;
-
-            if (hitDistance > 0 && hitDistance < nearestDistance)
-            {
-                nearestDistance = hitDistance;
-            }
-        }
-
         if (_water != null && !ShouldAutoFocusIgnoreObject(_water.Opacity) && Mathf.Abs(ray.direction.y) > 0.000001f)
         {
             Vector3 waterCenter = _water.TopCenter;
@@ -2639,7 +2570,6 @@ public class GameManager : MonoBehaviour
         shader.SetFloat("_ShadowRandomness", shadowRandomness);
         shader.SetFloat("_LightFalloffScale", lightFalloffScale);
         shader.SetFloat("_FocalDistance", cameraFocalDistance);
-        shader.SetFloat("_GroundSmoothness", groundSmoothness);
         shader.SetFloat("_Exposure", exposure);
         shader.SetFloat("_FireflyClamp", Mathf.Max(0.0f, fireflyClamp));
         bool waterEnabled = _water != null;
@@ -2698,7 +2628,6 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, shadowRandomness);
             hash = AddHash(hash, lightFalloffScale);
             hash = AddHash(hash, cameraFocalDistance);
-            hash = AddHash(hash, groundSmoothness);
             hash = AddHash(hash, fireflyClamp);
             if (enableCaustics)
             {

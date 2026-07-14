@@ -159,5 +159,5 @@ Completion criteria: light and material sampling can both discover the same path
 - Improve mesh textures beyond fixed `128x128` point-filtered, mipless albedo slices: configurable/source resolution, filtering/mips and LOD, color-space validation, then normal and roughness maps.
 - Add an optional firefly/outlier clamp for rare bright speckles in single-frame renders.
 - Consider a lightweight denoising or temporal-stability pass, especially for animated water where normal frame accumulation is disabled.
-- Tune defaults for light falloff, ground smoothness, shadow randomness, passes, shadow quality, and noise after reference-image testing.
+- Tune defaults for light falloff, shadow randomness, passes, shadow quality, and noise after reference-image testing.
 - Add debug legends/configurable ranges and material/debug presets only when they serve a specific diagnosis workflow.

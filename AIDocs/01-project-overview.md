@@ -2,11 +2,11 @@
 
 This is a Unity real-time GPU ray/path tracing project. The scene runs inside Unity, but the actual image generation is performed by a compute shader in `Assets/Scripts/RayTracingCompute.compute`.
 
-The renderer currently ray traces spheres, emissive sphere and mesh lights, registered triangle meshes, an implicit infinite ground plane, and one optional finite procedural water surface. Unity scene meshes, walls, and colliders that are not registered as ray-traced objects still exist mostly for scene organization and physics; they are not traced by the compute shader.
+The renderer currently ray traces spheres, emissive sphere and mesh lights, registered triangle meshes, and one optional finite procedural water surface. Unity scene meshes, walls, and colliders that are not registered as ray-traced objects still exist mostly for scene organization and physics; they are not traced by the compute shader.
 
 ## Key Files
 
-- `Assets/Scripts/GameManager.cs`: Main Unity-side controller. Owns render texture creation, compute shader dispatch, quality settings, camera controls, autofocus, object buffers, shader parameter uploads, implicit ground preview drawing, and optional Unity skybox preview sync. It does not implement `OnRenderImage()` itself; it exposes `RenderImage(src, dest)`, which is called by `RayTracingCameraRenderer`.
+- `Assets/Scripts/GameManager.cs`: Main Unity-side controller. Owns render texture creation, compute shader dispatch, quality settings, camera controls, autofocus, object buffers, shader parameter uploads, and optional Unity skybox preview sync. It does not implement `OnRenderImage()` itself; it exposes `RenderImage(src, dest)`, which is called by `RayTracingCameraRenderer`.
 - `Assets/Scripts/RayTracingCameraRenderer.cs`: Camera component whose `OnRenderImage()` delegates to `GameManager.RenderImage()`. It runs on whatever camera holds this component (typically the same camera wired into `GameManager.renderTextureCamera`, but that link is only inspector wiring, not enforced in code).
 - `Assets/Scripts/RayTracingCompute.compute`: Main GPU renderer. Generates camera rays, performs intersections, computes lighting/shadows/reflections/refraction, and writes the final pixel color.
 - `Assets/Scripts/RayTracingBenchmarkOverlay.cs`: Runtime benchmark overlay for frame timing, geometry counts, BVH status, and quality settings.
@@ -19,7 +19,7 @@ The renderer currently ray traces spheres, emissive sphere and mesh lights, regi
 - `Assets/Scripts/Water.cs`: Transform-backed finite water volume. Position sets the average wavy-top center, scale sets X/Z footprint and Y depth, and the component owns water material/wave settings. One active component is currently supported per `GameManager`.
 - `Assets/Scripts/ColorExtensions.cs`: Converts `Color32` to normalized `Vector3` values for GPU upload.
 - `Assets/Editor/RayMeshPrimitiveMenu.cs`: Adds `GameObject > Ray Tracing` menu entries for creating ray-traced mesh primitive test objects in the hierarchy.
-- `Assets/Editor/RaySceneObjectMenu.cs`: Adds `GameObject > Ray Tracing` menu entries for ray-traced spheres, light spheres, and a ground preview plane.
+- `Assets/Editor/RaySceneObjectMenu.cs`: Adds `GameObject > Ray Tracing` menu entries for ray-traced spheres and light spheres.
 - `Assets/Editor/RayTracingBenchmarkSceneGenerator.cs`: Adds `Tools > Ray Tracing > Generate Benchmark Scenes` for creating focused performance scenes.
 - `Assets/Editor/RayTracingShaderPrecompiler.cs`: Adds `Tools > Ray Tracing > Precompile Compute Shader`. Forces the compute shader to compile and dispatch once from edit mode (with timing and surfaced compile messages) so a slow or failing kernel shows up here instead of stalling Unity on first Play. Unity compiles compute kernels lazily on first `Dispatch`, which is why pathological kernels previously only hung when entering Play mode.
 - `Assets/Scenes/Root.unity`: Main scene with the camera, game manager, ray-traced spheres, light spheres, physics objects, and visual scene geometry.
@@ -33,7 +33,7 @@ The renderer currently ray traces spheres, emissive sphere and mesh lights, regi
 - Mesh UV/albedo texture sampling through a fixed-resolution texture array. This is currently mesh-only and does not include normal, roughness, opacity, or emission maps.
 - Editor-created ray-traced cube, pyramid, and dodecahedron primitives that remain visible in Scene view but hide their rasterized `MeshRenderer` in Play mode by default.
 - Scene-view previews for ray-traced sphere and light-sphere objects through gizmos and optional rasterized `RayObjectPreview` meshes.
-- Scene-view ground preview for the implicit ray-traced ground plane and a bounds/average-level preview for procedural water.
+- Scene-view bounds/average-level preview for procedural water.
 - Optional Unity skybox preview synced from `GameManager.skyboxTexture` and tinted by `_skyboxLightColor`.
 - Emissive sphere and mesh lights.
 - Direct lighting with hard/soft shadow sampling.

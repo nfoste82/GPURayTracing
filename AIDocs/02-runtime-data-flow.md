@@ -126,8 +126,6 @@ Benchmark scene generation and overlay behavior are documented in `10-benchmarki
 
 `GameManager.OnValidate()` and `Start()` call `SyncUnitySkyboxPreview()` when `syncUnitySkyboxToRayTracedSkybox` is enabled. It creates a transient `Skybox/Panoramic` material from `skyboxTexture`, applies `_skyboxLightColor` as the skybox tint, applies `unitySkyboxExposure` and `unitySkyboxRotation`, and assigns it to `RenderSettings.skybox`. This affects Unity's Scene/Game skybox preview only; ray-traced sky sampling still uses `_SkyboxTexture` and `_SkyboxLight` in the compute shader.
 
-`GameManager.OnDrawGizmos()`/`OnDrawGizmosSelected()` draws a ground preview for the implicit ground plane. In the editor it uses `Handles.DrawSolidRectangleWithOutline()` with depth testing so the opaque ground preview respects scene depth better than a filled `Gizmos.DrawCube()`.
-
 `RayTracingObject.OnDrawGizmos()` draws sphere/light-sphere gizmos using the world-space collider center and scaled radius. Sphere gizmo alpha follows `RayMaterial.Opacity`; light-sphere gizmos use full opacity because `RayLight` has no opacity field.
 
 `RayObjectPreview` can be attached to sphere/light objects to add a rasterized sphere mesh preview and, for `RayLight`, an optional Unity point-light preview. Its `MeshRenderer` is visible outside Play mode and hidden during Play mode by default, so the Game view remains compute-rendered.
@@ -155,7 +153,6 @@ Benchmark scene generation and overlay behavior are documented in `10-benchmarki
 - `_ShadowRandomness`
 - `_LightFalloffScale`
 - `_FocalDistance`
-- `_GroundSmoothness`
 - `_Exposure`
 - `_WaterEnabled`, `_WaterCenter`, `_WaterSize`, `_WaterDepth`, `_WaterColor`, `_WaterSmoothness`, `_WaterOpacity`, `_WaterAbsorptionStrength`, `_WaterRefraction`, `_WaterWaveAmplitude`, `_WaterWaveScale`, `_WaterWaveSpeed`, `_WaterTime`, `_WaterMarchSteps`, `_WaterRefinementSteps`. These are sourced from the registered `Water` component; its transform supplies center, footprint, and depth.
 - `_Spheres`

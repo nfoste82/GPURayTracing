@@ -20,6 +20,7 @@ public class RayMaterial : MonoBehaviour
     public bool InterpolateNormals;
 
     [Range(0f, 1f)]
+    [Tooltip("Surface smoothness. For glass, lower values broaden both reflections and transmitted refraction for a frosted appearance.")]
     public float Smoothness = 0.5f;
 
     [Range(0f, 1f)]
