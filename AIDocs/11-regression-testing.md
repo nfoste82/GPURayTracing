@@ -66,3 +66,4 @@ Stack overflow and genuinely unmatched exits set explicit status bits and preser
 
 - Add production-GPU BVH-on versus flat-loop image equivalence in addition to the deterministic CPU traversal comparisons.
 - The water, nested-water/glass, and underwater-camera signatures were recaptured after tracing their drift to the intentional finite-water AABB change in `5fd1d33`, whose fixtures gained `_WaterDepth` without corresponding baseline updates.
+- Add focused bounded-fog interval/transmittance GPU probes and deterministic light-shaft image signatures. Existing image fixtures explicitly disable `FOG_ENABLED` and upload neutral fog parameters so they continue to validate the unchanged non-fog shader variant.

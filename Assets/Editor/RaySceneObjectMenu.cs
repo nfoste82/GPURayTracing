@@ -39,6 +39,15 @@ public static class RaySceneObjectMenu
         FinishCreate(gameObject, "Create Ray Traced Light");
     }
 
+    [MenuItem("GameObject/Ray Tracing/Fog Volume", false, 3)]
+    private static void CreateFogVolume(MenuCommand command)
+    {
+        var gameObject = CreateBaseObject(command, "Fog Volume");
+        gameObject.AddComponent<FogVolume>();
+        gameObject.transform.localScale = new Vector3(20.0f, 10.0f, 20.0f);
+        FinishCreate(gameObject, "Create Fog Volume");
+    }
+
     private static GameObject CreateBaseObject(MenuCommand command, string name)
     {
         var gameObject = new GameObject(name);

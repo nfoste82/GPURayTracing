@@ -69,6 +69,25 @@ public class GameManager : MonoBehaviour
 
     [Range(0.0f, 4.0f)]
     public float causticIntensity = 1.0f;
+
+    [Header("Volumetric fog")]
+    [Tooltip("Globally enables the registered FogVolume without disabling its component or changing shader resources.")]
+    public bool enableVolumetricFog = true;
+
+    [Tooltip("Multiplies the density on the registered FogVolume. Useful for tuning a scene from the GameManager.")]
+    [Range(0.0f, 2.0f)]
+    public float fogDensityScale = 1.0f;
+
+    [Tooltip("Multiplies the FogVolume scattering albedo. Lower values absorb more light and preserve shaft contrast.")]
+    [Range(0.0f, 2.0f)]
+    public float fogScatteringScale = 1.0f;
+
+    [Tooltip("Display-oriented multiplier for direct light scattered toward the camera. Raise this to reveal shafts without increasing extinction or washing out surfaces.")]
+    [Range(0.0f, 32.0f)]
+    public float fogInScatteringIntensity = 8.0f;
+
+    [Tooltip("Allows paths to scatter repeatedly in fog. More physical, but slower, noisier, and more likely to wash out high-contrast light shafts.")]
+    public bool enableFogMultipleScattering = false;
     
     [Header("Dynamic quality")]
     [Tooltip("Dynamically adjusts passes, light sampling, shadow quality, and bounces to approach the target frame rate. BVH thresholds are never changed.")]
@@ -233,6 +252,7 @@ public class GameManager : MonoBehaviour
     private readonly HashSet<int> _warmedShaderVariants = new HashSet<int>();
     private DebugRenderMode _appliedDebugRenderMode = DebugRenderMode.FinalColor;
     private bool _appliedCausticsEnabled;
+    private bool _appliedFogEnabled;
     private bool _pendingVariantWarmup;
 
     // True for the single frame where the "Compiling shader variant" overlay should be shown
@@ -259,6 +279,11 @@ public class GameManager : MonoBehaviour
     public int CausticGridCellCount => _causticGridCellCount;
     public int CausticGridPhotonCount => _causticGridPhotonCount;
     public int CausticGridOutOfBoundsCount => _causticGridOutOfBoundsCount;
+    public bool IsVolumetricFogActive => IsFogEnabled();
+    public float EffectiveFogDensity => IsFogEnabled() ? _fogVolume.Density * Mathf.Max(0.0f, fogDensityScale) : 0.0f;
+    public Color EffectiveFogScatteringAlbedo => IsFogEnabled()
+        ? _fogVolume.ScatteringAlbedo * Mathf.Max(0.0f, fogScatteringScale)
+        : Color.black;
 
     private static bool _buffersNeedRebuilding = false;
     private static readonly List<RayTracingObject> _rayTracingObjects = new List<RayTracingObject>();
@@ -518,6 +543,7 @@ public class GameManager : MonoBehaviour
     }
 
     private Water _water;
+    private FogVolume _fogVolume;
 
     private void Start()
     {
@@ -1164,8 +1190,11 @@ public class GameManager : MonoBehaviour
         // overlay flag and re-show the previous output (no heavy dispatch), so OnGUI can paint the
         // "Compiling shader variant" message; next frame we run the stalling dispatch with that
         // message already on screen.
-        int requestedVariant = GetShaderVariantKey(debugRenderMode, enableCaustics);
-        bool shaderVariantChanged = debugRenderMode != _appliedDebugRenderMode || enableCaustics != _appliedCausticsEnabled;
+        bool fogEnabled = IsFogEnabled();
+        int requestedVariant = GetShaderVariantKey(debugRenderMode, enableCaustics, fogEnabled);
+        bool shaderVariantChanged = debugRenderMode != _appliedDebugRenderMode
+            || enableCaustics != _appliedCausticsEnabled
+            || fogEnabled != _appliedFogEnabled;
         if (!_pendingVariantWarmup
             && shaderVariantChanged
             && !_warmedShaderVariants.Contains(requestedVariant))
@@ -1243,14 +1272,23 @@ public class GameManager : MonoBehaviour
         _warmedShaderVariants.Add(requestedVariant);
         _appliedDebugRenderMode = debugRenderMode;
         _appliedCausticsEnabled = enableCaustics;
+        _appliedFogEnabled = fogEnabled;
         _pendingVariantWarmup = false;
 
         Graphics.Blit(_outputTexture, dest);
     }
 
-    private static int GetShaderVariantKey(DebugRenderMode mode, bool causticsEnabled)
+    private static int GetShaderVariantKey(DebugRenderMode mode, bool causticsEnabled, bool fogEnabled)
     {
-        return ((int)mode << 1) | (causticsEnabled ? 1 : 0);
+        return ((int)mode << 2) | (causticsEnabled ? 2 : 0) | (fogEnabled ? 1 : 0);
+    }
+
+    private bool IsFogEnabled()
+    {
+        return enableVolumetricFog
+            && _fogVolume != null
+            && _fogVolume.Density > 0.0f
+            && fogDensityScale > 0.0f;
     }
 
     private void UpdateSpheres()
@@ -2351,6 +2389,38 @@ public class GameManager : MonoBehaviour
         _water = null;
         ResetFrameAccumulation();
     }
+
+    public bool RegisterFogVolume(FogVolume fogVolume)
+    {
+        if (_fogVolume == fogVolume)
+        {
+            return true;
+        }
+
+        if (_fogVolume != null)
+        {
+            Debug.LogError(
+                $"Only one active FogVolume component is supported by GameManager '{name}'. " +
+                $"Disable '{_fogVolume.name}' before enabling '{fogVolume.name}'.",
+                fogVolume);
+            return false;
+        }
+
+        _fogVolume = fogVolume;
+        ResetFrameAccumulation();
+        return true;
+    }
+
+    public void UnregisterFogVolume(FogVolume fogVolume)
+    {
+        if (_fogVolume != fogVolume)
+        {
+            return;
+        }
+
+        _fogVolume = null;
+        ResetFrameAccumulation();
+    }
     
     public void UnregisterObject(RayTracingObject obj)
     {
@@ -2543,6 +2613,14 @@ public class GameManager : MonoBehaviour
         {
             shader.DisableKeyword("CAUSTICS_ENABLED");
         }
+        if (IsFogEnabled())
+        {
+            shader.EnableKeyword("FOG_ENABLED");
+        }
+        else
+        {
+            shader.DisableKeyword("FOG_ENABLED");
+        }
         shader.SetInt("_MaxLightSamples", maxLightSamples);
         shader.SetInt("_LightSamplingStrategy", (int)lightSamplingStrategy);
         shader.SetInt("_LightSampleCount", lightSampleCount);
@@ -2592,6 +2670,23 @@ public class GameManager : MonoBehaviour
         shader.SetFloat("_WaterTime", Application.isPlaying ? GetRenderTime() : 0.0f);
         shader.SetInt("_WaterMarchSteps", waterEnabled ? Mathf.Clamp(_water.MarchSteps, 8, 64) : 8);
         shader.SetInt("_WaterRefinementSteps", waterEnabled ? Mathf.Clamp(_water.RefinementSteps, 2, 8) : 2);
+        bool fogEnabled = IsFogEnabled();
+        Vector3 fogCenter = fogEnabled ? _fogVolume.Center : Vector3.zero;
+        Vector3 fogSize = fogEnabled ? _fogVolume.Size : Vector3.one;
+        Color fogAlbedo = fogEnabled ? _fogVolume.ScatteringAlbedo : Color.black;
+        shader.SetInt("_FogEnabled", fogEnabled ? 1 : 0);
+        Vector3 fogBoundsMin = fogCenter - fogSize * 0.5f;
+        Vector3 fogBoundsMax = fogCenter + fogSize * 0.5f;
+        shader.SetVector("_FogBoundsMin", new Vector4(fogBoundsMin.x, fogBoundsMin.y, fogBoundsMin.z, 0.0f));
+        shader.SetVector("_FogBoundsMax", new Vector4(fogBoundsMax.x, fogBoundsMax.y, fogBoundsMax.z, 0.0f));
+        shader.SetVector("_FogScatteringAlbedo", new Vector4(
+            Mathf.Clamp01(fogAlbedo.r * fogScatteringScale),
+            Mathf.Clamp01(fogAlbedo.g * fogScatteringScale),
+            Mathf.Clamp01(fogAlbedo.b * fogScatteringScale),
+            0.0f));
+        shader.SetFloat("_FogDensity", fogEnabled ? EffectiveFogDensity : 0.0f);
+        shader.SetFloat("_FogInScatteringIntensity", Mathf.Max(0.0f, fogInScatteringIntensity));
+        shader.SetInt("_FogMultipleScattering", enableFogMultipleScattering ? 1 : 0);
         shader.SetInt("_NumLights", _lights.Count);
         shader.SetInt("_NumTopLevelBvhNodes", _topLevelBvhNodes.Count);
         shader.SetInt("_NumShadowBvhNodes", _shadowBvhNodes.Count);
@@ -2654,6 +2749,21 @@ public class GameManager : MonoBehaviour
                 hash = AddHash(hash, _water.WaveSpeed);
                 hash = AddHash(hash, _water.MarchSteps);
                 hash = AddHash(hash, _water.RefinementSteps);
+            }
+            hash = AddHash(hash, _fogVolume != null ? _fogVolume.GetInstanceID() : 0);
+            hash = AddHash(hash, enableVolumetricFog ? 1 : 0);
+            hash = AddHash(hash, fogDensityScale);
+            hash = AddHash(hash, fogScatteringScale);
+            hash = AddHash(hash, fogInScatteringIntensity);
+            hash = AddHash(hash, enableFogMultipleScattering ? 1 : 0);
+            if (_fogVolume != null)
+            {
+                hash = AddHash(hash, _fogVolume.Center);
+                hash = AddHash(hash, _fogVolume.Size);
+                hash = AddHash(hash, _fogVolume.Density);
+                hash = AddHash(hash, _fogVolume.ScatteringAlbedo.r);
+                hash = AddHash(hash, _fogVolume.ScatteringAlbedo.g);
+                hash = AddHash(hash, _fogVolume.ScatteringAlbedo.b);
             }
             hash = AddHash(hash, randomNoise ? 1 : 0);
             hash = AddHash(hash, skyboxTexture != null ? skyboxTexture.GetInstanceID() : 0);

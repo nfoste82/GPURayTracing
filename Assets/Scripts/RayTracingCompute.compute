@@ -14,6 +14,7 @@
 // is selected. The non-debug variant (the hot path) compiles without any debug intersection code.
 #pragma multi_compile _ DEBUG_RENDER
 #pragma multi_compile _ CAUSTICS_ENABLED
+#pragma multi_compile _ FOG_ENABLED
 
 // Create a RenderTexture with enableRandomWrite flag and set it
 // with cs.SetTexture
@@ -61,6 +62,14 @@ float _WaterWaveSpeed;
 float _WaterTime;
 int _WaterMarchSteps;
 int _WaterRefinementSteps;
+
+int _FogEnabled;
+float3 _FogBoundsMin;
+float3 _FogBoundsMax;
+float _FogDensity;
+float3 _FogScatteringAlbedo;
+float _FogInScatteringIntensity;
+int _FogMultipleScattering;
 
 uint _Seed;
 uint _SampleOffset;
@@ -1364,6 +1373,71 @@ bool IntersectAabb(Ray ray, float3 boundsMin, float3 boundsMax, float maxDistanc
     return IntersectAabbInverse(ray.origin, inverseDirection, boundsMin, boundsMax, maxDistance, entryDistance);
 }
 
+bool GetFogInterval(Ray ray, float maxDistance, out float entryDistance, out float exitDistance)
+{
+    entryDistance = 0.0f;
+    exitDistance = 0.0f;
+    if (_FogEnabled == 0 || _FogDensity <= 0.0f)
+    {
+        return false;
+    }
+
+    float3 inverseDirection = 1.0f / ray.direction;
+    float3 t0 = (_FogBoundsMin - ray.origin) * inverseDirection;
+    float3 t1 = (_FogBoundsMax - ray.origin) * inverseDirection;
+    float3 tMin3 = min(t0, t1);
+    float3 tMax3 = max(t0, t1);
+    float tMin = max(max(tMin3.x, tMin3.y), tMin3.z);
+    float tMax = min(min(tMax3.x, tMax3.y), tMax3.z);
+    entryDistance = max(0.0f, tMin);
+    exitDistance = min(tMax, maxDistance);
+    return exitDistance > entryDistance;
+}
+
+float GetFogDistanceAlongSegment(float3 startPosition, float3 endPosition)
+{
+    float3 offset = endPosition - startPosition;
+    float segmentLength = length(offset);
+    if (segmentLength <= 1e-6f)
+    {
+        return 0.0f;
+    }
+
+    float entryDistance;
+    float exitDistance;
+    return GetFogInterval(CreateRay(startPosition, offset / segmentLength), segmentLength, entryDistance, exitDistance)
+        ? exitDistance - entryDistance
+        : 0.0f;
+}
+
+float GetFogTransmittanceAlongSegment(float3 startPosition, float3 endPosition)
+{
+    return exp(-max(0.0f, _FogDensity) * GetFogDistanceAlongSegment(startPosition, endPosition));
+}
+
+bool SampleFogScatteringEvent(Ray ray, float maxDistance, inout uint rngState, out float eventDistance)
+{
+    eventDistance = 0.0f;
+    float entryDistance;
+    float exitDistance;
+    if (!GetFogInterval(ray, maxDistance, entryDistance, exitDistance))
+    {
+        return false;
+    }
+
+    float freeFlightDistance = -log(max(1e-6f, 1.0f - rand(rngState))) / max(_FogDensity, 1e-6f);
+    eventDistance = entryDistance + freeFlightDistance;
+    return eventDistance < exitDistance;
+}
+
+float3 SampleUniformSphere(inout uint rngState)
+{
+    float z = 1.0f - 2.0f * rand(rngState);
+    float phi = 2.0f * PI * rand(rngState);
+    float radial = sqrt(max(0.0f, 1.0f - z * z));
+    return float3(radial * cos(phi), radial * sin(phi), z);
+}
+
 void IntersectMeshBvh(Ray ray, inout RayHit bestHit, MeshInfo meshInfo)
 {
     float3 inverseDirection = 1.0f / ray.direction;
@@ -2176,7 +2250,11 @@ float3 EvaluateMaterialBrdf(Ray ray, RayHit hit, float3 lightDirection, out floa
 }
 
 float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
-                         float lightSelectionPdf, int lightTechniqueSampleCount, inout uint rngState)
+                         float lightSelectionPdf, int lightTechniqueSampleCount,
+#if defined(FOG_ENABLED)
+                         bool volumeEvent,
+#endif
+                         inout uint rngState)
 {
     float3 lightTotal = float3(0.0f, 0.0f, 0.0f);
     Light light = _Lights[lightIndex];
@@ -2211,9 +2289,22 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
         float3 ptToOffset = offsetPt - hit.position;
         float distanceToLight = length(ptToOffset);
         ptToOffset = normalize(ptToOffset);
-        Ray rayToLight = CreateRay(hit.position + (hit.geometricNormal * 0.001f), ptToOffset);
+        float3 shadowOrigin = hit.position + hit.geometricNormal * 0.001f;
+#if defined(FOG_ENABLED)
+        if (volumeEvent)
+        {
+            shadowOrigin = hit.position + ptToOffset * 0.001f;
+        }
+#endif
+        Ray rayToLight = CreateRay(shadowOrigin, ptToOffset);
 
         float rayNormalDot = saturate(dot(ptToOffset, hit.normal));
+#if defined(FOG_ENABLED)
+        if (volumeEvent)
+        {
+            rayNormalDot = 1.0f;
+        }
+#endif
         if (rayNormalDot <= 0.0f)
         {
             continue;
@@ -2226,6 +2317,9 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
         }
 
         shadowTransmittance *= GetWaterAbsorptionTransmittance(EstimateWaterDistanceAlongSegment(hit.position, offsetPt));
+#if defined(FOG_ENABLED)
+        shadowTransmittance *= GetFogTransmittanceAlongSegment(hit.position, offsetPt);
+#endif
         if (max(shadowTransmittance.x, max(shadowTransmittance.y, shadowTransmittance.z)) <= 0.001f)
         {
             continue;
@@ -2234,6 +2328,13 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
         float lightShapePdf = GetLightShapePdf(light, hit.position, offsetPt);
         float materialPdf;
         float3 materialResponse = EvaluateMaterialBrdf(ray, hit, ptToOffset, materialPdf);
+#if defined(FOG_ENABLED)
+        if (volumeEvent)
+        {
+            materialPdf = 0.0f;
+            materialResponse = float3(1.0f / (4.0f * PI), 1.0f / (4.0f * PI), 1.0f / (4.0f * PI));
+        }
+#endif
         // Sphere lights retain the renderer's historical falloff-scaled direct-light model,
         // which is not the same estimator as an emissive sphere hit. Applying complementary
         // MIS weights between them removes energy from the center of reflected sphere lights.
@@ -2241,11 +2342,8 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
         {
             float lightPdf = lightSelectionPdf * lightShapePdf;
             float misWeight = PowerHeuristic(lightTechniqueSampleCount * lightPdf, materialPdf);
-            float lightStrength = GetDirectLightFalloff(distanceToLight, light.radius);
-            if (light.type == LightTypeTriangle)
-            {
-                lightStrength *= saturate(dot(light.normal, -ptToOffset)) * max(1.0f, light.area);
-            }
+            float distanceScale = max(1.0f, distanceToLight * distanceToLight * max(0.001f, _LightFalloffScale));
+            float lightStrength = saturate(dot(light.normal, -ptToOffset)) * light.area / distanceScale;
             lightTotal += light.emission * lightStrength * shadowTransmittance * materialResponse
                 * rayNormalDot * misWeight;
         }
@@ -2390,7 +2488,11 @@ int SelectLightForDraw(int iteration, int drawCount, int lightCount, RayHit hit,
     return iteration;
 }
 
-float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight, inout uint rngState)
+float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
+#if defined(FOG_ENABLED)
+                            bool volumeEvent,
+#endif
+                            inout uint rngState)
 {
     int sampleCount = max(1, samplesPerLight);
 
@@ -2463,7 +2565,11 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight, inout uint
         float selectionPdf = GetLightSelectionPdf(lightIndex, lightCount, sampleAllLights, hit);
         int lightTechniqueSampleCount = sampleCount * (sampleAllLights ? 1 : drawCount);
         accumulated += SampleSingleLight(lightIndex, ray, hit, sampleCount,
-            selectionPdf, lightTechniqueSampleCount, rngState) * weight;
+            selectionPdf, lightTechniqueSampleCount,
+#if defined(FOG_ENABLED)
+            volumeEvent,
+#endif
+            rngState) * weight;
     }
 
     // For random strategies the per-draw weights already include the 1/drawCount averaging,
@@ -2940,8 +3046,22 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
 float3 GetDirectLight(Ray ray, RayHit hit, bool softShadows, inout uint rngState)
 {
     int samplesPerLight = softShadows ? max(1, _ShadowQuality + 1) : 1;
-    return GetLightHittingPoint(ray, hit, samplesPerLight, rngState);
+    return GetLightHittingPoint(ray, hit, samplesPerLight,
+#if defined(FOG_ENABLED)
+        false,
+#endif
+        rngState);
 }
+
+#if defined(FOG_ENABLED)
+float3 GetFogDirectLight(Ray ray, float3 position, bool softShadows, inout uint rngState)
+{
+    RayHit eventHit = CreateRayHit();
+    eventHit.position = position;
+    int samplesPerLight = softShadows ? max(1, _ShadowQuality + 1) : 1;
+    return GetLightHittingPoint(ray, eventHit, samplesPerLight, true, rngState);
+}
+#endif
 
 bool ApplyRussianRoulette(inout float3 throughput, int bounce, inout uint rngState)
 {
@@ -3031,6 +3151,44 @@ float3 TracePath(Ray ray, inout uint rngState)
     for (int bounce = 0; bounce < _NumBounces; bounce++)
     {
         RayHit hit = GetNearestIntersection(ray);
+
+#if defined(FOG_ENABLED)
+        float fogEventDistance;
+        if (SampleFogScatteringEvent(ray, hit.distance, rngState, fogEventDistance))
+        {
+            throughput *= GetActiveMediumSegmentTransmittance(ray, fogEventDistance, mediumStack);
+            if (!HasPathEnergy(throughput))
+            {
+                break;
+            }
+
+            float3 eventPosition = ray.origin + ray.direction * fogEventDistance;
+            RayHit fogSegmentHit = CreateRayHit();
+            fogSegmentHit.distance = fogEventDistance;
+            ApplyFiniteMediumExitAfterSegment(mediumStack, ray, fogSegmentHit);
+            if (ShouldSampleDirectLight(throughput))
+            {
+                radiance += throughput * _FogScatteringAlbedo * max(0.0f, _FogInScatteringIntensity)
+                    * GetFogDirectLight(ray, eventPosition, bounce == 0, rngState);
+            }
+
+            if (_FogMultipleScattering == 0)
+            {
+                break;
+            }
+
+            throughput *= saturate(_FogScatteringAlbedo);
+            ray.direction = SampleUniformSphere(rngState);
+            ray.origin = eventPosition + ray.direction * 0.001f;
+            previousMaterialPdf = 0.0f;
+            previousDirectLightSampled = false;
+            if (!HasPathEnergy(throughput) || !ApplyRussianRoulette(throughput, bounce, rngState))
+            {
+                break;
+            }
+            continue;
+        }
+#endif
 
         throughput *= GetActiveMediumSegmentTransmittance(ray, hit.distance, mediumStack);
         if (!HasPathEnergy(throughput))

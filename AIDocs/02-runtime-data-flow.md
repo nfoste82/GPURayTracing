@@ -155,6 +155,7 @@ Benchmark scene generation and overlay behavior are documented in `10-benchmarki
 - `_FocalDistance`
 - `_Exposure`
 - `_WaterEnabled`, `_WaterCenter`, `_WaterSize`, `_WaterDepth`, `_WaterColor`, `_WaterSmoothness`, `_WaterOpacity`, `_WaterAbsorptionStrength`, `_WaterRefraction`, `_WaterWaveAmplitude`, `_WaterWaveScale`, `_WaterWaveSpeed`, `_WaterTime`, `_WaterMarchSteps`, `_WaterRefinementSteps`. These are sourced from the registered `Water` component; its transform supplies center, footprint, and depth.
+- `_FogEnabled`, `_FogBoundsMin`, `_FogBoundsMax`, `_FogDensity`, `_FogScatteringAlbedo`, `_FogInScatteringIntensity`, and `_FogMultipleScattering`. Base bounds and material values come from the single registered `FogVolume`; `GameManager` supplies the global enable, density/scattering scales, display-oriented in-scattering intensity, and multiple-scattering toggle. Fog uses no GPU buffer or auxiliary dispatch.
 - `_Spheres`
 - `_Lights`
 - `_Triangles`
@@ -167,7 +168,7 @@ Benchmark scene generation and overlay behavior are documented in `10-benchmarki
 
 When frame accumulation is active, `_SampleOffset` advances by `AccumulatedFrameCount * numberOfPasses` so deterministic sampling still generates new samples across accumulated frames. `_AccumulatedFrameCount` tells the shader how many previous HDR final-color frames are stored in `AccumulationResult`. Accumulation is applied before exposure/tone mapping, and debug render modes are not accumulated.
 
-Alongside `_DebugRenderMode`, `SetShaderParameters()` toggles the `DEBUG_RENDER` shader keyword: `EnableKeyword("DEBUG_RENDER")` when `debugRenderMode != FinalColor`, otherwise `DisableKeyword("DEBUG_RENDER")`. This selects the shader variant that includes or excludes the debug render path; see `08-shader-debugging-and-randomness.md` and `10-benchmarking-and-performance.md`.
+Alongside `_DebugRenderMode`, `SetShaderParameters()` toggles the `DEBUG_RENDER` shader keyword: `EnableKeyword("DEBUG_RENDER")` when `debugRenderMode != FinalColor`, otherwise `DisableKeyword("DEBUG_RENDER")`. It also toggles `FOG_ENABLED` from the active `FogVolume`, keeping fog intersection, scattering, and shadow-transmittance work out of the disabled variant. Shader variant warmup keys include debug mode, caustics, and fog state. See `08-shader-debugging-and-randomness.md` and `10-benchmarking-and-performance.md`.
 
 `SetShaderParameters()` also logs a one-time warning when `lightSamplingStrategy == ImportanceSampled` and the active light count exceeds `MaxImportanceLights` (`128`), since lights beyond that count are dropped from importance weighting in the shader. The C# `MaxImportanceLights` constant must stay in sync with the shader's `MaxImportanceLights`.
 

@@ -38,6 +38,7 @@ public static class RayTracingBenchmarkSceneGenerator
         CreateCornellBoxScene();
         CreateDragonCornellBoxScene();
         CreateWolfensteinScene();
+        CreateVolumetricFogScene();
 
         AssetDatabase.SaveAssets();
         AssetDatabase.Refresh();
@@ -80,6 +81,87 @@ public static class RayTracingBenchmarkSceneGenerator
         overlay.gameManager = manager;
 
         return new BenchmarkContext(scene, managerObject.transform);
+    }
+
+    private static void CreateVolumetricFogScene()
+    {
+        const string sceneName = "Benchmark_VolumetricFog";
+        if (ShouldSkipExistingScene(sceneName))
+        {
+            return;
+        }
+
+        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 3.17f, -11.27f), new Vector3(8.23f, 0.0f, 0.0f), passes: 1, bounces: 6, shadowQuality: 0);
+        context.Manager.enableFrameAccumulation = true;
+        context.Manager.lightSamplingStrategy = GameManager.LightSamplingStrategy.AllLights;
+        context.Manager.lightFalloffScale = 0.041f;
+        context.Manager.shadowRandomness = 0.6f;
+        context.Manager.exposure = 0.75f;
+        context.Manager.fogDensityScale = 0.74f;
+        context.Manager.fogScatteringScale = 0.466f;
+        context.Manager.fogInScatteringIntensity = 12.77f;
+        context.Manager.enableFogMultipleScattering = false;
+        context.Manager._skyboxLightColor = new Color32(0, 0, 0, 255);
+        context.Manager.cameraFocalDistance = 15.0f;
+        context.Manager.fireflyClamp = 32f;
+
+        const int slatCount = 9;
+        const float slatSpacing = 1.45f;
+        const float slatWidth = 0.72f;
+        const float slatDepth = 17.25f;
+
+        AddFloor(context.Root, new Vector2(0.0f, 2.5f), new Vector2(35.0f, 500.0f), 0.12f, "Matte Floor");
+        
+        AddMeshLight(
+            context.Root,
+            "Rectangular Ceiling Light",
+            CreateHorizontalQuadMesh("Rectangular Ceiling Light", (slatCount - 1) * slatSpacing + slatWidth, slatDepth, 1.0f, 1.0f),
+            new Vector3(0.0f, 20.7f, 3.5f),
+            Vector3.zero,
+            new Vector3(0.15f, 1.0f, 1.0f),
+            new Color32(255, 255, 255, 255));
+
+        for (int i = 0; i < slatCount; i++)
+        {
+            float x = (i - (slatCount - 1) * 0.5f) * slatSpacing;
+            AddPrimitiveMesh(
+                context.Root,
+                $"Ceiling Slat {i + 1}",
+                RayMeshPrimitive.PrimitiveType.Cube,
+                new Vector3(x, 8.75f, 3.5f),
+                Vector3.zero,
+                new Vector3(slatWidth, 0.55f, slatDepth),
+                Color.black,
+                RayMaterial.MaterialType.Diffuse,
+                0.56f,
+                1.0f);
+        }
+        
+        // Add left wall
+        AddPrimitiveMesh(context.Root, $"Left Wall",
+            RayMeshPrimitive.PrimitiveType.Cube,
+            new Vector3(-12.0f, 8.75f, 3.5f), Vector3.zero, new Vector3(1f, 40f, 100f),
+            Color.black,
+            RayMaterial.MaterialType.Diffuse, 0.0f, 1.0f);
+        
+        // Add right wall
+        AddPrimitiveMesh(context.Root, $"Right Wall",
+            RayMeshPrimitive.PrimitiveType.Cube,
+            new Vector3(12.0f, 8.75f, 3.5f), Vector3.zero, new Vector3(1f, 40f, 100f),
+            Color.black,
+            RayMaterial.MaterialType.Diffuse, 0.0f, 1.0f);
+
+        var fogObject = new GameObject("Homogeneous Fog Volume");
+        fogObject.transform.SetParent(context.Root, false);
+        
+        var fog = fogObject.AddComponent<FogVolume>();
+        fog.Density = 0.029f;
+        fog.ScatteringAlbedo = Color.white;
+        
+        fogObject.transform.localPosition = new Vector3(0.0f, 4.6f, 3.5f);
+        fogObject.transform.localScale = new Vector3(14.0f, 30.0f, 22.0f);
+
+        Save(context.Scene, sceneName);
     }
 
     private static void CreateManySpheresScene()

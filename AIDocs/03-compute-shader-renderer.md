@@ -24,6 +24,7 @@ Important shader globals:
 - `_Exposure`: master brightness multiplier applied before tone mapping. Acts like a camera exposure dial.
 - `_FireflyClamp`: optional maximum luminance for each complete path sample before per-pixel averaging. `0` disables it. This deliberately biased variance control suppresses rare specular samples that otherwise remain visible in low-sample animated scenes.
 - `_WaterAbsorptionStrength`: distance-based water-medium absorption density. When a path or direct-light segment travels underwater, the shader applies exponential transmittance from `_WaterColor` and this strength. The active `Water` component supplies these globals; its transform position is `_WaterCenter`, X/Z scale is `_WaterSize`, and Y scale is `_WaterDepth` below the wavy top.
+- `_FogEnabled`, `_FogBoundsMin`, `_FogBoundsMax`, `_FogDensity`, `_FogScatteringAlbedo`, `_FogInScatteringIntensity`, and `_FogMultipleScattering`: configure one optional axis-aligned homogeneous participating volume. Fog overlaps glass/water medium state, samples isotropic free-flight events, and attenuates direct-light segments through its bounds. `_FogInScatteringIntensity` is an explicitly display-oriented multiplier that reveals shafts without changing extinction. Single scattering is the default for lower cost and stronger light-shaft contrast; multiple scattering can be enabled from `GameManager` but adds noise and fills shadowed regions.
 - `_LightSamplingStrategy`: selects how `GetLightHittingPoint()` samples scene lights (`0` = all lights, `1` = uniform random pick, `2` = importance-sampled pick). See `07-shader-lighting-and-materials.md`.
 - `_LightSampleCount`: for the random/importance strategies, how many lights each shading point draws per hit. Ignored by the all-lights strategy.
 - `_MaxLightSamples`: diagnostic cap on how many lights any strategy considers. `0` means no cap (use the real light count); a positive value clamps the considered light count to confirm the per-hit light loop is the bottleneck.
@@ -143,7 +144,7 @@ It maintains:
 
 Per bounce:
 
-1. Trace the ray with `GetNearestIntersection()`.
+1. Trace the ray with `GetNearestIntersection()` and sample a fog free-flight distance over the bounded ray segment. A fog event before the surface receives shadowed direct lighting through an isotropic phase function, scatters in a uniform direction, consumes the bounce, and continues without shading the surface.
 2. Attenuate `throughput` for the actual finite distance traveled through the stack's active medium. Water segments stop at the nearest wavy-top, side, or bottom boundary; air is neutral and finite glass sky misses do not use infinite distance.
 3. If it hits sky, add `throughput * skyColor` and stop.
 4. If it hits a light, add `throughput * emission` and stop.

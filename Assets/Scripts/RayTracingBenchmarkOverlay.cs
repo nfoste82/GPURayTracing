@@ -6,7 +6,7 @@ public class RayTracingBenchmarkOverlay : MonoBehaviour
     public GameManager gameManager;
     public bool showOverlay = true;
     public int averageFrameCount = 120;
-    public KeyCode toggleKey = KeyCode.F3;
+    public KeyCode toggleKey = KeyCode.Z;
 
     private readonly StringBuilder _builder = new StringBuilder(512);
     private float _frameTimeSum;
@@ -79,6 +79,19 @@ public class RayTracingBenchmarkOverlay : MonoBehaviour
                 .Append("  OOB: ").Append(gameManager.CausticGridOutOfBoundsCount);
         }
         _builder.AppendLine();
+        _builder.Append("Fog: ").Append(gameManager.IsVolumetricFogActive ? "on" : "off");
+        if (gameManager.IsVolumetricFogActive)
+        {
+            Color fogAlbedo = gameManager.EffectiveFogScatteringAlbedo;
+            _builder.Append("  Density: ").Append(gameManager.EffectiveFogDensity.ToString("0.000"))
+                .Append("  Albedo: ")
+                .Append(fogAlbedo.r.ToString("0.00")).Append(',')
+                .Append(fogAlbedo.g.ToString("0.00")).Append(',')
+                .Append(fogAlbedo.b.ToString("0.00"))
+                .Append("  In-scatter: ").Append(gameManager.fogInScatteringIntensity.ToString("0.0"))
+                .Append("  Multiple: ").Append(gameManager.enableFogMultipleScattering ? "on" : "off");
+        }
+        _builder.AppendLine();
         _builder.Append("Spheres: ").Append(gameManager.SphereCount).Append("  Lights: ").Append(gameManager.LightCount).Append("  Meshes: ").Append(gameManager.MeshCount).AppendLine();
         _builder.Append("Triangles: ").AppendLine(gameManager.TriangleCount.ToString());
         _builder.Append("TLAS: ").Append(gameManager.IsTopLevelBvhActive ? "on" : "off")
@@ -91,6 +104,6 @@ public class RayTracingBenchmarkOverlay : MonoBehaviour
             .Append("  Threshold: ").AppendLine(gameManager.shadowBvhMinObjectCount.ToString());
         _builder.Append("Toggle: ").Append(toggleKey);
 
-        GUI.Box(new Rect(12, 12, 520, 270), _builder.ToString(), _style);
+        GUI.Box(new Rect(12, 12, 580, 292), _builder.ToString(), _style);
     }
 }

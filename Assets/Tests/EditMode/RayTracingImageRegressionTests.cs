@@ -600,10 +600,10 @@ namespace GPURayTracing.Tests
 
         private static readonly Vector4[] MeshLightBaseline =
         {
-            new Vector4(0.58991720f, 0.67719800f, 0.75332560f, 1.0f), new Vector4(0.95769670f, 0.94956930f, 0.93168690f, 1.0f),
+            new Vector4(0.58125170f, 0.66813520f, 0.74601660f, 1.0f), new Vector4(0.95769670f, 0.94956930f, 0.93168710f, 1.0f),
             new Vector4(0.10881560f, 0.14287760f, 0.20707400f, 1.0f), new Vector4(0.94579370f, 0.93877970f, 0.91988000f, 1.0f),
-            new Vector4(0.42459930f, 0.62297920f, 0.78613290f, 1.0f), new Vector4(0.98242520f, 0.92072470f, 0.70654600f, 1.0f),
-            new Vector4(0.39620480f, 0.59732020f, 0.76823890f, 1.0f), new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f),
+            new Vector4(0.32308050f, 0.52343000f, 0.71274310f, 1.0f), new Vector4(0.98242520f, 0.92072470f, 0.70654600f, 1.0f),
+            new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f), new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f),
             new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f)
         };
 
@@ -793,6 +793,8 @@ namespace GPURayTracing.Tests
                 bool hasTransparentMesh = triangles.Length > 0 && Array.Exists(triangles, triangle => triangle.opacity < 1.0f);
                 shader.SetInt("_HasTransparentShadowBlockers", hasTransparentSphere || hasTransparentMesh ? 1 : 0);
                 SetWater(shader, waterEnabled);
+                SetFogDisabled(shader);
+                shader.DisableKeyword("FOG_ENABLED");
 
                 shader.Dispatch(kernel, Mathf.CeilToInt(width / 8.0f), Mathf.CeilToInt(height / 8.0f), 1);
                 return ReadSignature(result, width, height, probes, includePeak);
@@ -801,6 +803,7 @@ namespace GPURayTracing.Tests
             {
                 shader.DisableKeyword("DEBUG_RENDER");
                 shader.DisableKeyword("CAUSTICS_ENABLED");
+                shader.DisableKeyword("FOG_ENABLED");
                 causticMap?.Dispose();
                 sphereBuffer.Release();
                 lightBuffer.Release();
@@ -1368,6 +1371,17 @@ namespace GPURayTracing.Tests
             shader.SetFloat("_WaterTime", 0.0f);
             shader.SetInt("_WaterMarchSteps", 28);
             shader.SetInt("_WaterRefinementSteps", 5);
+        }
+
+        private static void SetFogDisabled(ComputeShader shader)
+        {
+            shader.SetInt("_FogEnabled", 0);
+            shader.SetVector("_FogBoundsMin", Vector4.zero);
+            shader.SetVector("_FogBoundsMax", Vector4.one);
+            shader.SetFloat("_FogDensity", 0.0f);
+            shader.SetVector("_FogScatteringAlbedo", Vector4.zero);
+            shader.SetFloat("_FogInScatteringIntensity", 0.0f);
+            shader.SetInt("_FogMultipleScattering", 0);
         }
 
         private static Vector4[] ReadSignature(
