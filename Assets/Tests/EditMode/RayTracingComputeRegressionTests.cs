@@ -80,7 +80,7 @@ namespace GPURayTracing.Tests
                 AssertFinitePositiveSample(results[28], results[29]);
                 AssertVector(results[30], new Vector4(0.0f, 0.4472136f, 0.8944272f, 1.0f), "interpolated shading and geometric normals", 0.0002f);
                 AssertVector(results[31], new Vector4(0.2f, 0.8f, 0.5f, 1.0f), "MIS power heuristic");
-                AssertVector(results[32], new Vector4(2.0f, 0.0245556f, 0.0245556f, 0.0245556f), "triangle-light PDF and water F0");
+                AssertVector(results[32], new Vector4(2.0f, 0.1111111f, 0.1111111f, 0.1111111f), "triangle-light PDF and water F0");
                 AssertVector(results[33], new Vector4(1.6999575f, 0.8499787f, 0.4249894f, 1.0f), "firefly luminance clamp", 0.0002f);
                 AssertVector(results[34], new Vector4(0.0f, 0.4472136f, 0.8944272f, 1.0f), "caustic optical normal", 0.0002f);
                 AssertVector(results[35], new Vector4(0.0f, -0.1602089f, -0.9870830f, 0.0400126f), "interpolated mesh refraction and Fresnel", 0.0002f);

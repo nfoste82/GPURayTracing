@@ -150,7 +150,6 @@ static const int MaxImportanceLights = 128;
 static const float MinDirectLightThroughput = 0.01f;
 static const int BvhStackSize = 64;
 static const float WaterHitEpsilon = 0.001f;
-static const float WaterMinFresnelOpacity = 0.05f;
 static const float GlassAbsorptionColorFloor = 0.001f;
 static const float GlassNeutralAbsorption = 0.08f;
 static const float ThinTransparentSurfaceDistance = 0.25f;
@@ -2104,11 +2103,6 @@ bool IsWaterMaterial(RayHit hit)
     return hit.materialType == MaterialWater;
 }
 
-float GetWaterReflectiveOpacity(RayHit hit)
-{
-    return lerp(WaterMinFresnelOpacity, 1.0f, saturate(hit.opacity));
-}
-
 float3 GetSurfaceF0(RayHit hit, float3 albedo)
 {
     if (hit.materialType == MaterialMetal)
@@ -2123,7 +2117,7 @@ float3 GetSurfaceF0(RayHit hit, float3 albedo)
         dielectricF0 = max(0.02f, dielectricF0 * dielectricF0);
         if (IsWaterMaterial(hit))
         {
-            return dielectricF0.xxx * GetWaterReflectiveOpacity(hit);
+            return dielectricF0.xxx;
         }
 
         return lerp(dielectricF0.xxx * saturate(hit.opacity), saturate(albedo), saturate(hit.opacity));
@@ -2671,7 +2665,7 @@ float GetFresnelReflectanceForNormal(Ray ray, RayHit hit, float sourceRefraction
 
     float cosTheta = saturate(abs(dot(-ray.direction, boundaryNormal)));
     float reflectance = r0 + (1.0f - r0) * pow(1.0f - cosTheta, 5.0f);
-    return IsWaterMaterial(hit) ? reflectance * GetWaterReflectiveOpacity(hit) : reflectance;
+    return reflectance;
 }
 
 float GetFresnelReflectance(Ray ray, RayHit hit, float sourceRefraction, float targetRefraction)
@@ -2989,16 +2983,16 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
         bool entering;
         float2 transitionIndices = GetBoundaryTransitionIndices(mediumStack, hit, entering);
         float fresnelReflectance = GetFresnelReflectance(sourceRay, hit, transitionIndices.x, transitionIndices.y);
-        if (rand(rngState) < fresnelReflectance)
+        float transmissionProbability = GetTransmissionAmount(hit) * (1.0f - fresnelReflectance);
+        if (rand(rngState) >= transmissionProbability)
         {
             scatteredRay.direction = reflect(sourceRay.direction, roughNormal);
             scatteredRay.origin = hit.position + scatteredRay.direction * 0.01f;
-            return CreateScatterResult(scatteredRay, lerp(float3(1.0f, 1.0f, 1.0f), albedo, 0.08f), 1, MediumTransitionNone);
+            return CreateScatterResult(scatteredRay, float3(1.0f, 1.0f, 1.0f), 1, MediumTransitionNone);
         }
 
         int mediumTransition = ApplyWaterTransmission(scatteredRay, sourceRay, hit, entering, transitionIndices.x, transitionIndices.y);
-        float3 tint = lerp(float3(1.0f, 1.0f, 1.0f), albedo, saturate(1.0f - hit.opacity));
-        return CreateScatterResult(scatteredRay, tint * GetTransmissionAmount(hit), 1, mediumTransition);
+        return CreateScatterResult(scatteredRay, float3(1.0f, 1.0f, 1.0f), 1, mediumTransition);
     }
 
     if (IsGlassMaterial(hit))

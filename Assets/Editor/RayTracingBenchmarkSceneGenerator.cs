@@ -507,7 +507,7 @@ public static class RayTracingBenchmarkSceneGenerator
             return;
         }
 
-        var context = CreateBaseScene(sceneName, new Vector3(11.72f, 6.48f, 26.0f), new Vector3(15.954f, -151.8f, 0.0f), passes: 3, bounces: 8, shadowQuality: 1);
+        var context = CreateBaseScene(sceneName, new Vector3(13.72f, 5.395f, 24.27f), new Vector3(12.1f, -141.2f, 0.0f), passes: 1, bounces: 8, shadowQuality: 0);
         context.Manager.cameraFocalDistance = 18.0f;
         context.Manager.lightFalloffScale = 0.021f;
         context.Manager.exposure = 1.15f;
@@ -515,6 +515,7 @@ public static class RayTracingBenchmarkSceneGenerator
         context.Manager.topLevelBvhMinObjectCount = 0;
         context.Manager.shadowBvhMinObjectCount = 0;
         context.Manager.lightSamplingStrategy = GameManager.LightSamplingStrategy.ImportanceSampled;
+        context.Manager._skyboxLightColor = Color.white;
         
         var waterObject = new GameObject("Water Volume");
         waterObject.transform.SetParent(context.Root, false);
@@ -532,15 +533,11 @@ public static class RayTracingBenchmarkSceneGenerator
         water.MarchSteps = 36;
         water.RefinementSteps = 6;
 
-        AddLight(context.Root, "Low Sun Reflection Light", new Vector3(-5.0f, 4.0f, -5.5f), 1.2f, new Color32(255, 226, 188, 255));
+        //AddLight(context.Root, "Low Sun Reflection Light", new Vector3(-5.0f, 4.0f, -5.5f), 1.2f, new Color32(255, 226, 188, 255));
         AddLight(context.Root, "Cool Sky Fill", new Vector3(8.0f, 15f, 8.0f), 1.8f, new Color32(255, 253, 155, 255));
 
-        // Finite shore strips surround the water without filling the intentionally empty
-        // water-only region. The raised half-bed covers only the right side of the volume.
-        AddFloor(context.Root, new Vector2(-2.0f, -18.0f), new Vector2(48.0f, 8.0f), 0.72f, "Near Shore");
-        AddFloor(context.Root, new Vector2(-2.0f, 24.0f), new Vector2(48.0f, 8.0f), 0.72f, "Far Shore");
-        AddFloor(context.Root, new Vector2(-26.0f, 3.0f), new Vector2(8.0f, 34.0f), 0.72f, "Left Shore");
-        AddFloor(context.Root, new Vector2(22.0f, 3.0f), new Vector2(8.0f, 34.0f), 0.72f, "Right Shore");
+        AddPrimitiveMesh(context.Root, "Ground Plane", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-2.0f, 0.07f, 3.0f), Vector3.zero, new Vector3(600.0f, 0.04f, 600.0f), new Color32(88, 78, 48, 255), RayMaterial.MaterialType.Diffuse, 0.38f, 1.0f);
+
         AddPrimitiveMesh(context.Root, "Raised Bed Inside Water", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(10.0f, 0.43f, 10.0f), new Vector3(0.0f, 0.0f, 25.0f), new Vector3(15.0f, 5.0f, 40.0f), new Color32(88, 78, 48, 255), RayMaterial.MaterialType.Diffuse, 0.38f, 1.0f);
 
         for (var i = 0; i < 24; i++)
