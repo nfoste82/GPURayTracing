@@ -2,7 +2,7 @@
 Realtime 3D raytracer running in a GPU compute shader in Unity.
 
 Features:
-* GPU compute-shader path tracing for spheres, registered triangle meshes, and an implicit ground plane
+* GPU compute-shader path tracing for spheres and registered triangle meshes
 * Emissive sphere and mesh lights with direct-light sampling
 * Surface reflections, diffuse indirect lighting, and multiple ray bounces
 * Glass reflection/refraction, distance-based absorption, and colored transparent shadows

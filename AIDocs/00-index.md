@@ -16,6 +16,7 @@ Use this folder as focused context for LLM-assisted work on the Unity GPU ray tr
 - `10-benchmarking-and-performance.md`: Benchmark overlay, generated benchmark scenes, performance hotspots, benchmark recommendations, shader compile-time techniques, and the debug-variant compile stall handling.
 - `11-regression-testing.md`: EditMode CPU/GPU regression coverage, current-behavior baseline policy, test commands, and planned image/BVH coverage.
 - `12-caustics-prototype.md`: Proposed photon-mapped caustics prototype, disabled-path isolation, pipeline, estimator, lifecycle, testing, and staged implementation.
+- `13-denoising-and-upscaling.md`: Future reconstruction architecture, denoiser feature buffers, temporal motion/history requirements, Unity 6.3 implications, and DLSS/FSR/MetalFX/STP integration options.
 
 ## Fast Context Selection
 
@@ -29,4 +30,5 @@ Use this folder as focused context for LLM-assisted work on the Unity GPU ray tr
 - To reduce shader compile time, change the `DEBUG_RENDER` variant split, `[loop]` usage, or the debug-variant compile stall/overlay, read `10-benchmarking-and-performance.md` and `08-shader-debugging-and-randomness.md`.
 - To add or update correctness, reflection/refraction, GPU probe, BVH, or image-regression tests, read `11-regression-testing.md` plus the relevant renderer document.
 - To prototype caustics without affecting the disabled renderer, read `12-caustics-prototype.md`, `03-compute-shader-renderer.md`, and `07-shader-lighting-and-materials.md`.
+- To plan denoising, internal-resolution rendering, temporal upscaling, Unity 6.3 migration choices, or DLSS/FSR/MetalFX/STP integration, read `13-denoising-and-upscaling.md`, then `02-runtime-data-flow.md` and `03-compute-shader-renderer.md` before implementation.
 - To understand the project quickly before making broad changes, read `01-project-overview.md` first.
