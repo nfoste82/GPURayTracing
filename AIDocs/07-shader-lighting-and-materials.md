@@ -60,6 +60,8 @@ Opaque continuation throughput uses `brdf * abs(N dot L) / pdf`. The common roug
 
 Each uploaded emissive triangle stores the matching `_Lights` index, and emissive sphere hits already use their light-buffer index. This identity lets a BRDF-sampled emissive hit reconstruct the same light-selection and shape PDF used by next-event estimation.
 
+`TracePath()` retains only the previous surface position, material PDF, and light-sampling flags for this complementary MIS calculation. It does not keep the full previous `RayHit`; light importance and shape PDFs require only that position and the current emissive hit identity.
+
 The glass path is entered whenever `IsGlassMaterial(hit)` is true, which happens for `materialType == Glass` **or** for any hit with `opacity < 1.0`. A nominally `Diffuse` or `Metal` object with reduced opacity therefore scatters through the glass transmission/Fresnel path.
 
 ## Transparency And Refraction

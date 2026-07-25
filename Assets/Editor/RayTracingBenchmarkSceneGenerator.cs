@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using UnityEditor;
-using UnityEditor.Experimental.GraphView;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -13,7 +12,7 @@ public static class RayTracingBenchmarkSceneGenerator
     private const string GeneratedAssetFolder = "Assets/Scenes/Benchmarks/GeneratedAssets";
     private const string ComputeShaderPath = "Assets/Scripts/RayTracingCompute.compute";
     private const string SkyboxPath = "Assets/skyboxOcean.jpg";
-    private const string StanfordDragonModelPath = "Assets/Models/stanford-dragon-pbr.fbx";
+    private const string StanfordDragonModelPath = "Assets/Models/Dragon/stanford-dragon-pbr.fbx";
     private const string WolfensteinTextureAtlasPath = "Assets/wolf3d_textures.png";
     private const int WolfensteinTextureTileSize = 64;
 
@@ -76,9 +75,6 @@ public static class RayTracingBenchmarkSceneGenerator
 
         var renderer = cameraObject.AddComponent<RayTracingCameraRenderer>();
         renderer.GameManager = manager;
-
-        var overlay = cameraObject.AddComponent<RayTracingBenchmarkOverlay>();
-        overlay.gameManager = manager;
 
         return new BenchmarkContext(scene, managerObject.transform);
     }
@@ -391,39 +387,34 @@ public static class RayTracingBenchmarkSceneGenerator
             return;
         }
 
-        var context = CreateBaseScene(sceneName, new Vector3(-8.194436f, 5.217021f, 0.4341397f), new Vector3(28.573532f, 85.03342f, 0.0f), passes: 1, bounces: 10, shadowQuality: 0);
+        var context = CreateBaseScene(sceneName, new Vector3(-5.42f, 3.78f, 3.93f), new Vector3(36f, 124.5f, 0.0f), passes: 1, bounces: 10, shadowQuality: 0);
         context.Manager.enableFrameAccumulation = true;
         context.Manager.cameraFocalDistance = 12.0f;
         context.Manager.lightFalloffScale = 0.002f;
-        context.Manager.exposure = 1.0f;
+        context.Manager.exposure = 1.5f;
         context.Manager.fireflyClamp = 0.0f;
         context.Manager.enableCaustics = true;
-        context.Manager.causticPhotonCount = 1048576;
-        context.Manager.causticGatherRadius = 0.027f;
+        context.Manager.causticGatherRadius = 0.02f;
         context.Manager.causticSeed = 1;
         context.Manager.causticIntensity = 4.0f;
         context.Manager.topLevelBvhMinObjectCount = 1024;
         context.Manager.shadowBvhMinObjectCount = 1024;
         context.Manager.lightSamplingStrategy = GameManager.LightSamplingStrategy.AllLights;
-        context.Manager._skyboxLightColor = new Color32(2, 2, 3, 255);
-        context.Manager.renderTextureCamera.GetComponent<RayTracingBenchmarkOverlay>().enabled = false;
-        var benchmarkRunner = context.Manager.renderTextureCamera.gameObject.AddComponent<CausticsBenchmarkRunner>();
-        benchmarkRunner.gameManager = context.Manager;
-        benchmarkRunner.enabled = false;
+        context.Manager._skyboxLightColor = new Color32(64, 64, 64, 255);
 
         AddPrimitiveMesh(context.Root, "Matte Caustic Receiver", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 0.02f, 2.2f), Vector3.zero, new Vector3(10.0f, 0.04f, 9.0f), new Color32(225, 225, 218, 255), RayMaterial.MaterialType.Diffuse, 0.02f, 1.0f);
 
-        AddLight(context.Root, "Sphere Caustic Light", new Vector3(-1.9f, 6.8f, 2.5f), 0.24f, new Color32(255, 244, 218, 255)).SetActive(false);
-        AddSphere(context.Root, "Clear Glass Sphere", new Vector3(-1.9f, 1.32f, 2.5f), 1.3f, new Color32(238, 248, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.04f, 1.52f).SetActive(false);
+        //AddLight(context.Root, "Sphere Caustic Light", new Vector3(-1.9f, 6.8f, 2.5f), 0.24f, new Color32(255, 244, 218, 255)).SetActive(false);
+        //AddSphere(context.Root, "Clear Glass Sphere", new Vector3(-1.9f, 1.32f, 2.5f), 1.3f, new Color32(238, 248, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.04f, 1.52f).SetActive(false);
 
-        AddLight(context.Root, "Multi-Event Sphere Caustic Light", new Vector3(1.1f, 7.4f, 1.1f), 0.18f, new Color32(218, 235, 255, 255)).SetActive(false);
-        AddSphere(context.Root, "Multi-Event Upper Glass Sphere", new Vector3(1.1f, 4.35f, 1.1f), 0.9f, new Color32(232, 245, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.03f, 1.52f).SetActive(false);
-        AddSphere(context.Root, "Multi-Event Lower Glass Sphere", new Vector3(1.1f, 2.25f, 1.1f), 0.9f, new Color32(232, 245, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.03f, 1.52f).SetActive(false);
+        //AddLight(context.Root, "Multi-Event Sphere Caustic Light", new Vector3(1.1f, 7.4f, 1.1f), 0.18f, new Color32(218, 235, 255, 255)).SetActive(false);
+        //AddSphere(context.Root, "Multi-Event Upper Glass Sphere", new Vector3(1.1f, 4.35f, 1.1f), 0.9f, new Color32(232, 245, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.03f, 1.52f).SetActive(false);
+        //AddSphere(context.Root, "Multi-Event Lower Glass Sphere", new Vector3(1.1f, 2.25f, 1.1f), 0.9f, new Color32(232, 245, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.03f, 1.52f).SetActive(false);
 
-        AddLight(context.Root, "Dodecahedron Caustic Light", new Vector3(2.02f, 2.98f, -2.08f), 0.2f, new Color32(255, 230, 205, 255));
-        AddPrimitiveMesh(context.Root, "Glass Dodecahedron", RayMeshPrimitive.PrimitiveType.Dodecahedron, new Vector3(3.5f, 1.35f, 3.0f), new Vector3(12.0f, 32.0f, 8.0f), new Vector3(2.2f, 2.5f, 2.2f), new Color32(220, 240, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.05f, 1.62f).SetActive(false);
+        AddLight(context.Root, "Caustic Light", new Vector3(1.81f, 2.35f, -0.72f), 0.2f, new Color32(255, 230, 205, 255));
+        //AddPrimitiveMesh(context.Root, "Glass Dodecahedron", RayMeshPrimitive.PrimitiveType.Dodecahedron, new Vector3(3.5f, 1.35f, 3.0f), new Vector3(12.0f, 32.0f, 8.0f), new Vector3(2.2f, 2.5f, 2.2f), new Color32(220, 240, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.05f, 1.62f).SetActive(false);
 
-        AddSphere(context.Root, "Diffuse Scale Reference", new Vector3(0.0f, 0.45f, 6.2f), 0.45f, new Color32(185, 78, 52, 255), RayMaterial.MaterialType.Diffuse, 0.08f);
+        AddSphere(context.Root, "Diffuse Scale Reference", new Vector3(0.0f, 0.5f, 3.4f), 0.45f, new Color32(185, 78, 52, 255), RayMaterial.MaterialType.Diffuse, 0.08f);
         var dragon = AddRayMesh(context.Root, "Stanford Dragon", dragonMesh, Vector3.zero, new Vector3(0.0f, 148.0f, 0.0f), Vector3.one * 3.0f, new Color32(0, 118, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.121f, 1.391f);
         dragon.GetComponent<RayMaterial>().InterpolateNormals = true;
         Save(context.Scene, sceneName);
@@ -451,7 +442,6 @@ public static class RayTracingBenchmarkSceneGenerator
         context.Manager.shadowBvhMinObjectCount = 1024;
         context.Manager.lightSamplingStrategy = GameManager.LightSamplingStrategy.AllLights;
         context.Manager._skyboxLightColor = new Color32(2, 2, 3, 255);
-        context.Manager.renderTextureCamera.gameObject.AddComponent<CausticsBenchmarkRunner>().gameManager = context.Manager;
 
         AddPrimitiveMesh(context.Root, "Matte Caustic Receiver", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 0.02f, 2.2f), Vector3.zero, new Vector3(10.0f, 0.04f, 9.0f), new Color32(225, 225, 218, 255), RayMaterial.MaterialType.Diffuse, 0.02f, 1.0f);
         AddMeshLight(context.Root, "Triangle Caustic Light", CreateHorizontalTriangleMesh("Triangle Caustic Light", 2.8f, 1.8f), new Vector3(0.0f, 6.8f, 2.5f), Vector3.zero, Vector3.one, new Color32(255, 244, 218, 255));

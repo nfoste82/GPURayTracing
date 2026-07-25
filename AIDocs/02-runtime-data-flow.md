@@ -120,7 +120,7 @@ Profiling in the current scenes showed that the shadow-blocker BVH can improve `
 
 ## Benchmarking Flow
 
-Benchmark scene generation and overlay behavior are documented in `10-benchmarking-and-performance.md` so runtime orchestration tasks do not need to load benchmark methodology by default.
+On `Start()`, `GameManager` ensures that the generic benchmark runner and live performance/debug overlay are attached to its own GameObject and references itself from both. Benchmark scene generation and overlay behavior are documented in `10-benchmarking-and-performance.md` so runtime orchestration tasks do not need to load benchmark methodology by default.
 
 ## Scene View Preview Flow
 

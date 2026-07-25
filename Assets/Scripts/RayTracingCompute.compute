@@ -7,6 +7,11 @@
 #pragma kernel BuildCausticGrid CAUSTICS_ENABLED
 #pragma kernel CSCausticsRegressionImage CAUSTICS_ENABLED
 
+// Compile-time experiment: bypass Metal backend optimization so its effect on shader compile
+// time and runtime performance can be measured against the optimized baseline.
+// NOTE: This pragma did not end up improving shader compile times
+//#pragma skip_optimizations metal
+
 // Debug render modes (normals, albedo, BVH visualization, etc.) pull in a second set of
 // scene-intersection/scatter code. Compiling that into the default final-color variant roughly
 // doubled the kernel's traversal code and dominated shader compile time. This keyword keeps the
@@ -887,7 +892,12 @@ bool IntersectWaterSurfaceBounds(Ray ray, float maxDistance, out float entryDist
     float3 boundsMin = float3(_WaterCenter.x - halfSize.x, _WaterCenter.y - waveHeight, _WaterCenter.z - halfSize.y);
     float3 boundsMax = float3(_WaterCenter.x + halfSize.x, _WaterCenter.y + waveHeight, _WaterCenter.z + halfSize.y);
 
-    float3 inverseDirection = 1.0f / ray.direction;
+    // Axis-aligned regression rays contain exact zero components. Preserve the slab method's
+    // intended infinite reciprocal without asking the compiler to constant-fold 1 / 0.
+    float3 inverseDirection;
+    inverseDirection.x = ray.direction.x == 0.0f ? 1.#INF : 1.0f / ray.direction.x;
+    inverseDirection.y = ray.direction.y == 0.0f ? 1.#INF : 1.0f / ray.direction.y;
+    inverseDirection.z = ray.direction.z == 0.0f ? 1.#INF : 1.0f / ray.direction.z;
     float3 t0 = (boundsMin - ray.origin) * inverseDirection;
     float3 t1 = (boundsMax - ray.origin) * inverseDirection;
     float3 tMin3 = min(t0, t1);
@@ -2351,9 +2361,9 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
     return lightTotal / sampleCount;
 }
 
-float LightImportanceWeight(int lightIndex, RayHit hit);
+float LightImportanceWeight(int lightIndex, float3 shadingPosition);
 
-float GetLightSelectionPdf(int lightIndex, int lightCount, bool sampleAllLights, RayHit hit)
+float GetLightSelectionPdf(int lightIndex, int lightCount, bool sampleAllLights, float3 shadingPosition)
 {
     if (lightIndex < 0 || lightIndex >= lightCount)
     {
@@ -2381,9 +2391,9 @@ float GetLightSelectionPdf(int lightIndex, int lightCount, bool sampleAllLights,
     [loop]
     for (i = 0; i < weightedCount; i++)
     {
-        totalWeight += LightImportanceWeight(i, hit);
+        totalWeight += LightImportanceWeight(i, shadingPosition);
     }
-    return totalWeight > 0.0f ? LightImportanceWeight(lightIndex, hit) / totalWeight : 0.0f;
+    return totalWeight > 0.0f ? LightImportanceWeight(lightIndex, shadingPosition) / totalWeight : 0.0f;
 }
 
 // Cheap per-hit estimate of how much a light is likely to contribute, used to bias
@@ -2391,10 +2401,10 @@ float GetLightSelectionPdf(int lightIndex, int lightCount, bool sampleAllLights,
 // surface normal (too expensive to evaluate before picking), so it is only an estimate;
 // the 1/pdf correction keeps the final result unbiased regardless of estimate accuracy.
 // Uses squared distance directly to avoid a sqrt; mirrors GetDirectLightFalloff's math.
-float LightImportanceWeight(int lightIndex, RayHit hit)
+float LightImportanceWeight(int lightIndex, float3 shadingPosition)
 {
     Light light = _Lights[lightIndex];
-    float3 toLight = light.position - hit.position;
+    float3 toLight = light.position - shadingPosition;
     float distSq = dot(toLight, toLight);
 
     float lightRadius = light.radius;
@@ -2421,7 +2431,7 @@ float LightImportanceWeight(int lightIndex, RayHit hit)
 //  lightCount  : number of lights under consideration (after the diagnostic cap)
 //  outWeight   : multiplier for this draw's contribution (Monte Carlo / pdf correction)
 //  returns     : the light index to sample
-int SelectLightForDraw(int iteration, int drawCount, int lightCount, RayHit hit,
+int SelectLightForDraw(int iteration, int drawCount, int lightCount, float3 shadingPosition,
                        inout uint rngState, out float outWeight)
 {
     if (_LightSamplingStrategy == LightSamplingUniformRandom)
@@ -2442,7 +2452,7 @@ int SelectLightForDraw(int iteration, int drawCount, int lightCount, RayHit hit,
         [loop]
         for (w = 0; w < weightedCount; w++)
         {
-            totalWeight += LightImportanceWeight(w, hit);
+            totalWeight += LightImportanceWeight(w, shadingPosition);
         }
 
         if (totalWeight <= 0.0f)
@@ -2455,12 +2465,12 @@ int SelectLightForDraw(int iteration, int drawCount, int lightCount, RayHit hit,
         float target = rand(rngState) * totalWeight;
         float cumulative = 0.0f;
         int chosen = weightedCount - 1;
-        float chosenWeight = LightImportanceWeight(chosen, hit);
+        float chosenWeight = LightImportanceWeight(chosen, shadingPosition);
         int c;
         [loop]
         for (c = 0; c < weightedCount; c++)
         {
-            float weight = LightImportanceWeight(c, hit);
+            float weight = LightImportanceWeight(c, shadingPosition);
             cumulative += weight;
             if (target <= cumulative)
             {
@@ -2547,7 +2557,7 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
         }
         else
         {
-            lightIndex = SelectLightForDraw(d, drawCount, lightCount, hit, rngState, weight);
+            lightIndex = SelectLightForDraw(d, drawCount, lightCount, hit.position, rngState, weight);
         }
 
         if (weight <= 0.0f)
@@ -2555,7 +2565,7 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
             continue;
         }
 
-        float selectionPdf = GetLightSelectionPdf(lightIndex, lightCount, sampleAllLights, hit);
+        float selectionPdf = GetLightSelectionPdf(lightIndex, lightCount, sampleAllLights, hit.position);
         int lightTechniqueSampleCount = sampleCount * (sampleAllLights ? 1 : drawCount);
         accumulated += SampleSingleLight(lightIndex, ray, hit, sampleCount,
             selectionPdf, lightTechniqueSampleCount,
@@ -2570,7 +2580,7 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
     return accumulated;
 }
 
-float GetLightPdfForHit(RayHit shadingHit, RayHit lightHit, bool softShadows, out int sampleCount)
+float GetLightPdfForHit(float3 shadingPosition, RayHit lightHit, bool softShadows, out int sampleCount)
 {
     sampleCount = 0;
     int lightCount = _NumLights;
@@ -2600,8 +2610,8 @@ float GetLightPdfForHit(RayHit shadingHit, RayHit lightHit, bool softShadows, ou
 
     int samplesPerLight = softShadows ? max(1, _ShadowQuality + 1) : 1;
     sampleCount = samplesPerLight * (sampleAllLights ? 1 : drawCount);
-    float selectionPdf = GetLightSelectionPdf(lightHit.lightIndex, lightCount, sampleAllLights, shadingHit);
-    return selectionPdf * GetLightShapePdf(_Lights[lightHit.lightIndex], shadingHit.position, lightHit.position);
+    float selectionPdf = GetLightSelectionPdf(lightHit.lightIndex, lightCount, sampleAllLights, shadingPosition);
+    return selectionPdf * GetLightShapePdf(_Lights[lightHit.lightIndex], shadingPosition, lightHit.position);
 }
 
 float3 GetSkyboxColor(float3 direction)
@@ -2706,15 +2716,23 @@ float3 SampleDielectricBoundaryNormal(float3 opticalNormal, float3 geometricNorm
 {
     float3 geometricBoundaryNormal = dot(incidentDirection, geometricNormal) < 0.0f ? geometricNormal : -geometricNormal;
     float3 opticalBoundaryNormal = dot(opticalNormal, geometricBoundaryNormal) >= 0.0f ? opticalNormal : -opticalNormal;
-    int sampleCount = smoothness >= 0.9999f ? 1 : 8;
     float roughness = max(0.03f, 1.0f - saturate(smoothness));
 
-    [loop]
-    for (int sampleIndex = 0; sampleIndex < sampleCount; sampleIndex++)
+    if (smoothness >= 0.9999f)
     {
-        float3 microfacetNormal = sampleCount == 1
+        float3 reflectedDirection = reflect(incidentDirection, opticalBoundaryNormal);
+        float3 transmittedDirection;
+        bool canTransmit = RefractSnell(incidentDirection, sourceRefraction, targetRefraction, opticalBoundaryNormal, transmittedDirection);
+        bool crossesBoundary = !canTransmit || dot(transmittedDirection, geometricBoundaryNormal) < -1e-5f;
+        return dot(reflectedDirection, geometricBoundaryNormal) > 1e-5f && crossesBoundary
             ? opticalBoundaryNormal
-            : SampleGgxHalfDirection(opticalBoundaryNormal, roughness * roughness, rngState);
+            : geometricBoundaryNormal;
+    }
+
+    [loop]
+    for (int sampleIndex = 0; sampleIndex < 8; sampleIndex++)
+    {
+        float3 microfacetNormal = SampleGgxHalfDirection(opticalBoundaryNormal, roughness * roughness, rngState);
         float3 reflectedDirection = reflect(incidentDirection, microfacetNormal);
         float3 transmittedDirection;
         bool canTransmit = RefractSnell(incidentDirection, sourceRefraction, targetRefraction, microfacetNormal, transmittedDirection);
@@ -3135,7 +3153,7 @@ float3 TracePath(Ray ray, inout uint rngState)
     float3 radiance = float3(0.0f, 0.0f, 0.0f);
     float3 throughput = float3(1.0f, 1.0f, 1.0f);
     MediumStack mediumStack = CreateMediumStack(ray.origin);
-    RayHit previousSurfaceHit = CreateRayHit();
+    float3 previousSurfacePosition = float3(0.0f, 0.0f, 0.0f);
     float previousMaterialPdf = 0.0f;
     bool previousDirectLightSampled = false;
     bool previousSoftShadows = false;
@@ -3203,7 +3221,7 @@ float3 TracePath(Ray ray, inout uint rngState)
             if (previousDirectLightSampled && previousMaterialPdf > 0.0f)
             {
                 int lightSampleCount;
-                float lightPdf = GetLightPdfForHit(previousSurfaceHit, hit, previousSoftShadows, lightSampleCount);
+                float lightPdf = GetLightPdfForHit(previousSurfacePosition, hit, previousSoftShadows, lightSampleCount);
                 if (lightPdf > 0.0f)
                 {
                     misWeight = PowerHeuristic(previousMaterialPdf, lightSampleCount * lightPdf);
@@ -3233,7 +3251,7 @@ float3 TracePath(Ray ray, inout uint rngState)
         int remainingBounces = _NumBounces - bounce;
         ScatterResult scatter = CreateScatteredRay(ray, hit, bounce, remainingBounces, mediumStack, rngState);
         ApplyMediumTransition(mediumStack, hit, scatter.mediumTransition);
-        previousSurfaceHit = hit;
+        previousSurfacePosition = hit.position;
         previousMaterialPdf = scatter.materialPdf;
         previousDirectLightSampled = sampledDirectLight;
         ray = scatter.ray;

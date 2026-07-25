@@ -241,7 +241,7 @@ Milestones 1 and 2 are implemented as the initial prototype. Milestone 3 correct
 - Implemented: energy-stability checks across photon counts and gather radii, including the expected sharper peak at a smaller radius.
 - Implemented: photon power now includes material transmission and the gather applies the Lambert factor once rather than twice.
 - Implemented: the unsupported prism light is disabled in the checked-in benchmark and omitted by the generator so it cannot be redirected through the sphere prototype.
-- Implemented: an `F4` benchmark matrix measures the disabled variant and 64-16384-photon enabled variants after warmup, displays results, and writes CSV output for repeatable comparison.
+- Implemented: the generic benchmark runner's optional caustics sweep measures the disabled variant and 64-16384-photon enabled variants after warmup, displays results, and writes CSV output for repeatable comparison.
 - Run the matrix on target hardware and record the practical linear-gather limit before deciding whether to start Milestone 4.
 
 ### Milestone 4: Spatial Grid

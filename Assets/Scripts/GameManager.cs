@@ -279,6 +279,24 @@ public class GameManager : MonoBehaviour
     public int CausticGridCellCount => _causticGridCellCount;
     public int CausticGridPhotonCount => _causticGridPhotonCount;
     public int CausticGridOutOfBoundsCount => _causticGridOutOfBoundsCount;
+    public int SphereLightCount => _lightObjects.Count;
+    public int MeshLightCount
+    {
+        get
+        {
+            int count = 0;
+            for (int i = 0; i < _meshObjects.Count; i++)
+            {
+                if (_meshObjects[i].light != null)
+                {
+                    count++;
+                }
+            }
+            return count;
+        }
+    }
+    public int TriangleLightCount => Mathf.Max(0, _lights.Count - _lightObjects.Count);
+    public bool HasWaterVolume => _water != null;
     public bool IsVolumetricFogActive => IsFogEnabled();
     public float EffectiveFogDensity => IsFogEnabled() ? _fogVolume.Density * Mathf.Max(0.0f, fogDensityScale) : 0.0f;
     public Color EffectiveFogScatteringAlbedo => IsFogEnabled()
@@ -549,9 +567,27 @@ public class GameManager : MonoBehaviour
 
     private void Start()
     {
+        EnsureBenchmarkComponents();
         SyncUnitySkyboxPreview();
         CreateOutputTexture(Screen.width, Screen.height);
         RebuildBuffers();
+    }
+
+    private void EnsureBenchmarkComponents()
+    {
+        var debugOverlay = GetComponent<RayTracingBenchmarkOverlay>();
+        if (debugOverlay == null)
+        {
+            debugOverlay = gameObject.AddComponent<RayTracingBenchmarkOverlay>();
+        }
+        debugOverlay.gameManager = this;
+
+        var benchmarkRunner = GetComponent<RayTracingBenchmarkRunner>();
+        if (benchmarkRunner == null)
+        {
+            benchmarkRunner = gameObject.AddComponent<RayTracingBenchmarkRunner>();
+        }
+        benchmarkRunner.gameManager = this;
     }
 
     private void OnValidate()

@@ -4,7 +4,7 @@ using UnityEngine;
 public class RayTracingBenchmarkOverlay : MonoBehaviour
 {
     public GameManager gameManager;
-    public bool showOverlay = true;
+    public bool showOverlay = false;
     public int averageFrameCount = 120;
     public KeyCode toggleKey = KeyCode.Z;
 
@@ -18,7 +18,14 @@ public class RayTracingBenchmarkOverlay : MonoBehaviour
     {
         if (gameManager == null)
         {
-            gameManager = FindObjectOfType<GameManager>();
+            gameManager = FindFirstObjectByType<GameManager>();
+        }
+
+        if (gameManager != null && gameObject != gameManager.gameObject)
+        {
+            showOverlay = false;
+            enabled = false;
+            Destroy(this);
         }
     }
 
@@ -92,7 +99,11 @@ public class RayTracingBenchmarkOverlay : MonoBehaviour
                 .Append("  Multiple: ").Append(gameManager.enableFogMultipleScattering ? "on" : "off");
         }
         _builder.AppendLine();
+        _builder.Append("Water: ").AppendLine(gameManager.HasWaterVolume ? "present" : "none");
         _builder.Append("Spheres: ").Append(gameManager.SphereCount).Append("  Lights: ").Append(gameManager.LightCount).Append("  Meshes: ").Append(gameManager.MeshCount).AppendLine();
+        _builder.Append("Light types: ").Append(gameManager.SphereLightCount).Append(" sphere, ")
+            .Append(gameManager.MeshLightCount).Append(" mesh (")
+            .Append(gameManager.TriangleLightCount).AppendLine(" triangles)");
         _builder.Append("Triangles: ").AppendLine(gameManager.TriangleCount.ToString());
         _builder.Append("TLAS: ").Append(gameManager.IsTopLevelBvhActive ? "on" : "off")
             .Append("  Objects: ").Append(gameManager.TopLevelBvhObjectCount)
@@ -104,6 +115,6 @@ public class RayTracingBenchmarkOverlay : MonoBehaviour
             .Append("  Threshold: ").AppendLine(gameManager.shadowBvhMinObjectCount.ToString());
         _builder.Append("Toggle: ").Append(toggleKey);
 
-        GUI.Box(new Rect(12, 12, 580, 292), _builder.ToString(), _style);
+        GUI.Box(new Rect(12, 12, 580, 330), _builder.ToString(), _style);
     }
 }
