@@ -162,6 +162,12 @@ public class GameManager : MonoBehaviour
     [Tooltip("Fallback texture used when no mesh albedo textures are active. Created automatically at runtime if unset.")]
     public Texture2D defaultMeshAlbedoTexture;
 
+    [Tooltip("Fallback texture used when no mesh metallic/roughness textures are active.")]
+    public Texture2D defaultMeshMetallicRoughnessTexture;
+
+    [Tooltip("Fallback texture used when no mesh normal textures are active.")]
+    public Texture2D defaultMeshNormalTexture;
+
     [Header("Scene preview")]
     public bool syncUnitySkyboxToRayTracedSkybox = true;
 
@@ -202,8 +208,13 @@ public class GameManager : MonoBehaviour
     private readonly List<TopLevelBvhBuildItem> _shadowBvhBuildItems = new List<TopLevelBvhBuildItem>();
     private readonly TopLevelBvhBuildItemComparer _topLevelBvhBuildItemComparer = new TopLevelBvhBuildItemComparer();
     private readonly List<RayTracedMesh> _meshObjects = new List<RayTracedMesh>();
+    private readonly Dictionary<long, MeshBvhTemplate> _meshBvhTemplates = new Dictionary<long, MeshBvhTemplate>();
     private readonly List<Texture2D> _meshAlbedoTextures = new List<Texture2D>();
+    private readonly List<Texture2D> _meshMetallicRoughnessTextures = new List<Texture2D>();
+    private readonly List<Texture2D> _meshNormalTextures = new List<Texture2D>();
     private Texture2DArray _meshAlbedoTextureArray;
+    private Texture2DArray _meshMetallicRoughnessTextureArray;
+    private Texture2DArray _meshNormalTextureArray;
     private ComputeBuffer _triangleBuffer;
     private ComputeBuffer _meshBuffer;
     private ComputeBuffer _bvhNodeBuffer;
@@ -320,7 +331,7 @@ public class GameManager : MonoBehaviour
     private const float DynamicQualitySmoothing = 0.08f;
     private const float DynamicQualityAdjustmentInterval = 0.75f;
     private const int MeshTextureSize = 128;
-    private const int TriangleStride = 164;
+    private const int TriangleStride = 224;
     private const int MeshInfoStride = 48;
     private const int BvhNodeStride = 48;
     private const int TopLevelBvhNodeStride = 48;
@@ -442,8 +453,12 @@ public class GameManager : MonoBehaviour
         public Vector3 normal0;
         public Vector3 normal1;
         public Vector3 normal2;
+        public Vector4 tangent0;
+        public Vector4 tangent1;
+        public Vector4 tangent2;
         public Vector3 color;
         public float smoothness;
+        public float metallic;
         public Vector2 uv0;
         public Vector2 uv1;
         public Vector2 uv2;
@@ -453,6 +468,8 @@ public class GameManager : MonoBehaviour
         public int materialType;
         public int meshIndex;
         public int textureIndex;
+        public int metallicRoughnessTextureIndex;
+        public int normalTextureIndex;
         public int interpolateNormals;
         public int lightIndex;
 
@@ -555,11 +572,20 @@ public class GameManager : MonoBehaviour
         public Vector3 previousColor;
         public Vector3 previousEmission;
         public float previousSmoothness;
+        public float previousMetallic;
         public float previousOpacity;
         public float previousRefraction;
         public int previousMaterialType;
         public Texture2D previousAlbedoTexture;
+        public Texture2D previousMetallicRoughnessTexture;
+        public Texture2D previousNormalTexture;
         public bool previousInterpolateNormals;
+    }
+
+    private sealed class MeshBvhTemplate
+    {
+        public readonly List<Triangle> triangles = new List<Triangle>();
+        public readonly List<BvhNode> nodes = new List<BvhNode>();
     }
 
     private Water _water;
@@ -799,18 +825,25 @@ public class GameManager : MonoBehaviour
         _topLevelBvhNodeBuffer?.Release();
         _shadowBvhNodeBuffer?.Release();
         ReleaseCausticResources();
-        DestroyRuntimeTextureArray();
+        DestroyRuntimeTextureArrays();
     }
 
-    private void DestroyRuntimeTextureArray()
+    private void DestroyRuntimeTextureArrays()
     {
-        if (_meshAlbedoTextureArray == null)
-        {
-            return;
-        }
-
-        Destroy(_meshAlbedoTextureArray);
+        DestroyRuntimeTextureArray(_meshAlbedoTextureArray);
+        DestroyRuntimeTextureArray(_meshMetallicRoughnessTextureArray);
+        DestroyRuntimeTextureArray(_meshNormalTextureArray);
         _meshAlbedoTextureArray = null;
+        _meshMetallicRoughnessTextureArray = null;
+        _meshNormalTextureArray = null;
+    }
+
+    private static void DestroyRuntimeTextureArray(Texture2DArray textureArray)
+    {
+        if (textureArray != null)
+        {
+            Destroy(textureArray);
+        }
     }
 
     private void EnsureOutputTextureSize(int width, int height)
@@ -1403,24 +1436,32 @@ public class GameManager : MonoBehaviour
             return;
         }
 
-        if (!UpdateMeshChangeCache())
+        UpdateMeshChangeCache(out bool geometryChanged, out bool materialChanged);
+        if (!geometryChanged && !materialChanged)
         {
             return;
         }
 
-        RebuildTriangleData();
+        if (geometryChanged)
+        {
+            RebuildTriangleData();
+        }
+        else
+        {
+            RefreshTriangleMaterials();
+        }
 
         if (_triangleBuffer != null && _triangles.Count > 0)
         {
             _triangleBuffer.SetData(_triangles);
         }
 
-        if (_meshBuffer != null && _meshInfos.Count > 0)
+        if (geometryChanged && _meshBuffer != null && _meshInfos.Count > 0)
         {
             _meshBuffer.SetData(_meshInfos);
         }
 
-        if (_bvhNodeBuffer != null && _bvhNodes.Count > 0)
+        if (geometryChanged && _bvhNodeBuffer != null && _bvhNodes.Count > 0)
         {
             _bvhNodeBuffer.SetData(_bvhNodes);
         }
@@ -1469,9 +1510,10 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    private bool UpdateMeshChangeCache()
+    private void UpdateMeshChangeCache(out bool geometryChanged, out bool materialChanged)
     {
-        bool changed = false;
+        geometryChanged = false;
+        materialChanged = false;
         _hasTransparentMeshBlockers = false;
 
         for (int i = 0; i < _meshObjects.Count; i++)
@@ -1483,10 +1525,13 @@ public class GameManager : MonoBehaviour
             var color = material != null ? material.Color.ToVector3() : Vector3.one;
             var emission = light != null ? light.Color.ToVector3() : Vector3.zero;
             var smoothness = material != null ? material.Smoothness : 0.0f;
+            var metallic = material != null ? GetEffectiveMetallic(material) : 0.0f;
             var opacity = material != null ? Mathf.Clamp01(material.Opacity) : 1.0f;
             var refraction = material != null ? material.RefractionIndex : 1.0f;
             var materialType = light != null ? 3 : (int)material.Type;
             var albedoTexture = material != null ? material.AlbedoTexture : null;
+            var metallicRoughnessTexture = material != null ? material.MetallicRoughnessTexture : null;
+            var normalTexture = material != null ? material.NormalTexture : null;
             bool interpolateNormals = material != null && material.InterpolateNormals;
 
             if (opacity < ShadowBlockerOpaqueThreshold)
@@ -1494,15 +1539,23 @@ public class GameManager : MonoBehaviour
                 _hasTransparentMeshBlockers = true;
             }
 
-            if (meshObject.previousLocalToWorld == localToWorld
-                && meshObject.previousColor == color
-                && meshObject.previousEmission == emission
-                && Mathf.Approximately(meshObject.previousSmoothness, smoothness)
-                && Mathf.Approximately(meshObject.previousOpacity, opacity)
-                && Mathf.Approximately(meshObject.previousRefraction, refraction)
-                && meshObject.previousMaterialType == materialType
-                && meshObject.previousAlbedoTexture == albedoTexture
-                && meshObject.previousInterpolateNormals == interpolateNormals)
+            bool meshGeometryChanged = meshObject.previousLocalToWorld != localToWorld
+                || meshObject.previousInterpolateNormals != interpolateNormals;
+            bool meshMaterialChanged = meshObject.previousColor != color
+                || meshObject.previousEmission != emission
+                || !Mathf.Approximately(meshObject.previousSmoothness, smoothness)
+                || !Mathf.Approximately(meshObject.previousMetallic, metallic)
+                || !Mathf.Approximately(meshObject.previousOpacity, opacity)
+                || !Mathf.Approximately(meshObject.previousRefraction, refraction)
+                || meshObject.previousMaterialType != materialType
+                || meshObject.previousAlbedoTexture != albedoTexture
+                || meshObject.previousMetallicRoughnessTexture != metallicRoughnessTexture
+                || meshObject.previousNormalTexture != normalTexture;
+
+            geometryChanged |= meshGeometryChanged;
+            materialChanged |= meshMaterialChanged;
+
+            if (!meshGeometryChanged && !meshMaterialChanged)
             {
                 continue;
             }
@@ -1511,16 +1564,80 @@ public class GameManager : MonoBehaviour
             meshObject.previousColor = color;
             meshObject.previousEmission = emission;
             meshObject.previousSmoothness = smoothness;
+            meshObject.previousMetallic = metallic;
             meshObject.previousOpacity = opacity;
             meshObject.previousRefraction = refraction;
             meshObject.previousMaterialType = materialType;
             meshObject.previousAlbedoTexture = albedoTexture;
+            meshObject.previousMetallicRoughnessTexture = metallicRoughnessTexture;
+            meshObject.previousNormalTexture = normalTexture;
             meshObject.previousInterpolateNormals = interpolateNormals;
             _meshObjects[i] = meshObject;
-            changed = true;
+        }
+    }
+
+    private void RefreshTriangleMaterials()
+    {
+        _meshAlbedoTextures.Clear();
+        _meshMetallicRoughnessTextures.Clear();
+        _meshNormalTextures.Clear();
+
+        for (int meshIndex = 0; meshIndex < _meshObjects.Count; meshIndex++)
+        {
+            var meshObject = _meshObjects[meshIndex];
+            var material = meshObject.material;
+            var light = meshObject.light;
+            bool isLight = light != null;
+            var color = material != null ? material.Color.ToVector3() : Vector3.one;
+            var emission = isLight ? light.Color.ToVector3() : Vector3.zero;
+            float smoothness = material != null ? material.Smoothness : 0.0f;
+            float metallic = material != null ? GetEffectiveMetallic(material) : 0.0f;
+            float opacity = material != null ? Mathf.Clamp01(material.Opacity) : 1.0f;
+            float refraction = material != null ? material.RefractionIndex : 1.0f;
+            int materialType = isLight ? 3 : (int)material.Type;
+            int textureIndex = material != null ? GetMeshAlbedoTextureIndex(material.AlbedoTexture) : -1;
+            int metallicRoughnessTextureIndex = material != null ? GetMeshTextureIndex(material.MetallicRoughnessTexture, _meshMetallicRoughnessTextures) : -1;
+            int normalTextureIndex = material != null ? GetMeshTextureIndex(material.NormalTexture, _meshNormalTextures) : -1;
+
+            int triangleStart = 0;
+            int triangleEnd = 0;
+            for (int infoIndex = 0; infoIndex < _meshInfos.Count; infoIndex++)
+            {
+                if (_meshInfos[infoIndex].meshIndex != meshIndex)
+                {
+                    continue;
+                }
+
+                triangleStart = _meshInfos[infoIndex].triangleStart;
+                triangleEnd = triangleStart + _meshInfos[infoIndex].triangleCount;
+                break;
+            }
+
+            for (int triangleIndex = triangleStart; triangleIndex < triangleEnd; triangleIndex++)
+            {
+                var triangle = _triangles[triangleIndex];
+                triangle.color = color;
+                triangle.emission = emission;
+                triangle.smoothness = smoothness;
+                triangle.metallic = metallic;
+                triangle.opacity = opacity;
+                triangle.refraction = refraction;
+                triangle.materialType = materialType;
+                triangle.textureIndex = textureIndex;
+                triangle.metallicRoughnessTextureIndex = metallicRoughnessTextureIndex;
+                triangle.normalTextureIndex = normalTextureIndex;
+                _triangles[triangleIndex] = triangle;
+
+                if (isLight && triangle.lightIndex >= 0 && triangle.lightIndex < _lights.Count)
+                {
+                    var triangleLight = _lights[triangle.lightIndex];
+                    triangleLight.emission = emission;
+                    _lights[triangle.lightIndex] = triangleLight;
+                }
+            }
         }
 
-        return changed;
+        RebuildMeshTextureArrays();
     }
 
     private void RebuildTriangleData()
@@ -1529,6 +1646,8 @@ public class GameManager : MonoBehaviour
         _meshInfos.Clear();
         _bvhNodes.Clear();
         _meshAlbedoTextures.Clear();
+        _meshMetallicRoughnessTextures.Clear();
+        _meshNormalTextures.Clear();
         int sphereLightCount = _lightObjects.Count;
         if (_lights.Count > sphereLightCount)
         {
@@ -1544,10 +1663,6 @@ public class GameManager : MonoBehaviour
                 continue;
             }
 
-            var vertices = mesh.vertices;
-            var indices = mesh.triangles;
-            var uvs = mesh.uv;
-            var normals = mesh.normals;
             var localToWorld = meshObject.transform.localToWorldMatrix;
             var normalToWorld = localToWorld.inverse.transpose;
             var material = meshObject.material;
@@ -1556,64 +1671,59 @@ public class GameManager : MonoBehaviour
             var color = material != null ? material.Color.ToVector3() : Vector3.one;
             var emission = isLight ? light.Color.ToVector3() : Vector3.zero;
             var smoothness = material != null ? material.Smoothness : 0.0f;
+            var metallic = material != null ? GetEffectiveMetallic(material) : 0.0f;
             var opacity = material != null ? Mathf.Clamp01(material.Opacity) : 1.0f;
             var refraction = material != null ? material.RefractionIndex : 1.0f;
             int materialType = isLight ? 3 : (int)material.Type;
             int textureIndex = material != null ? GetMeshAlbedoTextureIndex(material.AlbedoTexture) : -1;
-            bool interpolateNormals = material != null && material.InterpolateNormals && normals.Length == vertices.Length;
-            var meshTriangles = new List<Triangle>(indices.Length / 3);
+            int metallicRoughnessTextureIndex = material != null ? GetMeshTextureIndex(material.MetallicRoughnessTexture, _meshMetallicRoughnessTextures) : -1;
+            int normalTextureIndex = material != null ? GetMeshTextureIndex(material.NormalTexture, _meshNormalTextures) : -1;
+            bool interpolateNormals = material != null && material.InterpolateNormals;
+            MeshBvhTemplate template = GetOrBuildMeshBvhTemplate(mesh, interpolateNormals);
+            int triangleStart = _triangles.Count;
+            int nodeStart = _bvhNodes.Count;
 
-            for (int i = 0; i + 2 < indices.Length; i += 3)
+            for (int i = 0; i < template.triangles.Count; i++)
             {
-                int index0 = indices[i];
-                int index1 = indices[i + 1];
-                int index2 = indices[i + 2];
-                var vertex0 = localToWorld.MultiplyPoint3x4(vertices[index0]);
-                var vertex1 = localToWorld.MultiplyPoint3x4(vertices[index1]);
-                var vertex2 = localToWorld.MultiplyPoint3x4(vertices[index2]);
-                var normal = Vector3.Cross(vertex1 - vertex0, vertex2 - vertex0).normalized;
-                var normal0 = interpolateNormals ? normalToWorld.MultiplyVector(normals[index0]).normalized : normal;
-                var normal1 = interpolateNormals ? normalToWorld.MultiplyVector(normals[index1]).normalized : normal;
-                var normal2 = interpolateNormals ? normalToWorld.MultiplyVector(normals[index2]).normalized : normal;
-
+                Triangle triangle = TransformTemplateTriangle(template.triangles[i], localToWorld, normalToWorld);
                 int lightIndex = isLight ? _lights.Count : -1;
-                meshTriangles.Add(new Triangle
-                {
-                    vertex0 = vertex0,
-                    vertex1 = vertex1,
-                    vertex2 = vertex2,
-                    normal = normal,
-                    normal0 = normal0,
-                    normal1 = normal1,
-                    normal2 = normal2,
-                    color = color,
-                    emission = emission,
-                    uv0 = GetMeshUv(uvs, index0),
-                    uv1 = GetMeshUv(uvs, index1),
-                    uv2 = GetMeshUv(uvs, index2),
-                    smoothness = smoothness,
-                    opacity = opacity,
-                    refraction = refraction,
-                    materialType = materialType,
-                    meshIndex = meshIndex,
-                    textureIndex = textureIndex,
-                    interpolateNormals = interpolateNormals ? 1 : 0,
-                    lightIndex = lightIndex
-                });
+                triangle.color = color;
+                triangle.emission = emission;
+                triangle.smoothness = smoothness;
+                triangle.metallic = metallic;
+                triangle.opacity = opacity;
+                triangle.refraction = refraction;
+                triangle.materialType = materialType;
+                triangle.meshIndex = meshIndex;
+                triangle.textureIndex = textureIndex;
+                triangle.metallicRoughnessTextureIndex = metallicRoughnessTextureIndex;
+                triangle.normalTextureIndex = normalTextureIndex;
+                triangle.interpolateNormals = interpolateNormals ? 1 : 0;
+                triangle.lightIndex = lightIndex;
+                _triangles.Add(triangle);
 
                 if (isLight)
                 {
-                    AddTriangleLight(vertex0, vertex1, vertex2, normal, emission);
+                    AddTriangleLight(triangle.vertex0, triangle.vertex1, triangle.vertex2, triangle.normal, emission);
                 }
             }
 
-            if (meshTriangles.Count == 0)
+            if (template.triangles.Count == 0)
             {
                 continue;
             }
 
-            var triangleStart = _triangles.Count;
-            var rootNodeIndex = BuildBvhNode(meshTriangles, 0, meshTriangles.Count);
+            for (int i = 0; i < template.nodes.Count; i++)
+            {
+                BvhNode node = template.nodes[i];
+                TransformBounds(node.boundsMin, node.boundsMax, localToWorld, out node.boundsMin, out node.boundsMax);
+                if (node.leftChildIndex >= 0) node.leftChildIndex += nodeStart;
+                if (node.rightChildIndex >= 0) node.rightChildIndex += nodeStart;
+                if (node.triangleStart >= 0) node.triangleStart += triangleStart;
+                _bvhNodes.Add(node);
+            }
+
+            int rootNodeIndex = nodeStart;
             _meshInfos.Add(new MeshInfo
             {
                 boundsMin = _bvhNodes[rootNodeIndex].boundsMin,
@@ -1626,24 +1736,154 @@ public class GameManager : MonoBehaviour
             });
         }
 
-        RebuildMeshAlbedoTextureArray();
+        RebuildMeshTextureArrays();
+    }
+
+    private MeshBvhTemplate GetOrBuildMeshBvhTemplate(Mesh mesh, bool interpolateNormals)
+    {
+        long key = ((long)mesh.GetInstanceID() << 1) | (interpolateNormals ? 1L : 0L);
+        if (_meshBvhTemplates.TryGetValue(key, out MeshBvhTemplate template))
+        {
+            return template;
+        }
+
+        var vertices = mesh.vertices;
+        var indices = mesh.triangles;
+        var uvs = mesh.uv;
+        var normals = mesh.normals;
+        var tangents = mesh.tangents;
+        bool useInterpolatedNormals = interpolateNormals && normals.Length == vertices.Length;
+        bool hasTangents = tangents.Length == vertices.Length;
+        var sourceTriangles = new List<Triangle>(indices.Length / 3);
+
+        for (int i = 0; i + 2 < indices.Length; i += 3)
+        {
+            int index0 = indices[i];
+            int index1 = indices[i + 1];
+            int index2 = indices[i + 2];
+            Vector3 vertex0 = vertices[index0];
+            Vector3 vertex1 = vertices[index1];
+            Vector3 vertex2 = vertices[index2];
+            Vector3 normal = Vector3.Cross(vertex1 - vertex0, vertex2 - vertex0).normalized;
+            Vector3 normal0 = useInterpolatedNormals ? normals[index0].normalized : normal;
+            Vector3 normal1 = useInterpolatedNormals ? normals[index1].normalized : normal;
+            Vector3 normal2 = useInterpolatedNormals ? normals[index2].normalized : normal;
+            sourceTriangles.Add(new Triangle
+            {
+                vertex0 = vertex0,
+                vertex1 = vertex1,
+                vertex2 = vertex2,
+                normal = normal,
+                normal0 = normal0,
+                normal1 = normal1,
+                normal2 = normal2,
+                tangent0 = GetLocalTangent(tangents, index0, normal0, hasTangents),
+                tangent1 = GetLocalTangent(tangents, index1, normal1, hasTangents),
+                tangent2 = GetLocalTangent(tangents, index2, normal2, hasTangents),
+                uv0 = GetMeshUv(uvs, index0),
+                uv1 = GetMeshUv(uvs, index1),
+                uv2 = GetMeshUv(uvs, index2),
+                interpolateNormals = useInterpolatedNormals ? 1 : 0
+            });
+        }
+
+        template = new MeshBvhTemplate();
+        if (sourceTriangles.Count > 0)
+        {
+            BuildBvhNode(sourceTriangles, template.triangles, template.nodes, 0, sourceTriangles.Count);
+        }
+        _meshBvhTemplates.Add(key, template);
+        return template;
+    }
+
+    private static Triangle TransformTemplateTriangle(Triangle triangle, Matrix4x4 localToWorld, Matrix4x4 normalToWorld)
+    {
+        triangle.vertex0 = localToWorld.MultiplyPoint3x4(triangle.vertex0);
+        triangle.vertex1 = localToWorld.MultiplyPoint3x4(triangle.vertex1);
+        triangle.vertex2 = localToWorld.MultiplyPoint3x4(triangle.vertex2);
+        triangle.normal = Vector3.Cross(triangle.vertex1 - triangle.vertex0, triangle.vertex2 - triangle.vertex0).normalized;
+        if (triangle.interpolateNormals != 0)
+        {
+            triangle.normal0 = normalToWorld.MultiplyVector(triangle.normal0).normalized;
+            triangle.normal1 = normalToWorld.MultiplyVector(triangle.normal1).normalized;
+            triangle.normal2 = normalToWorld.MultiplyVector(triangle.normal2).normalized;
+        }
+        else
+        {
+            triangle.normal0 = triangle.normal;
+            triangle.normal1 = triangle.normal;
+            triangle.normal2 = triangle.normal;
+        }
+        triangle.tangent0 = TransformTangent(triangle.tangent0, triangle.normal0, localToWorld);
+        triangle.tangent1 = TransformTangent(triangle.tangent1, triangle.normal1, localToWorld);
+        triangle.tangent2 = TransformTangent(triangle.tangent2, triangle.normal2, localToWorld);
+        return triangle;
+    }
+
+    private static void TransformBounds(Vector3 sourceMin, Vector3 sourceMax, Matrix4x4 matrix, out Vector3 boundsMin, out Vector3 boundsMax)
+    {
+        Vector3 center = (sourceMin + sourceMax) * 0.5f;
+        Vector3 extents = (sourceMax - sourceMin) * 0.5f;
+        Vector3 worldCenter = matrix.MultiplyPoint3x4(center);
+        boundsMin = worldCenter;
+        boundsMax = worldCenter;
+        for (int x = -1; x <= 1; x += 2)
+        for (int y = -1; y <= 1; y += 2)
+        for (int z = -1; z <= 1; z += 2)
+        {
+            Vector3 corner = matrix.MultiplyPoint3x4(center + Vector3.Scale(extents, new Vector3(x, y, z)));
+            boundsMin = Vector3.Min(boundsMin, corner);
+            boundsMax = Vector3.Max(boundsMax, corner);
+        }
     }
 
     private int GetMeshAlbedoTextureIndex(Texture2D texture)
+    {
+        return GetMeshTextureIndex(texture, _meshAlbedoTextures);
+    }
+
+    private static int GetMeshTextureIndex(Texture2D texture, List<Texture2D> textures)
     {
         if (texture == null)
         {
             return -1;
         }
 
-        int existingIndex = _meshAlbedoTextures.IndexOf(texture);
+        int existingIndex = textures.IndexOf(texture);
         if (existingIndex >= 0)
         {
             return existingIndex;
         }
 
-        _meshAlbedoTextures.Add(texture);
-        return _meshAlbedoTextures.Count - 1;
+        textures.Add(texture);
+        return textures.Count - 1;
+    }
+
+    private static float GetEffectiveMetallic(RayMaterial material)
+    {
+        return material.Type == RayMaterial.MaterialType.Metal && Mathf.Approximately(material.Metallic, 0.0f)
+            ? 1.0f
+            : Mathf.Clamp01(material.Metallic);
+    }
+
+    private static Vector4 GetLocalTangent(Vector4[] tangents, int index, Vector3 normal, bool hasTangents)
+    {
+        if (!hasTangents)
+        {
+            return Vector4.zero;
+        }
+
+        Vector4 source = tangents[index];
+        Vector3 tangent = new Vector3(source.x, source.y, source.z);
+        tangent = Vector3.ProjectOnPlane(tangent, normal).normalized;
+        return new Vector4(tangent.x, tangent.y, tangent.z, source.w < 0.0f ? -1.0f : 1.0f);
+    }
+
+    private static Vector4 TransformTangent(Vector4 tangent, Vector3 normal, Matrix4x4 localToWorld)
+    {
+        Vector3 direction = localToWorld.MultiplyVector(new Vector3(tangent.x, tangent.y, tangent.z));
+        direction = Vector3.ProjectOnPlane(direction, normal).normalized;
+        return new Vector4(direction.x, direction.y, direction.z, tangent.w);
     }
 
     private void AddTriangleLight(Vector3 vertex0, Vector3 vertex1, Vector3 vertex2, Vector3 normal, Vector3 emission)
@@ -1674,60 +1914,68 @@ public class GameManager : MonoBehaviour
         return uvs != null && vertexIndex >= 0 && vertexIndex < uvs.Length ? uvs[vertexIndex] : Vector2.zero;
     }
 
-    private void RebuildMeshAlbedoTextureArray()
+    private void RebuildMeshTextureArrays()
     {
-        EnsureDefaultMeshAlbedoTexture();
-        DestroyRuntimeTextureArray();
+        EnsureDefaultMeshTextures();
+        DestroyRuntimeTextureArrays();
+        _meshAlbedoTextureArray = BuildMeshTextureArray(_meshAlbedoTextures, defaultMeshAlbedoTexture, "Ray Tracing Mesh Albedo Texture Array", Color.white, false);
+        _meshMetallicRoughnessTextureArray = BuildMeshTextureArray(_meshMetallicRoughnessTextures, defaultMeshMetallicRoughnessTexture, "Ray Tracing Mesh Metallic Roughness Texture Array", Color.white, true);
+        _meshNormalTextureArray = BuildMeshTextureArray(_meshNormalTextures, defaultMeshNormalTexture, "Ray Tracing Mesh Normal Texture Array", new Color(0.5f, 0.5f, 1.0f, 1.0f), true);
+    }
 
-        int textureCount = Mathf.Max(1, _meshAlbedoTextures.Count);
-        _meshAlbedoTextureArray = new Texture2DArray(
-            MeshTextureSize,
-            MeshTextureSize,
-            textureCount,
-            TextureFormat.RGBA32,
-            false)
+    private void EnsureDefaultMeshTextures()
+    {
+        defaultMeshAlbedoTexture = EnsureDefaultMeshTexture(defaultMeshAlbedoTexture, "Default Mesh Albedo", Color.white);
+        defaultMeshMetallicRoughnessTexture = EnsureDefaultMeshTexture(defaultMeshMetallicRoughnessTexture, "Default Mesh Metallic Roughness", Color.white);
+        defaultMeshNormalTexture = EnsureDefaultMeshTexture(defaultMeshNormalTexture, "Default Mesh Normal", new Color(0.5f, 0.5f, 1.0f, 1.0f));
+    }
+
+    private static Texture2D EnsureDefaultMeshTexture(Texture2D texture, string textureName, Color color)
+    {
+        if (texture != null)
         {
-            name = "Ray Tracing Mesh Albedo Texture Array",
+            return texture;
+        }
+
+        texture = new Texture2D(1, 1, TextureFormat.RGBA32, false, true)
+        {
+            name = textureName,
             wrapMode = TextureWrapMode.Repeat,
-            filterMode = FilterMode.Point
+            filterMode = FilterMode.Bilinear
+        };
+        texture.SetPixel(0, 0, color);
+        texture.Apply(false, true);
+        return texture;
+    }
+
+    private static Texture2DArray BuildMeshTextureArray(List<Texture2D> textures, Texture2D fallback, string arrayName, Color fallbackColor, bool linear)
+    {
+        int textureCount = Mathf.Max(1, textures.Count);
+        var result = new Texture2DArray(MeshTextureSize, MeshTextureSize, textureCount, TextureFormat.RGBA32, false, linear)
+        {
+            name = arrayName,
+            wrapMode = TextureWrapMode.Repeat,
+            filterMode = FilterMode.Bilinear
         };
 
         for (int i = 0; i < textureCount; i++)
         {
-            Texture2D source = i < _meshAlbedoTextures.Count && _meshAlbedoTextures[i] != null
-                ? _meshAlbedoTextures[i]
-                : defaultMeshAlbedoTexture;
-            CopyTextureToArraySlice(source, _meshAlbedoTextureArray, i);
+            Texture2D source = i < textures.Count ? textures[i] : fallback;
+            CopyTextureToArraySlice(source, result, i, fallbackColor);
         }
 
-        _meshAlbedoTextureArray.Apply(false, false);
+        result.Apply(false, false);
+        return result;
     }
 
-    private void EnsureDefaultMeshAlbedoTexture()
-    {
-        if (defaultMeshAlbedoTexture != null)
-        {
-            return;
-        }
-
-        defaultMeshAlbedoTexture = new Texture2D(1, 1, TextureFormat.RGBA32, false)
-        {
-            name = "Default Mesh Albedo",
-            wrapMode = TextureWrapMode.Repeat,
-            filterMode = FilterMode.Point
-        };
-        defaultMeshAlbedoTexture.SetPixel(0, 0, Color.white);
-        defaultMeshAlbedoTexture.Apply(false, true);
-    }
-
-    private static void CopyTextureToArraySlice(Texture2D source, Texture2DArray destination, int slice)
+    private static void CopyTextureToArraySlice(Texture2D source, Texture2DArray destination, int slice, Color fallbackColor)
     {
         var pixels = new Color32[MeshTextureSize * MeshTextureSize];
         if (source == null)
         {
             for (int i = 0; i < pixels.Length; i++)
             {
-                pixels[i] = new Color32(255, 255, 255, 255);
+                pixels[i] = fallbackColor;
             }
         }
         else if (source.isReadable)
@@ -1744,10 +1992,10 @@ public class GameManager : MonoBehaviour
         }
         else
         {
-            Debug.LogWarning($"Mesh albedo texture '{source.name}' is not readable; using white fallback for ray tracing.");
+            Debug.LogWarning($"Mesh texture '{source.name}' is not readable; using fallback data for ray tracing.");
             for (int i = 0; i < pixels.Length; i++)
             {
-                pixels[i] = new Color32(255, 255, 255, 255);
+                pixels[i] = fallbackColor;
             }
         }
 
@@ -1923,9 +2171,9 @@ public class GameManager : MonoBehaviour
         return (item.boundsMin + item.boundsMax) * 0.5f;
     }
 
-    // Top-level / shadow BVH equivalent of FindTriangleSahSplit. Scores candidate splits across
-    // all three axes by SAH and leaves items sorted on the winning axis so the chosen split is
-    // contiguous. Falls back to a longest-axis median split if no positive-area split is found.
+    // Scores candidate top-level splits across all three axes by SAH and leaves items sorted on
+    // the winning axis so the chosen split is contiguous. Falls back to a longest-axis median
+    // split if no positive-area split is found.
     private int FindTopLevelSahSplit(List<TopLevelBvhBuildItem> items, int start, int count)
     {
         int bestAxis = -1;
@@ -1980,14 +2228,20 @@ public class GameManager : MonoBehaviour
         return Mathf.Clamp(bestSplit, 1, count - 1);
     }
 
-    private int BuildBvhNode(List<Triangle> meshTriangles, int start, int count, int depth = 1)
+    private int BuildBvhNode(
+        List<Triangle> meshTriangles,
+        List<Triangle> outputTriangles,
+        List<BvhNode> outputNodes,
+        int start,
+        int count,
+        int depth = 1)
     {
         if (depth > BvhStackSize)
         {
             throw new InvalidOperationException($"Mesh BVH depth {depth} exceeds traversal stack capacity {BvhStackSize}.");
         }
 
-        var nodeIndex = _bvhNodes.Count;
+        var nodeIndex = outputNodes.Count;
         var boundsMin = GetTriangleBoundsMin(meshTriangles[start]);
         var boundsMax = GetTriangleBoundsMax(meshTriangles[start]);
 
@@ -2000,7 +2254,7 @@ public class GameManager : MonoBehaviour
         boundsMin -= padding;
         boundsMax += padding;
 
-        _bvhNodes.Add(new BvhNode
+        outputNodes.Add(new BvhNode
         {
             boundsMin = boundsMin,
             boundsMax = boundsMax,
@@ -2012,13 +2266,13 @@ public class GameManager : MonoBehaviour
 
         if (count <= BvhLeafTriangleCount)
         {
-            var triangleStart = _triangles.Count;
+            var triangleStart = outputTriangles.Count;
             for (int i = start; i < start + count; i++)
             {
-                _triangles.Add(meshTriangles[i]);
+                outputTriangles.Add(meshTriangles[i]);
             }
 
-            _bvhNodes[nodeIndex] = new BvhNode
+            outputNodes[nodeIndex] = new BvhNode
             {
                 boundsMin = boundsMin,
                 boundsMax = boundsMax,
@@ -2030,13 +2284,13 @@ public class GameManager : MonoBehaviour
             return nodeIndex;
         }
 
-        int leftCount = ClampBvhSplitToDepth(FindTriangleSahSplit(meshTriangles, start, count), count, depth);
+        int leftCount = FindTriangleMedianSplit(meshTriangles, start, count, boundsMin, boundsMax);
 
         int rightCount = count - leftCount;
-        int leftChildIndex = BuildBvhNode(meshTriangles, start, leftCount, depth + 1);
-        int rightChildIndex = BuildBvhNode(meshTriangles, start + leftCount, rightCount, depth + 1);
+        int leftChildIndex = BuildBvhNode(meshTriangles, outputTriangles, outputNodes, start, leftCount, depth + 1);
+        int rightChildIndex = BuildBvhNode(meshTriangles, outputTriangles, outputNodes, start + leftCount, rightCount, depth + 1);
 
-        _bvhNodes[nodeIndex] = new BvhNode
+        outputNodes[nodeIndex] = new BvhNode
         {
             boundsMin = boundsMin,
             boundsMax = boundsMax,
@@ -2049,70 +2303,17 @@ public class GameManager : MonoBehaviour
         return nodeIndex;
     }
 
-    // Chooses how many triangles go to the left child using the surface area heuristic (SAH).
-    // For each axis it sorts by centroid, sweeps every candidate split, and scores it as
-    // SA(left)*leftCount + SA(right)*rightCount. The lowest-scoring split across all axes wins,
-    // leaving meshTriangles sorted on the winning axis so [start, start+leftCount) is the left set.
-    // Falls back to a median split if no positive-area split is found. This replaces the old
-    // longest-axis median split with a quality-aware split that produces tighter, less overlapping
-    // child bounds, so traversal skips more triangles.
-    private int FindTriangleSahSplit(List<Triangle> meshTriangles, int start, int count)
+    private static int FindTriangleMedianSplit(
+        List<Triangle> meshTriangles,
+        int start,
+        int count,
+        Vector3 boundsMin,
+        Vector3 boundsMax)
     {
-        int bestAxis = -1;
-        int bestSplit = count / 2;
-        float bestCost = float.MaxValue;
-
-        EnsureSahScratch(count);
-
-        for (int axis = 0; axis < 3; axis++)
-        {
-            int sortAxis = axis;
-            meshTriangles.Sort(start, count, Comparer<Triangle>.Create((a, b) =>
-                GetTriangleCentroid(a)[sortAxis].CompareTo(GetTriangleCentroid(b)[sortAxis])));
-
-            // Suffix bounds: _sahSuffixArea[i] = half surface area of triangles [start+i, start+count).
-            var suffixMin = GetTriangleBoundsMin(meshTriangles[start + count - 1]);
-            var suffixMax = GetTriangleBoundsMax(meshTriangles[start + count - 1]);
-            _sahSuffixArea[count - 1] = HalfSurfaceArea(suffixMax - suffixMin);
-            for (int i = count - 2; i >= 0; i--)
-            {
-                Encapsulate(meshTriangles[start + i], ref suffixMin, ref suffixMax);
-                _sahSuffixArea[i] = HalfSurfaceArea(suffixMax - suffixMin);
-            }
-
-            // Sweep left-to-right, growing the prefix bounds and combining with the suffix.
-            var prefixMin = GetTriangleBoundsMin(meshTriangles[start]);
-            var prefixMax = GetTriangleBoundsMax(meshTriangles[start]);
-            for (int leftCount = 1; leftCount < count; leftCount++)
-            {
-                float leftArea = HalfSurfaceArea(prefixMax - prefixMin);
-                float rightArea = _sahSuffixArea[leftCount];
-                float cost = leftArea * leftCount + rightArea * (count - leftCount);
-                if (cost < bestCost)
-                {
-                    bestCost = cost;
-                    bestAxis = sortAxis;
-                    bestSplit = leftCount;
-                }
-
-                Encapsulate(meshTriangles[start + leftCount], ref prefixMin, ref prefixMax);
-            }
-        }
-
-        if (bestAxis < 0)
-        {
-            // No usable split found; fall back to longest-axis median split.
-            bestAxis = GetLongestAxis(
-                GetTriangleBoundsMax(meshTriangles[start]) - GetTriangleBoundsMin(meshTriangles[start]));
-            bestSplit = count / 2;
-        }
-
-        // Re-sort on the winning axis so the chosen split is contiguous in the list.
-        int finalAxis = bestAxis;
+        int axis = GetLongestAxis(boundsMax - boundsMin);
         meshTriangles.Sort(start, count, Comparer<Triangle>.Create((a, b) =>
-            GetTriangleCentroid(a)[finalAxis].CompareTo(GetTriangleCentroid(b)[finalAxis])));
-
-        return Mathf.Clamp(bestSplit, 1, count - 1);
+            GetTriangleCentroid(a)[axis].CompareTo(GetTriangleCentroid(b)[axis])));
+        return count / 2;
     }
 
     private static Vector3 GetTriangleCentroid(Triangle triangle)
@@ -2369,13 +2570,15 @@ public class GameManager : MonoBehaviour
                 previousColor = material != null ? material.Color.ToVector3() : Vector3.one,
                 previousEmission = rayLight != null ? rayLight.Color.ToVector3() : Vector3.zero,
                 previousSmoothness = material != null ? material.Smoothness : 0.0f,
+                previousMetallic = material != null ? GetEffectiveMetallic(material) : 0.0f,
                 previousOpacity = material != null ? Mathf.Clamp01(material.Opacity) : 1.0f,
                 previousRefraction = material != null ? material.RefractionIndex : 1.0f,
                 previousMaterialType = rayLight != null ? 3 : (int)material.Type,
                 previousAlbedoTexture = material != null ? material.AlbedoTexture : null,
+                previousMetallicRoughnessTexture = material != null ? material.MetallicRoughnessTexture : null,
+                previousNormalTexture = material != null ? material.NormalTexture : null,
                 previousInterpolateNormals = material != null && material.InterpolateNormals
             });
-            RebuildTriangleData();
             return;
         }
 
@@ -2487,7 +2690,6 @@ public class GameManager : MonoBehaviour
         {
             _lightObjects.RemoveAt(lightIndex);
             _lights.RemoveAt(lightIndex);
-            RebuildTriangleData();
             return;
         }
 
@@ -2495,7 +2697,6 @@ public class GameManager : MonoBehaviour
         if (meshIndex >= 0)
         {
             _meshObjects.RemoveAt(meshIndex);
-            RebuildTriangleData();
         }
     }
 
@@ -2613,9 +2814,11 @@ public class GameManager : MonoBehaviour
         shader.SetTexture(kernelHandle, "_SkyboxTexture", skyboxTexture);
         if (_meshAlbedoTextureArray == null)
         {
-            RebuildMeshAlbedoTextureArray();
+            RebuildMeshTextureArrays();
         }
         shader.SetTexture(kernelHandle, "_MeshAlbedoTextures", _meshAlbedoTextureArray);
+        shader.SetTexture(kernelHandle, "_MeshMetallicRoughnessTextures", _meshMetallicRoughnessTextureArray);
+        shader.SetTexture(kernelHandle, "_MeshNormalTextures", _meshNormalTextureArray);
 
         shader.SetMatrix("_CameraToWorld", renderTextureCamera.cameraToWorldMatrix);
         shader.SetMatrix("_CameraInverseProjection", renderTextureCamera.projectionMatrix.inverse);
@@ -2933,10 +3136,13 @@ public class GameManager : MonoBehaviour
         hash = AddHash(hash, value.previousColor);
         hash = AddHash(hash, value.previousEmission);
         hash = AddHash(hash, value.previousSmoothness);
+        hash = AddHash(hash, value.previousMetallic);
         hash = AddHash(hash, value.previousOpacity);
         hash = AddHash(hash, value.previousRefraction);
         hash = AddHash(hash, value.previousMaterialType);
         hash = AddHash(hash, value.previousAlbedoTexture != null ? value.previousAlbedoTexture.GetInstanceID() : 0);
+        hash = AddHash(hash, value.previousMetallicRoughnessTexture != null ? value.previousMetallicRoughnessTexture.GetInstanceID() : 0);
+        hash = AddHash(hash, value.previousNormalTexture != null ? value.previousNormalTexture.GetInstanceID() : 0);
         return AddHash(hash, value.previousInterpolateNormals ? 1 : 0);
     }
 }

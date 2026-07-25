@@ -21,6 +21,9 @@ Fields:
 - `Type`: selects `Diffuse`, `Metal`, or `Glass` scattering in the compute shader. Defaults to `Metal`. (Mesh primitives created via `RayMeshPrimitive` override this to `Glass` in `Reset()`.)
 - `Color`: uploaded as normalized RGB and used as albedo/tint. For transmitted glass, it also acts as the RGB absorption/filter color, so stacked colored glass compounds per channel.
 - `AlbedoTexture`: optional mesh-only albedo texture. Mesh triangle UVs are uploaded and sampled from a fixed-size texture array; the sampled texture color multiplies `Color`. Sphere materials ignore this field.
+- `Metallic`: continuous mesh metallic response. `0` is dielectric and `1` is metal; existing `Metal` materials with the default zero value retain their historical fully metallic behavior.
+- `MetallicRoughnessTexture`: optional mesh-only linear data map using glTF channels (green roughness, blue metallic). Both channels multiply the material scalar values.
+- `NormalTexture`: optional mesh-only tangent-space normal map. Imported tangents are transformed with the mesh when available; meshes without tangents use a stable fallback basis. Mapped normals affect shading and optics while geometric normals remain authoritative for boundaries and ray offsets.
 - `InterpolateNormals`: mesh-only smooth shading. When enabled and the mesh contains vertex normals, the renderer barycentrically interpolates those normals for lighting and opaque reflection. Triangle geometry is still used for intersections, ray-origin offsets, shadow boundaries, and glass refraction.
 - `Smoothness`: controls metal/glass reflection roughness by randomizing the hit normal. Higher values preserve the normal more closely.
 - `Opacity`: controls glass transmission probability and absorption density. `1` is fully reflective/opaque, while lower values transmit more often and apply weaker color filtering through the material. Note that any opacity below `1` makes the shader treat the hit as glass (see below), regardless of `Type`.
@@ -77,6 +80,8 @@ For scene composition, `GameManager.syncUnitySkyboxToRayTracedSkybox` can create
 Unity meshes are traced by the compute shader only when they are registered through `RayTracingObject` plus `RayMaterial` and `MeshFilter`, without being registered as spheres through `SphereCollider`. Other Unity meshes/colliders can still affect Unity physics, scene editing, and visual editor context without being ray traced.
 
 Imported model assets such as FBX files are supported through their imported `MeshFilter`/`Mesh` data, but the mesh must be CPU-readable because `GameManager` reads vertices, indices, and UVs to build its own ray-tracing triangle buffer and per-mesh BVH. For model importer assets this means Unity's Read/Write import setting must be enabled. The Dragon Cornell benchmark generator enables this automatically for `Assets/Models/stanford-dragon-pbr.fbx` before loading its mesh.
+
+`Tools > Ray Tracing > Generate Teapot Material Scene` creates `Assets/Scenes/Benchmarks/Benchmark_TeapotMaterials.unity`. It uses both meshes under `Assets/Models/Teapot`, generates reusable striped, scratched, tiled, gold-ring, and marble textures under the benchmark generated-assets folder, and places six material variants over `Assets/checkerboard.png`. Existing generated output is not overwritten.
 
 The scene’s `Directional Light` is a Unity light and is not used by the compute shader lighting model.
 

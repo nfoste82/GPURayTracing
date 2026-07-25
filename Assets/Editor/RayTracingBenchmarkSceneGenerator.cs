@@ -14,6 +14,9 @@ public static class RayTracingBenchmarkSceneGenerator
     private const string SkyboxPath = "Assets/skyboxOcean.jpg";
     private const string StanfordDragonModelPath = "Assets/Models/Dragon/stanford-dragon-pbr.fbx";
     private const string WolfensteinTextureAtlasPath = "Assets/wolf3d_textures.png";
+    private const string TeapotLidModelPath = "Assets/Models/Teapot/Mesh000.obj";
+    private const string TeapotBodyModelPath = "Assets/Models/Teapot/Mesh001.obj";
+    private const string CheckerboardTexturePath = "Assets/checkerboard.png";
     private const int WolfensteinTextureTileSize = 64;
 
     [MenuItem("Tools/Ray Tracing/Generate Benchmark Scenes")]
@@ -39,6 +42,62 @@ public static class RayTracingBenchmarkSceneGenerator
         CreateWolfensteinScene();
         CreateVolumetricFogScene();
 
+        AssetDatabase.SaveAssets();
+        AssetDatabase.Refresh();
+    }
+
+    [MenuItem("Tools/Ray Tracing/Generate Teapot Material Scene")]
+    public static void GenerateTeapotMaterialScene()
+    {
+        const string sceneName = "Benchmark_TeapotMaterials";
+        Directory.CreateDirectory(BenchmarkSceneFolder);
+        Directory.CreateDirectory(GeneratedAssetFolder);
+        if (ShouldSkipExistingScene(sceneName))
+        {
+            return;
+        }
+
+        EnsureReadableModel(TeapotLidModelPath);
+        EnsureReadableModel(TeapotBodyModelPath);
+        EnsureReadableTexture(CheckerboardTexturePath);
+        Mesh lidMesh = LoadFirstMeshFromAsset(TeapotLidModelPath);
+        Mesh bodyMesh = LoadFirstMeshFromAsset(TeapotBodyModelPath);
+        Texture2D checkerboard = AssetDatabase.LoadAssetAtPath<Texture2D>(CheckerboardTexturePath);
+        if (lidMesh == null || bodyMesh == null || checkerboard == null)
+        {
+            Debug.LogError("Teapot material scene requires both Assets/Models/Teapot OBJ files and Assets/checkerboard.png.");
+            return;
+        }
+
+        Texture2D stripedNormal = GetOrCreateSwatchTexture("Teapot_Striped_Normal", CreateStripedNormalTexture);
+        Texture2D stripedMetalRough = GetOrCreateSwatchTexture("Teapot_Striped_MetalRough", CreateStripedMetalRoughnessTexture);
+        Texture2D scratchedNormal = GetOrCreateSwatchTexture("Teapot_Scratched_Normal", CreateScratchedNormalTexture);
+        Texture2D tiledNormal = GetOrCreateSwatchTexture("Teapot_Tiled_Normal", CreateTiledNormalTexture);
+        Texture2D goldNormal = GetOrCreateSwatchTexture("Teapot_Gold_Normal", CreateGoldNormalTexture);
+        Texture2D marbleAlbedo = GetOrCreateSwatchTexture("Teapot_Marble_Albedo", CreateMarbleAlbedoTexture);
+
+        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 5.4f, -13.5f), new Vector3(12.0f, 0.0f, 0.0f), passes: 1, bounces: 8, shadowQuality: 1);
+        context.Manager.enableFrameAccumulation = true;
+        context.Manager.cameraFocalDistance = 17.0f;
+        context.Manager.exposure = 1.15f;
+        context.Manager.lightFalloffScale = 0.035f;
+        context.Manager._skyboxLightColor = new Color32(55, 55, 60, 255);
+        context.Manager.topLevelBvhMinObjectCount = 0;
+        context.Manager.shadowBvhMinObjectCount = 0;
+
+        AddRayMesh(context.Root, "Checkerboard Floor", CreateHorizontalQuadMesh("Teapot Checkerboard Floor", 22.0f, 20.0f, 6.0f, 6.0f), Vector3.zero, Vector3.zero, Vector3.one, Color.white, RayMaterial.MaterialType.Diffuse, 0.2f, 1.0f, 1.0f, checkerboard);
+        AddLight(context.Root, "Warm Key", new Vector3(-6.5f, 10.0f, -4.0f), 1.5f, new Color32(255, 230, 205, 255));
+        AddLight(context.Root, "Cool Fill", new Vector3(7.0f, 8.0f, 2.0f), 1.25f, new Color32(185, 215, 255, 255));
+        AddLight(context.Root, "Top Rim", new Vector3(0.0f, 11.0f, 9.0f), 1.0f, new Color32(255, 250, 235, 255));
+
+        AddTeapot(context.Root, "Blue Tiles", bodyMesh, lidMesh, new Vector3(-4.2f, 0.02f, 4.8f), new Color32(34, 45, 135, 255), RayMaterial.MaterialType.Diffuse, 0.82f, 0.35f, null, null, tiledNormal);
+        AddTeapot(context.Root, "Marble", bodyMesh, lidMesh, new Vector3(0.0f, 0.02f, 4.8f), Color.white, RayMaterial.MaterialType.Diffuse, 0.55f, 0.0f, marbleAlbedo);
+        AddTeapot(context.Root, "Blue Scratched", bodyMesh, lidMesh, new Vector3(4.2f, 0.02f, 4.8f), new Color32(25, 39, 128, 255), RayMaterial.MaterialType.Metal, 0.8f, 0.85f, null, null, scratchedNormal);
+        AddTeapot(context.Root, "Striped Chrome", bodyMesh, lidMesh, new Vector3(-4.2f, 0.02f, 0.2f), new Color32(225, 230, 235, 255), RayMaterial.MaterialType.Metal, 0.98f, 1.0f, null, stripedMetalRough, stripedNormal);
+        AddTeapot(context.Root, "Teal Glass", bodyMesh, lidMesh, new Vector3(0.0f, 0.02f, 0.2f), new Color32(65, 225, 215, 255), RayMaterial.MaterialType.Glass, 0.98f, 0.0f, null, null, null, 0.12f, 1.5f);
+        AddTeapot(context.Root, "Gold Circles", bodyMesh, lidMesh, new Vector3(4.2f, 0.02f, 0.2f), new Color32(230, 158, 26, 255), RayMaterial.MaterialType.Metal, 0.94f, 1.0f, null, null, goldNormal);
+
+        Save(context.Scene, sceneName);
         AssetDatabase.SaveAssets();
         AssetDatabase.Refresh();
     }
@@ -867,6 +926,41 @@ public static class RayTracingBenchmarkSceneGenerator
         return obj;
     }
 
+    private static void AddTeapot(
+        Transform parent,
+        string name,
+        Mesh bodyMesh,
+        Mesh lidMesh,
+        Vector3 position,
+        Color color,
+        RayMaterial.MaterialType type,
+        float smoothness,
+        float metallic,
+        Texture2D albedoTexture = null,
+        Texture2D metallicRoughnessTexture = null,
+        Texture2D normalTexture = null,
+        float opacity = 1.0f,
+        float refraction = 1.0f)
+    {
+        var root = new GameObject(name);
+        root.transform.SetParent(parent, false);
+        root.transform.localPosition = position;
+        root.transform.localEulerAngles = new Vector3(0.0f, 90.0f, 0.0f);
+        root.transform.localScale = Vector3.one * 0.42f;
+
+        ConfigureTeapotPart(AddRayMesh(root.transform, "Body", bodyMesh, Vector3.zero, Vector3.zero, Vector3.one, color, type, smoothness, opacity, refraction, albedoTexture), metallic, metallicRoughnessTexture, normalTexture);
+        ConfigureTeapotPart(AddRayMesh(root.transform, "Lid", lidMesh, Vector3.zero, Vector3.zero, Vector3.one, color, type, smoothness, opacity, refraction, albedoTexture), metallic, metallicRoughnessTexture, normalTexture);
+    }
+
+    private static void ConfigureTeapotPart(GameObject part, float metallic, Texture2D metallicRoughnessTexture, Texture2D normalTexture)
+    {
+        var material = part.GetComponent<RayMaterial>();
+        material.Metallic = metallic;
+        material.MetallicRoughnessTexture = metallicRoughnessTexture;
+        material.NormalTexture = normalTexture;
+        material.InterpolateNormals = true;
+    }
+
     private static Mesh LoadFirstMeshFromAsset(string path)
     {
         var mesh = AssetDatabase.LoadAssetAtPath<Mesh>(path);
@@ -896,6 +990,151 @@ public static class RayTracingBenchmarkSceneGenerator
 
         importer.isReadable = true;
         importer.SaveAndReimport();
+    }
+
+    private static void EnsureReadableTexture(string path)
+    {
+        var importer = AssetImporter.GetAtPath(path) as TextureImporter;
+        if (importer == null)
+        {
+            return;
+        }
+
+        bool changed = false;
+        if (!importer.isReadable)
+        {
+            importer.isReadable = true;
+            changed = true;
+        }
+        if (importer.wrapMode != TextureWrapMode.Repeat)
+        {
+            importer.wrapMode = TextureWrapMode.Repeat;
+            changed = true;
+        }
+        if (changed)
+        {
+            importer.SaveAndReimport();
+        }
+    }
+
+    private static Texture2D GetOrCreateSwatchTexture(string name, Func<Texture2D> createTexture)
+    {
+        string path = $"{GeneratedAssetFolder}/{name}.asset";
+        var texture = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+        if (texture != null)
+        {
+            return texture;
+        }
+
+        texture = createTexture();
+        texture.name = name;
+        texture.wrapMode = TextureWrapMode.Repeat;
+        texture.filterMode = FilterMode.Bilinear;
+        texture.Apply(false, false);
+        AssetDatabase.CreateAsset(texture, path);
+        return texture;
+    }
+
+    private static Texture2D CreateStripedNormalTexture()
+    {
+        return CreateNormalTexture((x, y) =>
+        {
+            float phase = x * Mathf.PI * 16.0f;
+            return new Vector2(Mathf.Cos(phase) * 0.42f, 0.0f);
+        });
+    }
+
+    private static Texture2D CreateStripedMetalRoughnessTexture()
+    {
+        return CreateDataTexture((x, y) =>
+        {
+            float stripe = Mathf.SmoothStep(0.0f, 1.0f, Mathf.Abs(Mathf.Sin(x * Mathf.PI * 16.0f)));
+            return new Color(1.0f, Mathf.Lerp(0.18f, 0.55f, stripe), 1.0f, 1.0f);
+        });
+    }
+
+    private static Texture2D CreateScratchedNormalTexture()
+    {
+        return CreateNormalTexture((x, y) =>
+        {
+            float scratches = Mathf.Sin((x * 37.0f + y * 11.0f) * Mathf.PI) * Mathf.Sin((x * 7.0f - y * 29.0f) * Mathf.PI);
+            float mask = Mathf.Pow(Mathf.Abs(scratches), 18.0f);
+            return new Vector2(mask * 0.45f, -mask * 0.25f);
+        });
+    }
+
+    private static Texture2D CreateTiledNormalTexture()
+    {
+        return CreateNormalTexture((x, y) =>
+        {
+            const float cells = 7.0f;
+            float localX = Mathf.Repeat(x * cells, 1.0f) - 0.5f;
+            float localY = Mathf.Repeat(y * cells, 1.0f) - 0.5f;
+            float edgeX = Mathf.Exp(-Mathf.Abs(localX) * 45.0f) * Mathf.Sign(localX);
+            float edgeY = Mathf.Exp(-Mathf.Abs(localY) * 45.0f) * Mathf.Sign(localY);
+            return new Vector2(edgeX, edgeY) * 0.6f;
+        });
+    }
+
+    private static Texture2D CreateGoldNormalTexture()
+    {
+        return CreateNormalTexture((x, y) =>
+        {
+            const float cells = 6.0f;
+            Vector2 local = new Vector2(Mathf.Repeat(x * cells, 1.0f) - 0.5f, Mathf.Repeat(y * cells, 1.0f) - 0.5f);
+            float radius = local.magnitude;
+            float ring = Mathf.Exp(-Mathf.Abs(radius - 0.34f) * 55.0f);
+            return radius > 0.0001f ? local.normalized * ring * 0.7f : Vector2.zero;
+        });
+    }
+
+    private static Texture2D CreateMarbleAlbedoTexture()
+    {
+        const int size = 128;
+        var texture = new Texture2D(size, size, TextureFormat.RGBA32, false, false);
+        for (int y = 0; y < size; y++)
+        {
+            for (int x = 0; x < size; x++)
+            {
+                float u = (float)x / size;
+                float v = (float)y / size;
+                float noise = Mathf.PerlinNoise(u * 5.0f, v * 5.0f);
+                float vein = Mathf.Abs(Mathf.Sin((u * 4.0f + v * 2.0f + noise * 1.7f) * Mathf.PI));
+                float amount = Mathf.Pow(vein, 7.0f);
+                texture.SetPixel(x, y, Color.Lerp(new Color(0.08f, 0.13f, 0.12f), new Color(0.55f, 0.68f, 0.63f), amount));
+            }
+        }
+        return texture;
+    }
+
+    private static Texture2D CreateNormalTexture(Func<float, float, Vector2> getSlope)
+    {
+        const int size = 128;
+        var texture = new Texture2D(size, size, TextureFormat.RGBA32, false, true);
+        for (int y = 0; y < size; y++)
+        {
+            for (int x = 0; x < size; x++)
+            {
+                Vector2 slope = getSlope((x + 0.5f) / size, (y + 0.5f) / size);
+                Vector3 normal = new Vector3(slope.x, slope.y, 1.0f).normalized;
+                texture.SetPixel(x, y, new Color(normal.x * 0.5f + 0.5f, normal.y * 0.5f + 0.5f, normal.z * 0.5f + 0.5f, 1.0f));
+            }
+        }
+        return texture;
+    }
+
+    private static Texture2D CreateDataTexture(Func<float, float, Color> getColor)
+    {
+        const int size = 128;
+        var texture = new Texture2D(size, size, TextureFormat.RGBA32, false, true);
+        for (int y = 0; y < size; y++)
+        {
+            for (int x = 0; x < size; x++)
+            {
+                texture.SetPixel(x, y, getColor((x + 0.5f) / size, (y + 0.5f) / size));
+            }
+        }
+        return texture;
     }
 
     private static void FitObjectToBox(Transform transform, Bounds sourceBounds, Vector3 floorCenter, Vector3 maxSize)

@@ -58,6 +58,8 @@ Mesh hits retain both a shading/optical normal and the triangle's geometric norm
 
 Opaque continuation throughput uses `brdf * abs(N dot L) / pdf`. The common roughness conversion is `roughness = 1 - smoothness`, `alpha = roughness^2`, with a small roughness floor to keep mirror-like GGX evaluation finite. Glass/water transmission and Fresnel branch selection retain their medium-stack-specific path; their direct reflection uses the shared GGX evaluator.
 
+Mesh opaque materials can blend continuously between dielectric and metal with `RayMaterial.Metallic`. The glTF-style metallic/roughness texture multiplies scalar metallic and roughness using blue and green channels respectively. Tangent-space normal maps modify the optical/shading normal used by direct light, GGX sampling, reflection, and mesh refraction; geometric triangle normals continue to control boundary classification and ray offsets.
+
 Each uploaded emissive triangle stores the matching `_Lights` index, and emissive sphere hits already use their light-buffer index. This identity lets a BRDF-sampled emissive hit reconstruct the same light-selection and shape PDF used by next-event estimation.
 
 `TracePath()` retains only the previous surface position, material PDF, and light-sampling flags for this complementary MIS calculation. It does not keep the full previous `RayHit`; light importance and shape PDFs require only that position and the current emissive hit identity.
