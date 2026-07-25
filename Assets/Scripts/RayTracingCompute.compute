@@ -150,7 +150,7 @@ static const int LightSamplingImportance = 2;
 static const int MaxImportanceLights = 128;
 
 static const float MinDirectLightThroughput = 0.01f;
-static const int BvhStackSize = 64;
+static const int BvhStackSize = 32;
 static const float WaterHitEpsilon = 0.001f;
 static const float GlassAbsorptionColorFloor = 0.001f;
 static const float GlassNeutralAbsorption = 0.08f;
@@ -451,9 +451,9 @@ bool IsSameMedium(MediumIdentity left, MediumIdentity right)
 }
 
 bool IsPointInWater(float3 position);
-MediumStack PushMedium(MediumStack stack, MediumIdentity medium);
+void PushMedium(inout MediumStack stack, MediumIdentity medium);
 
-bool MediumStackContains(MediumStack stack, MediumIdentity medium)
+bool MediumStackContains(in MediumStack stack, MediumIdentity medium)
 {
     if (stack.count > 7 && IsSameMedium(stack.entry7, medium)) return true;
     if (stack.count > 6 && IsSameMedium(stack.entry6, medium)) return true;
@@ -523,7 +523,7 @@ MediumStack CreateMediumStack(float3 rayOrigin)
             break;
         }
 
-        stack = PushMedium(stack, CreateSphereMedium(_Spheres[containingSphereIndex], containingSphereIndex));
+        PushMedium(stack, CreateSphereMedium(_Spheres[containingSphereIndex], containingSphereIndex));
     }
 
     return stack;
@@ -571,13 +571,13 @@ MediumStack CreateShadowMediumStack(float3 rayOrigin)
             break;
         }
 
-        stack = PushMedium(stack, CreateSphereMedium(_Spheres[containingSphereIndex], containingSphereIndex));
+        PushMedium(stack, CreateSphereMedium(_Spheres[containingSphereIndex], containingSphereIndex));
     }
 
     return stack;
 }
 
-MediumIdentity GetCurrentMedium(MediumStack stack)
+MediumIdentity GetCurrentMedium(in MediumStack stack)
 {
     int index = max(0, stack.count - 1);
     if (index == 7) return stack.entry7;
@@ -590,7 +590,7 @@ MediumIdentity GetCurrentMedium(MediumStack stack)
     return stack.entry0;
 }
 
-MediumIdentity GetParentMedium(MediumStack stack)
+MediumIdentity GetParentMedium(in MediumStack stack)
 {
     int index = max(0, stack.count - 2);
     if (index == 6) return stack.entry6;
@@ -602,12 +602,12 @@ MediumIdentity GetParentMedium(MediumStack stack)
     return stack.entry0;
 }
 
-MediumStack PushMedium(MediumStack stack, MediumIdentity medium)
+void PushMedium(inout MediumStack stack, MediumIdentity medium)
 {
     if (stack.count >= MediumStackCapacity)
     {
         stack.status |= MediumStackStatusOverflow;
-        return stack;
+        return;
     }
 
     if (stack.count == 7) stack.entry7 = medium;
@@ -618,22 +618,20 @@ MediumStack PushMedium(MediumStack stack, MediumIdentity medium)
     else if (stack.count == 2) stack.entry2 = medium;
     else stack.entry1 = medium;
     stack.count++;
-    return stack;
 }
 
-MediumStack PopMatchingMedium(MediumStack stack, MediumIdentity medium)
+void PopMatchingMedium(inout MediumStack stack, MediumIdentity medium)
 {
     if (stack.count <= 1 || !IsSameMedium(GetCurrentMedium(stack), medium))
     {
         stack.status |= MediumStackStatusUnmatchedExit;
-        return stack;
+        return;
     }
 
     stack.count--;
-    return stack;
 }
 
-MediumIdentity GetMediumStackEntry(MediumStack stack, int index)
+MediumIdentity GetMediumStackEntry(in MediumStack stack, int index)
 {
     if (index == 7) return stack.entry7;
     if (index == 6) return stack.entry6;
@@ -657,7 +655,7 @@ void SetMediumStackEntry(inout MediumStack stack, int index, MediumIdentity medi
     else stack.entry0 = medium;
 }
 
-MediumStack RemoveMatchingMedium(MediumStack stack, MediumIdentity medium)
+void RemoveMatchingMedium(inout MediumStack stack, MediumIdentity medium)
 {
     int matchingIndex = -1;
     int index;
@@ -673,7 +671,7 @@ MediumStack RemoveMatchingMedium(MediumStack stack, MediumIdentity medium)
     if (matchingIndex < 0)
     {
         stack.status |= MediumStackStatusUnmatchedExit;
-        return stack;
+        return;
     }
 
     [unroll]
@@ -686,7 +684,6 @@ MediumStack RemoveMatchingMedium(MediumStack stack, MediumIdentity medium)
     }
 
     stack.count--;
-    return stack;
 }
 
 void ApplyMediumTransition(inout MediumStack stack, RayHit hit, int transition)
@@ -696,16 +693,16 @@ void ApplyMediumTransition(inout MediumStack stack, RayHit hit, int transition)
         MediumIdentity boundaryMedium = CreateHitMedium(hit);
         if (IsSameMedium(GetCurrentMedium(stack), boundaryMedium))
         {
-            stack = PopMatchingMedium(stack, boundaryMedium);
+            PopMatchingMedium(stack, boundaryMedium);
         }
         else
         {
-            stack = PushMedium(stack, boundaryMedium);
+            PushMedium(stack, boundaryMedium);
         }
     }
     else if (transition == MediumTransitionExit)
     {
-        stack = RemoveMatchingMedium(stack, CreateHitMedium(hit));
+        RemoveMatchingMedium(stack, CreateHitMedium(hit));
     }
 }
 
@@ -717,7 +714,7 @@ float2 GetMediumTransitionIndices(MediumIdentity currentMedium, MediumIdentity p
         : float2(currentMedium.refractionIndex, parentMedium.refractionIndex);
 }
 
-float2 GetBoundaryTransitionIndices(MediumStack stack, RayHit hit, out bool entering)
+float2 GetBoundaryTransitionIndices(in MediumStack stack, RayHit hit, out bool entering)
 {
     MediumIdentity currentMedium = GetCurrentMedium(stack);
     MediumIdentity boundaryMedium = CreateHitMedium(hit);
@@ -1221,7 +1218,7 @@ float3 GetMediumSegmentTransmittance(MediumIdentity medium, float distanceThroug
         : GetAbsorptionTransmittance(medium.absorptionColor, medium.opacity, distanceThroughMedium);
 }
 
-float3 GetActiveMediumSegmentTransmittance(Ray ray, float hitDistance, MediumStack stack)
+float3 GetActiveMediumSegmentTransmittance(Ray ray, float hitDistance, in MediumStack stack)
 {
     MediumIdentity medium = GetCurrentMedium(stack);
     return GetMediumSegmentTransmittance(medium, GetMediumSegmentDistance(ray, hitDistance, medium));
@@ -1238,7 +1235,7 @@ void ApplyFiniteMediumExitAfterSegment(inout MediumStack stack, Ray ray, RayHit 
     float waterDistance = GetWaterDistanceAlongRay(ray, hit.distance);
     if (waterDistance + 0.001f < hit.distance)
     {
-        stack = PopMatchingMedium(stack, medium);
+        PopMatchingMedium(stack, medium);
     }
 }
 
@@ -2054,7 +2051,7 @@ float3 GetShadowTransmittance(Ray rayToLight, float distanceToLight)
         }
         else if (exiting)
         {
-            mediumStack = RemoveMatchingMedium(mediumStack, boundaryMedium);
+            RemoveMatchingMedium(mediumStack, boundaryMedium);
         }
         else
         {
@@ -2064,7 +2061,7 @@ float3 GetShadowTransmittance(Ray rayToLight, float distanceToLight)
             {
                 transmittance *= GetTransparentShadowBoundaryTransmittance(blockerHit);
             }
-            mediumStack = PushMedium(mediumStack, boundaryMedium);
+            PushMedium(mediumStack, boundaryMedium);
         }
 
         if (max(transmittance.x, max(transmittance.y, transmittance.z)) <= 0.001f)
@@ -2974,7 +2971,7 @@ int ApplyWaterTransmission(inout Ray ray, Ray sourceRay, RayHit hit, bool enteri
         : MediumTransitionNone;
 }
 
-ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, int remainingBounces, MediumStack mediumStack, inout uint rngState)
+ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, int remainingBounces, in MediumStack mediumStack, inout uint rngState)
 {
     float3 albedo = GetAlbedo(hit);
     float3 roughNormal = GetRandomizedNormalBasedOnAmount(hit.normal, hit.smoothness, rngState);
@@ -3929,7 +3926,7 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     [unroll]
     for (stackEntry = 0; stackEntry < MediumStackCapacity; stackEntry++)
     {
-        overflowStack = PushMedium(overflowStack, glass);
+        PushMedium(overflowStack, glass);
     }
     RegressionResults[12] = float4(overflowStack.count, overflowStack.status, GetCurrentMedium(overflowStack).type, GetParentMedium(overflowStack).type);
 
@@ -3963,7 +3960,8 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     RegressionResults[20] = float4(nestedEntryIndices, enteringNestedGlass ? 1.0f : 0.0f, didRefractNestedEntry ? 1.0f : 0.0f);
     RegressionResults[21] = float4(nestedEntryDirection, GetFresnelReflectance(CreateRay(float3(0.0f, 0.0f, 0.0f), incident45), glassHit, nestedEntryIndices.x, nestedEntryIndices.y));
 
-    MediumStack glassInWaterStack = PushMedium(waterStack, glass);
+    MediumStack glassInWaterStack = waterStack;
+    PushMedium(glassInWaterStack, glass);
     bool enteringNestedExit;
     float2 nestedExitIndices = GetBoundaryTransitionIndices(glassInWaterStack, glassHit, enteringNestedExit);
     float3 nestedExitDirection;
@@ -3974,8 +3972,9 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     RayHit overlappingGlassHit = glassHit;
     overlappingGlassHit.objectIndex = 8;
     overlappingGlassHit.refraction = 1.0f;
-    MediumStack overlappingStack = PushMedium(CreateMediumStack(float3(0.0f, 2.0f, 0.0f)), glass);
-    overlappingStack = PushMedium(overlappingStack, CreateHitMedium(overlappingGlassHit));
+    MediumStack overlappingStack = CreateMediumStack(float3(0.0f, 2.0f, 0.0f));
+    PushMedium(overlappingStack, glass);
+    PushMedium(overlappingStack, CreateHitMedium(overlappingGlassHit));
     bool enteringOverlappingExit;
     float2 overlappingExitIndices = GetBoundaryTransitionIndices(overlappingStack, glassHit, enteringOverlappingExit);
     ApplyMediumTransition(overlappingStack, glassHit, MediumTransitionExit);
@@ -4064,7 +4063,7 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
 }
 
 #if defined(CAUSTICS_ENABLED)
-[numthreads(8,8,1)]
+[numthreads(8,4,1)]
 void CSCausticsRegressionImage(uint3 id : SV_DispatchThreadID)
 {
     uint width, height;
@@ -4087,7 +4086,7 @@ void CSCausticsRegressionImage(uint3 id : SV_DispatchThreadID)
 }
 #endif
 
-[numthreads(8,8,1)]
+[numthreads(8,4,1)]
 void CSMain (uint3 id : SV_DispatchThreadID)
 {
     // Get the dimensions of the RenderTexture

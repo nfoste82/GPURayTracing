@@ -302,6 +302,8 @@ public static class RayTracingBenchmarkSceneGenerator
 
         var context = CreateBaseScene("Benchmark_Glass", new Vector3(0.0f, 5.5f, -16.0f), new Vector3(12.0f, 0.0f, 0.0f), passes: 1, bounces: 8, shadowQuality: 1);
         context.Manager.enableFrameAccumulation = true;
+        context.Manager.lightSamplingStrategy = GameManager.LightSamplingStrategy.ImportanceSampled;
+        
         AddFloor(context.Root, new Vector2(0.0f, 3.0f), new Vector2(16.0f, 16.0f), 0.5f);
         AddLight(context.Root, "Key Light", new Vector3(-3.0f, 9.0f, -4.0f), 1.5f, new Color32(255, 235, 220, 255));
         AddLight(context.Root, "Blue Light", new Vector3(4.0f, 5.5f, 4.0f), 0.8f, new Color32(110, 165, 255, 255));

@@ -48,7 +48,7 @@ public class GameManager : MonoBehaviour
     }
 
     [Tooltip("How direct lighting samples scene lights. AllLights is accurate but scales with light count; UniformRandom is much faster in many-light scenes but noisy; ImportanceSampled favors bright/nearby lights for much less noise per sample.")]
-    public LightSamplingStrategy lightSamplingStrategy = LightSamplingStrategy.AllLights;
+    public LightSamplingStrategy lightSamplingStrategy = LightSamplingStrategy.ImportanceSampled;
 
     [Tooltip("UniformRandom/ImportanceSampled only: how many lights each shading point samples per pass. 1 is fastest/noisiest; higher values reduce noise toward AllLights quality at proportional cost.")]
     [Range(1, 64)]
@@ -60,10 +60,10 @@ public class GameManager : MonoBehaviour
 
     [Range(64, 4194200)]
     [Tooltip("Photon attempts traced for each rendered frame. Independent batches are averaged by final-color frame accumulation.")]
-    public int causticPhotonCount = 131072;
+    public int causticPhotonCount = 65536;
 
     [Range(0.01f, 2.0f)]
-    public float causticGatherRadius = 0.3f;
+    public float causticGatherRadius = 0.2f;
 
     public int causticSeed = 1;
 
@@ -309,9 +309,11 @@ public class GameManager : MonoBehaviour
     private const int CausticPhotonStride = 36;
     private const int CausticMetadataCount = 6;
     private const int CausticTraceThreadCount = 64;
+    private const int RenderThreadCountX = 8;
+    private const int RenderThreadCountY = 4;
     private const int MaxCausticGridCells = 262144;
     private const int BvhLeafTriangleCount = 4;
-    private const int BvhStackSize = 64;
+    private const int BvhStackSize = 32;
     private const float BvhBoundsPadding = 0.0001f;
     private const int TopLevelObjectTypeInternal = -1;
     private const int TopLevelObjectTypeSphere = 0;
@@ -789,8 +791,8 @@ public class GameManager : MonoBehaviour
     {
         shader.SetTexture(kernelHandle, "Result", _outputTexture);
         shader.SetTexture(kernelHandle, "AccumulationResult", _accumulationTexture);
-        int threadGroupsX = Mathf.CeilToInt(_textureSize.x / 8.0f);
-        int threadGroupsY = Mathf.CeilToInt(_textureSize.y / 8.0f);
+        int threadGroupsX = Mathf.CeilToInt(_textureSize.x / (float)RenderThreadCountX);
+        int threadGroupsY = Mathf.CeilToInt(_textureSize.y / (float)RenderThreadCountY);
         shader.Dispatch(kernelHandle, threadGroupsX, threadGroupsY, 1);
     }
 
@@ -1861,7 +1863,7 @@ public class GameManager : MonoBehaviour
         }
 
         _topLevelBvhBuildItemComparer.axis = GetLongestAxis(boundsMax - boundsMin);
-        int leftCount = FindTopLevelSahSplit(items, start, count);
+        int leftCount = ClampBvhSplitToDepth(FindTopLevelSahSplit(items, start, count), count, depth);
 
         int rightCount = count - leftCount;
         int leftChildIndex = BuildTopLevelBvhNode(items, nodes, start, leftCount, depth + 1);
@@ -1992,7 +1994,7 @@ public class GameManager : MonoBehaviour
             return nodeIndex;
         }
 
-        int leftCount = FindTriangleSahSplit(meshTriangles, start, count);
+        int leftCount = ClampBvhSplitToDepth(FindTriangleSahSplit(meshTriangles, start, count), count, depth);
 
         int rightCount = count - leftCount;
         int leftChildIndex = BuildBvhNode(meshTriangles, start, leftCount, depth + 1);
@@ -2106,6 +2108,14 @@ public class GameManager : MonoBehaviour
         }
 
         return size.y >= size.z ? 1 : 2;
+    }
+
+    private static int ClampBvhSplitToDepth(int leftCount, int count, int depth)
+    {
+        // Bound each child's population by what the remaining binary-tree depth can hold.
+        int remainingDepth = BvhStackSize - depth - 1;
+        int maxChildCount = remainingDepth >= 30 ? int.MaxValue : 1 << remainingDepth;
+        return Mathf.Clamp(leftCount, Mathf.Max(1, count - maxChildCount), Mathf.Min(count - 1, maxChildCount));
     }
 
     // Half the surface area of an AABB (the SA term used in the surface area heuristic). Half is

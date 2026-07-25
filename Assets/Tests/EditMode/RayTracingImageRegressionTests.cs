@@ -269,7 +269,7 @@ namespace GPURayTracing.Tests
         [TestCase(1, 1)]
         [TestCase(3, 5)]
         [TestCase(13, 7)]
-        public void NonMultipleOfEightDispatch_WritesEveryPixelWithoutOutOfBoundsAccess(int width, int height)
+        public void PartialThreadGroupDispatch_WritesEveryPixelWithoutOutOfBoundsAccess(int width, int height)
         {
             Vector4[] signature = RenderSignature(
                 Array.Empty<SphereData>(),
@@ -796,7 +796,7 @@ namespace GPURayTracing.Tests
                 SetFogDisabled(shader);
                 shader.DisableKeyword("FOG_ENABLED");
 
-                shader.Dispatch(kernel, Mathf.CeilToInt(width / 8.0f), Mathf.CeilToInt(height / 8.0f), 1);
+                shader.Dispatch(kernel, Mathf.CeilToInt(width / 8.0f), Mathf.CeilToInt(height / 4.0f), 1);
                 return ReadSignature(result, width, height, probes, includePeak);
             }
             finally

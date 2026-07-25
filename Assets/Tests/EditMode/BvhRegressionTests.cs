@@ -7,7 +7,7 @@ namespace GPURayTracing.Tests
 {
     public class BvhRegressionTests
     {
-        private const int BvhStackSize = 64;
+        private const int BvhStackSize = 32;
         private const int LeafSize = 4;
 
         private struct Primitive

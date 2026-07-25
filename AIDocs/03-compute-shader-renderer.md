@@ -1,6 +1,6 @@
 # Compute Shader Renderer
 
-The renderer lives in `Assets/Scripts/RayTracingCompute.compute`. It has one kernel, `CSMain`, using `[numthreads(8,8,1)]`.
+The renderer lives in `Assets/Scripts/RayTracingCompute.compute`. Its main image kernel, `CSMain`, uses `[numthreads(8,4,1)]` (32 threads) to reduce Metal's threadgroup-wide register demand. The shader also contains regression and optional caustics kernels.
 
 ## GPU Inputs
 
