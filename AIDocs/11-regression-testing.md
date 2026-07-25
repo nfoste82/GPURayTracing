@@ -29,14 +29,15 @@ In Unity, open `Window > General > Test Runner`, select EditMode, and run all te
 From the command line on this project's current macOS Unity version:
 
 ```sh
-/Applications/Unity/Hub/Editor/2022.3.72f1/Unity.app/Contents/MacOS/Unity \
+/Applications/Unity/Hub/Editor/6000.3.18f1/Unity.app/Contents/MacOS/Unity \
   -batchmode \
   -projectPath /Users/nic.foster/Projects/GPURayTracing \
   -runTests -testPlatform EditMode \
   -testResults /tmp/gpuraytracing-editmode-results.xml \
   -logFile /tmp/gpuraytracing-editmode.log \
-  -quit
 ```
+
+Unity Test Framework `1.6.0` exits after a command-line run without requiring `-quit`. In Unity `6.3`, supplying `-quit` can terminate the editor before the test run starts.
 
 The GPU probe is skipped if the active graphics device does not support compute shaders or does not compile the probe kernel. On macOS, `-nographics` imports the compute shader without an executable Metal kernel, so it runs the CPU suite and skips the GPU probe. Run through the Test Runner or omit `-nographics` to validate all tests.
 
@@ -66,4 +67,5 @@ Stack overflow and genuinely unmatched exits set explicit status bits and preser
 
 - Add production-GPU BVH-on versus flat-loop image equivalence in addition to the deterministic CPU traversal comparisons.
 - The water, nested-water/glass, and underwater-camera signatures were recaptured after tracing their drift to the intentional finite-water AABB change in `5fd1d33`, whose fixtures gained `_WaterDepth` without corresponding baseline updates.
+- Affected Metal image signatures were recaptured after the Unity `6000.3.18f1` upgrade. Two consecutive full image-test runs produced identical signatures, while CPU/GPU behavior probes, photon generation, odd-resolution dispatch, the water baseline, and mesh-light baseline remained stable.
 - Add focused bounded-fog interval/transmittance GPU probes and deterministic light-shaft image signatures. Existing image fixtures explicitly disable `FOG_ENABLED` and upload neutral fog parameters so they continue to validate the unchanged non-fog shader variant.

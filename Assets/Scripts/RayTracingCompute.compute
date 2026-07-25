@@ -16,6 +16,8 @@
 #pragma multi_compile _ CAUSTICS_ENABLED
 #pragma multi_compile _ FOG_ENABLED
 
+#include "RayTracingCompilerWarnings.hlsl"
+
 // Create a RenderTexture with enableRandomWrite flag and set it
 // with cs.SetTexture
 RWTexture2D<float4> Result;
