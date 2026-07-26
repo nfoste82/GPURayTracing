@@ -81,7 +81,7 @@ Unity meshes are traced by the compute shader only when they are registered thro
 
 Imported model assets such as FBX files are supported through their imported `MeshFilter`/`Mesh` data, but the mesh must be CPU-readable because `GameManager` reads vertices, indices, and UVs to build its own ray-tracing triangle buffer and per-mesh BVH. For model importer assets this means Unity's Read/Write import setting must be enabled. The Dragon Cornell benchmark generator enables this automatically for `Assets/Models/stanford-dragon-pbr.fbx` before loading its mesh.
 
-`Tools > Ray Tracing > Generate Teapot Material Scene` creates `Assets/Scenes/Benchmarks/Benchmark_TeapotMaterials.unity`. It uses both meshes under `Assets/Models/Teapot`, generates reusable striped, scratched, tiled, gold-ring, and marble textures under the benchmark generated-assets folder, and places six material variants over `Assets/checkerboard.png`. Existing generated output is not overwritten.
+`Tools > Ray Tracing > Generate Teapot Material Scene` creates `Assets/Scenes/Benchmarks/Benchmark_TeapotMaterials.unity`. It uses both meshes under `Assets/Models/Teapot`, applies the original RenderMan swatch albedo, metallic-roughness, and normal maps from `Assets/Textures/RenderManSwatch`, and places six material variants over `Assets/checkerboard.png`. Existing generated output is not overwritten.
 
 The scene’s `Directional Light` is a Unity light and is not used by the compute shader lighting model.
 

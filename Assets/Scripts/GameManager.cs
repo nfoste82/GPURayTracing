@@ -330,7 +330,6 @@ public class GameManager : MonoBehaviour
     private const int DynamicLightSampleDivisor = 10;
     private const float DynamicQualitySmoothing = 0.08f;
     private const float DynamicQualityAdjustmentInterval = 0.75f;
-    private const int MeshTextureSize = 128;
     private const int TriangleStride = 224;
     private const int MeshInfoStride = 48;
     private const int BvhNodeStride = 48;
@@ -1951,7 +1950,20 @@ public class GameManager : MonoBehaviour
     private static Texture2DArray BuildMeshTextureArray(List<Texture2D> textures, Texture2D fallback, string arrayName, Color fallbackColor, bool linear)
     {
         int textureCount = Mathf.Max(1, textures.Count);
-        var result = new Texture2DArray(MeshTextureSize, MeshTextureSize, textureCount, TextureFormat.RGBA32, false, linear)
+        int width = 1;
+        int height = 1;
+        for (int i = 0; i < textures.Count; i++)
+        {
+            if (textures[i] == null)
+            {
+                continue;
+            }
+
+            width = Mathf.Max(width, textures[i].width);
+            height = Mathf.Max(height, textures[i].height);
+        }
+
+        var result = new Texture2DArray(width, height, textureCount, TextureFormat.RGBA32, false, linear)
         {
             name = arrayName,
             wrapMode = TextureWrapMode.Repeat,
@@ -1970,7 +1982,9 @@ public class GameManager : MonoBehaviour
 
     private static void CopyTextureToArraySlice(Texture2D source, Texture2DArray destination, int slice, Color fallbackColor)
     {
-        var pixels = new Color32[MeshTextureSize * MeshTextureSize];
+        int width = destination.width;
+        int height = destination.height;
+        var pixels = new Color32[width * height];
         if (source == null)
         {
             for (int i = 0; i < pixels.Length; i++)
@@ -1980,13 +1994,13 @@ public class GameManager : MonoBehaviour
         }
         else if (source.isReadable)
         {
-            for (int y = 0; y < MeshTextureSize; y++)
+            for (int y = 0; y < height; y++)
             {
-                float v = (y + 0.5f) / MeshTextureSize;
-                for (int x = 0; x < MeshTextureSize; x++)
+                float v = (y + 0.5f) / height;
+                for (int x = 0; x < width; x++)
                 {
-                    float u = (x + 0.5f) / MeshTextureSize;
-                    pixels[y * MeshTextureSize + x] = source.GetPixelBilinear(u, v);
+                    float u = (x + 0.5f) / width;
+                    pixels[y * width + x] = source.GetPixelBilinear(u, v);
                 }
             }
         }

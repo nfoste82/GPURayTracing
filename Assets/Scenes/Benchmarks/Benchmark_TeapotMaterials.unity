@@ -321,12 +321,13 @@ MonoBehaviour:
   Color:
     serializedVersion: 2
     rgba: 4294967295
-  AlbedoTexture: {fileID: 2800000, guid: 4f6a1b732d0c3449e8b0552f3df360d9, type: 2}
-  Metallic: 0
-  MetallicRoughnessTexture: {fileID: 0}
+  AlbedoTexture: {fileID: 2800000, guid: 6aef0c9e67b0241d6a85bd9ec0b637de, type: 3}
+  Metallic: 1
+  MetallicRoughnessTexture: {fileID: 2800000, guid: a293ec81868844c56ac7838eaf600059,
+    type: 3}
   NormalTexture: {fileID: 0}
   InterpolateNormals: 1
-  Smoothness: 0.55
+  Smoothness: 0
   Opacity: 1
   RefractionIndex: 1
 --- !u!1 &253461507
@@ -355,7 +356,7 @@ Transform:
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0.7071068, z: 0, w: 0.7071068}
   m_LocalPosition: {x: -4.2, y: 0.02, z: 4.8}
-  m_LocalScale: {x: 0.42, y: 0.42, z: 0.42}
+  m_LocalScale: {x: 25, y: 25, z: 25}
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 2014813432}
@@ -478,16 +479,17 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 83d05e536e514b418b2e59cffae1bbe7, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::RayMaterial
-  Type: 1
+  Type: 0
   Color:
     serializedVersion: 2
-    rgba: 4286588697
-  AlbedoTexture: {fileID: 0}
-  Metallic: 0.85
-  MetallicRoughnessTexture: {fileID: 0}
-  NormalTexture: {fileID: 2800000, guid: d256033c215db4b4b8852929f360de87, type: 2}
+    rgba: 4294967295
+  AlbedoTexture: {fileID: 2800000, guid: a6f820cd3d9514b0dae86c2f0c41e982, type: 3}
+  Metallic: 1
+  MetallicRoughnessTexture: {fileID: 2800000, guid: b499d32410cb045a4a0e8c10cfcb543a,
+    type: 3}
+  NormalTexture: {fileID: 2800000, guid: abfb6d224c621466da4f712d003da2ba, type: 3}
   InterpolateNormals: 1
-  Smoothness: 0.8
+  Smoothness: 0
   Opacity: 1
   RefractionIndex: 1
 --- !u!1 &458161004
@@ -516,7 +518,7 @@ Transform:
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0.7071068, z: 0, w: 0.7071068}
   m_LocalPosition: {x: 0, y: 0.02, z: 4.8}
-  m_LocalScale: {x: 0.42, y: 0.42, z: 0.42}
+  m_LocalScale: {x: 25, y: 25, z: 25}
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 236924043}
@@ -770,7 +772,7 @@ MonoBehaviour:
   Type: 2
   Color:
     serializedVersion: 2
-    rgba: 4292337985
+    rgba: 4292405782
   AlbedoTexture: {fileID: 0}
   Metallic: 0
   MetallicRoughnessTexture: {fileID: 0}
@@ -805,7 +807,7 @@ Transform:
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0.7071068, z: 0, w: 0.7071068}
   m_LocalPosition: {x: 0, y: 0.02, z: 0.2}
-  m_LocalScale: {x: 0.42, y: 0.42, z: 0.42}
+  m_LocalScale: {x: 25, y: 25, z: 25}
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 539405815}
@@ -931,13 +933,14 @@ MonoBehaviour:
   Type: 0
   Color:
     serializedVersion: 2
-    rgba: 4287048994
-  AlbedoTexture: {fileID: 0}
-  Metallic: 0.35
-  MetallicRoughnessTexture: {fileID: 0}
-  NormalTexture: {fileID: 2800000, guid: 92cdd61e0b4fd4103910163a21df67c7, type: 2}
+    rgba: 4294967295
+  AlbedoTexture: {fileID: 2800000, guid: a47a5f348d27f41eea1dbac31ce2f871, type: 3}
+  Metallic: 1
+  MetallicRoughnessTexture: {fileID: 2800000, guid: ef542c45f6e894a8bb03f315dbc6739c,
+    type: 3}
+  NormalTexture: {fileID: 2800000, guid: 6486affda65c54feaaeee92ebc45ae84, type: 3}
   InterpolateNormals: 1
-  Smoothness: 0.82
+  Smoothness: 0
   Opacity: 1
   RefractionIndex: 1
 --- !u!1 &984940844
@@ -966,7 +969,7 @@ Transform:
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0.7071068, z: 0, w: 0.7071068}
   m_LocalPosition: {x: 4.2, y: 0.02, z: 0.2}
-  m_LocalScale: {x: 0.42, y: 0.42, z: 0.42}
+  m_LocalScale: {x: 25, y: 25, z: 25}
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 1958716475}
@@ -1092,14 +1095,14 @@ MonoBehaviour:
   Type: 1
   Color:
     serializedVersion: 2
-    rgba: 4293650145
-  AlbedoTexture: {fileID: 0}
+    rgba: 4294967295
+  AlbedoTexture: {fileID: 2800000, guid: 8afe2547b8ac9467586c956365998609, type: 3}
   Metallic: 1
-  MetallicRoughnessTexture: {fileID: 2800000, guid: 5fdc73377ad6d4ab2a49cf42117ca6b8,
-    type: 2}
-  NormalTexture: {fileID: 2800000, guid: f2fc0efcde4be4e468e43365ab1cac6d, type: 2}
+  MetallicRoughnessTexture: {fileID: 2800000, guid: 48ec3b2dbc7a444e39e6062459ee7f6c,
+    type: 3}
+  NormalTexture: {fileID: 2800000, guid: f46973b00a68044a6a7ac644527ccc09, type: 3}
   InterpolateNormals: 1
-  Smoothness: 0.98
+  Smoothness: 0
   Opacity: 1
   RefractionIndex: 1
 --- !u!1 &1262156190
@@ -1327,7 +1330,7 @@ MonoBehaviour:
   Type: 2
   Color:
     serializedVersion: 2
-    rgba: 4292337985
+    rgba: 4292405782
   AlbedoTexture: {fileID: 0}
   Metallic: 0
   MetallicRoughnessTexture: {fileID: 0}
@@ -1444,7 +1447,7 @@ Transform:
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0.7071068, z: 0, w: 0.7071068}
   m_LocalPosition: {x: 4.2, y: 0.02, z: 4.8}
-  m_LocalScale: {x: 0.42, y: 0.42, z: 0.42}
+  m_LocalScale: {x: 25, y: 25, z: 25}
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 412203688}
@@ -1567,16 +1570,17 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 83d05e536e514b418b2e59cffae1bbe7, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::RayMaterial
-  Type: 1
+  Type: 0
   Color:
     serializedVersion: 2
-    rgba: 4286588697
-  AlbedoTexture: {fileID: 0}
-  Metallic: 0.85
-  MetallicRoughnessTexture: {fileID: 0}
-  NormalTexture: {fileID: 2800000, guid: d256033c215db4b4b8852929f360de87, type: 2}
+    rgba: 4294967295
+  AlbedoTexture: {fileID: 2800000, guid: a6f820cd3d9514b0dae86c2f0c41e982, type: 3}
+  Metallic: 1
+  MetallicRoughnessTexture: {fileID: 2800000, guid: b499d32410cb045a4a0e8c10cfcb543a,
+    type: 3}
+  NormalTexture: {fileID: 2800000, guid: abfb6d224c621466da4f712d003da2ba, type: 3}
   InterpolateNormals: 1
-  Smoothness: 0.8
+  Smoothness: 0
   Opacity: 1
   RefractionIndex: 1
 --- !u!1 &1667406615
@@ -1958,14 +1962,14 @@ MonoBehaviour:
   Type: 1
   Color:
     serializedVersion: 2
-    rgba: 4293650145
-  AlbedoTexture: {fileID: 0}
+    rgba: 4294967295
+  AlbedoTexture: {fileID: 2800000, guid: 8afe2547b8ac9467586c956365998609, type: 3}
   Metallic: 1
-  MetallicRoughnessTexture: {fileID: 2800000, guid: 5fdc73377ad6d4ab2a49cf42117ca6b8,
-    type: 2}
-  NormalTexture: {fileID: 2800000, guid: f2fc0efcde4be4e468e43365ab1cac6d, type: 2}
+  MetallicRoughnessTexture: {fileID: 2800000, guid: 48ec3b2dbc7a444e39e6062459ee7f6c,
+    type: 3}
+  NormalTexture: {fileID: 2800000, guid: f46973b00a68044a6a7ac644527ccc09, type: 3}
   InterpolateNormals: 1
-  Smoothness: 0.98
+  Smoothness: 0
   Opacity: 1
   RefractionIndex: 1
 --- !u!1 &1869897870
@@ -2088,12 +2092,13 @@ MonoBehaviour:
   Color:
     serializedVersion: 2
     rgba: 4294967295
-  AlbedoTexture: {fileID: 2800000, guid: 4f6a1b732d0c3449e8b0552f3df360d9, type: 2}
-  Metallic: 0
-  MetallicRoughnessTexture: {fileID: 0}
+  AlbedoTexture: {fileID: 2800000, guid: 6aef0c9e67b0241d6a85bd9ec0b637de, type: 3}
+  Metallic: 1
+  MetallicRoughnessTexture: {fileID: 2800000, guid: a293ec81868844c56ac7838eaf600059,
+    type: 3}
   NormalTexture: {fileID: 0}
   InterpolateNormals: 1
-  Smoothness: 0.55
+  Smoothness: 0
   Opacity: 1
   RefractionIndex: 1
 --- !u!1 &1904217849
@@ -2311,16 +2316,17 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 83d05e536e514b418b2e59cffae1bbe7, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::RayMaterial
-  Type: 1
+  Type: 0
   Color:
     serializedVersion: 2
     rgba: 4279934694
-  AlbedoTexture: {fileID: 0}
+  AlbedoTexture: {fileID: 2800000, guid: 6d80b2c3810764ec5b64ae4f3a8d2dc8, type: 3}
   Metallic: 1
-  MetallicRoughnessTexture: {fileID: 0}
-  NormalTexture: {fileID: 2800000, guid: 6f932142735ce4bfc8436387767c7bab, type: 2}
+  MetallicRoughnessTexture: {fileID: 2800000, guid: 2ed52e17e36174173b1a091ba0717652,
+    type: 3}
+  NormalTexture: {fileID: 2800000, guid: 62da4b49165384e69a67a9475f6b8931, type: 3}
   InterpolateNormals: 1
-  Smoothness: 0.94
+  Smoothness: 0
   Opacity: 1
   RefractionIndex: 1
 --- !u!1 &1981005240
@@ -2439,16 +2445,17 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 83d05e536e514b418b2e59cffae1bbe7, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::RayMaterial
-  Type: 1
+  Type: 0
   Color:
     serializedVersion: 2
     rgba: 4279934694
-  AlbedoTexture: {fileID: 0}
+  AlbedoTexture: {fileID: 2800000, guid: 6d80b2c3810764ec5b64ae4f3a8d2dc8, type: 3}
   Metallic: 1
-  MetallicRoughnessTexture: {fileID: 0}
-  NormalTexture: {fileID: 2800000, guid: 6f932142735ce4bfc8436387767c7bab, type: 2}
+  MetallicRoughnessTexture: {fileID: 2800000, guid: 2ed52e17e36174173b1a091ba0717652,
+    type: 3}
+  NormalTexture: {fileID: 2800000, guid: 62da4b49165384e69a67a9475f6b8931, type: 3}
   InterpolateNormals: 1
-  Smoothness: 0.94
+  Smoothness: 0
   Opacity: 1
   RefractionIndex: 1
 --- !u!1 &2014813431
@@ -2570,13 +2577,14 @@ MonoBehaviour:
   Type: 0
   Color:
     serializedVersion: 2
-    rgba: 4287048994
-  AlbedoTexture: {fileID: 0}
-  Metallic: 0.35
-  MetallicRoughnessTexture: {fileID: 0}
-  NormalTexture: {fileID: 2800000, guid: 92cdd61e0b4fd4103910163a21df67c7, type: 2}
+    rgba: 4294967295
+  AlbedoTexture: {fileID: 2800000, guid: a47a5f348d27f41eea1dbac31ce2f871, type: 3}
+  Metallic: 1
+  MetallicRoughnessTexture: {fileID: 2800000, guid: ef542c45f6e894a8bb03f315dbc6739c,
+    type: 3}
+  NormalTexture: {fileID: 2800000, guid: 6486affda65c54feaaeee92ebc45ae84, type: 3}
   InterpolateNormals: 1
-  Smoothness: 0.82
+  Smoothness: 0
   Opacity: 1
   RefractionIndex: 1
 --- !u!1 &2090386221
@@ -2605,7 +2613,7 @@ Transform:
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0.7071068, z: 0, w: 0.7071068}
   m_LocalPosition: {x: -4.2, y: 0.02, z: 0.2}
-  m_LocalScale: {x: 0.42, y: 0.42, z: 0.42}
+  m_LocalScale: {x: 25, y: 25, z: 25}
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 1766099695}

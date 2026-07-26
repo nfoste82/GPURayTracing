@@ -17,6 +17,7 @@ public static class RayTracingBenchmarkSceneGenerator
     private const string TeapotLidModelPath = "Assets/Models/Teapot/Mesh000.obj";
     private const string TeapotBodyModelPath = "Assets/Models/Teapot/Mesh001.obj";
     private const string CheckerboardTexturePath = "Assets/checkerboard.png";
+    private const string RenderManTextureFolder = "Assets/Textures/RenderManSwatch";
     private const int WolfensteinTextureTileSize = 64;
 
     [MenuItem("Tools/Ray Tracing/Generate Benchmark Scenes")]
@@ -69,12 +70,30 @@ public static class RayTracingBenchmarkSceneGenerator
             return;
         }
 
-        Texture2D stripedNormal = GetOrCreateSwatchTexture("Teapot_Striped_Normal", CreateStripedNormalTexture);
-        Texture2D stripedMetalRough = GetOrCreateSwatchTexture("Teapot_Striped_MetalRough", CreateStripedMetalRoughnessTexture);
-        Texture2D scratchedNormal = GetOrCreateSwatchTexture("Teapot_Scratched_Normal", CreateScratchedNormalTexture);
-        Texture2D tiledNormal = GetOrCreateSwatchTexture("Teapot_Tiled_Normal", CreateTiledNormalTexture);
-        Texture2D goldNormal = GetOrCreateSwatchTexture("Teapot_Gold_Normal", CreateGoldNormalTexture);
-        Texture2D marbleAlbedo = GetOrCreateSwatchTexture("Teapot_Marble_Albedo", CreateMarbleAlbedoTexture);
+        Texture2D tilesAlbedo = LoadRenderManTexture("tiles_base.png", false);
+        Texture2D tilesMetalRough = LoadRenderManTexture("tiles_mat_rgh.png", true);
+        Texture2D tilesNormal = LoadRenderManTexture("tiles_normal.png", true);
+        Texture2D marbleAlbedo = LoadRenderManTexture("marble_base.png", false);
+        Texture2D marbleMetalRough = LoadRenderManTexture("marble_mat_rgh.png", true);
+        Texture2D scratchesAlbedo = LoadRenderManTexture("scratches_base.png", false);
+        Texture2D scratchesMetalRough = LoadRenderManTexture("scratches_mat_rgh.png", true);
+        Texture2D scratchesNormal = LoadRenderManTexture("scratches_normal.png", true);
+        Texture2D stripedAlbedo = LoadRenderManTexture("striped_base.png", false);
+        Texture2D stripedMetalRough = LoadRenderManTexture("striped_mat_rgh.png", true);
+        Texture2D stripedNormal = LoadRenderManTexture("striped_normal.png", true);
+        Texture2D goldAlbedo = LoadRenderManTexture("gold_base.png", false);
+        Texture2D goldMetalRough = LoadRenderManTexture("gold_mat_rgh.png", true);
+        Texture2D goldNormal = LoadRenderManTexture("gold_normal.png", true);
+
+        if (tilesAlbedo == null || tilesMetalRough == null || tilesNormal == null
+            || marbleAlbedo == null || marbleMetalRough == null
+            || scratchesAlbedo == null || scratchesMetalRough == null || scratchesNormal == null
+            || stripedAlbedo == null || stripedMetalRough == null || stripedNormal == null
+            || goldAlbedo == null || goldMetalRough == null || goldNormal == null)
+        {
+            Debug.LogError($"Teapot material scene requires the RenderMan swatch textures under {RenderManTextureFolder}.");
+            return;
+        }
 
         var context = CreateBaseScene(sceneName, new Vector3(0.0f, 5.4f, -13.5f), new Vector3(12.0f, 0.0f, 0.0f), passes: 1, bounces: 8, shadowQuality: 1);
         context.Manager.enableFrameAccumulation = true;
@@ -90,12 +109,12 @@ public static class RayTracingBenchmarkSceneGenerator
         AddLight(context.Root, "Cool Fill", new Vector3(7.0f, 8.0f, 2.0f), 1.25f, new Color32(185, 215, 255, 255));
         AddLight(context.Root, "Top Rim", new Vector3(0.0f, 11.0f, 9.0f), 1.0f, new Color32(255, 250, 235, 255));
 
-        AddTeapot(context.Root, "Blue Tiles", bodyMesh, lidMesh, new Vector3(-4.2f, 0.02f, 4.8f), new Color32(34, 45, 135, 255), RayMaterial.MaterialType.Diffuse, 0.82f, 0.35f, null, null, tiledNormal);
-        AddTeapot(context.Root, "Marble", bodyMesh, lidMesh, new Vector3(0.0f, 0.02f, 4.8f), Color.white, RayMaterial.MaterialType.Diffuse, 0.55f, 0.0f, marbleAlbedo);
-        AddTeapot(context.Root, "Blue Scratched", bodyMesh, lidMesh, new Vector3(4.2f, 0.02f, 4.8f), new Color32(25, 39, 128, 255), RayMaterial.MaterialType.Metal, 0.8f, 0.85f, null, null, scratchedNormal);
-        AddTeapot(context.Root, "Striped Chrome", bodyMesh, lidMesh, new Vector3(-4.2f, 0.02f, 0.2f), new Color32(225, 230, 235, 255), RayMaterial.MaterialType.Metal, 0.98f, 1.0f, null, stripedMetalRough, stripedNormal);
-        AddTeapot(context.Root, "Teal Glass", bodyMesh, lidMesh, new Vector3(0.0f, 0.02f, 0.2f), new Color32(65, 225, 215, 255), RayMaterial.MaterialType.Glass, 0.98f, 0.0f, null, null, null, 0.12f, 1.5f);
-        AddTeapot(context.Root, "Gold Circles", bodyMesh, lidMesh, new Vector3(4.2f, 0.02f, 0.2f), new Color32(230, 158, 26, 255), RayMaterial.MaterialType.Metal, 0.94f, 1.0f, null, null, goldNormal);
+        AddTeapot(context.Root, "Blue Tiles", bodyMesh, lidMesh, new Vector3(-4.2f, 0.02f, 4.8f), Color.white, RayMaterial.MaterialType.Diffuse, 0.0f, 1.0f, tilesAlbedo, tilesMetalRough, tilesNormal);
+        AddTeapot(context.Root, "Marble", bodyMesh, lidMesh, new Vector3(0.0f, 0.02f, 4.8f), Color.white, RayMaterial.MaterialType.Diffuse, 0.0f, 1.0f, marbleAlbedo, marbleMetalRough);
+        AddTeapot(context.Root, "Blue Scratched", bodyMesh, lidMesh, new Vector3(4.2f, 0.02f, 4.8f), Color.white, RayMaterial.MaterialType.Diffuse, 0.0f, 1.0f, scratchesAlbedo, scratchesMetalRough, scratchesNormal);
+        AddTeapot(context.Root, "Striped Chrome", bodyMesh, lidMesh, new Vector3(-4.2f, 0.02f, 0.2f), Color.white, RayMaterial.MaterialType.Metal, 0.0f, 1.0f, stripedAlbedo, stripedMetalRough, stripedNormal);
+        AddTeapot(context.Root, "Teal Glass", bodyMesh, lidMesh, new Vector3(0.0f, 0.02f, 0.2f), new Color(0.085f, 0.917f, 0.848f, 1.0f), RayMaterial.MaterialType.Glass, 0.98f, 0.0f, null, null, null, 0.12f, 1.5f);
+        AddTeapot(context.Root, "Gold Circles", bodyMesh, lidMesh, new Vector3(4.2f, 0.02f, 0.2f), new Color(0.9f, 0.618f, 0.1f, 1.0f), RayMaterial.MaterialType.Diffuse, 0.0f, 1.0f, goldAlbedo, goldMetalRough, goldNormal);
 
         Save(context.Scene, sceneName);
         AssetDatabase.SaveAssets();
@@ -946,7 +965,7 @@ public static class RayTracingBenchmarkSceneGenerator
         root.transform.SetParent(parent, false);
         root.transform.localPosition = position;
         root.transform.localEulerAngles = new Vector3(0.0f, 90.0f, 0.0f);
-        root.transform.localScale = Vector3.one * 0.42f;
+        root.transform.localScale = Vector3.one * 25.0f;
 
         ConfigureTeapotPart(AddRayMesh(root.transform, "Body", bodyMesh, Vector3.zero, Vector3.zero, Vector3.one, color, type, smoothness, opacity, refraction, albedoTexture), metallic, metallicRoughnessTexture, normalTexture);
         ConfigureTeapotPart(AddRayMesh(root.transform, "Lid", lidMesh, Vector3.zero, Vector3.zero, Vector3.one, color, type, smoothness, opacity, refraction, albedoTexture), metallic, metallicRoughnessTexture, normalTexture);
@@ -1015,6 +1034,39 @@ public static class RayTracingBenchmarkSceneGenerator
         {
             importer.SaveAndReimport();
         }
+    }
+
+    private static Texture2D LoadRenderManTexture(string fileName, bool linear)
+    {
+        string path = $"{RenderManTextureFolder}/{fileName}";
+        var importer = AssetImporter.GetAtPath(path) as TextureImporter;
+        if (importer == null)
+        {
+            return null;
+        }
+
+        bool changed = false;
+        if (!importer.isReadable)
+        {
+            importer.isReadable = true;
+            changed = true;
+        }
+        if (importer.wrapMode != TextureWrapMode.Repeat)
+        {
+            importer.wrapMode = TextureWrapMode.Repeat;
+            changed = true;
+        }
+        if (importer.sRGBTexture == linear)
+        {
+            importer.sRGBTexture = !linear;
+            changed = true;
+        }
+        if (changed)
+        {
+            importer.SaveAndReimport();
+        }
+
+        return AssetDatabase.LoadAssetAtPath<Texture2D>(path);
     }
 
     private static Texture2D GetOrCreateSwatchTexture(string name, Func<Texture2D> createTexture)
