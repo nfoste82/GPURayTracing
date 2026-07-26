@@ -97,6 +97,27 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void GameManager_DefaultFireflyClamp_IsEnabled()
+        {
+            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+            Assert.That(managerType, Is.Not.Null, "Could not load GameManager from Assembly-CSharp");
+
+            var gameObject = new GameObject("Firefly Clamp Default Test");
+            try
+            {
+                Component manager = gameObject.AddComponent(managerType);
+                FieldInfo clampField = managerType.GetField("fireflyClamp");
+
+                Assert.That(clampField, Is.Not.Null);
+                Assert.That(clampField.GetValue(manager), Is.EqualTo(1.0f));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(gameObject);
+            }
+        }
+
+        [Test]
         public void CausticsDisabled_DoesNotAllocateResourcesOrDispatchPhotonKernels()
         {
             Type managerType = Type.GetType("GameManager, Assembly-CSharp");

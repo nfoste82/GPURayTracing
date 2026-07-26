@@ -99,6 +99,7 @@ public static class RayTracingBenchmarkSceneGenerator
         context.Manager.enableFrameAccumulation = true;
         context.Manager.cameraFocalDistance = 17.0f;
         context.Manager.exposure = 1.15f;
+        context.Manager.fireflyClamp = 1.0f;
         context.Manager.lightFalloffScale = 0.035f;
         context.Manager._skyboxLightColor = new Color32(55, 55, 60, 255);
         context.Manager.topLevelBvhMinObjectCount = 0;
@@ -177,7 +178,7 @@ public static class RayTracingBenchmarkSceneGenerator
         context.Manager.enableFogMultipleScattering = false;
         context.Manager._skyboxLightColor = new Color32(0, 0, 0, 255);
         context.Manager.cameraFocalDistance = 15.0f;
-        context.Manager.fireflyClamp = 32f;
+        context.Manager.fireflyClamp = 8f;
 
         const int slatCount = 9;
         const float slatSpacing = 1.45f;

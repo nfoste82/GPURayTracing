@@ -146,9 +146,9 @@ public class GameManager : MonoBehaviour
     [Range(0.0f, 8.0f)]
     public float exposure = 1.0f;
 
-    [Tooltip("Maximum luminance of one path sample before averaging. Reduces persistent fireflies from rare specular paths; 0 disables the clamp.")]
-    [Range(0.0f, 32.0f)]
-    public float fireflyClamp = 0.0f;
+    [Tooltip("Maximum HDR luminance of one path sample before averaging. Lower positive values clamp fireflies more strongly; 0 disables the clamp.")]
+    [Range(0.0f, 8.0f)]
+    public float fireflyClamp = 1.0f;
 
     private float previousFocalDistance = 100f;
     private float timeSincePreviousFocusDistance = 1f;
