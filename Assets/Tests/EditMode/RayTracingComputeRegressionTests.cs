@@ -119,6 +119,33 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void GameManager_DefaultCameraLens_PreservesPreviousBlurScale()
+        {
+            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+            Assert.That(managerType, Is.Not.Null, "Could not load GameManager from Assembly-CSharp");
+
+            var gameObject = new GameObject("Camera Lens Default Test");
+            try
+            {
+                Component manager = gameObject.AddComponent(managerType);
+                FieldInfo modeField = managerType.GetField("cameraApertureMode");
+                FieldInfo radiusField = managerType.GetField("cameraApertureRadius");
+                FieldInfo clickField = managerType.GetField("enableClickToFocus");
+
+                Assert.That(modeField, Is.Not.Null);
+                Assert.That(modeField.GetValue(manager).ToString(), Is.EqualTo("LensRadius"));
+                Assert.That(radiusField, Is.Not.Null);
+                Assert.That(radiusField.GetValue(manager), Is.EqualTo(0.005f));
+                Assert.That(clickField, Is.Not.Null);
+                Assert.That(clickField.GetValue(manager), Is.EqualTo(true));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(gameObject);
+            }
+        }
+
+        [Test]
         public void GameManager_SameSizeMeshTextureArray_PreservesSourceTexels()
         {
             Type managerType = Type.GetType("GameManager, Assembly-CSharp");

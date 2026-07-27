@@ -21,6 +21,7 @@ Important shader globals:
 - `_ShadowRandomness`: area-light sampling radius multiplier for soft shadow samples.
 - `_LightFalloffScale`: distance falloff scale for direct light. Higher values make light intensity decrease faster with distance.
 - `_FocalDistance`: depth-of-field focal distance.
+- `_ApertureRadius`, `_ApertureBladeCount`, `_ApertureBladeRotation`, and `_AnamorphicRatio`: thin-lens aperture size and shape. Radius zero is an exact pinhole path; blade counts below three use a circular aperture.
 - `_Exposure`: master brightness multiplier applied before tone mapping. Acts like a camera exposure dial.
 - `_FireflyClamp`: optional maximum HDR luminance for each complete path sample before per-pixel averaging. `0` disables it; lower positive values clamp more strongly. This deliberately biased variance control suppresses rare specular samples that otherwise remain visible in low-sample animated scenes.
 - `_WaterAbsorptionStrength`: distance-based water-medium absorption density. When a path or direct-light segment travels underwater, the shader applies exponential transmittance from `_WaterColor` and this strength. The active `Water` component supplies these globals; its transform position is `_WaterCenter`, X/Z scale is `_WaterSize`, and Y scale is `_WaterDepth` below the wavy top.
@@ -122,13 +123,16 @@ Each final-color path sample is optionally luminance-clamped before averaging. A
 
 ## Depth Of Field
 
-For each pass, `CSMain` computes a focal point:
+For each pass with a nonzero aperture, `CSMain` intersects the pinhole ray with a camera-forward focal plane:
 
 ```hlsl
-float3 focalPoint = ray.origin + ray.direction * _FocalDistance;
+float focusRayDistance = _FocalDistance / dot(ray.direction, cameraForward);
+float3 focalPoint = ray.origin + ray.direction * focusRayDistance;
 ```
 
-It jitters the ray origin by a small fixed amount and re-aims the ray at the focal point. This approximates lens aperture blur. The jitter magnitude is a hard-coded `0.005` world-space offset applied independently to each ray-origin axis; there is no configurable aperture/f-stop parameter.
+It samples a configurable circular or polygonal aperture in camera right/up space, optionally stretches it anamorphically while preserving area, shifts the origin across that lens, and re-aims at the focal point. `GameManager` supports an exact pinhole, direct world-space lens radius, or a physical radius derived from the Unity camera focal length and f-number. The optional aperture scale accounts for project world-unit conventions. Lens changes invalidate final-color accumulation.
+
+`CSFocusQuery` creates an unjittered pinhole ray from a clicked normalized screen coordinate and calls the same `GetNearestIntersection()` used by rendering. It can advance through surfaces at or below the configured transparency threshold, then writes the selected world-space hit to a one-element readback buffer. This preserves parity with GPU-only geometry such as procedural water.
 
 ## Core Path Tracing Loop
 

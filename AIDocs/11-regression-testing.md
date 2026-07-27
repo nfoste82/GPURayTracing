@@ -18,6 +18,7 @@ The project uses EditMode tests under `Assets/Tests/EditMode/` to make rendering
 - Medium-identity and stack probes for air -> water -> sphere glass -> water -> air, parent lookup, matching exits, overflow, unmatched exits, underwater initialization, and flat water-volume side/bottom intersections.
 - Deterministic randomized CPU reference comparisons for per-mesh, top-level, and shadow BVH traversal against brute force, with maximum build depth checked against the fixed stack capacity of `32`.
 - GPU dispatch smoke coverage at `1x1`, `3x5`, and `13x7`; `CSMain` returns before accessing output textures for partial 8x4 thread groups outside their dimensions.
+- Camera coverage verifies that the serialized lens defaults preserve the previous `0.005` blur scale and enable click-to-focus. Existing image fixtures explicitly use the pinhole path; deterministic focus-plane and aperture-shape image fixtures remain future coverage.
 - Production GPU probes cover shared Lambert/GGX BRDF values, PDFs, and finite positive sampled throughput.
 - Production GPU probes cover the MIS power heuristic and triangle area-to-solid-angle PDF conversion.
 - A focused high-sample image regression verifies that a reflected sphere light does not develop a dark center.

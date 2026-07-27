@@ -1,5 +1,6 @@
 ﻿// Each #kernel tells which function to compile; you can have many kernels
 #pragma kernel CSMain
+#pragma kernel CSFocusQuery
 #pragma kernel CSRegressionProbe
 #pragma kernel ClearCausticPhotons CAUSTICS_ENABLED
 #pragma kernel TraceCausticPhotons CAUSTICS_ENABLED
@@ -28,6 +29,7 @@
 RWTexture2D<float4> Result;
 RWTexture2D<float4> AccumulationResult;
 RWStructuredBuffer<float4> RegressionResults;
+RWStructuredBuffer<float4> _FocusQueryResult;
 
 float4x4 _CameraToWorld;
 float4x4 _CameraInverseProjection;
@@ -55,6 +57,12 @@ int _AccumulatedFrameCount;
 float _ShadowRandomness;
 float _LightFalloffScale;
 float _FocalDistance;
+float _ApertureRadius;
+int _ApertureBladeCount;
+float _ApertureBladeRotation;
+float _AnamorphicRatio;
+float2 _FocusQueryUv;
+float _FocusQueryTransparentOpacityThreshold;
 float _Exposure;
 float _FireflyClamp;
 
@@ -374,6 +382,57 @@ Ray CreateCameraRay(float2 uv)
     direction = normalize(direction);
 
     return CreateRay(origin, direction);
+}
+
+float2 SampleConcentricDisk(inout uint rngState)
+{
+    float2 offset = float2(rand(rngState), rand(rngState)) * 2.0f - 1.0f;
+    if (offset.x == 0.0f && offset.y == 0.0f)
+    {
+        return float2(0.0f, 0.0f);
+    }
+
+    float radius;
+    float angle;
+    if (abs(offset.x) > abs(offset.y))
+    {
+        radius = offset.x;
+        angle = (PI * 0.25f) * (offset.y / offset.x);
+    }
+    else
+    {
+        radius = offset.y;
+        angle = (PI * 0.5f) - (PI * 0.25f) * (offset.x / offset.y);
+    }
+
+    return radius * float2(cos(angle), sin(angle));
+}
+
+float2 SampleAperture(inout uint rngState)
+{
+    float2 samplePosition;
+    int bladeCount = max(0, _ApertureBladeCount);
+    if (bladeCount < 3)
+    {
+        samplePosition = SampleConcentricDisk(rngState);
+    }
+    else
+    {
+        int blade = min(bladeCount - 1, (int)(rand(rngState) * bladeCount));
+        float angle0 = _ApertureBladeRotation + (2.0f * PI * blade) / bladeCount;
+        float angle1 = _ApertureBladeRotation + (2.0f * PI * (blade + 1)) / bladeCount;
+        float2 vertex0 = float2(cos(angle0), sin(angle0));
+        float2 vertex1 = float2(cos(angle1), sin(angle1));
+        float2 barycentric = float2(rand(rngState), rand(rngState));
+        if (barycentric.x + barycentric.y > 1.0f)
+        {
+            barycentric = 1.0f - barycentric;
+        }
+        samplePosition = vertex0 * barycentric.x + vertex1 * barycentric.y;
+    }
+
+    float anamorphicScale = sqrt(max(0.01f, _AnamorphicRatio));
+    return samplePosition * float2(anamorphicScale, 1.0f / anamorphicScale);
 }
 // =======================================================
 
@@ -4186,6 +4245,32 @@ void CSCausticsRegressionImage(uint3 id : SV_DispatchThreadID)
 }
 #endif
 
+[numthreads(1,1,1)]
+void CSFocusQuery(uint3 id : SV_DispatchThreadID)
+{
+    Ray ray = CreateCameraRay(_FocusQueryUv);
+    [loop]
+    for (int crossing = 0; crossing < 32; crossing++)
+    {
+        RayHit hit = GetNearestIntersection(ray);
+        if (!isfinite(hit.distance))
+        {
+            _FocusQueryResult[0] = float4(0.0f, 0.0f, 0.0f, 0.0f);
+            return;
+        }
+
+        if (hit.opacity > _FocusQueryTransparentOpacityThreshold)
+        {
+            _FocusQueryResult[0] = float4(hit.position, 1.0f);
+            return;
+        }
+
+        ray.origin = hit.position + ray.direction * 0.001f;
+    }
+
+    _FocusQueryResult[0] = float4(0.0f, 0.0f, 0.0f, 0.0f);
+}
+
 [numthreads(8,4,1)]
 void CSMain (uint3 id : SV_DispatchThreadID)
 {
@@ -4207,17 +4292,26 @@ void CSMain (uint3 id : SV_DispatchThreadID)
         float2 uv = ((id.xy + float2(rand(rngState), rand(rngState))) / float2(width, height)) * 2.0f - 1.0f;
         Ray ray = CreateCameraRay(uv);
 
-        // We find the camera focal point, then shift the ray origin, and find the adjusted ray
-        // direction after that shift. This gives us depth of field.
+        if (_ApertureRadius > 0.0f)
         {
-            float3 focalPoint = ray.origin + ray.direction * _FocalDistance;
-
-            float shiftAmount = 0.005f;
-            ray.origin.x += rand(rngState) * shiftAmount - rand(rngState) * shiftAmount;
-            ray.origin.y += rand(rngState) * shiftAmount - rand(rngState) * shiftAmount;
-            ray.origin.z += rand(rngState) * shiftAmount - rand(rngState) * shiftAmount;
-
+            float3 cameraForward = normalize(mul(_CameraToWorld, float4(0.0f, 0.0f, -1.0f, 0.0f)).xyz);
+            float focusRayDistance = _FocalDistance / max(0.0001f, dot(ray.direction, cameraForward));
+            float3 focalPoint = ray.origin + ray.direction * focusRayDistance;
+            float2 apertureSample = SampleAperture(rngState) * _ApertureRadius;
+            float3 cameraRight = normalize(mul(_CameraToWorld, float4(1.0f, 0.0f, 0.0f, 0.0f)).xyz);
+            float3 cameraUp = normalize(mul(_CameraToWorld, float4(0.0f, 1.0f, 0.0f, 0.0f)).xyz);
+            ray.origin += cameraRight * apertureSample.x + cameraUp * apertureSample.y;
             ray.direction = normalize(focalPoint - ray.origin);
+        }
+        else
+        {
+            // Preserve the established downstream path-sampling sequence when the lens is pinhole.
+            rand(rngState);
+            rand(rngState);
+            rand(rngState);
+            rand(rngState);
+            rand(rngState);
+            rand(rngState);
         }
 
 #if DEBUG_RENDER

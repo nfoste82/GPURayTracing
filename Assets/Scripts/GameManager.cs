@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using DefaultNamespace;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 public class GameManager : MonoBehaviour
 {
@@ -128,15 +129,55 @@ public class GameManager : MonoBehaviour
     [Header("Debug render modes")]
     public DebugRenderMode debugRenderMode = DebugRenderMode.FinalColor;
 
-    [Header("Misc settings")]
+    [Header("Camera focus and lens")]
+    [Tooltip("Continuously focuses the center of the image. A successful click-to-focus selection disables this so the selected distance remains active.")]
     public bool cameraAutoFocus = true;
+
+    [Tooltip("Left-click the rendered Game view to focus on the first qualifying ray-traced surface under the pointer.")]
+    public bool enableClickToFocus = true;
 
     [Tooltip("Autofocus ignores ray-traced objects with opacity at or below this value, allowing focus through mostly transparent glass.")]
     [Range(0.0f, 1.0f)]
     public float autoFocusTransparentOpacityThreshold = 0.5f;
     
-    [Range(0.1f, 100f)]
+    [Min(0.1f)]
     public float cameraFocalDistance = 100f;
+
+    public enum CameraApertureMode
+    {
+        Pinhole = 0,
+        LensRadius = 1,
+        FStop = 2
+    }
+
+    [Tooltip("Pinhole disables depth-of-field blur. Lens Radius gives direct artistic control. F-Stop derives aperture size from the Unity camera focal length.")]
+    public CameraApertureMode cameraApertureMode = CameraApertureMode.LensRadius;
+
+    [Tooltip("World-space aperture radius used in Lens Radius mode.")]
+    [Range(0.0f, 0.1f)]
+    public float cameraApertureRadius = 0.005f;
+
+    [Tooltip("Photographic f-number used in F-Stop mode. Lower values create shallower depth of field.")]
+    [Range(0.7f, 32.0f)]
+    public float cameraFStop = 2.8f;
+
+    [Tooltip("Scales the physical aperture derived from focal length and f-stop. A value of 1 assumes one world unit is one meter.")]
+    [Range(0.01f, 100.0f)]
+    public float cameraApertureScale = 1.0f;
+
+    [Tooltip("0 uses a circular aperture. Values from 3 to 16 produce polygonal bokeh.")]
+    [Range(0, 16)]
+    public int cameraApertureBladeCount = 0;
+
+    [Tooltip("Rotates polygonal aperture blades and their bokeh shape, in degrees.")]
+    [Range(0.0f, 360.0f)]
+    public float cameraApertureBladeRotation = 0.0f;
+
+    [Tooltip("Stretches bokeh horizontally above 1 and vertically below 1 while preserving aperture area.")]
+    [Range(0.25f, 4.0f)]
+    public float cameraAnamorphicRatio = 1.0f;
+
+    [Header("Misc settings")]
 
     [Tooltip("Higher values make direct light fall off faster with distance.")]
     [Range(0.001f, 1.0f)]
@@ -220,6 +261,14 @@ public class GameManager : MonoBehaviour
     private ComputeBuffer _bvhNodeBuffer;
     private ComputeBuffer _topLevelBvhNodeBuffer;
     private ComputeBuffer _shadowBvhNodeBuffer;
+    private ComputeBuffer _focusQueryBuffer;
+    private bool _focusQueryPending;
+    private bool _focusQueryInFlight;
+    private Vector2 _pendingFocusQueryUv;
+    private Vector3 _focusQueryCameraPosition;
+    private Vector3 _focusQueryCameraForward;
+    private int _focusQueryGeneration;
+    private AsyncGPUReadbackRequest _focusReadbackRequest;
     private ComputeBuffer _causticPhotonBuffer;
     private ComputeBuffer _causticPhotonMetadataBuffer;
     private ComputeBuffer _causticGridCellHeadBuffer;
@@ -691,6 +740,7 @@ public class GameManager : MonoBehaviour
         UpdateDynamicQuality();
 
         HandleInputForCamera(renderTextureCamera);
+        HandleClickToFocusInput();
 
         if (Input.GetKeyDown(KeyCode.T))
         {
@@ -811,6 +861,27 @@ public class GameManager : MonoBehaviour
             camera.transform.eulerAngles += new Vector3(-movementDelta * 50f, 0f, 0f);
         }
     }
+
+    private void HandleClickToFocusInput()
+    {
+        if (!enableClickToFocus || _focusQueryInFlight || !Input.GetMouseButtonDown(0) || renderTextureCamera == null)
+        {
+            return;
+        }
+
+        Rect pixelRect = renderTextureCamera.pixelRect;
+        Vector2 mousePosition = Input.mousePosition;
+        if (!pixelRect.Contains(mousePosition) || pixelRect.width <= 0.0f || pixelRect.height <= 0.0f)
+        {
+            return;
+        }
+
+        Vector2 viewportPosition = new Vector2(
+            (mousePosition.x - pixelRect.x) / pixelRect.width,
+            (mousePosition.y - pixelRect.y) / pixelRect.height);
+        _pendingFocusQueryUv = viewportPosition * 2.0f - Vector2.one;
+        _focusQueryPending = true;
+    }
     
     private void OnDestroy()
     {
@@ -823,6 +894,13 @@ public class GameManager : MonoBehaviour
         _bvhNodeBuffer?.Release();
         _topLevelBvhNodeBuffer?.Release();
         _shadowBvhNodeBuffer?.Release();
+        if (_focusQueryInFlight)
+        {
+            _focusReadbackRequest.WaitForCompletion();
+        }
+        _focusQueryGeneration++;
+        _focusQueryBuffer?.Release();
+        _focusQueryBuffer = null;
         ReleaseCausticResources();
         DestroyRuntimeTextureArrays();
     }
@@ -1328,6 +1406,7 @@ public class GameManager : MonoBehaviour
         var kernelHandle = shader.FindKernel("CSMain");
 
         SetShaderParameters(kernelHandle);
+        DispatchPendingFocusQuery();
         UpdateTextureFromCompute(kernelHandle);
         _renderedFrameCount++;
 
@@ -1359,6 +1438,68 @@ public class GameManager : MonoBehaviour
             && _fogVolume != null
             && _fogVolume.Density > 0.0f
             && fogDensityScale > 0.0f;
+    }
+
+    private void DispatchPendingFocusQuery()
+    {
+        if (!_focusQueryPending || _focusQueryInFlight)
+        {
+            return;
+        }
+
+        if (_focusQueryBuffer == null)
+        {
+            _focusQueryBuffer = new ComputeBuffer(1, sizeof(float) * 4);
+        }
+
+        int kernel = shader.FindKernel("CSFocusQuery");
+        SetShaderParameters(kernel);
+        shader.SetVector("_FocusQueryUv", _pendingFocusQueryUv);
+        shader.SetFloat("_FocusQueryTransparentOpacityThreshold", autoFocusTransparentOpacityThreshold);
+        shader.SetBuffer(kernel, "_FocusQueryResult", _focusQueryBuffer);
+        shader.Dispatch(kernel, 1, 1, 1);
+
+        _focusQueryPending = false;
+        _focusQueryInFlight = true;
+        _focusQueryCameraPosition = renderTextureCamera.transform.position;
+        _focusQueryCameraForward = renderTextureCamera.transform.forward;
+        int generation = _focusQueryGeneration;
+        _focusReadbackRequest = AsyncGPUReadback.Request(
+            _focusQueryBuffer,
+            request => CompleteFocusQuery(request, generation));
+    }
+
+    private void CompleteFocusQuery(AsyncGPUReadbackRequest request, int generation)
+    {
+        if (generation != _focusQueryGeneration)
+        {
+            return;
+        }
+
+        _focusQueryInFlight = false;
+        if (request.hasError)
+        {
+            Debug.LogWarning("GPU click-to-focus readback failed.", this);
+            return;
+        }
+
+        Vector4 result = request.GetData<Vector4>()[0];
+        if (result.w < 0.5f)
+        {
+            return;
+        }
+
+        Vector3 hitPosition = new Vector3(result.x, result.y, result.z);
+        float focusDistance = Vector3.Dot(hitPosition - _focusQueryCameraPosition, _focusQueryCameraForward);
+        if (focusDistance <= 0.0f)
+        {
+            return;
+        }
+
+        cameraAutoFocus = false;
+        cameraFocalDistance = Mathf.Max(0.1f, focusDistance);
+        previousFocalDistance = cameraFocalDistance;
+        ResetFrameAccumulation();
     }
 
     private void UpdateSpheres()
@@ -2932,6 +3073,10 @@ public class GameManager : MonoBehaviour
         shader.SetFloat("_ShadowRandomness", shadowRandomness);
         shader.SetFloat("_LightFalloffScale", lightFalloffScale);
         shader.SetFloat("_FocalDistance", cameraFocalDistance);
+        shader.SetFloat("_ApertureRadius", GetCameraApertureRadius());
+        shader.SetInt("_ApertureBladeCount", cameraApertureBladeCount >= 3 ? cameraApertureBladeCount : 0);
+        shader.SetFloat("_ApertureBladeRotation", cameraApertureBladeRotation * Mathf.Deg2Rad);
+        shader.SetFloat("_AnamorphicRatio", Mathf.Clamp(cameraAnamorphicRatio, 0.25f, 4.0f));
         shader.SetFloat("_Exposure", exposure);
         shader.SetFloat("_FireflyClamp", Mathf.Max(0.0f, fireflyClamp));
         bool waterEnabled = _water != null;
@@ -2989,6 +3134,23 @@ public class GameManager : MonoBehaviour
         return (int)Math.Min(int.MaxValue, sampleOffset);
     }
 
+    private float GetCameraApertureRadius()
+    {
+        if (cameraApertureMode == CameraApertureMode.Pinhole)
+        {
+            return 0.0f;
+        }
+
+        if (cameraApertureMode == CameraApertureMode.LensRadius)
+        {
+            return Mathf.Max(0.0f, cameraApertureRadius);
+        }
+
+        float focalLengthInWorldUnits = Mathf.Max(0.0f, renderTextureCamera.focalLength) * 0.001f;
+        return focalLengthInWorldUnits / (2.0f * Mathf.Max(0.1f, cameraFStop))
+            * Mathf.Max(0.0f, cameraApertureScale);
+    }
+
     private int CalculateAccumulationStateHash()
     {
         unchecked
@@ -3007,6 +3169,13 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, shadowRandomness);
             hash = AddHash(hash, lightFalloffScale);
             hash = AddHash(hash, cameraFocalDistance);
+            hash = AddHash(hash, (int)cameraApertureMode);
+            hash = AddHash(hash, cameraApertureRadius);
+            hash = AddHash(hash, cameraFStop);
+            hash = AddHash(hash, cameraApertureScale);
+            hash = AddHash(hash, cameraApertureBladeCount);
+            hash = AddHash(hash, cameraApertureBladeRotation);
+            hash = AddHash(hash, cameraAnamorphicRatio);
             hash = AddHash(hash, fireflyClamp);
             if (enableCaustics)
             {

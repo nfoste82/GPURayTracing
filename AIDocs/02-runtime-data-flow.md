@@ -40,7 +40,7 @@ Each render callback:
 1. Ensures `_outputTexture` matches the current source render target dimensions.
 2. Updates `renderTextureCamera.aspect` to match `_outputTexture`.
 3. `Update()` may adjust dynamic quality before render dispatch when `enableDynamicQuality` is enabled. It tracks an exponentially averaged unscaled frame time against `dynamicQualityTargetFrameRate`, waits at least `0.75` seconds between adjustments, and changes only `numberOfPasses`, `lightSamplingStrategy`, `lightSampleCount`, `shadowQuality`, or `numBounces` within their existing inspector slider ranges. It never changes `topLevelBvhMinObjectCount` or `shadowBvhMinObjectCount`.
-4. Computes autofocus distance if `cameraAutoFocus` is enabled, ignoring ray-traced objects whose opacity is at or below `autoFocusTransparentOpacityThreshold` so focus can pass through mostly transparent glass. The autofocus search starts from a `numberOfPasses`-derived near distance (`12 - min(8, numberOfPasses * 1.75)`) rather than a fixed near plane, and very close hits (under `1.0`) are remapped by an additional close-focus modifier and smoothed toward the previous focal distance over time.
+4. Computes center autofocus distance if `cameraAutoFocus` is enabled, ignoring ray-traced objects whose opacity is at or below `autoFocusTransparentOpacityThreshold` so focus can pass through mostly transparent glass. The autofocus search starts from a `numberOfPasses`-derived near distance (`12 - min(8, numberOfPasses * 1.75)`) rather than a fixed near plane, and very close hits (under `1.0`) are remapped by an additional close-focus modifier and smoothed toward the previous focal distance over time. With `enableClickToFocus`, a left click queues a one-thread `CSFocusQuery` dispatch against the production GPU intersection path. An asynchronous one-element readback returns the world-space hit on a later frame; successful selection disables center autofocus, converts the hit to camera-forward focal-plane distance, and resets accumulation.
 5. Writes the resulting focal distance to `cameraFocalDistance`.
 6. Calls `UpdateSpheres()` to refresh CPU sphere/light structs from cached Unity object references.
 7. Calls `UpdateTriangles()` to refresh registered mesh triangle data only if a cached mesh transform or material value changed.
@@ -143,6 +143,7 @@ On `Start()`, `GameManager` ensures that the generic benchmark runner and live p
 - `_ShadowRandomness`
 - `_LightFalloffScale`
 - `_FocalDistance`
+- `_ApertureRadius`, `_ApertureBladeCount`, `_ApertureBladeRotation`, `_AnamorphicRatio`
 - `_Exposure`
 - `_WaterEnabled`, `_WaterCenter`, `_WaterSize`, `_WaterDepth`, `_WaterColor`, `_WaterSmoothness`, `_WaterOpacity`, `_WaterAbsorptionStrength`, `_WaterRefraction`, `_WaterWaveAmplitude`, `_WaterWaveScale`, `_WaterWaveSpeed`, `_WaterTime`, `_WaterMarchSteps`, `_WaterRefinementSteps`. These are sourced from the registered `Water` component; its transform supplies center, footprint, and depth.
 - `_FogEnabled`, `_FogBoundsMin`, `_FogBoundsMax`, `_FogDensity`, `_FogScatteringAlbedo`, `_FogInScatteringIntensity`, and `_FogMultipleScattering`. Base bounds and material values come from the single registered `FogVolume`; `GameManager` supplies the global enable, density/scattering scales, display-oriented in-scattering intensity, and multiple-scattering toggle. Fog uses no GPU buffer or auxiliary dispatch.
@@ -176,6 +177,7 @@ Dynamic quality resets frame accumulation whenever it changes a setting. Adjustm
 
 - WASD moves `renderTextureCamera`.
 - Arrow keys rotate `renderTextureCamera`.
+- Left click focuses on the selected ray-traced surface when `enableClickToFocus` is enabled. Mostly transparent surfaces use the existing autofocus opacity threshold and the query includes shader-only procedural water.
 - `T` toggles single-frame mode.
 - `Space` resumes real-time rendering.
 - `debugRenderMode` is exposed in the `GameManager` inspector and selects final color or one of the shader debug visualizations.

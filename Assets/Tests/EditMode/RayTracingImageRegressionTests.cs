@@ -551,7 +551,7 @@ namespace GPURayTracing.Tests
             new Vector4(0.18173040f, 0.34718470f, 0.54317370f, 1.0f),
             new Vector4(0.11754310f, 0.26860310f, 0.47664970f, 1.0f), new Vector4(0.02927951f, 0.08683124f, 0.20704730f, 1.0f),
             new Vector4(0.24839830f, 0.47703760f, 0.68394960f, 1.0f), new Vector4(0.16319830f, 0.34220730f, 0.55730190f, 1.0f),
-            new Vector4(0.10823700f, 0.23281910f, 0.42639530f, 1.0f), new Vector4(0.07051557f, 0.16169770f, 0.32682100f, 1.0f),
+            new Vector4(0.14819820f, 0.26874160f, 0.44220630f, 1.0f), new Vector4(0.07051557f, 0.16169770f, 0.32682100f, 1.0f),
             new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f), new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f)
         };
 
@@ -791,6 +791,10 @@ namespace GPURayTracing.Tests
                 shader.SetFloat("_ShadowRandomness", shadowRandomness);
                 shader.SetFloat("_LightFalloffScale", lightFalloffScale);
                 shader.SetFloat("_FocalDistance", 100.0f);
+                shader.SetFloat("_ApertureRadius", 0.0f);
+                shader.SetInt("_ApertureBladeCount", 0);
+                shader.SetFloat("_ApertureBladeRotation", 0.0f);
+                shader.SetFloat("_AnamorphicRatio", 1.0f);
                 shader.SetFloat("_Exposure", 1.0f);
                 shader.SetFloat("_FireflyClamp", 0.0f);
                 shader.SetInt("_NumSpheres", spheres.Length);
