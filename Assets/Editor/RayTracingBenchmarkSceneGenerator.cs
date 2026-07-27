@@ -42,6 +42,7 @@ public static class RayTracingBenchmarkSceneGenerator
         CreateDragonCornellBoxScene();
         CreateWolfensteinScene();
         CreateVolumetricFogScene();
+        GenerateTeapotMaterialScene();
 
         AssetDatabase.SaveAssets();
         AssetDatabase.Refresh();
@@ -95,10 +96,10 @@ public static class RayTracingBenchmarkSceneGenerator
             return;
         }
 
-        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 5.4f, -13.5f), new Vector3(12.0f, 0.0f, 0.0f), passes: 1, bounces: 8, shadowQuality: 1);
+        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 5.4f, -13.5f), new Vector3(12.0f, 0.0f, 0.0f), passes: 1, bounces: 8, shadowQuality: 0);
         context.Manager.enableFrameAccumulation = true;
         context.Manager.cameraFocalDistance = 17.0f;
-        context.Manager.exposure = 1.15f;
+        context.Manager.exposure = 2.5f;
         context.Manager.fireflyClamp = 1.0f;
         context.Manager.lightFalloffScale = 0.035f;
         context.Manager._skyboxLightColor = new Color32(55, 55, 60, 255);
@@ -114,8 +115,8 @@ public static class RayTracingBenchmarkSceneGenerator
         AddTeapot(context.Root, "Marble", bodyMesh, lidMesh, new Vector3(0.0f, 0.02f, 4.8f), Color.white, RayMaterial.MaterialType.Diffuse, 0.0f, 1.0f, marbleAlbedo, marbleMetalRough);
         AddTeapot(context.Root, "Blue Scratched", bodyMesh, lidMesh, new Vector3(4.2f, 0.02f, 4.8f), Color.white, RayMaterial.MaterialType.Diffuse, 0.0f, 1.0f, scratchesAlbedo, scratchesMetalRough, scratchesNormal);
         AddTeapot(context.Root, "Striped Chrome", bodyMesh, lidMesh, new Vector3(-4.2f, 0.02f, 0.2f), Color.white, RayMaterial.MaterialType.Metal, 0.0f, 1.0f, stripedAlbedo, stripedMetalRough, stripedNormal);
-        AddTeapot(context.Root, "Teal Glass", bodyMesh, lidMesh, new Vector3(0.0f, 0.02f, 0.2f), new Color(0.085f, 0.917f, 0.848f, 1.0f), RayMaterial.MaterialType.Glass, 0.98f, 0.0f, null, null, null, 0.12f, 1.5f);
-        AddTeapot(context.Root, "Gold Circles", bodyMesh, lidMesh, new Vector3(4.2f, 0.02f, 0.2f), new Color(0.9f, 0.618f, 0.1f, 1.0f), RayMaterial.MaterialType.Diffuse, 0.0f, 1.0f, goldAlbedo, goldMetalRough, goldNormal);
+        AddTeapot(context.Root, "Teal Glass", bodyMesh, lidMesh, new Vector3(0.0f, 0.02f, 0.2f), new Color(0.085f, 0.917f, 0.848f, 1.0f), RayMaterial.MaterialType.Glass, 0.88f, 0.0f, null, null, null, 0.12f, 1.5f);
+        AddTeapot(context.Root, "Gold Circles", bodyMesh, lidMesh, new Vector3(4.2f, 0.02f, 0.2f), new Color(0.9f, 0.618f, 0.1f, 1.0f), RayMaterial.MaterialType.Diffuse, 0.5f, 1.0f, goldAlbedo, goldMetalRough, goldNormal);
 
         Save(context.Scene, sceneName);
         AssetDatabase.SaveAssets();
@@ -969,7 +970,7 @@ public static class RayTracingBenchmarkSceneGenerator
         root.transform.localScale = Vector3.one * 25.0f;
 
         ConfigureTeapotPart(AddRayMesh(root.transform, "Body", bodyMesh, Vector3.zero, Vector3.zero, Vector3.one, color, type, smoothness, opacity, refraction, albedoTexture), metallic, metallicRoughnessTexture, normalTexture);
-        ConfigureTeapotPart(AddRayMesh(root.transform, "Lid", lidMesh, Vector3.zero, Vector3.zero, Vector3.one, color, type, smoothness, opacity, refraction, albedoTexture), metallic, metallicRoughnessTexture, normalTexture);
+        ConfigureTeapotPart(AddRayMesh(root.transform, "Base", lidMesh, Vector3.zero, Vector3.zero, Vector3.one, color, type, smoothness, opacity, refraction, albedoTexture), metallic, metallicRoughnessTexture, normalTexture);
     }
 
     private static void ConfigureTeapotPart(GameObject part, float metallic, Texture2D metallicRoughnessTexture, Texture2D normalTexture)
@@ -1060,6 +1061,11 @@ public static class RayTracingBenchmarkSceneGenerator
         if (importer.sRGBTexture == linear)
         {
             importer.sRGBTexture = !linear;
+            changed = true;
+        }
+        if (importer.textureCompression != TextureImporterCompression.Uncompressed)
+        {
+            importer.textureCompression = TextureImporterCompression.Uncompressed;
             changed = true;
         }
         if (changed)

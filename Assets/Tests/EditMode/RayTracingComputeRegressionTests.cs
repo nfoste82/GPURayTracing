@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using NUnit.Framework;
 using UnityEditor;
@@ -114,6 +115,50 @@ namespace GPURayTracing.Tests
             finally
             {
                 UnityEngine.Object.DestroyImmediate(gameObject);
+            }
+        }
+
+        [Test]
+        public void GameManager_SameSizeMeshTextureArray_PreservesSourceTexels()
+        {
+            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+            Assert.That(managerType, Is.Not.Null, "Could not load GameManager from Assembly-CSharp");
+            MethodInfo buildMethod = managerType.GetMethod(
+                "BuildMeshTextureArray",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(buildMethod, Is.Not.Null);
+
+            var source = new Texture2D(2, 2, TextureFormat.RGBA32, false, true);
+            var expected = new[]
+            {
+                new Color32(127, 127, 255, 255),
+                new Color32(128, 126, 254, 255),
+                new Color32(12, 240, 64, 255),
+                new Color32(251, 3, 129, 255)
+            };
+            source.SetPixels32(expected);
+            source.Apply(false, false);
+
+            Texture2DArray result = null;
+            try
+            {
+                result = (Texture2DArray)buildMethod.Invoke(null, new object[]
+                {
+                    new List<Texture2D> { source },
+                    null,
+                    "Exact Texture Copy Test",
+                    Color.white,
+                    true
+                });
+
+                Assert.That(result.width, Is.EqualTo(source.width));
+                Assert.That(result.height, Is.EqualTo(source.height));
+                Assert.That(result.GetPixels32(0), Is.EqualTo(expected));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(source);
+                UnityEngine.Object.DestroyImmediate(result);
             }
         }
 

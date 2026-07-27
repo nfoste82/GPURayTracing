@@ -1992,6 +1992,10 @@ public class GameManager : MonoBehaviour
                 pixels[i] = fallbackColor;
             }
         }
+        else if (source.isReadable && source.width == width && source.height == height)
+        {
+            pixels = source.GetPixels32();
+        }
         else if (source.isReadable)
         {
             for (int y = 0; y < height; y++)
@@ -2006,10 +2010,27 @@ public class GameManager : MonoBehaviour
         }
         else
         {
-            Debug.LogWarning($"Mesh texture '{source.name}' is not readable; using fallback data for ray tracing.");
-            for (int i = 0; i < pixels.Length; i++)
+            RenderTexture previousRenderTexture = RenderTexture.active;
+            RenderTexture temporaryRenderTexture = RenderTexture.GetTemporary(
+                width,
+                height,
+                0,
+                RenderTextureFormat.ARGB32,
+                destination.isDataSRGB ? RenderTextureReadWrite.sRGB : RenderTextureReadWrite.Linear);
+            var readableTexture = new Texture2D(width, height, TextureFormat.RGBA32, false, !destination.isDataSRGB);
+            try
             {
-                pixels[i] = fallbackColor;
+                Graphics.Blit(source, temporaryRenderTexture);
+                RenderTexture.active = temporaryRenderTexture;
+                readableTexture.ReadPixels(new Rect(0, 0, width, height), 0, 0, false);
+                readableTexture.Apply(false, false);
+                pixels = readableTexture.GetPixels32();
+            }
+            finally
+            {
+                RenderTexture.active = previousRenderTexture;
+                RenderTexture.ReleaseTemporary(temporaryRenderTexture);
+                Destroy(readableTexture);
             }
         }
 
