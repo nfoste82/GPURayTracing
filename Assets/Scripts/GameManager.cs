@@ -919,7 +919,19 @@ public class GameManager : MonoBehaviour
     {
         if (textureArray != null)
         {
-            Destroy(textureArray);
+            DestroyRuntimeObject(textureArray);
+        }
+    }
+
+    private static void DestroyRuntimeObject(UnityEngine.Object runtimeObject)
+    {
+        if (Application.isPlaying)
+        {
+            Destroy(runtimeObject);
+        }
+        else
+        {
+            DestroyImmediate(runtimeObject);
         }
     }
 
@@ -2171,7 +2183,7 @@ public class GameManager : MonoBehaviour
             {
                 RenderTexture.active = previousRenderTexture;
                 RenderTexture.ReleaseTemporary(temporaryRenderTexture);
-                Destroy(readableTexture);
+                DestroyRuntimeObject(readableTexture);
             }
         }
 
