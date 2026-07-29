@@ -62,7 +62,6 @@ int _ApertureBladeCount;
 float _ApertureBladeRotation;
 float _AnamorphicRatio;
 float2 _FocusQueryUv;
-float _FocusQueryTransparentOpacityThreshold;
 float _Exposure;
 float _FireflyClamp;
 
@@ -1347,12 +1346,13 @@ bool IntersectTriangleRaw(Ray ray, MeshTriangle meshTriangle, out float hitDista
     float3 edge2 = meshTriangle.vertex2 - meshTriangle.vertex0;
     float3 p = cross(ray.direction, edge2);
     float determinant = dot(edge1, p);
+    float determinantScale = length(edge1) * length(p);
 
     hitDistance = 1.#INF;
     normal = meshTriangle.normal;
     barycentric = float2(0.0f, 0.0f);
 
-    if (abs(determinant) < 0.000001f)
+    if (determinantScale <= 0.0f || abs(determinant) <= 0.000001f * determinantScale)
     {
         return false;
     }
@@ -4207,6 +4207,21 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     RegressionResults[36] = float4(smoothGlassNormal, smoothGlassTransmitted ? 1.0f : 0.0f);
     RegressionResults[37] = float4(roughGlassNormal, roughGlassTransmitted ? length(roughGlassDirection - smoothGlassDirection) : -1.0f);
 
+    MeshTriangle smallTriangle = smoothTriangle;
+    smallTriangle.vertex0 = float3(-0.00005f, -0.00005f, 0.0f);
+    smallTriangle.vertex1 = float3(0.00005f, -0.00005f, 0.0f);
+    smallTriangle.vertex2 = float3(0.0f, 0.00005f, 0.0f);
+    float smallTriangleDistance;
+    float3 smallTriangleNormal;
+    float2 smallTriangleBarycentric;
+    bool hitSmallTriangle = IntersectTriangleRaw(
+        CreateRay(float3(0.0f, 0.0f, 1.0f), float3(0.0f, 0.0f, -1.0f)),
+        smallTriangle,
+        smallTriangleDistance,
+        smallTriangleNormal,
+        smallTriangleBarycentric);
+    RegressionResults[38] = float4(smallTriangleDistance, smallTriangleBarycentric, hitSmallTriangle ? 1.0f : 0.0f);
+
     Light triangleLight;
     triangleLight.position = float3(-1.0f, 2.0f, -1.0f);
     triangleLight.emission = 1.0f;
@@ -4249,26 +4264,14 @@ void CSCausticsRegressionImage(uint3 id : SV_DispatchThreadID)
 void CSFocusQuery(uint3 id : SV_DispatchThreadID)
 {
     Ray ray = CreateCameraRay(_FocusQueryUv);
-    [loop]
-    for (int crossing = 0; crossing < 32; crossing++)
+    RayHit hit = GetNearestIntersection(ray);
+    if (!isfinite(hit.distance))
     {
-        RayHit hit = GetNearestIntersection(ray);
-        if (!isfinite(hit.distance))
-        {
-            _FocusQueryResult[0] = float4(0.0f, 0.0f, 0.0f, 0.0f);
-            return;
-        }
-
-        if (hit.opacity > _FocusQueryTransparentOpacityThreshold)
-        {
-            _FocusQueryResult[0] = float4(hit.position, 1.0f);
-            return;
-        }
-
-        ray.origin = hit.position + ray.direction * 0.001f;
+        _FocusQueryResult[0] = float4(0.0f, 0.0f, 0.0f, 0.0f);
+        return;
     }
 
-    _FocusQueryResult[0] = float4(0.0f, 0.0f, 0.0f, 0.0f);
+    _FocusQueryResult[0] = float4(hit.position, 1.0f);
 }
 
 [numthreads(8,4,1)]

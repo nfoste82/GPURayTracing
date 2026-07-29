@@ -28,7 +28,7 @@ namespace GPURayTracing.Tests
             }
 
             int kernel = shader.FindKernel("CSRegressionProbe");
-            var buffer = new ComputeBuffer(38, sizeof(float) * 4);
+            var buffer = new ComputeBuffer(39, sizeof(float) * 4);
             var sphereBuffer = new ComputeBuffer(1, 56);
             try
             {
@@ -47,7 +47,7 @@ namespace GPURayTracing.Tests
                 shader.SetBuffer(kernel, "RegressionResults", buffer);
                 shader.Dispatch(kernel, 1, 1, 1);
 
-                var results = new Vector4[38];
+                var results = new Vector4[39];
                 buffer.GetData(results);
 
                 AssertVector(results[0], new Vector4(0.70710677f, 0.70710677f, 0.0f, 1.0f), "reflection");
@@ -89,6 +89,7 @@ namespace GPURayTracing.Tests
                 Assert.That(results[37].w, Is.GreaterThan(0.01f), "rough glass should perturb its transmitted direction");
                 Assert.That(new Vector3(results[37].x, results[37].y, results[37].z).sqrMagnitude,
                     Is.EqualTo(1.0f).Within(0.001f), "rough glass microfacet normal should remain normalized");
+                AssertVector(results[38], new Vector4(1.0f, 0.25f, 0.5f, 1.0f), "small triangle intersection", 0.0002f);
             }
             finally
             {
@@ -131,6 +132,7 @@ namespace GPURayTracing.Tests
                 FieldInfo modeField = managerType.GetField("cameraApertureMode");
                 FieldInfo radiusField = managerType.GetField("cameraApertureRadius");
                 FieldInfo clickField = managerType.GetField("enableClickToFocus");
+                FieldInfo trackClickField = managerType.GetField("trackClickedFocusPoint");
 
                 Assert.That(modeField, Is.Not.Null);
                 Assert.That(modeField.GetValue(manager).ToString(), Is.EqualTo("LensRadius"));
@@ -138,11 +140,76 @@ namespace GPURayTracing.Tests
                 Assert.That(radiusField.GetValue(manager), Is.EqualTo(0.005f));
                 Assert.That(clickField, Is.Not.Null);
                 Assert.That(clickField.GetValue(manager), Is.EqualTo(true));
+                Assert.That(trackClickField, Is.Not.Null);
+                Assert.That(trackClickField.GetValue(manager), Is.EqualTo(true));
             }
             finally
             {
                 UnityEngine.Object.DestroyImmediate(gameObject);
             }
+        }
+
+        [Test]
+        public void GameManager_TrackedFocusPoint_UpdatesDistanceAndUsesPinholeOutsideFrustum()
+        {
+            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+            Assert.That(managerType, Is.Not.Null, "Could not load GameManager from Assembly-CSharp");
+
+            var managerObject = new GameObject("Tracked Focus Point Test");
+            var cameraObject = new GameObject("Tracked Focus Camera");
+            try
+            {
+                Component manager = managerObject.AddComponent(managerType);
+                Camera camera = cameraObject.AddComponent<Camera>();
+                managerType.GetField("renderTextureCamera").SetValue(manager, camera);
+                managerType.GetField("trackClickedFocusPoint").SetValue(manager, true);
+                managerType.GetField("cameraApertureRadius").SetValue(manager, 0.02f);
+
+                FieldInfo focusPointField = managerType.GetField("_clickedFocusPoint", BindingFlags.Instance | BindingFlags.NonPublic);
+                FieldInfo hasFocusPointField = managerType.GetField("_hasClickedFocusPoint", BindingFlags.Instance | BindingFlags.NonPublic);
+                MethodInfo updateFocusMethod = managerType.GetMethod("UpdateTrackedFocusPoint", BindingFlags.Instance | BindingFlags.NonPublic);
+                MethodInfo apertureMethod = managerType.GetMethod("GetCameraApertureRadius", BindingFlags.Instance | BindingFlags.NonPublic);
+                Assert.That(focusPointField, Is.Not.Null);
+                Assert.That(hasFocusPointField, Is.Not.Null);
+                Assert.That(updateFocusMethod, Is.Not.Null);
+                Assert.That(apertureMethod, Is.Not.Null);
+
+                focusPointField.SetValue(manager, new Vector3(0.0f, 0.0f, 10.0f));
+                hasFocusPointField.SetValue(manager, true);
+                updateFocusMethod.Invoke(manager, null);
+
+                Assert.That(managerType.GetField("cameraFocalDistance").GetValue(manager), Is.EqualTo(10.0f));
+                Assert.That(apertureMethod.Invoke(manager, null), Is.EqualTo(0.02f));
+
+                camera.transform.rotation = Quaternion.Euler(0.0f, 180.0f, 0.0f);
+                updateFocusMethod.Invoke(manager, null);
+
+                Assert.That(apertureMethod.Invoke(manager, null), Is.EqualTo(0.0f));
+                Assert.That(managerType.GetField("cameraApertureMode").GetValue(manager).ToString(), Is.EqualTo("LensRadius"));
+
+                managerType.GetField("enableClickToFocus").SetValue(manager, false);
+                Assert.That(apertureMethod.Invoke(manager, null), Is.EqualTo(0.02f));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(cameraObject);
+                UnityEngine.Object.DestroyImmediate(managerObject);
+            }
+        }
+
+        [Test]
+        public void FocusQuery_SelectsFirstIntersectionRegardlessOfOpacity()
+        {
+            string shaderSource = System.IO.File.ReadAllText(ComputeShaderPath);
+            int kernelStart = shaderSource.IndexOf("void CSFocusQuery", StringComparison.Ordinal);
+            int mainKernelStart = shaderSource.IndexOf("void CSMain", kernelStart, StringComparison.Ordinal);
+
+            Assert.That(kernelStart, Is.GreaterThanOrEqualTo(0));
+            Assert.That(mainKernelStart, Is.GreaterThan(kernelStart));
+            string focusKernel = shaderSource.Substring(kernelStart, mainKernelStart - kernelStart);
+            Assert.That(focusKernel, Does.Contain("GetNearestIntersection(ray)"));
+            Assert.That(focusKernel, Does.Not.Contain("hit.opacity"));
+            Assert.That(focusKernel, Does.Not.Contain("TransparentOpacityThreshold"));
         }
 
         [Test]
@@ -259,6 +326,22 @@ namespace GPURayTracing.Tests
             {
                 UnityEngine.Object.DestroyImmediate(gameObject);
             }
+        }
+
+        [Test]
+        public void PhotonTrace_BindsAllMeshTextureArrays()
+        {
+            string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+            int methodStart = managerSource.IndexOf("private void SetPhotonTraceSceneParameters(int traceKernel)", StringComparison.Ordinal);
+            int nextMethodStart = managerSource.IndexOf("private bool ShouldUseFrameAccumulation()", methodStart, StringComparison.Ordinal);
+
+            Assert.That(methodStart, Is.GreaterThanOrEqualTo(0));
+            Assert.That(nextMethodStart, Is.GreaterThan(methodStart));
+            string method = managerSource.Substring(methodStart, nextMethodStart - methodStart);
+            Assert.That(method, Does.Contain("EnsureMeshTextureArrays()"));
+            Assert.That(method, Does.Contain("\"_MeshAlbedoTextures\""));
+            Assert.That(method, Does.Contain("\"_MeshMetallicRoughnessTextures\""));
+            Assert.That(method, Does.Contain("\"_MeshNormalTextures\""));
         }
 
         private static void AssertVector(Vector4 actual, Vector4 expected, string label, float tolerance = Epsilon)

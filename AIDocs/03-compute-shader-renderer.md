@@ -132,7 +132,7 @@ float3 focalPoint = ray.origin + ray.direction * focusRayDistance;
 
 It samples a configurable circular or polygonal aperture in camera right/up space, optionally stretches it anamorphically while preserving area, shifts the origin across that lens, and re-aims at the focal point. `GameManager` supports an exact pinhole, direct world-space lens radius, or a physical radius derived from the Unity camera focal length and f-number. The optional aperture scale accounts for project world-unit conventions. Lens changes invalidate final-color accumulation.
 
-`CSFocusQuery` creates an unjittered pinhole ray from a clicked normalized screen coordinate and calls the same `GetNearestIntersection()` used by rendering. It can advance through surfaces at or below the configured transparency threshold, then writes the selected world-space hit to a one-element readback buffer. This preserves parity with GPU-only geometry such as procedural water.
+`CSFocusQuery` creates an unjittered pinhole ray from a clicked normalized screen coordinate and calls the same `GetNearestIntersection()` used by rendering. It writes the first surface's world-space hit to a one-element readback buffer regardless of opacity, allowing glass to be selected directly while preserving parity with GPU-only geometry such as procedural water.
 
 ## Core Path Tracing Loop
 

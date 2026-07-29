@@ -1,11 +1,25 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Text;
 using DefaultNamespace;
 using UnityEngine;
 using UnityEngine.Rendering;
+using Debug = UnityEngine.Debug;
 
 public class GameManager : MonoBehaviour
 {
+    [SerializeField, HideInInspector]
+    private RayTracingBvhBakeAsset bvhBake;
+
+    [SerializeField, HideInInspector]
+    private bool bakeBvhUponExit = true;
+
+    [Header("Diagnostics")]
+    [Tooltip("Logs phase timings for initial scene buffer construction and the first compute dispatch.")]
+    public bool profileStartup = true;
+
     public ComputeShader shader;
     public Camera renderTextureCamera;
     
@@ -135,6 +149,9 @@ public class GameManager : MonoBehaviour
 
     [Tooltip("Left-click the rendered Game view to focus on the first qualifying ray-traced surface under the pointer.")]
     public bool enableClickToFocus = true;
+
+    [Tooltip("Keeps a successful click-to-focus world point in focus as the camera moves. While the point is outside the camera frustum, depth of field temporarily uses a pinhole aperture without changing the selected aperture mode.")]
+    public bool trackClickedFocusPoint = true;
 
     [Tooltip("Autofocus ignores ray-traced objects with opacity at or below this value, allowing focus through mostly transparent glass.")]
     [Range(0.0f, 1.0f)]
@@ -267,6 +284,9 @@ public class GameManager : MonoBehaviour
     private Vector2 _pendingFocusQueryUv;
     private Vector3 _focusQueryCameraPosition;
     private Vector3 _focusQueryCameraForward;
+    private Vector3 _clickedFocusPoint;
+    private bool _hasClickedFocusPoint;
+    private bool _clickedFocusPointInFrustum;
     private int _focusQueryGeneration;
     private AsyncGPUReadbackRequest _focusReadbackRequest;
     private ComputeBuffer _causticPhotonBuffer;
@@ -391,6 +411,8 @@ public class GameManager : MonoBehaviour
     private const int MaxCausticGridCells = 262144;
     private const int BvhLeafTriangleCount = 4;
     private const int BvhStackSize = 32;
+    public const int BvhBakeFormatVersion = 2;
+    private const int BvhBakeMagic = 0x48564252;
     private const float BvhBoundsPadding = 0.0001f;
     private const int TopLevelObjectTypeInternal = -1;
     private const int TopLevelObjectTypeSphere = 0;
@@ -527,8 +549,9 @@ public class GameManager : MonoBehaviour
             var edge2 = vertex2 - vertex0;
             var p = Vector3.Cross(direction, edge2);
             var determinant = Vector3.Dot(edge1, p);
+            var determinantScale = edge1.magnitude * p.magnitude;
 
-            if (Mathf.Abs(determinant) < 0.000001f)
+            if (determinantScale <= 0.0f || Mathf.Abs(determinant) <= 0.000001f * determinantScale)
             {
                 return -1.0f;
             }
@@ -638,13 +661,29 @@ public class GameManager : MonoBehaviour
 
     private Water _water;
     private FogVolume _fogVolume;
+    private readonly Stopwatch _startupStopwatch = Stopwatch.StartNew();
+    private readonly List<string> _startupProfilePhases = new List<string>();
+    private double _startupRegistrationMilliseconds;
+    private bool _startupProfilePending;
+    private bool _loadedBakedMeshBvhs;
+    private string _bvhBakeLoadStatus = "not attempted";
+    private int _profileBuiltMeshTemplateCount;
+    private long _profileBuiltMeshTemplateTicks;
+    private long _profileTextureArrayTicks;
 
     private void Start()
     {
+        _startupRegistrationMilliseconds = _startupStopwatch.Elapsed.TotalMilliseconds;
+        _startupProfilePending = profileStartup;
         EnsureBenchmarkComponents();
         SyncUnitySkyboxPreview();
+        long outputTextureStart = Stopwatch.GetTimestamp();
         CreateOutputTexture(Screen.width, Screen.height);
-        RebuildBuffers();
+        AddStartupProfilePhase("output textures", outputTextureStart);
+        long bakedBvhLoadStart = Stopwatch.GetTimestamp();
+        TryLoadBakedMeshBvhs();
+        AddStartupProfilePhase($"baked mesh BVH load ({_bvhBakeLoadStatus})", bakedBvhLoadStart);
+        RebuildBuffers(_startupProfilePending);
     }
 
     private void EnsureBenchmarkComponents()
@@ -1095,7 +1134,7 @@ public class GameManager : MonoBehaviour
         int traceKernel = shader.FindKernel("TraceCausticPhotons");
         int clearGridKernel = shader.FindKernel("ClearCausticGrid");
         int buildGridKernel = shader.FindKernel("BuildCausticGrid");
-        SetPhotonTraceSceneParameters();
+        SetPhotonTraceSceneParameters(traceKernel);
         SetCausticShaderParameters(clearKernel);
         SetCausticShaderParameters(traceKernel);
         SetCausticShaderParameters(clearGridKernel);
@@ -1117,8 +1156,12 @@ public class GameManager : MonoBehaviour
         _previousCausticsEnabled = true;
     }
 
-    private void SetPhotonTraceSceneParameters()
+    private void SetPhotonTraceSceneParameters(int traceKernel)
     {
+        EnsureMeshTextureArrays();
+        shader.SetTexture(traceKernel, "_MeshAlbedoTextures", _meshAlbedoTextureArray);
+        shader.SetTexture(traceKernel, "_MeshMetallicRoughnessTextures", _meshMetallicRoughnessTextureArray);
+        shader.SetTexture(traceKernel, "_MeshNormalTextures", _meshNormalTextureArray);
         shader.SetInt("_NumSpheres", _spheres.Count);
         shader.SetInt("_NumLights", _lights.Count);
         shader.SetInt("_NumTriangles", _triangles.Count);
@@ -1364,6 +1407,8 @@ public class GameManager : MonoBehaviour
             return;
         }
 
+        long firstFramePreparationStart = _startupProfilePending ? Stopwatch.GetTimestamp() : 0;
+        UpdateTrackedFocusPoint();
         var autoFocusDistance = (cameraAutoFocus)
             ? GetNearestIntersectionDistanceForAutoFocus(new Ray(renderTextureCamera.transform.position,
                 renderTextureCamera.transform.forward))
@@ -1419,7 +1464,17 @@ public class GameManager : MonoBehaviour
 
         SetShaderParameters(kernelHandle);
         DispatchPendingFocusQuery();
+        if (_startupProfilePending)
+        {
+            AddStartupProfilePhase("first-frame CPU preparation", firstFramePreparationStart);
+        }
+        long dispatchStart = _startupProfilePending ? Stopwatch.GetTimestamp() : 0;
         UpdateTextureFromCompute(kernelHandle);
+        if (_startupProfilePending)
+        {
+            AddStartupProfilePhase("first compute dispatch (includes shader compilation)", dispatchStart);
+            LogStartupProfile();
+        }
         _renderedFrameCount++;
 
         if (useFrameAccumulation)
@@ -1467,7 +1522,6 @@ public class GameManager : MonoBehaviour
         int kernel = shader.FindKernel("CSFocusQuery");
         SetShaderParameters(kernel);
         shader.SetVector("_FocusQueryUv", _pendingFocusQueryUv);
-        shader.SetFloat("_FocusQueryTransparentOpacityThreshold", autoFocusTransparentOpacityThreshold);
         shader.SetBuffer(kernel, "_FocusQueryResult", _focusQueryBuffer);
         shader.Dispatch(kernel, 1, 1, 1);
 
@@ -1511,7 +1565,36 @@ public class GameManager : MonoBehaviour
         cameraAutoFocus = false;
         cameraFocalDistance = Mathf.Max(0.1f, focusDistance);
         previousFocalDistance = cameraFocalDistance;
+        _clickedFocusPoint = hitPosition;
+        _hasClickedFocusPoint = enableClickToFocus && trackClickedFocusPoint;
+        UpdateTrackedFocusPoint();
         ResetFrameAccumulation();
+    }
+
+    private void UpdateTrackedFocusPoint()
+    {
+        if (!enableClickToFocus || !trackClickedFocusPoint || !_hasClickedFocusPoint || renderTextureCamera == null)
+        {
+            _hasClickedFocusPoint = false;
+            _clickedFocusPointInFrustum = false;
+            return;
+        }
+
+        Vector3 viewportPoint = renderTextureCamera.WorldToViewportPoint(_clickedFocusPoint);
+        _clickedFocusPointInFrustum = viewportPoint.z >= renderTextureCamera.nearClipPlane
+            && viewportPoint.z <= renderTextureCamera.farClipPlane
+            && viewportPoint.x >= 0.0f && viewportPoint.x <= 1.0f
+            && viewportPoint.y >= 0.0f && viewportPoint.y <= 1.0f;
+
+        if (_clickedFocusPointInFrustum)
+        {
+            cameraFocalDistance = Mathf.Max(
+                0.1f,
+                Vector3.Dot(
+                    _clickedFocusPoint - renderTextureCamera.transform.position,
+                    renderTextureCamera.transform.forward));
+            previousFocalDistance = cameraFocalDistance;
+        }
     }
 
     private void UpdateSpheres()
@@ -1899,6 +1982,7 @@ public class GameManager : MonoBehaviour
             return template;
         }
 
+        long start = Stopwatch.GetTimestamp();
         var vertices = mesh.vertices;
         var indices = mesh.triangles;
         var uvs = mesh.uv;
@@ -1945,8 +2029,365 @@ public class GameManager : MonoBehaviour
             BuildBvhNode(sourceTriangles, template.triangles, template.nodes, 0, sourceTriangles.Count);
         }
         _meshBvhTemplates.Add(key, template);
+        _profileBuiltMeshTemplateCount++;
+        _profileBuiltMeshTemplateTicks += Stopwatch.GetTimestamp() - start;
         return template;
     }
+
+    private void TryLoadBakedMeshBvhs()
+    {
+        _loadedBakedMeshBvhs = false;
+        if (bvhBake == null)
+        {
+            _bvhBakeLoadStatus = "no bake assigned";
+            return;
+        }
+        if (bvhBake.formatVersion != BvhBakeFormatVersion)
+        {
+            _bvhBakeLoadStatus = "format is out-of-date";
+            return;
+        }
+        if (string.IsNullOrEmpty(bvhBake.streamingAssetsRelativePath))
+        {
+            _bvhBakeLoadStatus = "binary path is missing";
+            return;
+        }
+
+#if UNITY_EDITOR
+        if (!EditorIsBvhBakeCurrent())
+        {
+            return;
+        }
+#endif
+
+        string path = Path.Combine(Application.streamingAssetsPath, bvhBake.streamingAssetsRelativePath);
+        if (!File.Exists(path))
+        {
+            _bvhBakeLoadStatus = "binary file is missing";
+            return;
+        }
+
+        try
+        {
+            using (var stream = File.OpenRead(path))
+            using (var reader = new BinaryReader(stream))
+            {
+                if (reader.ReadInt32() != BvhBakeMagic || reader.ReadInt32() != BvhBakeFormatVersion)
+                {
+                    _bvhBakeLoadStatus = "binary header is invalid";
+                    return;
+                }
+
+                int meshCount = reader.ReadInt32();
+                if (meshCount != bvhBake.meshes.Count)
+                {
+                    _bvhBakeLoadStatus = "binary mesh count does not match metadata";
+                    return;
+                }
+
+                var loadedTemplates = new List<MeshBvhTemplate>(meshCount);
+                for (int meshIndex = 0; meshIndex < meshCount; meshIndex++)
+                {
+                    var entry = bvhBake.meshes[meshIndex];
+                    int triangleCount = reader.ReadInt32();
+                    int nodeCount = reader.ReadInt32();
+                    if (entry.mesh == null
+                        || entry.mesh.vertexCount != entry.vertexCount
+                        || GetMeshIndexCount(entry.mesh) != entry.indexCount
+                        || triangleCount != entry.triangleCount
+                        || nodeCount != entry.nodeCount)
+                    {
+                        _bvhBakeLoadStatus = $"mesh metadata mismatch at entry {meshIndex}";
+                        return;
+                    }
+
+                    var template = new MeshBvhTemplate();
+                    for (int i = 0; i < triangleCount; i++)
+                    {
+                        template.triangles.Add(ReadBakedTriangle(reader));
+                    }
+                    for (int i = 0; i < nodeCount; i++)
+                    {
+                        template.nodes.Add(ReadBakedBvhNode(reader));
+                    }
+
+                    loadedTemplates.Add(template);
+                }
+
+                if (stream.Position != stream.Length)
+                {
+                    _bvhBakeLoadStatus = "binary has unexpected trailing data";
+                    return;
+                }
+
+                _meshBvhTemplates.Clear();
+                foreach (var meshObject in _meshObjects)
+                {
+                    bool interpolateNormals = meshObject.material != null && meshObject.material.InterpolateNormals;
+                    int bakeIndex = FindBakedMeshEntry(meshObject.mesh, interpolateNormals);
+                    if (bakeIndex < 0)
+                    {
+                        _meshBvhTemplates.Clear();
+                        _bvhBakeLoadStatus = $"bake is out-of-date: no template for {meshObject.mesh.name}";
+                        return;
+                    }
+
+                    long runtimeKey = ((long)meshObject.mesh.GetInstanceID() << 1) | (interpolateNormals ? 1L : 0L);
+                    _meshBvhTemplates[runtimeKey] = loadedTemplates[bakeIndex];
+                }
+                _loadedBakedMeshBvhs = true;
+                _bvhBakeLoadStatus = $"loaded {meshCount:N0} baked templates for {_meshBvhTemplates.Count:N0} runtime meshes";
+            }
+        }
+        catch (Exception exception)
+        {
+            Debug.LogWarning($"Could not load baked ray tracing BVH data from '{path}': {exception.Message}", this);
+            _meshBvhTemplates.Clear();
+            _bvhBakeLoadStatus = $"load failed: {exception.GetType().Name}";
+        }
+    }
+
+    private int FindBakedMeshEntry(Mesh mesh, bool interpolateNormals)
+    {
+#if UNITY_EDITOR
+        string identity = GetEditorMeshIdentity(mesh);
+#endif
+        for (int i = 0; i < bvhBake.meshes.Count; i++)
+        {
+            var entry = bvhBake.meshes[i];
+            if (entry.interpolateNormals != interpolateNormals)
+            {
+                continue;
+            }
+#if UNITY_EDITOR
+            if (entry.meshIdentity == identity)
+#else
+            if (entry.mesh == mesh)
+#endif
+            {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+#if UNITY_EDITOR
+    private bool EditorIsBvhBakeCurrent()
+    {
+        var expectedKeys = new HashSet<string>();
+        foreach (var meshObject in _meshObjects)
+        {
+            bool interpolateNormals = meshObject.material != null && meshObject.material.InterpolateNormals;
+            string key = GetEditorMeshIdentity(meshObject.mesh) + (interpolateNormals ? ":smooth" : ":flat");
+            expectedKeys.Add(key);
+        }
+        if (expectedKeys.Count != bvhBake.meshes.Count)
+        {
+            _bvhBakeLoadStatus = $"bake is out-of-date: expected {expectedKeys.Count:N0} templates, bake has {bvhBake.meshes.Count:N0}";
+            return false;
+        }
+
+        foreach (var entry in bvhBake.meshes)
+        {
+            string key = entry.meshIdentity + (entry.interpolateNormals ? ":smooth" : ":flat");
+            string path = entry.mesh == null ? string.Empty : UnityEditor.AssetDatabase.GetAssetPath(entry.mesh);
+            string dependencyHash = string.IsNullOrEmpty(path)
+                ? $"scene:{entry.mesh?.vertexCount ?? 0}:{(entry.mesh == null ? 0 : GetMeshIndexCount(entry.mesh))}"
+                : UnityEditor.AssetDatabase.GetAssetDependencyHash(path).ToString();
+            if (!expectedKeys.Remove(key)
+                || entry.mesh.vertexCount != entry.vertexCount
+                || GetMeshIndexCount(entry.mesh) != entry.indexCount
+                || dependencyHash != entry.dependencyHash)
+            {
+                _bvhBakeLoadStatus = $"bake is out-of-date: mesh entry {entry.mesh?.name ?? "missing"} changed";
+                return false;
+            }
+        }
+        return expectedKeys.Count == 0;
+    }
+
+    private static string GetEditorMeshIdentity(Mesh mesh)
+    {
+        if (UnityEditor.AssetDatabase.TryGetGUIDAndLocalFileIdentifier(mesh, out string guid, out long localId))
+        {
+            return guid + ":" + localId;
+        }
+        return "scene:" + mesh.name + ":" + mesh.vertexCount + ":" + GetMeshIndexCount(mesh);
+    }
+#endif
+
+    private static Triangle ReadBakedTriangle(BinaryReader reader)
+    {
+        return new Triangle
+        {
+            vertex0 = ReadVector3(reader),
+            vertex1 = ReadVector3(reader),
+            vertex2 = ReadVector3(reader),
+            normal = ReadVector3(reader),
+            normal0 = ReadVector3(reader),
+            normal1 = ReadVector3(reader),
+            normal2 = ReadVector3(reader),
+            tangent0 = ReadVector4(reader),
+            tangent1 = ReadVector4(reader),
+            tangent2 = ReadVector4(reader),
+            uv0 = ReadVector2(reader),
+            uv1 = ReadVector2(reader),
+            uv2 = ReadVector2(reader),
+            interpolateNormals = reader.ReadInt32()
+        };
+    }
+
+    private static BvhNode ReadBakedBvhNode(BinaryReader reader)
+    {
+        return new BvhNode
+        {
+            boundsMin = ReadVector3(reader),
+            leftChildIndex = reader.ReadInt32(),
+            boundsMax = ReadVector3(reader),
+            rightChildIndex = reader.ReadInt32(),
+            triangleStart = reader.ReadInt32(),
+            triangleCount = reader.ReadInt32()
+        };
+    }
+
+    private static Vector2 ReadVector2(BinaryReader reader)
+    {
+        return new Vector2(reader.ReadSingle(), reader.ReadSingle());
+    }
+
+    private static Vector3 ReadVector3(BinaryReader reader)
+    {
+        return new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
+    }
+
+    private static Vector4 ReadVector4(BinaryReader reader)
+    {
+        return new Vector4(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
+    }
+
+    private static int GetMeshIndexCount(Mesh mesh)
+    {
+        int count = 0;
+        for (int i = 0; i < mesh.subMeshCount; i++)
+        {
+            count += checked((int)mesh.GetIndexCount(i));
+        }
+        return count;
+    }
+
+#if UNITY_EDITOR
+    public RayTracingBvhBakeAsset EditorBvhBake
+    {
+        get => bvhBake;
+        set => bvhBake = value;
+    }
+
+    public bool EditorBakeBvhUponExit
+    {
+        get => bakeBvhUponExit;
+        set => bakeBvhUponExit = value;
+    }
+
+    public bool EditorLoadedBakedMeshBvhs => _loadedBakedMeshBvhs;
+
+    public void EditorBuildMeshBvhTemplates()
+    {
+        foreach (var meshObject in _meshObjects)
+        {
+            bool interpolateNormals = meshObject.material != null && meshObject.material.InterpolateNormals;
+            GetOrBuildMeshBvhTemplate(meshObject.mesh, interpolateNormals);
+        }
+    }
+
+    public void EditorBuildMeshBvhTemplate(Mesh mesh, bool interpolateNormals)
+    {
+        GetOrBuildMeshBvhTemplate(mesh, interpolateNormals);
+    }
+
+    public void EditorGetMeshBvhTemplateCounts(Mesh mesh, bool interpolateNormals, out int triangleCount, out int nodeCount)
+    {
+        long key = ((long)mesh.GetInstanceID() << 1) | (interpolateNormals ? 1L : 0L);
+        MeshBvhTemplate template = _meshBvhTemplates[key];
+        triangleCount = template.triangles.Count;
+        nodeCount = template.nodes.Count;
+    }
+
+    public void EditorWriteMeshBvhBake(string path, RayTracingBvhBakeAsset asset)
+    {
+        using (var stream = File.Create(path))
+        using (var writer = new BinaryWriter(stream))
+        {
+            writer.Write(BvhBakeMagic);
+            writer.Write(BvhBakeFormatVersion);
+            writer.Write(asset.meshes.Count);
+            for (int meshIndex = 0; meshIndex < asset.meshes.Count; meshIndex++)
+            {
+                var entry = asset.meshes[meshIndex];
+                long key = ((long)entry.mesh.GetInstanceID() << 1) | (entry.interpolateNormals ? 1L : 0L);
+                MeshBvhTemplate template = _meshBvhTemplates[key];
+                writer.Write(template.triangles.Count);
+                writer.Write(template.nodes.Count);
+                for (int i = 0; i < template.triangles.Count; i++)
+                {
+                    WriteBakedTriangle(writer, template.triangles[i]);
+                }
+                for (int i = 0; i < template.nodes.Count; i++)
+                {
+                    WriteBakedBvhNode(writer, template.nodes[i]);
+                }
+            }
+        }
+    }
+
+    private static void WriteBakedTriangle(BinaryWriter writer, Triangle triangle)
+    {
+        WriteVector3(writer, triangle.vertex0);
+        WriteVector3(writer, triangle.vertex1);
+        WriteVector3(writer, triangle.vertex2);
+        WriteVector3(writer, triangle.normal);
+        WriteVector3(writer, triangle.normal0);
+        WriteVector3(writer, triangle.normal1);
+        WriteVector3(writer, triangle.normal2);
+        WriteVector4(writer, triangle.tangent0);
+        WriteVector4(writer, triangle.tangent1);
+        WriteVector4(writer, triangle.tangent2);
+        WriteVector2(writer, triangle.uv0);
+        WriteVector2(writer, triangle.uv1);
+        WriteVector2(writer, triangle.uv2);
+        writer.Write(triangle.interpolateNormals);
+    }
+
+    private static void WriteBakedBvhNode(BinaryWriter writer, BvhNode node)
+    {
+        WriteVector3(writer, node.boundsMin);
+        writer.Write(node.leftChildIndex);
+        WriteVector3(writer, node.boundsMax);
+        writer.Write(node.rightChildIndex);
+        writer.Write(node.triangleStart);
+        writer.Write(node.triangleCount);
+    }
+
+    private static void WriteVector2(BinaryWriter writer, Vector2 value)
+    {
+        writer.Write(value.x);
+        writer.Write(value.y);
+    }
+
+    private static void WriteVector3(BinaryWriter writer, Vector3 value)
+    {
+        writer.Write(value.x);
+        writer.Write(value.y);
+        writer.Write(value.z);
+    }
+
+    private static void WriteVector4(BinaryWriter writer, Vector4 value)
+    {
+        writer.Write(value.x);
+        writer.Write(value.y);
+        writer.Write(value.z);
+        writer.Write(value.w);
+    }
+#endif
 
     private static Triangle TransformTemplateTriangle(Triangle triangle, Matrix4x4 localToWorld, Matrix4x4 normalToWorld)
     {
@@ -2068,11 +2509,13 @@ public class GameManager : MonoBehaviour
 
     private void RebuildMeshTextureArrays()
     {
+        long start = Stopwatch.GetTimestamp();
         EnsureDefaultMeshTextures();
         DestroyRuntimeTextureArrays();
         _meshAlbedoTextureArray = BuildMeshTextureArray(_meshAlbedoTextures, defaultMeshAlbedoTexture, "Ray Tracing Mesh Albedo Texture Array", Color.white, false);
         _meshMetallicRoughnessTextureArray = BuildMeshTextureArray(_meshMetallicRoughnessTextures, defaultMeshMetallicRoughnessTexture, "Ray Tracing Mesh Metallic Roughness Texture Array", Color.white, true);
         _meshNormalTextureArray = BuildMeshTextureArray(_meshNormalTextures, defaultMeshNormalTexture, "Ray Tracing Mesh Normal Texture Array", new Color(0.5f, 0.5f, 1.0f, 1.0f), true);
+        _profileTextureArrayTicks += Stopwatch.GetTimestamp() - start;
     }
 
     private void EnsureDefaultMeshTextures()
@@ -2652,8 +3095,12 @@ public class GameManager : MonoBehaviour
         return opacity <= autoFocusTransparentOpacityThreshold;
     }
 
-    public void RebuildBuffers()
+    public void RebuildBuffers(bool startupProfile = false)
     {
+        long rebuildStart = Stopwatch.GetTimestamp();
+        _profileBuiltMeshTemplateCount = 0;
+        _profileBuiltMeshTemplateTicks = 0;
+        _profileTextureArrayTicks = 0;
         _buffersNeedRebuilding = false;
         ResetFrameAccumulation();
         _sphereBuffer?.Release();
@@ -2671,9 +3118,32 @@ public class GameManager : MonoBehaviour
         _topLevelBvhNodeBuffer = null;
         _shadowBvhNodeBuffer = null;
 
+        long phaseStart = Stopwatch.GetTimestamp();
         RebuildTriangleData();
+        if (startupProfile)
+        {
+            AddStartupProfilePhase(
+                $"triangle data/per-mesh BVHs ({_triangles.Count:N0} triangles, {_meshInfos.Count:N0} meshes)",
+                phaseStart);
+            AddStartupProfileElapsedTicks(
+                $"  new mesh BVH templates ({_profileBuiltMeshTemplateCount:N0})",
+                _profileBuiltMeshTemplateTicks);
+            AddStartupProfileElapsedTicks("  texture arrays", _profileTextureArrayTicks);
+        }
+
+        phaseStart = Stopwatch.GetTimestamp();
         RebuildTopLevelBvh();
+        if (startupProfile)
+        {
+            AddStartupProfilePhase($"top-level BVH ({_topLevelBvhNodes.Count:N0} nodes)", phaseStart);
+        }
+
+        phaseStart = Stopwatch.GetTimestamp();
         RebuildShadowBvh();
+        if (startupProfile)
+        {
+            AddStartupProfilePhase($"shadow BVH ({_shadowBvhNodes.Count:N0} nodes)", phaseStart);
+        }
 
         shader.SetInt("_NumSpheres", _spheres.Count);
         shader.SetInt("_NumLights", _lights.Count);
@@ -2682,6 +3152,7 @@ public class GameManager : MonoBehaviour
         shader.SetInt("_NumTopLevelBvhNodes", _topLevelBvhNodes.Count);
         shader.SetInt("_NumShadowBvhNodes", _shadowBvhNodes.Count);
 
+        phaseStart = Stopwatch.GetTimestamp();
         _sphereBuffer = CreateComputeBuffer(_spheres, SphereStride);
         _lightBuffer = CreateComputeBuffer(_lights, LightStride);
         _triangleBuffer = CreateComputeBuffer(_triangles, TriangleStride);
@@ -2689,6 +3160,45 @@ public class GameManager : MonoBehaviour
         _bvhNodeBuffer = CreateComputeBuffer(_bvhNodes, BvhNodeStride);
         _topLevelBvhNodeBuffer = CreateComputeBuffer(_topLevelBvhNodes, TopLevelBvhNodeStride);
         _shadowBvhNodeBuffer = CreateComputeBuffer(_shadowBvhNodes, TopLevelBvhNodeStride);
+        if (startupProfile)
+        {
+            AddStartupProfilePhase("compute buffer creation/upload", phaseStart);
+            AddStartupProfilePhase("buffer rebuild total", rebuildStart);
+        }
+    }
+
+    private void AddStartupProfilePhase(string name, long startTimestamp)
+    {
+        AddStartupProfileElapsedTicks(name, Stopwatch.GetTimestamp() - startTimestamp);
+    }
+
+    private void AddStartupProfileElapsedTicks(string name, long elapsedTicks)
+    {
+        if (!_startupProfilePending || elapsedTicks < 0)
+        {
+            return;
+        }
+
+        double milliseconds = elapsedTicks * 1000.0 / Stopwatch.Frequency;
+        _startupProfilePhases.Add($"  {name}: {milliseconds:N1} ms");
+    }
+
+    private void LogStartupProfile()
+    {
+        _startupStopwatch.Stop();
+        var message = new StringBuilder(512);
+        message.AppendLine($"Ray tracing startup profile for '{gameObject.scene.name}':");
+        message.AppendLine($"  object registration / Unity startup before Start: {_startupRegistrationMilliseconds:N1} ms");
+        for (int i = 0; i < _startupProfilePhases.Count; i++)
+        {
+            message.AppendLine(_startupProfilePhases[i]);
+        }
+        message.AppendLine($"  total through first dispatch: {_startupStopwatch.Elapsed.TotalMilliseconds:N1} ms");
+        message.Append(
+            $"  scene totals: {_meshObjects.Count:N0} mesh objects, {_meshBvhTemplates.Count:N0} unique mesh templates, " +
+            $"{_triangles.Count:N0} triangles, {_lights.Count:N0} lights");
+        Debug.Log(message.ToString(), this);
+        _startupProfilePending = false;
     }
 
     private static ComputeBuffer CreateComputeBuffer<T>(List<T> data, int stride) where T : struct
@@ -3000,10 +3510,7 @@ public class GameManager : MonoBehaviour
     private void SetShaderParameters(int kernelHandle)
     {
         shader.SetTexture(kernelHandle, "_SkyboxTexture", skyboxTexture);
-        if (_meshAlbedoTextureArray == null)
-        {
-            RebuildMeshTextureArrays();
-        }
+        EnsureMeshTextureArrays();
         shader.SetTexture(kernelHandle, "_MeshAlbedoTextures", _meshAlbedoTextureArray);
         shader.SetTexture(kernelHandle, "_MeshMetallicRoughnessTextures", _meshMetallicRoughnessTextureArray);
         shader.SetTexture(kernelHandle, "_MeshNormalTextures", _meshNormalTextureArray);
@@ -3139,6 +3646,16 @@ public class GameManager : MonoBehaviour
         SetSceneBuffers(kernelHandle);
     }
 
+    private void EnsureMeshTextureArrays()
+    {
+        if (_meshAlbedoTextureArray == null
+            || _meshMetallicRoughnessTextureArray == null
+            || _meshNormalTextureArray == null)
+        {
+            RebuildMeshTextureArrays();
+        }
+    }
+
     private int CalculateSampleOffset()
     {
         long frameIndex = ShouldUseFrameAccumulation() ? _accumulatedFrameCount : _renderedFrameCount;
@@ -3148,7 +3665,7 @@ public class GameManager : MonoBehaviour
 
     private float GetCameraApertureRadius()
     {
-        if (cameraApertureMode == CameraApertureMode.Pinhole)
+        if (cameraApertureMode == CameraApertureMode.Pinhole || IsTrackedFocusPointOutsideFrustum())
         {
             return 0.0f;
         }
@@ -3161,6 +3678,14 @@ public class GameManager : MonoBehaviour
         float focalLengthInWorldUnits = Mathf.Max(0.0f, renderTextureCamera.focalLength) * 0.001f;
         return focalLengthInWorldUnits / (2.0f * Mathf.Max(0.1f, cameraFStop))
             * Mathf.Max(0.0f, cameraApertureScale);
+    }
+
+    private bool IsTrackedFocusPointOutsideFrustum()
+    {
+        return enableClickToFocus
+            && trackClickedFocusPoint
+            && _hasClickedFocusPoint
+            && !_clickedFocusPointInFrustum;
     }
 
     private int CalculateAccumulationStateHash()
@@ -3188,6 +3713,7 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, cameraApertureBladeCount);
             hash = AddHash(hash, cameraApertureBladeRotation);
             hash = AddHash(hash, cameraAnamorphicRatio);
+            hash = AddHash(hash, IsTrackedFocusPointOutsideFrustum() ? 1 : 0);
             hash = AddHash(hash, fireflyClamp);
             if (enableCaustics)
             {
