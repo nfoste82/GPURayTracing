@@ -93,7 +93,7 @@ Add dedicated kernels rather than extending `CSMain`:
 For each photon:
 
 1. Select a sphere light using a documented probability distribution.
-2. Select a supported glass sphere, initially using a power/distance/bounds importance weight.
+2. Select a supported light/refractor pair from a CPU-built CDF weighted by emitter luminance/area and the refractor's approximate projected solid angle. Triangle emitters also include their facing toward the refractor.
 3. Sample a direction from the light toward the sphere's visible solid angle or a conservative bounding cone.
 4. Divide photon power by the light-selection, refractor-selection, and directional PDFs.
 5. Intersect the target sphere and apply the existing Snell/Fresnel and absorption rules.
@@ -103,6 +103,14 @@ For each photon:
 Reusing the production sphere-refraction behavior is important, but its current helper is coupled to camera-path `RayHit`, bounce accounting, and medium-stack state. Refactor only the smallest shared optical operation needed by both paths. Do not make the normal path call a more generic or more expensive abstraction merely to support photons.
 
 Photon generation uses its own deterministic base seed and progressive frame index. Light/refractor selection, triangle-light emission positions, mesh target positions, and sphere-target cone directions use scrambled low-discrepancy samples; the scramble changes each photon frame while remaining deterministic. Changing camera sampling does not change the photon sequence.
+
+Eligible light/refractor pairs are compacted when caustic scene state changes and uploaded to a dedicated buffer. Photon threads binary-search that CDF rather than scanning every light, sphere, and mesh for every attempt. Each pair keeps a small nonzero probability floor so supported paths remain sampleable, and photon power divides by the selected pair probability. Glass-mesh target triangles use a second area-weighted CDF with the exact triangle probability included in the area-to-solid-angle PDF conversion.
+
+When normalizing that mesh-triangle CDF, the running values are accumulated as unnormalized areas and must be divided by the mesh total exactly once. Track the previous normalized value in a local rather than re-reading the preceding list element, which has already been normalized in place and would be divided a second time. Because photon power divides by `selectionProbability`, such an error scales mesh photon power to near-zero or negative values and removes all visible mesh caustics while photon counts, stored-photon metadata, and grid indexing all still look healthy. Tests that only assert nonzero photon or indexed counts cannot catch this; assert that per-mesh probabilities are positive, monotonic, and sum to one.
+
+The target-distribution declarations and selection helpers compile only for the dedicated `TraceCausticPhotons` kernel through `CAUSTIC_PHOTON_TRACE`. They must not be compiled into `CSMain`: doing so raises the already register-heavy Metal camera kernel above the practical compiler complexity limit and can leave the application with an invalid final-color kernel even though standalone photon-generation tests pass.
+
+When caustics are enabled, the `Caustics` debug mode dispatches the lightweight `CSCausticsDebug` gather-only kernel directly. It keeps `DEBUG_RENDER` disabled so inspecting photon radiance does not compile the extremely large combined caustics/general-debug `CSMain` variant.
 
 ## Estimator And Energy Accounting
 
@@ -258,6 +266,7 @@ Milestones 1 and 2 are implemented as the initial prototype. Milestone 3 correct
 - Implemented: reflected and multi-event glass-sphere caustics use an iterative photon transport loop with shared scene intersections, medium-stack transitions, Fresnel/Snell behavior, absorption, and a bounded bounce budget.
 - Implemented: closed glass meshes are targeted by sampling their triangle surfaces with an area-to-solid-angle PDF correction, validating visibility against their mesh BVHs, and transporting boundary-by-boundary through the same medium-stack loop. This avoids the sparse photon maps produced by loose bounding-sphere targeting on non-convex meshes.
 - Implemented: glass mesh photon Fresnel, transmission, and reflection use interpolated vertex normals when `InterpolateNormals` is enabled, while intersections and boundary identity remain geometric.
+- Implemented: CPU-built importance distributions compact eligible light/refractor pairs, remove per-photon scene-wide candidate scans, weight pairs by approximate useful flux, and area-weight glass-mesh triangle targets with exact PDF compensation.
 - Add procedural water only after static glass behavior and photon-map invalidation are stable.
 
 ## Prototype Acceptance Criteria

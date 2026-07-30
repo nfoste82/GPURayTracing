@@ -48,7 +48,7 @@ Each render callback:
 9. Checks whether final-color frame accumulation can continue. Accumulation resets when the render size, camera matrices, focus distance, quality settings, random-noise setting, skybox texture/tint, sphere/light data, mesh object transforms/materials, or relevant object counts change. Debug render modes and `enableFrameAccumulation == false` disable accumulation.
 10. Finds the compute kernel `CSMain`.
 11. Calls `SetShaderParameters()`.
-12. When caustics and final-color frame accumulation are enabled, clears and rebuilds an independent fixed-size photon batch and spatial grid. Stable frames advance a caustic-only sequence index without invalidating HDR accumulation; relevant scene/settings changes reset both sequences. Without accumulation, the current batch remains fixed.
+12. When caustics and final-color frame accumulation are enabled, clears and rebuilds an independent fixed-size photon batch and spatial grid. Relevant scene changes also rebuild compact light/refractor and mesh-target CDF buffers; photon threads binary-search these distributions instead of scanning all scene candidates. Stable frames advance a caustic-only sequence index without invalidating HDR accumulation; relevant scene/settings changes reset both sequences. Without accumulation, the current batch remains fixed.
 13. Dispatches the compute shader through `UpdateTextureFromCompute()`.
 14. Increments `AccumulatedFrameCount` when accumulation is active.
 15. Marks the active `debugRenderMode` as warmed and clears the variant-warmup flag.

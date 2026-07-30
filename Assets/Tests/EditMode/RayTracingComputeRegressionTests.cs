@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.Reflection;
 using NUnit.Framework;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace GPURayTracing.Tests
 {
@@ -329,6 +331,171 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void BenchmarkCaustics_ProductionSamplingDistribution_HasValidTargets()
+        {
+            Scene previousScene = SceneManager.GetActiveScene();
+            string previousScenePath = previousScene.path;
+            try
+            {
+                Scene scene = EditorSceneManager.OpenScene(
+                    "Assets/Scenes/Benchmarks/Benchmark_Caustics.unity",
+                    OpenSceneMode.Single);
+                Assert.That(scene.IsValid(), Is.True);
+
+                Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+                Component manager = UnityEngine.Object.FindFirstObjectByType(managerType) as Component;
+                Assert.That(manager, Is.Not.Null);
+
+                Type rayTracingObjectType = Type.GetType("RayTracingObject, Assembly-CSharp");
+                MethodInfo registerMethod = managerType.GetMethod(
+                    "RegisterObject", BindingFlags.Instance | BindingFlags.Public);
+                foreach (UnityEngine.Object rayTracingObject in UnityEngine.Object.FindObjectsByType(
+                    rayTracingObjectType, FindObjectsSortMode.None))
+                {
+                    registerMethod.Invoke(manager, new[] { rayTracingObject });
+                }
+                managerType.GetMethod("RebuildBuffers", BindingFlags.Instance | BindingFlags.Public)
+                    .Invoke(manager, new object[] { false });
+                managerType.GetMethod("UpdateSpheres", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .Invoke(manager, null);
+                managerType.GetMethod("UpdateTriangles", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .Invoke(manager, null);
+                managerType.GetMethod("BuildCausticSamplingDistribution", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .Invoke(manager, null);
+
+                PropertyInfo pairCountProperty = managerType.GetProperty("CausticTargetPairCount");
+                Assert.That(pairCountProperty.GetValue(manager), Is.GreaterThan(0),
+                    "The production scene should produce at least one eligible light/refractor pair");
+
+                FieldInfo pairsField = managerType.GetField(
+                    "_causticTargetPairs", BindingFlags.Instance | BindingFlags.NonPublic);
+                var pairs = pairsField.GetValue(manager) as System.Collections.IList;
+                float probabilitySum = 0.0f;
+                foreach (object pair in pairs)
+                {
+                    Type pairType = pair.GetType();
+                    float probability = (float)pairType.GetField("selectionProbability").GetValue(pair);
+                    float cumulative = (float)pairType.GetField("cumulativeProbability").GetValue(pair);
+                    Assert.That(float.IsNaN(probability), Is.False);
+                    Assert.That(probability, Is.GreaterThan(0.0f));
+                    Assert.That(cumulative, Is.InRange(0.0f, 1.0f));
+                    probabilitySum += probability;
+                }
+                Assert.That(probabilitySum, Is.EqualTo(1.0f).Within(0.0001f));
+
+                // The glass-mesh target CDF is a separate distribution from the pair CDF above, and
+                // it is the one photon power divides by. A normalization error here silently scales
+                // every mesh photon's power (potentially negative), producing no visible caustics
+                // even while pair probabilities still look valid. Each mesh owns its own CDF range,
+                // so validate per range rather than across the concatenated list.
+                FieldInfo trianglesField = managerType.GetField(
+                    "_causticTargetTriangles", BindingFlags.Instance | BindingFlags.NonPublic);
+                var targetTriangles = trianglesField.GetValue(manager) as System.Collections.IList;
+                Assert.That(targetTriangles.Count, Is.GreaterThan(0),
+                    "The production scene's glass mesh should produce area-weighted target triangles");
+
+                int validatedMeshRanges = 0;
+                foreach (object pair in pairs)
+                {
+                    Type pairType = pair.GetType();
+                    if ((int)pairType.GetField("refractorType").GetValue(pair) != 1)
+                    {
+                        continue;
+                    }
+
+                    int rangeStart = (int)pairType.GetField("triangleStart").GetValue(pair);
+                    int rangeCount = (int)pairType.GetField("triangleCount").GetValue(pair);
+                    Assert.That(rangeCount, Is.GreaterThan(0), "a glass-mesh pair must target triangles");
+                    Assert.That(rangeStart + rangeCount, Is.LessThanOrEqualTo(targetTriangles.Count));
+
+                    float triangleProbabilitySum = 0.0f;
+                    float previousCumulative = 0.0f;
+                    for (int i = rangeStart; i < rangeStart + rangeCount; i++)
+                    {
+                        object target = targetTriangles[i];
+                        Type targetType = target.GetType();
+                        float probability = (float)targetType.GetField("selectionProbability").GetValue(target);
+                        float cumulative = (float)targetType.GetField("cumulativeProbability").GetValue(target);
+                        Assert.That(float.IsNaN(probability), Is.False, $"target triangle {i} probability is NaN");
+                        Assert.That(probability, Is.GreaterThan(0.0f),
+                            $"target triangle {i} must have a positive selection probability");
+                        Assert.That(cumulative, Is.InRange(0.0f, 1.0f),
+                            $"target triangle {i} cumulative probability must be a normalized CDF value");
+                        Assert.That(cumulative, Is.GreaterThanOrEqualTo(previousCumulative),
+                            $"target triangle {i} must keep the CDF monotonically increasing");
+                        previousCumulative = cumulative;
+                        triangleProbabilitySum += probability;
+                    }
+
+                    Assert.That(triangleProbabilitySum, Is.EqualTo(1.0f).Within(0.001f),
+                        "Glass-mesh target triangle probabilities must sum to one");
+                    Assert.That(previousCumulative, Is.EqualTo(1.0f).Within(0.0001f),
+                        "The final glass-mesh target CDF entry must reach one so no sample falls through");
+                    validatedMeshRanges++;
+                }
+                Assert.That(validatedMeshRanges, Is.GreaterThan(0),
+                    "The production scene should exercise at least one glass-mesh target distribution");
+
+                managerType.GetMethod("UpdateCausticPhotonMap", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .Invoke(manager, null);
+                PropertyInfo photonCountProperty = managerType.GetProperty("CausticGridPhotonCount");
+                int indexedPhotonCount = (int)photonCountProperty.GetValue(manager);
+                TestContext.WriteLine($"Production indexed photon count: {indexedPhotonCount}");
+                Assert.That(indexedPhotonCount, Is.GreaterThan(0),
+                    "The production sampling distribution should produce indexed receiver photons");
+
+                ComputeShader shader = managerType.GetField("shader").GetValue(manager) as ComputeShader;
+                int gatherKernel = shader.FindKernel("CSCausticsDebug");
+                var causticsImage = new RenderTexture(256, 256, 0, RenderTextureFormat.ARGBFloat)
+                {
+                    enableRandomWrite = true
+                };
+                causticsImage.Create();
+                try
+                {
+                    managerType.GetMethod("SetShaderParameters", BindingFlags.Instance | BindingFlags.NonPublic)
+                        .Invoke(manager, new object[] { gatherKernel });
+                    shader.SetTexture(gatherKernel, "Result", causticsImage);
+                    shader.SetInt("_NumberOfPasses", 1);
+                    shader.Dispatch(gatherKernel, 32, 64, 1);
+
+                    RenderTexture previous = RenderTexture.active;
+                    RenderTexture.active = causticsImage;
+                    var image = new Texture2D(256, 256, TextureFormat.RGBAFloat, false, true);
+                    image.ReadPixels(new Rect(0, 0, 256, 256), 0, 0);
+                    image.Apply();
+                    RenderTexture.active = previous;
+                    float maximumLuminance = 0.0f;
+                    foreach (Color pixel in image.GetPixels())
+                    {
+                        maximumLuminance = Mathf.Max(maximumLuminance,
+                            pixel.r * 0.2126f + pixel.g * 0.7152f + pixel.b * 0.0722f);
+                    }
+                    UnityEngine.Object.DestroyImmediate(image);
+                    TestContext.WriteLine($"Production visible caustic peak: {maximumLuminance}");
+                    Assert.That(maximumLuminance, Is.GreaterThan(0.0f),
+                        "The saved benchmark camera should see gathered caustic radiance");
+                }
+                finally
+                {
+                    causticsImage.Release();
+                }
+
+            }
+            finally
+            {
+                if (!string.IsNullOrEmpty(previousScenePath))
+                {
+                    EditorSceneManager.OpenScene(previousScenePath, OpenSceneMode.Single);
+                }
+                else
+                {
+                    EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+                }
+            }
+        }
+
+        [Test]
         public void PhotonTrace_BindsAllMeshTextureArrays()
         {
             string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
@@ -342,6 +509,18 @@ namespace GPURayTracing.Tests
             Assert.That(method, Does.Contain("\"_MeshAlbedoTextures\""));
             Assert.That(method, Does.Contain("\"_MeshMetallicRoughnessTextures\""));
             Assert.That(method, Does.Contain("\"_MeshNormalTextures\""));
+        }
+
+        [Test]
+        public void CausticsDebugMode_UsesDedicatedGatherKernelWithoutDebugVariant()
+        {
+            string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+            Assert.That(managerSource, Does.Contain(
+                "enableCaustics && debugRenderMode == DebugRenderMode.Caustics"));
+            Assert.That(managerSource, Does.Contain(
+                "useDedicatedCausticsDebugKernel ? \"CSCausticsDebug\" : \"CSMain\""));
+            Assert.That(managerSource, Does.Contain(
+                "debugRenderMode == DebugRenderMode.FinalColor || debugRenderMode == DebugRenderMode.Caustics"));
         }
 
         private static void AssertVector(Vector4 actual, Vector4 expected, string label, float tolerance = Epsilon)

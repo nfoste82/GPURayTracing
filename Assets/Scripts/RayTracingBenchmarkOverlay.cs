@@ -82,6 +82,7 @@ public class RayTracingBenchmarkOverlay : MonoBehaviour
         if (gameManager.enableCaustics)
         {
             _builder.Append("  Photons: ").Append(gameManager.CausticGridPhotonCount)
+                .Append("  Target pairs: ").Append(gameManager.CausticTargetPairCount)
                 .Append("  Grid cells: ").Append(gameManager.CausticGridCellCount)
                 .Append("  OOB: ").Append(gameManager.CausticGridOutOfBoundsCount);
         }

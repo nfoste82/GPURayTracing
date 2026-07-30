@@ -103,6 +103,27 @@ namespace GPURayTracing.Tests
             public Vector3 power;
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        private struct CausticTargetPairData
+        {
+            public int lightIndex;
+            public int refractorType;
+            public int refractorIndex;
+            public int triangleStart;
+            public int triangleCount;
+            public float cumulativeProbability;
+            public float selectionProbability;
+            public float padding;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct CausticTargetTriangleData
+        {
+            public int triangleIndex;
+            public float cumulativeProbability;
+            public float selectionProbability;
+        }
+
         private sealed class CausticOptions
         {
             public int photonCount = 4096;
@@ -119,13 +140,17 @@ namespace GPURayTracing.Tests
             public readonly ComputeBuffer metadata;
             public readonly ComputeBuffer gridCellHeads;
             public readonly ComputeBuffer photonNext;
+            public readonly ComputeBuffer targetPairs;
+            public readonly ComputeBuffer targetTriangles;
 
-            public CausticMap(int photonCapacity)
+            public CausticMap(int photonCapacity, CausticTargetPairData[] pairs, CausticTargetTriangleData[] triangles)
             {
                 photons = new ComputeBuffer(photonCapacity, 36);
                 metadata = new ComputeBuffer(6, sizeof(uint));
                 gridCellHeads = new ComputeBuffer(65536, sizeof(int));
                 photonNext = new ComputeBuffer(photonCapacity, sizeof(int));
+                targetPairs = CreateBuffer(pairs.Length > 0 ? pairs : new CausticTargetPairData[1], 32);
+                targetTriangles = CreateBuffer(triangles.Length > 0 ? triangles : new CausticTargetTriangleData[1], 12);
             }
 
             public void Dispose()
@@ -134,6 +159,8 @@ namespace GPURayTracing.Tests
                 metadata.Release();
                 gridCellHeads.Release();
                 photonNext.Release();
+                targetPairs.Release();
+                targetTriangles.Release();
             }
         }
 
@@ -705,7 +732,7 @@ namespace GPURayTracing.Tests
 
             ComputeShader shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
             Assert.That(shader, Is.Not.Null);
-            string kernelName = caustics == null ? "CSMain" : "CSCausticsRegressionImage";
+            string kernelName = caustics == null ? "CSMain" : "CSCausticsDebug";
             if (!shader.HasKernel(kernelName))
             {
                 Assert.Ignore($"The active graphics device did not compile {kernelName}. Run without -nographics.");
@@ -966,7 +993,10 @@ namespace GPURayTracing.Tests
             int traceKernel = shader.FindKernel("TraceCausticPhotons");
             int clearGridKernel = shader.FindKernel("ClearCausticGrid");
             int buildGridKernel = shader.FindKernel("BuildCausticGrid");
-            var map = new CausticMap(options.photonCount);
+            BuildCausticTargets(sphereBuffer, lightBuffer, triangleBuffer, meshBuffer,
+                sphereCount, lightCount, triangleCount, meshCount, out CausticTargetPairData[] targetPairs,
+                out CausticTargetTriangleData[] targetTriangles);
+            var map = new CausticMap(options.photonCount, targetPairs, targetTriangles);
             var meshDataTextures = CreateMeshTextureArray();
             var meshNormalTextures = CreateNormalTextureArray();
             SetCausticParameters(shader, options);
@@ -976,6 +1006,7 @@ namespace GPURayTracing.Tests
             shader.SetInt("_NumMeshes", meshCount);
             shader.SetInt("_NumTopLevelBvhNodes", 0);
             shader.SetInt("_NumShadowBvhNodes", 0);
+            shader.SetInt("_NumCausticTargetPairs", targetPairs.Length);
             SetWater(shader, false);
             SetCausticBuffers(shader, clearKernel, map);
             SetCausticBuffers(shader, traceKernel, map);
@@ -988,6 +1019,8 @@ namespace GPURayTracing.Tests
             shader.SetBuffer(traceKernel, "_BvhNodes", bvhBuffer);
             shader.SetBuffer(traceKernel, "_TopLevelBvhNodes", topLevelBuffer);
             shader.SetBuffer(traceKernel, "_ShadowBvhNodes", shadowBuffer);
+            shader.SetBuffer(traceKernel, "_CausticTargetPairs", map.targetPairs);
+            shader.SetBuffer(traceKernel, "_CausticTargetTriangles", map.targetTriangles);
             shader.SetTexture(traceKernel, "_MeshMetallicRoughnessTextures", meshDataTextures);
             shader.SetTexture(traceKernel, "_MeshNormalTextures", meshNormalTextures);
             shader.Dispatch(clearKernel, 1, 1, 1);
@@ -997,6 +1030,97 @@ namespace GPURayTracing.Tests
             UnityEngine.Object.DestroyImmediate(meshDataTextures);
             UnityEngine.Object.DestroyImmediate(meshNormalTextures);
             return map;
+        }
+
+        private static void BuildCausticTargets(ComputeBuffer spheres, ComputeBuffer lights, ComputeBuffer triangles,
+            ComputeBuffer meshes, int sphereCount, int lightCount, int triangleCount, int meshCount,
+            out CausticTargetPairData[] pairs, out CausticTargetTriangleData[] targetTriangles)
+        {
+            var sphereData = new SphereData[sphereCount];
+            var lightData = new LightData[lightCount];
+            var triangleData = new MeshTriangleData[triangleCount];
+            var meshData = new MeshInfoData[meshCount];
+            if (sphereCount > 0) spheres.GetData(sphereData, 0, 0, sphereCount);
+            if (lightCount > 0) lights.GetData(lightData, 0, 0, lightCount);
+            if (triangleCount > 0) triangles.GetData(triangleData, 0, 0, triangleCount);
+            if (meshCount > 0) meshes.GetData(meshData, 0, 0, meshCount);
+
+            var pairList = new System.Collections.Generic.List<CausticTargetPairData>();
+            var targetTriangleList = new System.Collections.Generic.List<CausticTargetTriangleData>();
+            for (int lightIndex = 0; lightIndex < lightData.Length; lightIndex++)
+            {
+                for (int sphereIndex = 0; sphereIndex < sphereData.Length; sphereIndex++)
+                {
+                    SphereData sphere = sphereData[sphereIndex];
+                    if ((sphere.materialType == 2 || sphere.opacity < 1.0f) && sphere.opacity < 1.0f)
+                    {
+                        pairList.Add(new CausticTargetPairData
+                        {
+                            lightIndex = lightIndex,
+                            refractorType = 0,
+                            refractorIndex = sphereIndex
+                        });
+                    }
+                }
+
+                for (int meshIndex = 0; meshIndex < meshData.Length; meshIndex++)
+                {
+                    MeshInfoData mesh = meshData[meshIndex];
+                    if (mesh.isLight != 0 || mesh.triangleCount <= 0)
+                    {
+                        continue;
+                    }
+                    MeshTriangleData material = triangleData[mesh.triangleStart];
+                    if (!((material.materialType == 2 || material.opacity < 1.0f) && material.opacity < 1.0f))
+                    {
+                        continue;
+                    }
+
+                    int targetStart = targetTriangleList.Count;
+                    float totalArea = 0.0f;
+                    for (int i = 0; i < mesh.triangleCount; i++)
+                    {
+                        MeshTriangleData triangle = triangleData[mesh.triangleStart + i];
+                        totalArea += 0.5f * Vector3.Cross(
+                            triangle.vertex1 - triangle.vertex0,
+                            triangle.vertex2 - triangle.vertex0).magnitude;
+                        targetTriangleList.Add(new CausticTargetTriangleData
+                        {
+                            triangleIndex = mesh.triangleStart + i,
+                            cumulativeProbability = totalArea
+                        });
+                    }
+                    int lastTriangle = targetTriangleList.Count - 1;
+                    float previous = 0.0f;
+                    for (int i = targetStart; i < targetTriangleList.Count; i++)
+                    {
+                        CausticTargetTriangleData target = targetTriangleList[i];
+                        float cumulative = target.cumulativeProbability / totalArea;
+                        target.selectionProbability = cumulative - previous;
+                        target.cumulativeProbability = i == lastTriangle ? 1.0f : cumulative;
+                        previous = cumulative;
+                        targetTriangleList[i] = target;
+                    }
+                    pairList.Add(new CausticTargetPairData
+                    {
+                        lightIndex = lightIndex,
+                        refractorType = 1,
+                        refractorIndex = meshIndex,
+                        triangleStart = targetStart,
+                        triangleCount = mesh.triangleCount
+                    });
+                }
+            }
+
+            for (int i = 0; i < pairList.Count; i++)
+            {
+                CausticTargetPairData pair = pairList[i];
+                pair.selectionProbability = 1.0f / pairList.Count;
+                pair.cumulativeProbability = (i + 1.0f) / pairList.Count;
+                pairList[i] = pair;
+            }
+            pairs = pairList.ToArray();
+            targetTriangles = targetTriangleList.ToArray();
         }
 
         private static void SetCausticParameters(ComputeShader shader, CausticOptions options)
@@ -1020,6 +1144,8 @@ namespace GPURayTracing.Tests
             shader.SetBuffer(kernel, "_CausticPhotonMetadata", map.metadata);
             shader.SetBuffer(kernel, "_CausticGridCellHeads", map.gridCellHeads);
             shader.SetBuffer(kernel, "_CausticPhotonNext", map.photonNext);
+            shader.SetBuffer(kernel, "_CausticTargetPairs", map.targetPairs);
+            shader.SetBuffer(kernel, "_CausticTargetTriangles", map.targetTriangles);
         }
 
         private static void SortPhotons(CausticPhotonData[] photons)

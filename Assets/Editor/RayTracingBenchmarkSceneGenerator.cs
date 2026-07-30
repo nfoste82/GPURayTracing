@@ -17,6 +17,7 @@ public static class RayTracingBenchmarkSceneGenerator
     private const string TeapotLidModelPath = "Assets/Models/Teapot/Mesh000.obj";
     private const string TeapotBodyModelPath = "Assets/Models/Teapot/Mesh001.obj";
     private const string CheckerboardTexturePath = "Assets/checkerboard.png";
+    private const string DefaultCheckerGrayTexturePath = "Default-Checker-Gray.png";
     private const string RenderManTextureFolder = "Assets/Textures/RenderManSwatch";
     private const int WolfensteinTextureTileSize = 64;
 
@@ -471,18 +472,20 @@ public static class RayTracingBenchmarkSceneGenerator
         context.Manager.enableFrameAccumulation = true;
         context.Manager.cameraFocalDistance = 12.0f;
         context.Manager.lightFalloffScale = 0.002f;
-        context.Manager.exposure = 1.5f;
+        context.Manager.exposure = 2.5f;
         context.Manager.fireflyClamp = 0.0f;
         context.Manager.enableCaustics = true;
-        context.Manager.causticGatherRadius = 0.02f;
+        context.Manager.causticGatherRadius = 0.01f;
         context.Manager.causticSeed = 1;
-        context.Manager.causticIntensity = 4.0f;
+        context.Manager.causticIntensity = 3.0f;
         context.Manager.topLevelBvhMinObjectCount = 1024;
         context.Manager.shadowBvhMinObjectCount = 1024;
         context.Manager.lightSamplingStrategy = GameManager.LightSamplingStrategy.AllLights;
-        context.Manager._skyboxLightColor = new Color32(64, 64, 64, 255);
+        context.Manager._skyboxLightColor = new Color32(40, 40, 40, 255);
 
-        AddPrimitiveMesh(context.Root, "Matte Caustic Receiver", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 0.02f, 2.2f), Vector3.zero, new Vector3(10.0f, 0.04f, 9.0f), new Color32(225, 225, 218, 255), RayMaterial.MaterialType.Diffuse, 0.02f, 1.0f);
+        Mesh texturedPlane = RayMeshAssetGenerator.GetOrCreateTexturedPlaneMesh();
+        Texture2D defaultCheckerGray = AssetDatabase.GetBuiltinExtraResource<Texture2D>(DefaultCheckerGrayTexturePath);
+        AddRayMesh(context.Root, "Caustic Receiver", texturedPlane, new Vector3(0.0f, 0.02f, 2.2f), Vector3.zero, new Vector3(10.0f, 0.4f, 9.0f), Color.white, RayMaterial.MaterialType.Diffuse, 0.5f, 1.0f, 1.0f, defaultCheckerGray);
 
         //AddLight(context.Root, "Sphere Caustic Light", new Vector3(-1.9f, 6.8f, 2.5f), 0.24f, new Color32(255, 244, 218, 255)).SetActive(false);
         //AddSphere(context.Root, "Clear Glass Sphere", new Vector3(-1.9f, 1.32f, 2.5f), 1.3f, new Color32(238, 248, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.04f, 1.52f).SetActive(false);
@@ -491,7 +494,7 @@ public static class RayTracingBenchmarkSceneGenerator
         //AddSphere(context.Root, "Multi-Event Upper Glass Sphere", new Vector3(1.1f, 4.35f, 1.1f), 0.9f, new Color32(232, 245, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.03f, 1.52f).SetActive(false);
         //AddSphere(context.Root, "Multi-Event Lower Glass Sphere", new Vector3(1.1f, 2.25f, 1.1f), 0.9f, new Color32(232, 245, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.03f, 1.52f).SetActive(false);
 
-        AddLight(context.Root, "Caustic Light", new Vector3(1.81f, 2.35f, -0.72f), 0.2f, new Color32(255, 230, 205, 255));
+        AddLight(context.Root, "Caustic Light", new Vector3(1.81f, 2.35f, -0.72f), 0.2f, new Color32(255, 255, 255, 255));
         //AddPrimitiveMesh(context.Root, "Glass Dodecahedron", RayMeshPrimitive.PrimitiveType.Dodecahedron, new Vector3(3.5f, 1.35f, 3.0f), new Vector3(12.0f, 32.0f, 8.0f), new Vector3(2.2f, 2.5f, 2.2f), new Color32(220, 240, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.05f, 1.62f).SetActive(false);
 
         AddSphere(context.Root, "Diffuse Scale Reference", new Vector3(0.0f, 0.5f, 3.4f), 0.45f, new Color32(185, 78, 52, 255), RayMaterial.MaterialType.Diffuse, 0.08f);

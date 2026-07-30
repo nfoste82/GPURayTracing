@@ -3,10 +3,10 @@
 #pragma kernel CSFocusQuery
 #pragma kernel CSRegressionProbe
 #pragma kernel ClearCausticPhotons CAUSTICS_ENABLED
-#pragma kernel TraceCausticPhotons CAUSTICS_ENABLED
+#pragma kernel TraceCausticPhotons CAUSTICS_ENABLED CAUSTIC_PHOTON_TRACE
 #pragma kernel ClearCausticGrid CAUSTICS_ENABLED
 #pragma kernel BuildCausticGrid CAUSTICS_ENABLED
-#pragma kernel CSCausticsRegressionImage CAUSTICS_ENABLED
+#pragma kernel CSCausticsDebug CAUSTICS_ENABLED
 
 // Compile-time experiment: bypass Metal backend optimization so its effect on shader compile
 // time and runtime performance can be measured against the optimized baseline.
@@ -116,6 +116,7 @@ float3 _CausticGridMin;
 float _CausticGridCellSize;
 int3 _CausticGridDimensions;
 int _CausticGridCellCount;
+int _NumCausticTargetPairs;
 #endif
 
 static const float PI = 3.141593f;
@@ -323,6 +324,30 @@ RWStructuredBuffer<CausticPhoton> _CausticPhotons;
 RWStructuredBuffer<uint> _CausticPhotonMetadata;
 RWStructuredBuffer<int> _CausticGridCellHeads;
 RWStructuredBuffer<int> _CausticPhotonNext;
+
+#if defined(CAUSTIC_PHOTON_TRACE)
+struct CausticTargetPair
+{
+    int lightIndex;
+    int refractorType;
+    int refractorIndex;
+    int triangleStart;
+    int triangleCount;
+    float cumulativeProbability;
+    float selectionProbability;
+    float padding;
+};
+
+struct CausticTargetTriangle
+{
+    int triangleIndex;
+    float cumulativeProbability;
+    float selectionProbability;
+};
+
+StructuredBuffer<CausticTargetPair> _CausticTargetPairs;
+StructuredBuffer<CausticTargetTriangle> _CausticTargetTriangles;
+#endif
 #endif
 
 // =======================================================
@@ -3657,6 +3682,47 @@ void ClearCausticGrid(uint3 id : SV_DispatchThreadID)
     }
 }
 
+#if defined(CAUSTIC_PHOTON_TRACE)
+int SelectCausticTargetPair(float sample)
+{
+    int low = 0;
+    int high = _NumCausticTargetPairs - 1;
+    [loop]
+    while (low < high)
+    {
+        int middle = low + (high - low) / 2;
+        if (sample <= _CausticTargetPairs[middle].cumulativeProbability)
+        {
+            high = middle;
+        }
+        else
+        {
+            low = middle + 1;
+        }
+    }
+    return low;
+}
+
+CausticTargetTriangle SelectCausticTargetTriangle(CausticTargetPair pair, float sample)
+{
+    int low = pair.triangleStart;
+    int high = pair.triangleStart + pair.triangleCount - 1;
+    [loop]
+    while (low < high)
+    {
+        int middle = low + (high - low) / 2;
+        if (sample <= _CausticTargetTriangles[middle].cumulativeProbability)
+        {
+            high = middle;
+        }
+        else
+        {
+            low = middle + 1;
+        }
+    }
+    return _CausticTargetTriangles[low];
+}
+
 bool TraceCausticPhotonTransport(
     Ray photonRay,
     RayHit firstHit,
@@ -3758,108 +3824,39 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
 
     InterlockedAdd(_CausticPhotonMetadata[2], 1);
 
-    int lightCount = 0;
-    int sphereIndex;
-    [loop]
-    for (sphereIndex = 0; sphereIndex < _NumLights; sphereIndex++)
-    {
-        Light candidate = _Lights[sphereIndex];
-        lightCount += candidate.type == LightTypeSphere
-            || (candidate.type == LightTypeTriangle && candidate.area > 1e-6f) ? 1 : 0;
-    }
-
-    int refractorCount = 0;
-    [loop]
-    for (sphereIndex = 0; sphereIndex < _NumSpheres; sphereIndex++)
-    {
-        Sphere candidate = _Spheres[sphereIndex];
-        refractorCount += (candidate.materialType == MaterialGlass || candidate.opacity < 1.0f) && candidate.opacity < 1.0f ? 1 : 0;
-    }
-    int meshIndex;
-    [loop]
-    for (meshIndex = 0; meshIndex < _NumMeshes; meshIndex++)
-    {
-        MeshInfo candidate = _Meshes[meshIndex];
-        if (candidate.isLight != 0 || candidate.triangleCount <= 0)
-        {
-            continue;
-        }
-
-        MeshTriangle material = _Triangles[candidate.triangleStart];
-        refractorCount += (material.materialType == MaterialGlass || material.opacity < 1.0f) && material.opacity < 1.0f ? 1 : 0;
-    }
-
-    if (lightCount == 0 || refractorCount == 0)
+    if (_NumCausticTargetPairs <= 0)
     {
         return;
     }
 
     uint rngState = Hash(_CausticSeed ^ (_CausticFrameIndex * 2246822519u) ^ (id.x * 26699u));
-    int selectedLightRank = min((int)(CausticSequenceSample(id.x, 0u) * lightCount), lightCount - 1);
-    int selectedRefractorRank = min((int)(CausticSequenceSample(id.x, 1u) * refractorCount), refractorCount - 1);
-    Light light;
-    int foundRank = 0;
-    [loop]
-    for (sphereIndex = 0; sphereIndex < _NumLights; sphereIndex++)
-    {
-        Light candidate = _Lights[sphereIndex];
-        if (candidate.type != LightTypeSphere
-            && (candidate.type != LightTypeTriangle || candidate.area <= 1e-6f))
-        {
-            continue;
-        }
-        if (foundRank++ == selectedLightRank)
-        {
-            light = candidate;
-            break;
-        }
-    }
+    CausticTargetPair targetPair = _CausticTargetPairs[
+        SelectCausticTargetPair(CausticSequenceSample(id.x, 0u))];
+    Light light = _Lights[targetPair.lightIndex];
 
     float3 refractorPosition = float3(0.0f, 0.0f, 0.0f);
     float refractorRadius = 0.0f;
     int refractorIndex = -1;
     int refractorMeshIndex = -1;
     int refractorTriangleIndex = -1;
-    foundRank = 0;
-    [loop]
-    for (sphereIndex = 0; sphereIndex < _NumSpheres; sphereIndex++)
+    float targetTriangleProbability = 1.0f;
+    if (targetPair.refractorType == 0)
     {
-        Sphere candidate = _Spheres[sphereIndex];
-        if (!((candidate.materialType == MaterialGlass || candidate.opacity < 1.0f) && candidate.opacity < 1.0f))
-        {
-            continue;
-        }
-        if (foundRank++ == selectedRefractorRank)
-        {
-            refractorPosition = candidate.position;
-            refractorRadius = candidate.radius;
-            refractorIndex = sphereIndex;
-            break;
-        }
+        Sphere refractor = _Spheres[targetPair.refractorIndex];
+        refractorPosition = refractor.position;
+        refractorRadius = refractor.radius;
+        refractorIndex = targetPair.refractorIndex;
     }
-    [loop]
-    for (meshIndex = 0; meshIndex < _NumMeshes && refractorIndex < 0; meshIndex++)
+    else
     {
-        MeshInfo candidate = _Meshes[meshIndex];
-        if (candidate.isLight != 0 || candidate.triangleCount <= 0)
-        {
-            continue;
-        }
-
-        MeshTriangle material = _Triangles[candidate.triangleStart];
-        if (!((material.materialType == MaterialGlass || material.opacity < 1.0f) && material.opacity < 1.0f))
-        {
-            continue;
-        }
-        if (foundRank++ == selectedRefractorRank)
-        {
-            refractorPosition = (candidate.boundsMin + candidate.boundsMax) * 0.5f;
-            refractorRadius = length(candidate.boundsMax - candidate.boundsMin) * 0.5f;
-            refractorMeshIndex = meshIndex;
-            refractorTriangleIndex = candidate.triangleStart
-                + min((int)(CausticSequenceSample(id.x, 2u) * candidate.triangleCount), candidate.triangleCount - 1);
-            break;
-        }
+        MeshInfo refractor = _Meshes[targetPair.refractorIndex];
+        refractorPosition = (refractor.boundsMin + refractor.boundsMax) * 0.5f;
+        refractorRadius = length(refractor.boundsMax - refractor.boundsMin) * 0.5f;
+        refractorMeshIndex = targetPair.refractorIndex;
+        CausticTargetTriangle targetTriangle = SelectCausticTargetTriangle(
+            targetPair, CausticSequenceSample(id.x, 2u));
+        refractorTriangleIndex = targetTriangle.triangleIndex;
+        targetTriangleProbability = targetTriangle.selectionProbability;
     }
 
     float3 emissionPosition = light.position;
@@ -3907,8 +3904,8 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
             return;
         }
 
-        MeshInfo targetMesh = _Meshes[refractorMeshIndex];
-        meshTargetInversePdf = targetMesh.triangleCount * triangleArea * targetCosine / targetDistanceSquared;
+        meshTargetInversePdf = triangleArea * targetCosine
+            / max(1e-8f, targetTriangleProbability * targetDistanceSquared);
     }
 
     float3 toRefractor = refractorPosition - emissionPosition;
@@ -3957,7 +3954,8 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
 
     float coneSolidAngle = 2.0f * PI * max(1e-6f, 1.0f - cosThetaMax);
     float inverseDirectionalPdf = refractorMeshIndex >= 0 ? meshTargetInversePdf : coneSolidAngle;
-    float selectionScale = lightCount * refractorCount * inverseDirectionalPdf * emissionAreaScale * emitterCosine;
+    float selectionScale = inverseDirectionalPdf * emissionAreaScale * emitterCosine
+        / max(1e-8f, targetPair.selectionProbability);
     CausticPhoton photon;
     if (!TraceCausticPhotonTransport(
         photonRay,
@@ -3981,6 +3979,7 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
         InterlockedAdd(_CausticPhotonMetadata[1], 1);
     }
 }
+#endif
 
 [numthreads(64,1,1)]
 void BuildCausticGrid(uint3 id : SV_DispatchThreadID)
@@ -4238,7 +4237,7 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
 
 #if defined(CAUSTICS_ENABLED)
 [numthreads(8,4,1)]
-void CSCausticsRegressionImage(uint3 id : SV_DispatchThreadID)
+void CSCausticsDebug(uint3 id : SV_DispatchThreadID)
 {
     uint width, height;
     Result.GetDimensions(width, height);

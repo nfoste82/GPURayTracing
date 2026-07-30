@@ -82,7 +82,7 @@ public class GameManager : MonoBehaviour
 
     public int causticSeed = 1;
 
-    [Range(0.0f, 4.0f)]
+    [Range(0.0f, 10.0f)]
     public float causticIntensity = 1.0f;
 
     [Header("Volumetric fog")]
@@ -293,6 +293,10 @@ public class GameManager : MonoBehaviour
     private ComputeBuffer _causticPhotonMetadataBuffer;
     private ComputeBuffer _causticGridCellHeadBuffer;
     private ComputeBuffer _causticPhotonNextBuffer;
+    private ComputeBuffer _causticTargetPairBuffer;
+    private ComputeBuffer _causticTargetTriangleBuffer;
+    private readonly List<CausticTargetPair> _causticTargetPairs = new List<CausticTargetPair>();
+    private readonly List<CausticTargetTriangle> _causticTargetTriangles = new List<CausticTargetTriangle>();
     private Vector3 _causticGridMin;
     private Vector3Int _causticGridDimensions;
     private float _causticGridCellSize;
@@ -354,11 +358,13 @@ public class GameManager : MonoBehaviour
     public int AccumulatedFrameCount => _accumulatedFrameCount;
     public float DynamicQualityAverageFrameMs => _dynamicQualityAverageFrameMs;
     public bool HasCausticResources => _causticPhotonBuffer != null && _causticPhotonMetadataBuffer != null
-        && _causticGridCellHeadBuffer != null && _causticPhotonNextBuffer != null;
+        && _causticGridCellHeadBuffer != null && _causticPhotonNextBuffer != null
+        && _causticTargetPairBuffer != null && _causticTargetTriangleBuffer != null;
     public int CausticDispatchCount => _causticDispatchCount;
     public int CausticGridCellCount => _causticGridCellCount;
     public int CausticGridPhotonCount => _causticGridPhotonCount;
     public int CausticGridOutOfBoundsCount => _causticGridOutOfBoundsCount;
+    public int CausticTargetPairCount => _causticTargetPairs.Count;
     public int SphereLightCount => _lightObjects.Count;
     public int MeshLightCount
     {
@@ -404,6 +410,8 @@ public class GameManager : MonoBehaviour
     private const int BvhNodeStride = 48;
     private const int TopLevelBvhNodeStride = 48;
     private const int CausticPhotonStride = 36;
+    private const int CausticTargetPairStride = 32;
+    private const int CausticTargetTriangleStride = 12;
     private const int CausticMetadataCount = 6;
     private const int CausticTraceThreadCount = 64;
     private const int RenderThreadCountX = 8;
@@ -588,6 +596,25 @@ public class GameManager : MonoBehaviour
         public int meshIndex;
         public int isLight;
         public int padding1;
+    }
+
+    private struct CausticTargetPair
+    {
+        public int lightIndex;
+        public int refractorType;
+        public int refractorIndex;
+        public int triangleStart;
+        public int triangleCount;
+        public float cumulativeProbability;
+        public float selectionProbability;
+        public float padding;
+    }
+
+    private struct CausticTargetTriangle
+    {
+        public int triangleIndex;
+        public float cumulativeProbability;
+        public float selectionProbability;
     }
 
     private struct BvhNode
@@ -1006,7 +1033,9 @@ public class GameManager : MonoBehaviour
         if (_causticPhotonBuffer != null && _causticPhotonBuffer.count == photonCapacity
             && _causticPhotonMetadataBuffer != null
             && _causticPhotonNextBuffer != null && _causticPhotonNextBuffer.count == photonCapacity
-            && _causticGridCellHeadBuffer != null && _causticGridCellHeadBuffer.count == _causticGridCellCount)
+            && _causticGridCellHeadBuffer != null && _causticGridCellHeadBuffer.count == _causticGridCellCount
+            && _causticTargetPairBuffer != null && _causticTargetPairBuffer.count == Mathf.Max(1, _causticTargetPairs.Count)
+            && _causticTargetTriangleBuffer != null && _causticTargetTriangleBuffer.count == Mathf.Max(1, _causticTargetTriangles.Count))
         {
             return;
         }
@@ -1017,7 +1046,168 @@ public class GameManager : MonoBehaviour
         _causticPhotonMetadataBuffer = new ComputeBuffer(CausticMetadataCount, sizeof(uint));
         _causticPhotonNextBuffer = new ComputeBuffer(photonCapacity, sizeof(int));
         _causticGridCellHeadBuffer = new ComputeBuffer(_causticGridCellCount, sizeof(int));
+        _causticTargetPairBuffer = CreateComputeBuffer(_causticTargetPairs, CausticTargetPairStride);
+        _causticTargetTriangleBuffer = CreateComputeBuffer(_causticTargetTriangles, CausticTargetTriangleStride);
         _hasCausticPhotonStateHash = false;
+    }
+
+    private void BuildCausticSamplingDistribution()
+    {
+        _causticTargetPairs.Clear();
+        _causticTargetTriangles.Clear();
+        var meshTriangleRanges = new Dictionary<int, Vector2Int>();
+
+        for (int meshIndex = 0; meshIndex < _meshInfos.Count; meshIndex++)
+        {
+            MeshInfo mesh = _meshInfos[meshIndex];
+            if (!IsCausticRefractor(mesh))
+            {
+                continue;
+            }
+
+            int triangleStart = _causticTargetTriangles.Count;
+            float totalArea = 0.0f;
+            for (int triangleOffset = 0; triangleOffset < mesh.triangleCount; triangleOffset++)
+            {
+                Triangle triangle = _triangles[mesh.triangleStart + triangleOffset];
+                totalArea += 0.5f * Vector3.Cross(
+                    triangle.vertex1 - triangle.vertex0,
+                    triangle.vertex2 - triangle.vertex0).magnitude;
+                _causticTargetTriangles.Add(new CausticTargetTriangle
+                {
+                    triangleIndex = mesh.triangleStart + triangleOffset,
+                    cumulativeProbability = totalArea
+                });
+            }
+
+            if (totalArea <= 1e-8f)
+            {
+                _causticTargetTriangles.RemoveRange(triangleStart, _causticTargetTriangles.Count - triangleStart);
+                continue;
+            }
+
+            // cumulativeProbability currently holds the running *unnormalized* area sum. Normalize it
+            // in place while tracking the previous already-normalized value locally. Reading the
+            // previous element back out of the list here would divide it by totalArea a second time
+            // (it was normalized on the prior iteration), which corrupts every per-triangle
+            // probability and therefore every photon's power.
+            int lastTriangleIndex = _causticTargetTriangles.Count - 1;
+            float previousCdf = 0.0f;
+            for (int triangleIndex = triangleStart; triangleIndex < _causticTargetTriangles.Count; triangleIndex++)
+            {
+                CausticTargetTriangle target = _causticTargetTriangles[triangleIndex];
+                float normalizedCdf = target.cumulativeProbability / totalArea;
+                target.selectionProbability = normalizedCdf - previousCdf;
+                // Guard the last entry against float rounding leaving the CDF just below any sample.
+                target.cumulativeProbability = triangleIndex == lastTriangleIndex ? 1.0f : normalizedCdf;
+                previousCdf = normalizedCdf;
+                _causticTargetTriangles[triangleIndex] = target;
+            }
+            meshTriangleRanges.Add(meshIndex, new Vector2Int(triangleStart, _causticTargetTriangles.Count - triangleStart));
+        }
+
+        var pairWeights = new List<float>();
+        float maximumWeight = 0.0f;
+        for (int lightIndex = 0; lightIndex < _lights.Count; lightIndex++)
+        {
+            Light light = _lights[lightIndex];
+            if (!IsCausticLight(light))
+            {
+                continue;
+            }
+
+            for (int sphereIndex = 0; sphereIndex < _spheres.Count; sphereIndex++)
+            {
+                Sphere sphere = _spheres[sphereIndex];
+                if (IsCausticRefractor(sphere))
+                {
+                    AddCausticTargetPair(lightIndex, 0, sphereIndex, 0, 0,
+                        GetCausticPairWeight(light, sphere.position, sphere.radius), pairWeights, ref maximumWeight);
+                }
+            }
+
+            foreach (KeyValuePair<int, Vector2Int> meshRange in meshTriangleRanges)
+            {
+                MeshInfo mesh = _meshInfos[meshRange.Key];
+                AddCausticTargetPair(lightIndex, 1, meshRange.Key, meshRange.Value.x, meshRange.Value.y,
+                    GetCausticPairWeight(light, (mesh.boundsMin + mesh.boundsMax) * 0.5f,
+                        (mesh.boundsMax - mesh.boundsMin).magnitude * 0.5f),
+                    pairWeights, ref maximumWeight);
+            }
+        }
+
+        if (_causticTargetPairs.Count == 0)
+        {
+            return;
+        }
+
+        float totalWeight = 0.0f;
+        float minimumWeight = Mathf.Max(1e-8f, maximumWeight * 1e-4f);
+        for (int i = 0; i < pairWeights.Count; i++)
+        {
+            pairWeights[i] = Mathf.Max(minimumWeight, pairWeights[i]);
+            totalWeight += pairWeights[i];
+        }
+
+        float cumulativeProbability = 0.0f;
+        for (int i = 0; i < _causticTargetPairs.Count; i++)
+        {
+            CausticTargetPair pair = _causticTargetPairs[i];
+            pair.selectionProbability = pairWeights[i] / totalWeight;
+            cumulativeProbability += pair.selectionProbability;
+            pair.cumulativeProbability = i == _causticTargetPairs.Count - 1 ? 1.0f : cumulativeProbability;
+            _causticTargetPairs[i] = pair;
+        }
+    }
+
+    private void AddCausticTargetPair(int lightIndex, int refractorType, int refractorIndex,
+        int triangleStart, int triangleCount, float weight, List<float> weights, ref float maximumWeight)
+    {
+        _causticTargetPairs.Add(new CausticTargetPair
+        {
+            lightIndex = lightIndex,
+            refractorType = refractorType,
+            refractorIndex = refractorIndex,
+            triangleStart = triangleStart,
+            triangleCount = triangleCount
+        });
+        weights.Add(weight);
+        maximumWeight = Mathf.Max(maximumWeight, weight);
+    }
+
+    private static bool IsCausticLight(Light light)
+    {
+        return light.type == LightTypeSphere || (light.type == LightTypeTriangle && light.area > 1e-6f);
+    }
+
+    private static bool IsCausticRefractor(Sphere sphere)
+    {
+        return (sphere.materialType == 2 || sphere.opacity < 1.0f) && sphere.opacity < 1.0f;
+    }
+
+    private bool IsCausticRefractor(MeshInfo mesh)
+    {
+        if (mesh.isLight != 0 || mesh.triangleCount <= 0)
+        {
+            return false;
+        }
+        Triangle material = _triangles[mesh.triangleStart];
+        return (material.materialType == 2 || material.opacity < 1.0f) && material.opacity < 1.0f;
+    }
+
+    private static float GetCausticPairWeight(Light light, Vector3 targetPosition, float targetRadius)
+    {
+        Vector3 lightPosition = light.type == LightTypeTriangle
+            ? light.position + (light.u + light.v) / 3.0f
+            : light.position;
+        float distanceSquared = Mathf.Max(1e-6f, (targetPosition - lightPosition).sqrMagnitude);
+        float projectedTarget = Mathf.Min(4.0f * Mathf.PI, Mathf.PI * targetRadius * targetRadius / distanceSquared);
+        float luminance = Vector3.Dot(light.emission, new Vector3(0.2126f, 0.7152f, 0.0722f));
+        float emitterScale = light.type == LightTypeTriangle ? Mathf.Max(1e-6f, light.area) : 1.0f;
+        float facing = light.type == LightTypeTriangle
+            ? Mathf.Max(0.0f, Vector3.Dot(light.normal, (targetPosition - lightPosition).normalized))
+            : 1.0f;
+        return Mathf.Max(0.0f, luminance) * emitterScale * facing * Mathf.Max(1e-8f, projectedTarget);
     }
 
     private void CalculateCausticGridLayout()
@@ -1089,10 +1279,14 @@ public class GameManager : MonoBehaviour
         _causticPhotonMetadataBuffer?.Release();
         _causticGridCellHeadBuffer?.Release();
         _causticPhotonNextBuffer?.Release();
+        _causticTargetPairBuffer?.Release();
+        _causticTargetTriangleBuffer?.Release();
         _causticPhotonBuffer = null;
         _causticPhotonMetadataBuffer = null;
         _causticGridCellHeadBuffer = null;
         _causticPhotonNextBuffer = null;
+        _causticTargetPairBuffer = null;
+        _causticTargetTriangleBuffer = null;
         _causticGridCellCount = 0;
         _causticGridPhotonCount = 0;
         _causticGridOutOfBoundsCount = 0;
@@ -1113,11 +1307,21 @@ public class GameManager : MonoBehaviour
             return;
         }
 
-        EnsureCausticResources();
         int stateHash = CalculateCausticPhotonStateHash();
         bool stateChanged = !_hasCausticPhotonStateHash || stateHash != _causticPhotonStateHash;
         if (stateChanged)
         {
+            BuildCausticSamplingDistribution();
+        }
+        EnsureCausticResources();
+        if (stateChanged)
+        {
+            _causticTargetPairBuffer.SetData(_causticTargetPairs.Count > 0
+                ? _causticTargetPairs
+                : new List<CausticTargetPair> { default });
+            _causticTargetTriangleBuffer.SetData(_causticTargetTriangles.Count > 0
+                ? _causticTargetTriangles
+                : new List<CausticTargetTriangle> { default });
             _causticPhotonStateHash = stateHash;
             _hasCausticPhotonStateHash = true;
             _causticFrameIndex = 0;
@@ -1394,6 +1598,7 @@ public class GameManager : MonoBehaviour
         // "Compiling shader variant" message; next frame we run the stalling dispatch with that
         // message already on screen.
         bool fogEnabled = IsFogEnabled();
+        bool useDedicatedCausticsDebugKernel = enableCaustics && debugRenderMode == DebugRenderMode.Caustics;
         int requestedVariant = GetShaderVariantKey(debugRenderMode, enableCaustics, fogEnabled);
         bool shaderVariantChanged = debugRenderMode != _appliedDebugRenderMode
             || enableCaustics != _appliedCausticsEnabled
@@ -1460,7 +1665,7 @@ public class GameManager : MonoBehaviour
             ResetFrameAccumulation();
         }
 
-        var kernelHandle = shader.FindKernel("CSMain");
+        var kernelHandle = shader.FindKernel(useDedicatedCausticsDebugKernel ? "CSCausticsDebug" : "CSMain");
 
         SetShaderParameters(kernelHandle);
         DispatchPendingFocusQuery();
@@ -1477,7 +1682,7 @@ public class GameManager : MonoBehaviour
         }
         _renderedFrameCount++;
 
-        if (useFrameAccumulation)
+        if (useFrameAccumulation && !useDedicatedCausticsDebugKernel)
         {
             _accumulatedFrameCount++;
         }
@@ -3430,10 +3635,13 @@ public class GameManager : MonoBehaviour
         shader.SetFloat("_CausticGridCellSize", _causticGridCellSize);
         shader.SetInts("_CausticGridDimensions", _causticGridDimensions.x, _causticGridDimensions.y, _causticGridDimensions.z);
         shader.SetInt("_CausticGridCellCount", _causticGridCellCount);
+        shader.SetInt("_NumCausticTargetPairs", _causticTargetPairs.Count);
         SetComputeBuffer("_CausticPhotons", _causticPhotonBuffer, kernelHandle);
         SetComputeBuffer("_CausticPhotonMetadata", _causticPhotonMetadataBuffer, kernelHandle);
         SetComputeBuffer("_CausticGridCellHeads", _causticGridCellHeadBuffer, kernelHandle);
         SetComputeBuffer("_CausticPhotonNext", _causticPhotonNextBuffer, kernelHandle);
+        SetComputeBuffer("_CausticTargetPairs", _causticTargetPairBuffer, kernelHandle);
+        SetComputeBuffer("_CausticTargetTriangles", _causticTargetTriangleBuffer, kernelHandle);
     }
 
     private static float GetWorldSphereRadius(SphereCollider sphereCollider, Transform sphereTransform)
@@ -3540,7 +3748,7 @@ public class GameManager : MonoBehaviour
         // The shader splits its debug render path behind the DEBUG_RENDER keyword so the default
         // final-color variant compiles without any debug intersection/scatter code (a large shader
         // compile-time saving). Only enable the debug variant when a debug mode is actually active.
-        if (debugRenderMode == DebugRenderMode.FinalColor)
+        if (debugRenderMode == DebugRenderMode.FinalColor || debugRenderMode == DebugRenderMode.Caustics)
         {
             shader.DisableKeyword("DEBUG_RENDER");
         }

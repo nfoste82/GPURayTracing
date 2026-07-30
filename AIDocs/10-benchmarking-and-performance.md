@@ -89,6 +89,8 @@ Use `Tools > Ray Tracing > Precompile Compute Shader` to compile and dispatch th
 
 Because each `DEBUG_RENDER` variant compiles synchronously on its first `Dispatch`, the first time a debug render mode is selected during Play the main thread freezes while Unity compiles it (the macOS spinning-wheel stall). A live progress bar is impossible during this freeze because the main thread is blocked, so `GameManager` instead defers the blocking dispatch by one frame:
 
+The photon-map `Caustics` debug mode is an exception when caustics are enabled: it dispatches the dedicated gather-only `CSCausticsDebug` kernel with `DEBUG_RENDER` disabled. This avoids compiling the very large combined caustics/general-debug `CSMain` variant.
+
 - `GameManager.RenderImage()` tracks compiled debug variants in `_warmedDebugModes` and the currently applied mode in `_appliedDebugRenderMode`. When `debugRenderMode` switches to a mode not yet warmed, it sets `_pendingVariantWarmup`, re-blits the previous output without running the heavy dispatch, and returns.
 - That extra frame lets `GameManager.OnGUI()` paint a centered "Compiling shader variant, this may take a minute..." notice (gated on `_pendingVariantWarmup`). The notice is hosted in `GameManager` rather than `RayTracingBenchmarkOverlay` so it appears in every scene, including `Root.unity`, not just the benchmark scenes.
 - The next frame runs the stalling `Dispatch` with that notice already on screen, then marks the mode warmed and clears the flag. Subsequent switches to an already-warmed mode dispatch immediately with no notice.

@@ -28,3 +28,9 @@ There are multiple quality settings on the GameManager object in the root scene.
 ![Volumetric Fog](volumetric_fog.png)
 
 ![Default scene](default_scene.png)
+
+Special Thanks to these projects which have been great reference/learning material:
+
+* https://github.com/knightcrawler25/GLSL-PathTracer/
+* https://github.com/tylertms/vkrt
+* https://github.com/gkjohnson/three-gpu-pathtracer
