@@ -1,0 +1,111 @@
+#pragma kernel CSAtrous
+#pragma kernel CSPresent
+
+Texture2D<float4> InputBeauty;
+Texture2D<float4> FeatureNormal;
+Texture2D<float4> FeatureAlbedo;
+Texture2D<float> FeatureDepth;
+Texture2D<float> FeatureIdentity;
+Texture2D<float> FeatureValidity;
+RWTexture2D<float4> FilteredBeauty;
+RWTexture2D<float4> PresentationResult;
+
+int _StepWidth;
+float _DepthSigma;
+float _NormalPower;
+float _AlbedoSigma;
+float _LuminanceSigma;
+float _Exposure;
+
+static const float Kernel[5] = { 1.0f, 4.0f, 6.0f, 4.0f, 1.0f };
+
+float Luminance(float3 color)
+{
+    return dot(color, float3(0.2126f, 0.7152f, 0.0722f));
+}
+
+float3 ACESFilmicToneMap(float3 color)
+{
+    const float a = 2.51f;
+    const float b = 0.03f;
+    const float c = 2.43f;
+    const float d = 0.59f;
+    const float e = 0.14f;
+    return saturate((color * (a * color + b)) / (color * (c * color + d) + e));
+}
+
+[numthreads(8, 8, 1)]
+void CSAtrous(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    FilteredBeauty.GetDimensions(width, height);
+    if (id.x >= width || id.y >= height)
+    {
+        return;
+    }
+
+    uint2 pixel = id.xy;
+    float3 centerColor = InputBeauty[pixel].rgb;
+    float centerValidity = FeatureValidity[pixel];
+    float centerIdentity = FeatureIdentity[pixel];
+    float centerDepth = FeatureDepth[pixel];
+    float3 centerNormal = FeatureNormal[pixel].xyz;
+    float3 centerAlbedo = FeatureAlbedo[pixel].xyz;
+    float centerLuminance = Luminance(centerColor);
+
+    float3 sum = 0.0f;
+    float totalWeight = 0.0f;
+    [unroll]
+    for (int ky = -2; ky <= 2; ky++)
+    {
+        [unroll]
+        for (int kx = -2; kx <= 2; kx++)
+        {
+            int2 samplePixel = int2(pixel) + int2(kx, ky) * _StepWidth;
+            samplePixel = clamp(samplePixel, int2(0, 0), int2(width - 1, height - 1));
+            uint2 sampleCoordinate = uint2(samplePixel);
+            float sampleValidity = FeatureValidity[sampleCoordinate];
+            if ((centerValidity > 0.5f) != (sampleValidity > 0.5f))
+            {
+                continue;
+            }
+
+            float weight = Kernel[kx + 2] * Kernel[ky + 2];
+            float3 sampleColor = InputBeauty[sampleCoordinate].rgb;
+            if (centerValidity > 0.5f)
+            {
+                if (FeatureIdentity[sampleCoordinate] != centerIdentity)
+                {
+                    continue;
+                }
+
+                float depthDifference = abs(FeatureDepth[sampleCoordinate] - centerDepth)
+                    / max(0.001f, min(FeatureDepth[sampleCoordinate], centerDepth));
+                weight *= exp(-depthDifference / _DepthSigma);
+                weight *= pow(saturate(dot(centerNormal, FeatureNormal[sampleCoordinate].xyz)), _NormalPower);
+                weight *= exp(-length(centerAlbedo - FeatureAlbedo[sampleCoordinate].xyz) / _AlbedoSigma);
+            }
+
+            float luminanceDifference = abs(Luminance(sampleColor) - centerLuminance)
+                / max(0.001f, centerLuminance + Luminance(sampleColor));
+            weight *= exp(-luminanceDifference / _LuminanceSigma);
+            sum += sampleColor * weight;
+            totalWeight += weight;
+        }
+    }
+
+    FilteredBeauty[pixel] = float4(sum / max(0.0001f, totalWeight), 1.0f);
+}
+
+[numthreads(8, 8, 1)]
+void CSPresent(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    PresentationResult.GetDimensions(width, height);
+    if (id.x >= width || id.y >= height)
+    {
+        return;
+    }
+
+    PresentationResult[id.xy] = float4(ACESFilmicToneMap(InputBeauty[id.xy].rgb * _Exposure), 1.0f);
+}

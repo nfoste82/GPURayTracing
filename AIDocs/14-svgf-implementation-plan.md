@@ -19,9 +19,9 @@ This is distinct from progressive still-image accumulation and from external den
 
 ## Current Status
 
-- Milestone 1 is complete.
-- Milestones 2-12 remain unimplemented.
-- The current presentation still uses the existing tone-mapped `Result` texture. No denoiser consumes the feature textures yet.
+- Milestones 1 and 2 are complete.
+- Milestones 3-12 remain unimplemented.
+- The existing tone-mapped `Result` texture remains the fallback presentation path. When spatial denoising is enabled, HDR beauty is filtered first and a denoiser presentation pass writes the tone-mapped result.
 - Do not conflate this work with a Unity version or render-pipeline migration.
 
 ## Milestone 1: Reconstruction-Neutral Outputs
@@ -43,7 +43,7 @@ This is distinct from progressive still-image accumulation and from external den
 
 ## Milestone 2: Spatial A-Trous Denoiser
 
-**Status:** Not started
+**Status:** Complete
 
 **Purpose:** Validate feature semantics and obtain a usable static-scene denoising baseline before temporal history is introduced.
 
@@ -54,6 +54,14 @@ This is distinct from progressive still-image accumulation and from external den
 - Implement three initial edge-aware A-trous iterations with step widths `1`, `2`, and `4`; make additional iterations configurable for evaluation.
 - Use kernel, depth, normal, albedo, identity/validity, and luminance edge-stopping weights.
 - Present the filtered HDR result only when denoising is enabled; retain raw beauty presentation as the fallback.
+
+**Implemented:**
+
+- `Assets/Resources/RayTracingSpatialDenoiser.compute` contains an edge-aware 5x5 A-trous kernel and a final HDR presentation kernel.
+- `GameManager.enableSpatialDenoising` runs between one and five iterations, defaulting to steps `1`, `2`, and `4`.
+- The filter uses primary-hit validity, identity, relative depth, normal alignment, albedo difference, and normalized HDR luminance difference to stop filtering across unrelated surfaces and sharp lighting changes.
+- `SpatialDenoised`, `AtrousIteration1`, `AtrousIteration2`, and `AtrousIteration3` debug modes run the spatial path and present the selected HDR iteration through the same exposure/ACES pass.
+- The disabled path allocates no A-trous ping-pong resources and keeps the prior presentation behavior.
 
 **Validation:**
 

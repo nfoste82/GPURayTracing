@@ -179,7 +179,7 @@ Implement denoising in stages so feature correctness can be isolated from filter
 4. Add a real-time spatial-temporal denoiser if temporal feature quality is adequate.
 5. Evaluate ML ray reconstruction only after the vendor-neutral signal contract is stable.
 
-A GPU A-trous or SVGF-style filter is a pragmatic first implementation. It is not machine learned, but it validates feature semantics, provides a portable real-time baseline, and makes vendor SDK quality measurable rather than anecdotal.
+A GPU A-trous or SVGF-style filter is a pragmatic first implementation. The project now has an optional spatial A-trous baseline operating on HDR beauty and reconstruction-neutral feature buffers; it is not temporally stable and is deliberately separate from the future SVGF history path. It is not machine learned, but it validates feature semantics, provides a portable real-time baseline, and makes vendor SDK quality measurable rather than anecdotal.
 
 An offline ML denoiser such as Intel Open Image Denoise can be useful for on-demand still renders using beauty, albedo, and normal guidance. It is not necessarily appropriate for low-latency frame presentation.
 

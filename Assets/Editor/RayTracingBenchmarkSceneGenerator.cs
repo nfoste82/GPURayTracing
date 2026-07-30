@@ -97,7 +97,7 @@ public static class RayTracingBenchmarkSceneGenerator
             return;
         }
 
-        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 5.4f, -13.5f), new Vector3(12.0f, 0.0f, 0.0f), passes: 1, bounces: 8, shadowQuality: 0);
+        var context = CreateBaseScene(sceneName, new Vector3(0.0f, 4.81f, -10.74f), new Vector3(22.03f, 0.0f, 0.0f), passes: 1, bounces: 8, shadowQuality: 0);
         context.Manager.enableFrameAccumulation = true;
         context.Manager.cameraFocalDistance = 17.0f;
         context.Manager.exposure = 2.5f;

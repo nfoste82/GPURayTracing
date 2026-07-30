@@ -22,6 +22,30 @@ public class GameManager : MonoBehaviour
 
     public ComputeShader shader;
     public Camera renderTextureCamera;
+
+    [Header("Spatial denoising")]
+    [Tooltip("Applies an edge-aware spatial A-trous filter to linear HDR beauty. This does not use temporal history.")]
+    public bool enableSpatialDenoising = false;
+
+    [Range(1, 5)]
+    [Tooltip("A-trous passes use increasing pixel steps: 1, 2, 4, 8, and 16.")]
+    public int spatialDenoiserIterations = 1;
+
+    [Range(0.01f, 4.0f)]
+    [Tooltip("How quickly filtering stops across depth discontinuities. Lower values preserve sharper depth edges.")]
+    public float spatialDenoiserDepthSigma = 0.25f;
+
+    [Range(1.0f, 256.0f)]
+    [Tooltip("How strongly filtering stops across shading-normal changes.")]
+    public float spatialDenoiserNormalPower = 64.0f;
+
+    [Range(0.01f, 4.0f)]
+    [Tooltip("How quickly filtering stops across albedo changes.")]
+    public float spatialDenoiserAlbedoSigma = 0.25f;
+
+    [Range(0.01f, 4.0f)]
+    [Tooltip("How quickly filtering stops across HDR luminance changes.")]
+    public float spatialDenoiserLuminanceSigma = 0.03f;
     
     [Header("Quality settings (Higher quality -> Slower)")]
     [Range(1, 32)]
@@ -143,7 +167,11 @@ public class GameManager : MonoBehaviour
         FeatureAlbedo = 13,
         FeatureDepth = 14,
         FeatureIdentity = 15,
-        FeatureValidity = 16
+        FeatureValidity = 16,
+        SpatialDenoised = 17,
+        AtrousIteration1 = 18,
+        AtrousIteration2 = 19,
+        AtrousIteration3 = 20
     }
 
     [Header("Debug render modes")]
@@ -254,6 +282,12 @@ public class GameManager : MonoBehaviour
     private RenderTexture _featureDepthTexture;
     private RenderTexture _featureIdentityTexture;
     private RenderTexture _featureValidityTexture;
+    private RenderTexture _denoiserPingTexture;
+    private RenderTexture _denoiserPongTexture;
+    private RenderTexture _denoiserIteration1Texture;
+    private RenderTexture _denoiserIteration2Texture;
+    private RenderTexture _denoiserIteration3Texture;
+    private ComputeShader _spatialDenoiserShader;
     private Vector2Int _textureSize;
     private int _accumulatedFrameCount;
     private long _renderedFrameCount;
@@ -746,6 +780,11 @@ public class GameManager : MonoBehaviour
 
     private void OnValidate()
     {
+        spatialDenoiserIterations = Mathf.Clamp(spatialDenoiserIterations, 1, 5);
+        spatialDenoiserDepthSigma = Mathf.Max(0.01f, spatialDenoiserDepthSigma);
+        spatialDenoiserNormalPower = Mathf.Max(1.0f, spatialDenoiserNormalPower);
+        spatialDenoiserAlbedoSigma = Mathf.Max(0.01f, spatialDenoiserAlbedoSigma);
+        spatialDenoiserLuminanceSigma = Mathf.Max(0.01f, spatialDenoiserLuminanceSigma);
         SyncUnitySkyboxPreview();
     }
 
@@ -788,6 +827,7 @@ public class GameManager : MonoBehaviour
         _featureDepthTexture?.Release();
         _featureIdentityTexture?.Release();
         _featureValidityTexture?.Release();
+        ReleaseSpatialDenoiserResources();
         _textureSize = new Vector2Int(width, height);
         _outputTexture = new RenderTexture(_textureSize.x, _textureSize.y, 24)
         {
@@ -821,6 +861,54 @@ public class GameManager : MonoBehaviour
         };
         texture.Create();
         return texture;
+    }
+
+    private void EnsureSpatialDenoiserResources()
+    {
+        if (_spatialDenoiserShader == null)
+        {
+            _spatialDenoiserShader = Resources.Load<ComputeShader>("RayTracingSpatialDenoiser");
+        }
+
+        if (_spatialDenoiserShader == null)
+        {
+            Debug.LogError("Spatial denoiser shader was not found at Resources/RayTracingSpatialDenoiser.", this);
+            return;
+        }
+
+        if (_denoiserPingTexture != null)
+        {
+            return;
+        }
+
+        _denoiserPingTexture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
+        _denoiserPongTexture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
+        _denoiserIteration1Texture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
+        _denoiserIteration2Texture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
+        _denoiserIteration3Texture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
+    }
+
+    private void ReleaseSpatialDenoiserResources()
+    {
+        _denoiserPingTexture?.Release();
+        _denoiserPongTexture?.Release();
+        _denoiserIteration1Texture?.Release();
+        _denoiserIteration2Texture?.Release();
+        _denoiserIteration3Texture?.Release();
+        _denoiserPingTexture = null;
+        _denoiserPongTexture = null;
+        _denoiserIteration1Texture = null;
+        _denoiserIteration2Texture = null;
+        _denoiserIteration3Texture = null;
+    }
+
+    private bool ShouldRunSpatialDenoiser()
+    {
+        return enableSpatialDenoising
+            || debugRenderMode == DebugRenderMode.SpatialDenoised
+            || debugRenderMode == DebugRenderMode.AtrousIteration1
+            || debugRenderMode == DebugRenderMode.AtrousIteration2
+            || debugRenderMode == DebugRenderMode.AtrousIteration3;
     }
 
     private void Update()
@@ -997,6 +1085,7 @@ public class GameManager : MonoBehaviour
         _featureDepthTexture?.Release();
         _featureIdentityTexture?.Release();
         _featureValidityTexture?.Release();
+        ReleaseSpatialDenoiserResources();
         _sphereBuffer?.Release();
         _lightBuffer?.Release();
         _triangleBuffer?.Release();
@@ -1068,6 +1157,78 @@ public class GameManager : MonoBehaviour
         int threadGroupsX = Mathf.CeilToInt(_textureSize.x / (float)RenderThreadCountX);
         int threadGroupsY = Mathf.CeilToInt(_textureSize.y / (float)RenderThreadCountY);
         shader.Dispatch(kernelHandle, threadGroupsX, threadGroupsY, 1);
+    }
+
+    private void RunSpatialDenoiser()
+    {
+        EnsureSpatialDenoiserResources();
+        if (_spatialDenoiserShader == null || _denoiserPingTexture == null)
+        {
+            return;
+        }
+
+        int atrousKernel = _spatialDenoiserShader.FindKernel("CSAtrous");
+        _spatialDenoiserShader.SetTexture(atrousKernel, "FeatureNormal", _featureNormalTexture);
+        _spatialDenoiserShader.SetTexture(atrousKernel, "FeatureAlbedo", _featureAlbedoTexture);
+        _spatialDenoiserShader.SetTexture(atrousKernel, "FeatureDepth", _featureDepthTexture);
+        _spatialDenoiserShader.SetTexture(atrousKernel, "FeatureIdentity", _featureIdentityTexture);
+        _spatialDenoiserShader.SetTexture(atrousKernel, "FeatureValidity", _featureValidityTexture);
+        _spatialDenoiserShader.SetFloat("_DepthSigma", spatialDenoiserDepthSigma);
+        _spatialDenoiserShader.SetFloat("_NormalPower", spatialDenoiserNormalPower);
+        _spatialDenoiserShader.SetFloat("_AlbedoSigma", spatialDenoiserAlbedoSigma);
+        _spatialDenoiserShader.SetFloat("_LuminanceSigma", spatialDenoiserLuminanceSigma);
+
+        RenderTexture input = _beautyTexture;
+        RenderTexture output = _denoiserPingTexture;
+        int requiredDebugIterations = debugRenderMode == DebugRenderMode.AtrousIteration3 ? 3
+            : debugRenderMode == DebugRenderMode.AtrousIteration2 ? 2
+            : 1;
+        int iterations = Mathf.Clamp(Mathf.Max(spatialDenoiserIterations, requiredDebugIterations), 1, 5);
+        int threadGroupsX = Mathf.CeilToInt(_textureSize.x / 8.0f);
+        int threadGroupsY = Mathf.CeilToInt(_textureSize.y / 8.0f);
+        for (int iteration = 0; iteration < iterations; iteration++)
+        {
+            _spatialDenoiserShader.SetTexture(atrousKernel, "InputBeauty", input);
+            _spatialDenoiserShader.SetTexture(atrousKernel, "FilteredBeauty", output);
+            _spatialDenoiserShader.SetInt("_StepWidth", 1 << iteration);
+            _spatialDenoiserShader.Dispatch(atrousKernel, threadGroupsX, threadGroupsY, 1);
+
+            if (iteration == 0)
+            {
+                Graphics.CopyTexture(output, _denoiserIteration1Texture);
+            }
+            else if (iteration == 1)
+            {
+                Graphics.CopyTexture(output, _denoiserIteration2Texture);
+            }
+            else if (iteration == 2)
+            {
+                Graphics.CopyTexture(output, _denoiserIteration3Texture);
+            }
+
+            input = output;
+            output = output == _denoiserPingTexture ? _denoiserPongTexture : _denoiserPingTexture;
+        }
+
+        RenderTexture presentationInput = input;
+        if (debugRenderMode == DebugRenderMode.AtrousIteration1)
+        {
+            presentationInput = _denoiserIteration1Texture;
+        }
+        else if (debugRenderMode == DebugRenderMode.AtrousIteration2 && iterations >= 2)
+        {
+            presentationInput = _denoiserIteration2Texture;
+        }
+        else if (debugRenderMode == DebugRenderMode.AtrousIteration3 && iterations >= 3)
+        {
+            presentationInput = _denoiserIteration3Texture;
+        }
+
+        int presentKernel = _spatialDenoiserShader.FindKernel("CSPresent");
+        _spatialDenoiserShader.SetTexture(presentKernel, "InputBeauty", presentationInput);
+        _spatialDenoiserShader.SetTexture(presentKernel, "PresentationResult", _outputTexture);
+        _spatialDenoiserShader.SetFloat("_Exposure", exposure);
+        _spatialDenoiserShader.Dispatch(presentKernel, threadGroupsX, threadGroupsY, 1);
     }
 
     private void ResetFrameAccumulation()
@@ -1725,6 +1886,10 @@ public class GameManager : MonoBehaviour
         }
         long dispatchStart = _startupProfilePending ? Stopwatch.GetTimestamp() : 0;
         UpdateTextureFromCompute(kernelHandle);
+        if (!useDedicatedCausticsDebugKernel && ShouldRunSpatialDenoiser())
+        {
+            RunSpatialDenoiser();
+        }
         if (_startupProfilePending)
         {
             AddStartupProfilePhase("first compute dispatch (includes shader compilation)", dispatchStart);
