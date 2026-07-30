@@ -6,7 +6,7 @@
 
 On `Start()`, `GameManager` creates `_outputTexture` as a `RenderTexture` sized to the current screen dimensions with `enableRandomWrite = true`. This texture is bound as `Result` before dispatch and then blitted to the camera output. The blit is performed by `GameManager.RenderImage()`, which is invoked from `RayTracingCameraRenderer.OnRenderImage()`. The blit therefore happens on whichever camera holds the `RayTracingCameraRenderer` component; that is normally the camera wired into `GameManager.renderTextureCamera`, but the code does not enforce that they are the same camera.
 
-During `RenderImage()`, `GameManager` calls `EnsureOutputTextureSize(src.width, src.height)` to check the source render target dimensions and recreate `_outputTexture` and the HDR `_accumulationTexture` if the runtime render size changes. This runs every call. It also updates `renderTextureCamera.aspect` from the active output texture size so the camera projection used for ray generation matches the resized render target.
+During `RenderImage()`, `GameManager` calls `EnsureOutputTextureSize(src.width, src.height)` to check the source render target dimensions and recreate `_outputTexture`, the HDR `_accumulationTexture`, and reconstruction-neutral beauty/feature textures if the runtime render size changes. The feature textures contain linear beauty, normal, albedo, depth, identity, and validity. This runs every call. It also updates `renderTextureCamera.aspect` from the active output texture size so the camera projection used for ray generation matches the resized render target.
 
 ## Object Registration
 

@@ -2,6 +2,8 @@
 
 This document records the renderer work required to add path-tracing denoising and image reconstruction, including the implications of upgrading from Unity `2022.3.72f1` to Unity `6.3 LTS`. It is architectural guidance for a future implementation, not a claim that the current renderer supports DLSS, FSR, MetalFX, or Unity STP.
 
+Milestone 1 has established reconstruction-neutral full-resolution outputs: linear HDR beauty, unjittered primary-hit normal, albedo, hit distance, identity, and validity. They are persistent GPU textures and inspectable through `GameManager.DebugRenderMode`; presentation still uses the existing tone-mapped output, and no denoiser consumes these textures yet.
+
 ## Executive Summary
 
 The project can benefit substantially from rendering fewer camera pixels and reconstructing a native-resolution image, but its current output contract is not suitable for modern spatial or temporal reconstruction. The renderer currently produces one full-resolution, tone-mapped color texture and does not expose stable depth, motion, material, or history-validity data.

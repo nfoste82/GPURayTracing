@@ -28,6 +28,12 @@
 // with cs.SetTexture
 RWTexture2D<float4> Result;
 RWTexture2D<float4> AccumulationResult;
+RWTexture2D<float4> Beauty;
+RWTexture2D<float4> FeatureNormal;
+RWTexture2D<float4> FeatureAlbedo;
+RWTexture2D<float> FeatureDepth;
+RWTexture2D<float> FeatureIdentity;
+RWTexture2D<float> FeatureValidity;
 RWStructuredBuffer<float4> RegressionResults;
 RWStructuredBuffer<float4> _FocusQueryResult;
 
@@ -132,6 +138,12 @@ static const int DebugHitDistance = 7;
 static const int DebugAccelerationStructures = 8;
 static const int DebugGlassScatter = 9;
 static const int DebugCaustics = 10;
+static const int DebugRawBeauty = 11;
+static const int DebugFeatureNormal = 12;
+static const int DebugFeatureAlbedo = 13;
+static const int DebugFeatureDepth = 14;
+static const int DebugFeatureIdentity = 15;
+static const int DebugFeatureValidity = 16;
 
 static const int MaterialDiffuse = 0;
 static const int MaterialMetal = 1;
@@ -3648,6 +3660,65 @@ float3 GetDebugRenderColor(Ray ray, inout uint rngState)
 }
 #endif // DEBUG_RENDER
 
+float GetFeatureIdentity(RayHit hit)
+{
+    if (DidHitSky(hit))
+    {
+        return 0.0f;
+    }
+
+    if (hit.materialType == MaterialWater)
+    {
+        return 1.0f;
+    }
+
+    if (hit.lightIndex >= 0)
+    {
+        return 2000000.0f + hit.lightIndex;
+    }
+
+    return hit.obj_radius > 0.0f
+        ? 2.0f + hit.objectIndex
+        : 1000000.0f + hit.meshIndex;
+}
+
+float3 GetFeatureIdentityDebugColor(float identity)
+{
+    if (identity <= 0.0f)
+    {
+        return float3(0.0f, 0.0f, 0.0f);
+    }
+
+    uint hash = Hash((uint)identity);
+    return float3(
+        (hash & 255u) / 255.0f,
+        ((hash >> 8) & 255u) / 255.0f,
+        ((hash >> 16) & 255u) / 255.0f);
+}
+
+// Feature buffers use an unjittered pinhole primary ray. This makes their surface decisions
+// stable across stochastic path samples; beauty remains independently sampled and accumulated.
+void WriteDenoiserFeatures(uint2 pixel, uint width, uint height)
+{
+    float2 uv = ((float2(pixel) + 0.5f) / float2(width, height)) * 2.0f - 1.0f;
+    RayHit hit = GetNearestIntersection(CreateCameraRay(uv));
+    if (DidHitSky(hit))
+    {
+        FeatureNormal[pixel] = float4(0.0f, 0.0f, 0.0f, 0.0f);
+        FeatureAlbedo[pixel] = float4(0.0f, 0.0f, 0.0f, 0.0f);
+        FeatureDepth[pixel] = 0.0f;
+        FeatureIdentity[pixel] = 0.0f;
+        FeatureValidity[pixel] = 0.0f;
+        return;
+    }
+
+    FeatureNormal[pixel] = float4(normalize(hit.normal), 1.0f);
+    FeatureAlbedo[pixel] = float4(saturate(GetAlbedo(hit)), 1.0f);
+    FeatureDepth[pixel] = hit.distance;
+    FeatureIdentity[pixel] = GetFeatureIdentity(hit);
+    FeatureValidity[pixel] = 1.0f;
+}
+
 // Narkowicz 2015 ACES filmic tone mapping approximation. Maps the open-ended
 // HDR radiance range into [0,1] so bright values roll off smoothly instead of
 // clipping hard to white.
@@ -4285,6 +4356,8 @@ void CSMain (uint3 id : SV_DispatchThreadID)
         return;
     }
 
+    WriteDenoiserFeatures(id.xy, width, height);
+
     // Transform pixel to [-1,1] range
     float3 result = float3(0.0f, 0.0f, 0.0f);
     [loop]
@@ -4333,6 +4406,44 @@ void CSMain (uint3 id : SV_DispatchThreadID)
             color = (AccumulationResult[id.xy].rgb * previousFrameCount + color) / (previousFrameCount + 1.0f);
         }
         AccumulationResult[id.xy] = float4(color, 1);
+    }
+
+    Beauty[id.xy] = float4(color, 1.0f);
+
+    if (_DebugRenderMode == DebugRawBeauty)
+    {
+        Result[id.xy] = float4(color, 1.0f);
+        return;
+    }
+
+    if (_DebugRenderMode == DebugFeatureNormal)
+    {
+        Result[id.xy] = float4(FeatureNormal[id.xy].rgb * 0.5f + 0.5f, 1.0f);
+        return;
+    }
+
+    if (_DebugRenderMode == DebugFeatureAlbedo)
+    {
+        Result[id.xy] = float4(FeatureAlbedo[id.xy].rgb, 1.0f);
+        return;
+    }
+
+    if (_DebugRenderMode == DebugFeatureDepth)
+    {
+        Result[id.xy] = saturate(FeatureDepth[id.xy] / 25.0f).xxxx;
+        return;
+    }
+
+    if (_DebugRenderMode == DebugFeatureIdentity)
+    {
+        Result[id.xy] = float4(GetFeatureIdentityDebugColor(FeatureIdentity[id.xy]), 1.0f);
+        return;
+    }
+
+    if (_DebugRenderMode == DebugFeatureValidity)
+    {
+        Result[id.xy] = FeatureValidity[id.xy].xxxx;
+        return;
     }
 
     // Only tone map the final path-traced color. Debug visualizations are written

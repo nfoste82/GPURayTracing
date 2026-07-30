@@ -137,7 +137,13 @@ public class GameManager : MonoBehaviour
         HitDistance = 7,
         AccelerationStructures = 8,
         GlassScatter = 9,
-        Caustics = 10
+        Caustics = 10,
+        RawBeauty = 11,
+        FeatureNormal = 12,
+        FeatureAlbedo = 13,
+        FeatureDepth = 14,
+        FeatureIdentity = 15,
+        FeatureValidity = 16
     }
 
     [Header("Debug render modes")]
@@ -240,6 +246,14 @@ public class GameManager : MonoBehaviour
 
     private RenderTexture _outputTexture;
     private RenderTexture _accumulationTexture;
+    // Reconstruction-neutral, linear feature outputs. They are allocated now but do not change
+    // presentation until a denoiser consumes them in a later milestone.
+    private RenderTexture _beautyTexture;
+    private RenderTexture _featureNormalTexture;
+    private RenderTexture _featureAlbedoTexture;
+    private RenderTexture _featureDepthTexture;
+    private RenderTexture _featureIdentityTexture;
+    private RenderTexture _featureValidityTexture;
     private Vector2Int _textureSize;
     private int _accumulatedFrameCount;
     private long _renderedFrameCount;
@@ -768,6 +782,12 @@ public class GameManager : MonoBehaviour
     {
         _outputTexture?.Release();
         _accumulationTexture?.Release();
+        _beautyTexture?.Release();
+        _featureNormalTexture?.Release();
+        _featureAlbedoTexture?.Release();
+        _featureDepthTexture?.Release();
+        _featureIdentityTexture?.Release();
+        _featureValidityTexture?.Release();
         _textureSize = new Vector2Int(width, height);
         _outputTexture = new RenderTexture(_textureSize.x, _textureSize.y, 24)
         {
@@ -782,7 +802,25 @@ public class GameManager : MonoBehaviour
             filterMode = FilterMode.Point
         };
         _accumulationTexture.Create();
+
+        _beautyTexture = CreateFeatureTexture(RenderTextureFormat.ARGBFloat);
+        _featureNormalTexture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
+        _featureAlbedoTexture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
+        _featureDepthTexture = CreateFeatureTexture(RenderTextureFormat.RHalf);
+        _featureIdentityTexture = CreateFeatureTexture(RenderTextureFormat.RFloat);
+        _featureValidityTexture = CreateFeatureTexture(RenderTextureFormat.RHalf);
         ResetFrameAccumulation();
+    }
+
+    private RenderTexture CreateFeatureTexture(RenderTextureFormat format)
+    {
+        var texture = new RenderTexture(_textureSize.x, _textureSize.y, 0, format)
+        {
+            enableRandomWrite = true,
+            filterMode = FilterMode.Point
+        };
+        texture.Create();
+        return texture;
     }
 
     private void Update()
@@ -953,6 +991,12 @@ public class GameManager : MonoBehaviour
     {
         _outputTexture?.Release();
         _accumulationTexture?.Release();
+        _beautyTexture?.Release();
+        _featureNormalTexture?.Release();
+        _featureAlbedoTexture?.Release();
+        _featureDepthTexture?.Release();
+        _featureIdentityTexture?.Release();
+        _featureValidityTexture?.Release();
         _sphereBuffer?.Release();
         _lightBuffer?.Release();
         _triangleBuffer?.Release();
@@ -1015,6 +1059,12 @@ public class GameManager : MonoBehaviour
     {
         shader.SetTexture(kernelHandle, "Result", _outputTexture);
         shader.SetTexture(kernelHandle, "AccumulationResult", _accumulationTexture);
+        shader.SetTexture(kernelHandle, "Beauty", _beautyTexture);
+        shader.SetTexture(kernelHandle, "FeatureNormal", _featureNormalTexture);
+        shader.SetTexture(kernelHandle, "FeatureAlbedo", _featureAlbedoTexture);
+        shader.SetTexture(kernelHandle, "FeatureDepth", _featureDepthTexture);
+        shader.SetTexture(kernelHandle, "FeatureIdentity", _featureIdentityTexture);
+        shader.SetTexture(kernelHandle, "FeatureValidity", _featureValidityTexture);
         int threadGroupsX = Mathf.CeilToInt(_textureSize.x / (float)RenderThreadCountX);
         int threadGroupsY = Mathf.CeilToInt(_textureSize.y / (float)RenderThreadCountY);
         shader.Dispatch(kernelHandle, threadGroupsX, threadGroupsY, 1);
@@ -3748,7 +3798,8 @@ public class GameManager : MonoBehaviour
         // The shader splits its debug render path behind the DEBUG_RENDER keyword so the default
         // final-color variant compiles without any debug intersection/scatter code (a large shader
         // compile-time saving). Only enable the debug variant when a debug mode is actually active.
-        if (debugRenderMode == DebugRenderMode.FinalColor || debugRenderMode == DebugRenderMode.Caustics)
+        if (debugRenderMode == DebugRenderMode.FinalColor || debugRenderMode == DebugRenderMode.Caustics
+            || debugRenderMode >= DebugRenderMode.RawBeauty)
         {
             shader.DisableKeyword("DEBUG_RENDER");
         }

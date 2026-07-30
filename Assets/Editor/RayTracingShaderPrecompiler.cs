@@ -55,11 +55,28 @@ public static class RayTracingShaderPrecompiler
             enableRandomWrite = true
         };
         rt.Create();
+        var featureColor = new RenderTexture(8, 8, 0, RenderTextureFormat.ARGBFloat)
+        {
+            enableRandomWrite = true
+        };
+        featureColor.Create();
+        var featureScalar = new RenderTexture(8, 8, 0, RenderTextureFormat.RFloat)
+        {
+            enableRandomWrite = true
+        };
+        featureScalar.Create();
 
         var stopwatch = Stopwatch.StartNew();
         try
         {
             shader.SetTexture(kernel, "Result", rt);
+            shader.SetTexture(kernel, "AccumulationResult", featureColor);
+            shader.SetTexture(kernel, "Beauty", featureColor);
+            shader.SetTexture(kernel, "FeatureNormal", featureColor);
+            shader.SetTexture(kernel, "FeatureAlbedo", featureColor);
+            shader.SetTexture(kernel, "FeatureDepth", featureScalar);
+            shader.SetTexture(kernel, "FeatureIdentity", featureScalar);
+            shader.SetTexture(kernel, "FeatureValidity", featureScalar);
             // Single thread group; we only care about triggering compilation, not output.
             shader.Dispatch(kernel, 1, 1, 1);
 
@@ -81,7 +98,11 @@ public static class RayTracingShaderPrecompiler
         {
             stopwatch.Stop();
             rt.Release();
+            featureColor.Release();
+            featureScalar.Release();
             Object.DestroyImmediate(rt);
+            Object.DestroyImmediate(featureColor);
+            Object.DestroyImmediate(featureScalar);
         }
 
         Debug.Log(

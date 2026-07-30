@@ -749,6 +749,12 @@ namespace GPURayTracing.Tests
             lights = lights ?? Array.Empty<LightData>();
             var result = CreateRenderTexture(width, height, RenderTextureFormat.ARGBFloat);
             var accumulation = CreateRenderTexture(width, height, RenderTextureFormat.ARGBFloat);
+            var beauty = CreateRenderTexture(width, height, RenderTextureFormat.ARGBFloat);
+            var featureNormal = CreateRenderTexture(width, height, RenderTextureFormat.ARGBHalf);
+            var featureAlbedo = CreateRenderTexture(width, height, RenderTextureFormat.ARGBHalf);
+            var featureDepth = CreateRenderTexture(width, height, RenderTextureFormat.RHalf);
+            var featureIdentity = CreateRenderTexture(width, height, RenderTextureFormat.RFloat);
+            var featureValidity = CreateRenderTexture(width, height, RenderTextureFormat.RHalf);
             var skybox = CreateSolidTexture(skyboxColor ?? new Color(0.18f, 0.32f, 0.58f, 1.0f));
             bool ownsMeshTextures = meshTextures == null;
             meshTextures = meshTextures ?? CreateMeshTextureArray();
@@ -783,6 +789,12 @@ namespace GPURayTracing.Tests
                 }
                 shader.SetTexture(kernel, "Result", result);
                 shader.SetTexture(kernel, "AccumulationResult", accumulation);
+                shader.SetTexture(kernel, "Beauty", beauty);
+                shader.SetTexture(kernel, "FeatureNormal", featureNormal);
+                shader.SetTexture(kernel, "FeatureAlbedo", featureAlbedo);
+                shader.SetTexture(kernel, "FeatureDepth", featureDepth);
+                shader.SetTexture(kernel, "FeatureIdentity", featureIdentity);
+                shader.SetTexture(kernel, "FeatureValidity", featureValidity);
                 shader.SetTexture(kernel, "_SkyboxTexture", skybox);
                 shader.SetTexture(kernel, "_MeshAlbedoTextures", meshTextures);
                 shader.SetTexture(kernel, "_MeshMetallicRoughnessTextures", meshDataTextures);
@@ -855,6 +867,12 @@ namespace GPURayTracing.Tests
                 shadowBuffer.Release();
                 result.Release();
                 accumulation.Release();
+                beauty.Release();
+                featureNormal.Release();
+                featureAlbedo.Release();
+                featureDepth.Release();
+                featureIdentity.Release();
+                featureValidity.Release();
                 UnityEngine.Object.DestroyImmediate(skybox);
                 if (ownsMeshTextures)
                 {
