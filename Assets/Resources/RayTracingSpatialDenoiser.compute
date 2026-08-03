@@ -1,7 +1,13 @@
 #pragma kernel CSAtrous
 #pragma kernel CSPresent
+#pragma kernel CSGenerateCameraMotion
+#pragma kernel CSTemporalReprojectValidate
+#pragma kernel CSUpdateTemporalMoments
+#pragma kernel CSVisualizeTemporal
+#pragma kernel CSVisualizeFeature
 
 Texture2D<float4> InputBeauty;
+Texture2D<float4> Beauty;
 Texture2D<float4> FeatureNormal;
 Texture2D<float4> FeatureAlbedo;
 Texture2D<float> FeatureDepth;
@@ -9,6 +15,37 @@ Texture2D<float> FeatureIdentity;
 Texture2D<float> FeatureValidity;
 RWTexture2D<float4> FilteredBeauty;
 RWTexture2D<float4> PresentationResult;
+Texture2D<float4> PreviousRadiance;
+Texture2D<float4> PreviousNormal;
+Texture2D<float> PreviousDepth;
+Texture2D<float> PreviousIdentity;
+Texture2D<float> PreviousValidity;
+Texture2D<float> PreviousHistoryLength;
+Texture2D<float> HistoryLength;
+Texture2D<float> Variance;
+Texture2D<float2> MotionVectors;
+RWTexture2D<float2> GeneratedMotionVectors;
+RWTexture2D<float4> ReprojectedRadiance;
+RWTexture2D<float4> NextRadiance;
+RWTexture2D<float4> NextNormal;
+RWTexture2D<float> NextDepth;
+RWTexture2D<float> NextIdentity;
+RWTexture2D<float> NextValidity;
+RWTexture2D<float> NextHistoryLength;
+RWTexture2D<float2> TemporalDiagnostics;
+float4x4 _CurrentUnjitteredViewProjection;
+float4x4 _PreviousUnjitteredViewProjection;
+float4x4 _CameraToWorld;
+float4x4 _CameraInverseProjection;
+int _TemporalHistoryValid;
+int _TemporalUnsupported;
+float _TemporalDepthThreshold;
+float _TemporalNormalThreshold;
+int _TemporalDebugMode;
+int _TemporalMaxHistoryLength;
+float _TemporalCameraRotationDelta;
+int _UseVarianceGuidance;
+int _FeatureDebugMode;
 
 int _StepWidth;
 float _DepthSigma;
@@ -22,6 +59,49 @@ static const float Kernel[5] = { 1.0f, 4.0f, 6.0f, 4.0f, 1.0f };
 float Luminance(float3 color)
 {
     return dot(color, float3(0.2126f, 0.7152f, 0.0722f));
+}
+
+float3 ClampHistoryLuminance(float3 historyColor, uint2 pixel, uint width, uint height)
+{
+    float minimumLuminance = 1e20f;
+    float maximumLuminance = 0.0f;
+    [unroll]
+    for (int y = -1; y <= 1; y++)
+    {
+        [unroll]
+        for (int x = -1; x <= 1; x++)
+        {
+            int2 samplePixel = clamp(int2(pixel) + int2(x, y), int2(0, 0), int2(width - 1, height - 1));
+            float sampleLuminance = Luminance(Beauty[uint2(samplePixel)].rgb);
+            minimumLuminance = min(minimumLuminance, sampleLuminance);
+            maximumLuminance = max(maximumLuminance, sampleLuminance);
+        }
+    }
+
+    float historyLuminance = Luminance(historyColor);
+    float clampedLuminance = clamp(historyLuminance, minimumLuminance, maximumLuminance);
+    return historyLuminance > 0.00001f ? historyColor * (clampedLuminance / historyLuminance) : historyColor;
+}
+
+float EstimateCurrentVariance(uint2 pixel, uint width, uint height)
+{
+    float sum = 0.0f;
+    float sumSquared = 0.0f;
+    [unroll]
+    for (int y = -1; y <= 1; y++)
+    {
+        [unroll]
+        for (int x = -1; x <= 1; x++)
+        {
+            uint2 samplePixel = uint2(clamp(int2(pixel) + int2(x, y), int2(0, 0), int2(width - 1, height - 1)));
+            float luminance = Luminance(Beauty[samplePixel].rgb);
+            sum += luminance;
+            sumSquared += luminance * luminance;
+        }
+    }
+
+    float mean = sum / 9.0f;
+    return max(0.0f, sumSquared / 9.0f - mean * mean);
 }
 
 float3 ACESFilmicToneMap(float3 color)
@@ -88,7 +168,11 @@ void CSAtrous(uint3 id : SV_DispatchThreadID)
 
             float luminanceDifference = abs(Luminance(sampleColor) - centerLuminance)
                 / max(0.001f, centerLuminance + Luminance(sampleColor));
-            weight *= exp(-luminanceDifference / _LuminanceSigma);
+            // Noisy pixels need broader filtering; stable pixels retain the configured edge stop.
+            float varianceScale = _UseVarianceGuidance != 0
+                ? 1.0f + sqrt(max(0.0f, Variance[pixel])) / max(0.01f, centerLuminance)
+                : 1.0f;
+            weight *= exp(-luminanceDifference / max(0.0001f, _LuminanceSigma * varianceScale));
             sum += sampleColor * weight;
             totalWeight += weight;
         }
@@ -108,4 +192,287 @@ void CSPresent(uint3 id : SV_DispatchThreadID)
     }
 
     PresentationResult[id.xy] = float4(ACESFilmicToneMap(InputBeauty[id.xy].rgb * _Exposure), 1.0f);
+}
+
+float2 ClipToUv(float4 clip)
+{
+    return clip.xy / clip.w * float2(0.5f, 0.5f) + 0.5f;
+}
+
+float3 ReconstructFeatureWorldPosition(uint2 pixel, uint width, uint height)
+{
+    float2 uv = ((float2(pixel) + 0.5f) / float2(width, height)) * 2.0f - 1.0f;
+    float3 origin = mul(_CameraToWorld, float4(0.0f, 0.0f, 0.0f, 1.0f)).xyz;
+    float3 direction = mul(_CameraInverseProjection, float4(uv, 0.0f, 1.0f)).xyz;
+    direction = normalize(mul(_CameraToWorld, float4(direction, 0.0f)).xyz);
+    return origin + direction * FeatureDepth[pixel];
+}
+
+[numthreads(8, 8, 1)]
+void CSGenerateCameraMotion(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    GeneratedMotionVectors.GetDimensions(width, height);
+    if (id.x >= width || id.y >= height)
+    {
+        return;
+    }
+
+    uint2 pixel = id.xy;
+    if (FeatureValidity[pixel] <= 0.5f)
+    {
+        GeneratedMotionVectors[pixel] = float2(0.0f, 0.0f);
+        return;
+    }
+
+    float4 position = float4(ReconstructFeatureWorldPosition(pixel, width, height), 1.0f);
+    float4 currentClip = mul(_CurrentUnjitteredViewProjection, position);
+    float4 previousClip = mul(_PreviousUnjitteredViewProjection, position);
+    if (currentClip.w <= 0.00001f || previousClip.w <= 0.00001f)
+    {
+        GeneratedMotionVectors[pixel] = float2(10000.0f, 10000.0f);
+        return;
+    }
+
+    // Project both endpoints through the same convention. Mixing pixel-center UV with projected
+    // previous UV introduces a persistent offset on graphics APIs whose clip-space Y differs.
+    float2 currentUv = ClipToUv(currentClip);
+    float2 previousUv = ClipToUv(previousClip);
+    GeneratedMotionVectors[pixel] = currentUv - previousUv;
+}
+
+[numthreads(8, 8, 1)]
+void CSTemporalReprojectValidate(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    NextRadiance.GetDimensions(width, height);
+    if (id.x >= width || id.y >= height)
+    {
+        return;
+    }
+
+    uint2 pixel = id.xy;
+    float reason = 0.0f;
+    float accepted = 0.0f;
+    float3 candidate = Beauty[pixel].rgb;
+    float historyLength = 1.0f;
+    uint2 previousPixel = pixel;
+    if (_TemporalHistoryValid == 0)
+    {
+        reason = 1.0f;
+    }
+    else if (FeatureValidity[pixel] <= 0.5f)
+    {
+        reason = 2.0f;
+    }
+    else if (_TemporalUnsupported != 0 || FeatureNormal[pixel].w > 0.75f)
+    {
+        reason = 8.0f;
+    }
+    else
+    {
+        float2 uv = (float2(pixel) + 0.5f) / float2(width, height);
+        float2 previousUv = uv - MotionVectors[pixel];
+        if (any(previousUv < 0.0f) || any(previousUv >= 1.0f))
+        {
+            reason = 3.0f;
+        }
+        else
+        {
+            previousPixel = min(uint2(previousUv * float2(width, height)), uint2(width - 1, height - 1));
+            if (PreviousValidity[previousPixel] <= 0.5f)
+            {
+                reason = 4.0f;
+            }
+            else if (PreviousIdentity[previousPixel] != FeatureIdentity[pixel])
+            {
+                reason = 5.0f;
+            }
+            else if (abs(PreviousDepth[previousPixel] - FeatureDepth[pixel])
+                / max(0.001f, min(PreviousDepth[previousPixel], FeatureDepth[pixel])) > _TemporalDepthThreshold)
+            {
+                reason = 6.0f;
+            }
+            else if (dot(normalize(PreviousNormal[previousPixel].xyz), normalize(FeatureNormal[pixel].xyz)) < _TemporalNormalThreshold)
+            {
+                reason = 7.0f;
+            }
+            else
+            {
+                accepted = 1.0f;
+                candidate = PreviousRadiance[previousPixel].rgb;
+                candidate = ClampHistoryLuminance(candidate, pixel, width, height);
+                float previousHistoryLength = max(1.0f, PreviousHistoryLength[previousPixel]);
+                historyLength = min((float)_TemporalMaxHistoryLength, previousHistoryLength + 1.0f);
+                // Transmission boundaries can reuse only a short history because primary-surface
+                // motion is not the motion of refracted radiance behind the boundary.
+                if (FeatureNormal[pixel].w > 0.25f)
+                {
+                    historyLength = min(historyLength, 4.0f);
+                }
+            }
+        }
+    }
+
+    // Keep the reprojection diagnostic distinct from current beauty: black means no prior sample
+    // survived validation, while the temporal resolve still falls back safely to current beauty.
+    ReprojectedRadiance[pixel] = float4(accepted > 0.5f ? candidate : float3(0.0f, 0.0f, 0.0f), 1.0f);
+    // Rejected and disoccluded pixels use only the current estimate. Valid history contributes
+    // 1 / capped history length, keeping recent samples meaningful rather than accumulating forever.
+    float motionInPixels = length(MotionVectors[pixel] * float2(width, height));
+    // Motion shortens the effective history without eliminating it. A 50% current-frame cap
+    // retains a useful two-frame average during ordinary movement; validation and camera cuts
+    // remain responsible for completely rejecting unsafe history.
+    float motionCurrentWeight = min(0.5f, motionInPixels * 0.1f);
+    float currentWeight = max(1.0f / historyLength, motionCurrentWeight);
+    // Camera-only nearest-neighbor reprojection is least reliable during rotation. Prefer current
+    // radiance rapidly as angular velocity rises rather than dragging old detail across the frame.
+    currentWeight = max(currentWeight, min(0.5f, _TemporalCameraRotationDelta));
+    float3 temporalColor = accepted > 0.5f
+        ? lerp(candidate, Beauty[pixel].rgb, currentWeight)
+        : Beauty[pixel].rgb;
+    NextRadiance[pixel] = float4(temporalColor, 1.0f);
+    NextNormal[pixel] = FeatureNormal[pixel];
+    NextDepth[pixel] = FeatureDepth[pixel];
+    NextIdentity[pixel] = FeatureIdentity[pixel];
+    NextValidity[pixel] = FeatureValidity[pixel];
+    NextHistoryLength[pixel] = historyLength;
+    TemporalDiagnostics[pixel] = float2(accepted, reason);
+}
+
+// This is separate from reprojection because that kernel already uses Metal's eight-UAV limit.
+Texture2D<float2> PreviousMoments;
+RWTexture2D<float2> NextMoments;
+RWTexture2D<float> NextVariance;
+
+[numthreads(8, 8, 1)]
+void CSUpdateTemporalMoments(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    NextVariance.GetDimensions(width, height);
+    if (id.x >= width || id.y >= height)
+    {
+        return;
+    }
+
+    uint2 pixel = id.xy;
+    float accepted = TemporalDiagnostics[pixel].x;
+    float currentLuminance = Luminance(Beauty[pixel].rgb);
+    float2 moments = float2(currentLuminance, currentLuminance * currentLuminance);
+    if (accepted > 0.5f)
+    {
+        float2 uv = (float2(pixel) + 0.5f) / float2(width, height);
+        uint2 previousPixel = min(uint2((uv - MotionVectors[pixel]) * float2(width, height)), uint2(width - 1, height - 1));
+        float historyLength = max(1.0f, HistoryLength[pixel]);
+        float motionInPixels = length(MotionVectors[pixel] * float2(width, height));
+        float currentWeight = max(1.0f / historyLength, min(0.5f, motionInPixels * 0.1f));
+        currentWeight = max(currentWeight, min(0.5f, _TemporalCameraRotationDelta));
+        moments = lerp(PreviousMoments[previousPixel], moments, currentWeight);
+    }
+
+    NextMoments[pixel] = moments;
+    // New/disoccluded pixels do not yet have temporal evidence, so seed filtering from the
+    // local current-frame neighborhood rather than incorrectly treating them as noiseless.
+    NextVariance[pixel] = accepted > 0.5f
+        ? max(0.0f, moments.y - moments.x * moments.x)
+        : EstimateCurrentVariance(pixel, width, height);
+}
+
+[numthreads(8, 8, 1)]
+void CSVisualizeTemporal(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    PresentationResult.GetDimensions(width, height);
+    if (id.x >= width || id.y >= height)
+    {
+        return;
+    }
+
+    if (_TemporalDebugMode == 1)
+    {
+        PresentationResult[id.xy] = float4(MotionVectors[id.xy] * 8.0f + 0.5f, 0.5f, 1.0f);
+    }
+    else if (_TemporalDebugMode == 2)
+    {
+        PresentationResult[id.xy] = float4(ACESFilmicToneMap(ReprojectedRadiance[id.xy].rgb * _Exposure), 1.0f);
+    }
+    else if (_TemporalDebugMode == 3)
+    {
+        PresentationResult[id.xy] = TemporalDiagnostics[id.xy].x > 0.5f
+            ? float4(0.0f, 1.0f, 0.0f, 1.0f)
+            : float4(1.0f, 0.0f, 0.0f, 1.0f);
+    }
+    else if (_TemporalDebugMode == 5)
+    {
+        PresentationResult[id.xy] = float4(ACESFilmicToneMap(NextRadiance[id.xy].rgb * _Exposure), 1.0f);
+    }
+    else if (_TemporalDebugMode == 6)
+    {
+        float normalizedLength = saturate(HistoryLength[id.xy] / max(1.0f, (float)_TemporalMaxHistoryLength));
+        PresentationResult[id.xy] = float4(0.0f, normalizedLength, normalizedLength, 1.0f);
+    }
+    else if (_TemporalDebugMode == 7)
+    {
+        float3 temporalColor = ACESFilmicToneMap(NextRadiance[id.xy].rgb * _Exposure);
+        float accepted = TemporalDiagnostics[id.xy].x;
+        PresentationResult[id.xy] = float4(lerp(temporalColor, float3(1.0f, 0.0f, 1.0f), accepted * 0.3f), 1.0f);
+    }
+    else if (_TemporalDebugMode == 8)
+    {
+        float variance = Variance[id.xy];
+        PresentationResult[id.xy] = float4(saturate(log2(1.0f + variance) * 0.25f).xxx, 1.0f);
+    }
+    else
+    {
+        float reason = TemporalDiagnostics[id.xy].y;
+        PresentationResult[id.xy] = reason == 0.0f ? float4(0.0f, 1.0f, 0.0f, 1.0f)
+            : reason == 1.0f ? float4(1.0f, 1.0f, 0.0f, 1.0f)
+            : reason == 2.0f ? float4(0.0f, 0.0f, 1.0f, 1.0f)
+            : reason == 3.0f ? float4(1.0f, 0.0f, 1.0f, 1.0f)
+            : reason == 4.0f ? float4(0.0f, 1.0f, 1.0f, 1.0f)
+            : reason == 5.0f ? float4(1.0f, 0.5f, 0.0f, 1.0f)
+            : reason == 6.0f ? float4(0.6f, 0.2f, 1.0f, 1.0f)
+            : reason == 7.0f ? float4(0.8f, 0.8f, 0.8f, 1.0f)
+            : float4(1.0f, 0.0f, 0.0f, 1.0f);
+    }
+}
+
+[numthreads(8, 8, 1)]
+void CSVisualizeFeature(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    PresentationResult.GetDimensions(width, height);
+    if (id.x >= width || id.y >= height)
+    {
+        return;
+    }
+
+    if (_FeatureDebugMode == 1)
+    {
+        PresentationResult[id.xy] = float4(FeatureNormal[id.xy].xyz * 0.5f + 0.5f, 1.0f);
+    }
+    else if (_FeatureDebugMode == 2)
+    {
+        PresentationResult[id.xy] = float4(FeatureAlbedo[id.xy].xyz, 1.0f);
+    }
+    else if (_FeatureDebugMode == 3)
+    {
+        PresentationResult[id.xy] = saturate(FeatureDepth[id.xy] / 25.0f).xxxx;
+    }
+    else if (_FeatureDebugMode == 4)
+    {
+        uint identity = (uint)FeatureIdentity[id.xy];
+        identity ^= identity >> 16;
+        identity *= 0x7feb352du;
+        identity ^= identity >> 15;
+        PresentationResult[id.xy] = float4(
+            (identity & 255u) / 255.0f,
+            ((identity >> 8) & 255u) / 255.0f,
+            ((identity >> 16) & 255u) / 255.0f,
+            1.0f);
+    }
+    else
+    {
+        PresentationResult[id.xy] = FeatureValidity[id.xy].xxxx;
+    }
 }

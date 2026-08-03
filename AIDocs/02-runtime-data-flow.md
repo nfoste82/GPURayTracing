@@ -45,11 +45,11 @@ Each render callback:
 6. Calls `UpdateSpheres()` to refresh CPU sphere/light structs from cached Unity object references.
 7. Calls `UpdateTriangles()` to refresh registered mesh triangle data only if a cached mesh transform or material value changed.
 8. Calls `UpdateTopLevelBvh()` and `UpdateShadowBvh()` to refresh acceleration structures if their runtime thresholds are met.
-9. Checks whether final-color frame accumulation can continue. Accumulation resets when the render size, camera matrices, focus distance, quality settings, random-noise setting, skybox texture/tint, sphere/light data, mesh object transforms/materials, or relevant object counts change. Debug render modes and `enableFrameAccumulation == false` disable accumulation.
+9. Selects accumulation policy. When temporal denoising is enabled and the camera changed beyond its temporal motion thresholds since the prior rendered frame, bounded temporal accumulation is used. Otherwise, final-color progressive accumulation can continue when enabled. Temporal history remains updated while the still-image path is presented, ready for renewed camera movement. Progressive accumulation resets when the render size, camera matrices, focus distance, quality settings, random-noise setting, skybox texture/tint, sphere/light data, mesh object transforms/materials, or relevant object counts change. Debug render modes and `enableFrameAccumulation == false` disable progressive accumulation.
 10. Finds the compute kernel `CSMain`.
 11. Calls `SetShaderParameters()`.
 12. When caustics and final-color frame accumulation are enabled, clears and rebuilds an independent fixed-size photon batch and spatial grid. Relevant scene changes also rebuild compact light/refractor and mesh-target CDF buffers; photon threads binary-search these distributions instead of scanning all scene candidates. Stable frames advance a caustic-only sequence index without invalidating HDR accumulation; relevant scene/settings changes reset both sequences. Without accumulation, the current batch remains fixed.
-13. Dispatches the compute shader through `UpdateTextureFromCompute()`.
+13. Dispatches beauty through `UpdateTextureFromCompute()`, then runs the separate five-UAV `CSFeatures` kernel when spatial or temporal denoising needs stable primary features. This split keeps the main renderer and temporal kernels within Metal's eight-UAV limit.
 14. Increments `AccumulatedFrameCount` when accumulation is active.
 15. Marks the active `debugRenderMode` as warmed and clears the variant-warmup flag.
 16. In single-frame mode, keeps dispatching at the reduced single-frame presentation rate. Final-color accumulation progressively refines an unchanged view and resets when the camera or scene changes.

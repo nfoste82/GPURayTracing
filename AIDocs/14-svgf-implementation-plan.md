@@ -20,7 +20,7 @@ This is distinct from progressive still-image accumulation and from external den
 ## Current Status
 
 - Milestones 1 and 2 are complete.
-- Milestones 3-12 remain unimplemented.
+- Milestones 3-11 are complete. Milestone 12 remains unimplemented.
 - The existing tone-mapped `Result` texture remains the fallback presentation path. When spatial denoising is enabled, HDR beauty is filtered first and a denoiser presentation pass writes the tone-mapped result.
 - Do not conflate this work with a Unity version or render-pipeline migration.
 
@@ -71,7 +71,7 @@ This is distinct from progressive still-image accumulation and from external den
 
 ## Milestone 3: Previous-Frame Camera State
 
-**Status:** Not started
+**Status:** Complete
 
 **Purpose:** Establish deterministic camera information required for temporal reprojection.
 
@@ -82,6 +82,13 @@ This is distinct from progressive still-image accumulation and from external den
 - Store current/previous jitter, render dimensions, frame index, and a camera-cut/history-reset flag.
 - Initially constrain temporal validation to a pinhole camera path or define a conservative depth-of-field policy.
 
+**Implemented:**
+
+- `GameManager` retains current/previous unjittered view-projection matrices, current/previous frame jitter, a temporal frame index, camera-cut thresholds, and a separate temporal reset state.
+- A deterministic Halton(2,3) frame jitter is applied to beauty sampling only while temporal diagnostics/history are active; pinhole feature visibility remains unjittered.
+- Resize, relevant rendering/scene changes, large camera discontinuities, and temporal disable/re-enable reset temporal state without reusing progressive accumulation state.
+- Initial temporal validation uses stable pinhole primary features as conservative motion guidance under depth of field. Fog and water remain globally rejected because their radiance motion is not represented by those features.
+
 **Validation:**
 
 - Debug current/previous matrices and jitter values.
@@ -89,7 +96,7 @@ This is distinct from progressive still-image accumulation and from external den
 
 ## Milestone 4: Camera-Only Motion Vectors
 
-**Status:** Not started
+**Status:** Complete
 
 **Purpose:** Reproject static primary surfaces across camera movement.
 
@@ -100,6 +107,13 @@ This is distinct from progressive still-image accumulation and from external den
 - Add a motion-vector texture and debug visualization.
 - Reject history for dynamic geometry until object motion is implemented.
 
+**Implemented:**
+
+- Stable unjittered primary-hit depth is reconstructed through the current pinhole camera to obtain world position.
+- `CSGenerateCameraMotion` projects that position with current and previous unjittered view-projection matrices and writes `current UV - previous UV` motion vectors.
+- `MotionVectors` provides a signed-vector debug visualization.
+- Dynamic geometry is not supported for temporal reuse yet; changed scene state resets history.
+
 **Validation:**
 
 - Test camera pan, translation, rotation, and small/large movements against static spheres and meshes.
@@ -107,7 +121,7 @@ This is distinct from progressive still-image accumulation and from external den
 
 ## Milestone 5: Temporal History Allocation And Lifecycle
 
-**Status:** Not started
+**Status:** Complete
 
 **Purpose:** Safely retain prior-frame data without using the unbounded progressive accumulation model.
 
@@ -118,6 +132,12 @@ This is distinct from progressive still-image accumulation and from external den
 - Reset all related histories together for camera cuts, size changes, incompatible settings changes, scene changes without valid motion, denoiser toggles, or changed feature semantics.
 - Keep progressive still accumulation independent from temporal denoiser history.
 
+**Implemented:**
+
+- Temporal radiance, normal, depth, identity, and validity each have isolated double-buffered GPU histories.
+- Temporal resources are allocated only while temporal denoising or a temporal debug mode is active, then released when disabled.
+- Read/write histories swap only after validation dispatch; temporal state is separate from progressive accumulation.
+
 **Validation:**
 
 - Add reset diagnostics and test resize, toggle, scene, material, camera, and quality transitions.
@@ -125,7 +145,7 @@ This is distinct from progressive still-image accumulation and from external den
 
 ## Milestone 6: Reprojection And History Validation
 
-**Status:** Not started
+**Status:** Complete
 
 **Purpose:** Accept prior data only when it represents the current visible surface.
 
@@ -136,6 +156,13 @@ This is distinct from progressive still-image accumulation and from external den
 - Start with nearest-neighbor history sampling; evaluate compatible bilinear selection after correctness is proven.
 - Record a per-pixel rejection reason for diagnostics.
 
+**Implemented:**
+
+- `CSTemporalReprojectValidate` uses nearest-neighbor reprojected history and validates global reset state, current/prior validity, bounds, identity, relative depth, normal agreement, and reactive/unsupported paths.
+- Rejection diagnostics encode reset, invalid current feature, out-of-bounds motion, invalid prior feature, identity, depth, normal, and reactive-policy failures.
+- `TemporalReprojectedRadiance`, `TemporalHistoryAcceptance`, and `TemporalRejectionReason` provide diagnostics. This milestone records a prior-radiance candidate but does not blend it; bounded temporal accumulation remains milestone 7.
+- Diagnostic convention: reprojected radiance is black when no prior sample was accepted; acceptance is green or red; rejection reasons use distinct colors rather than ambiguous beauty-like output.
+
 **Validation:**
 
 - Test disocclusions, silhouettes, foreground/background crossings, camera cuts, and sky transitions.
@@ -144,7 +171,7 @@ This is distinct from progressive still-image accumulation and from external den
 
 ## Milestone 7: Bounded Temporal Accumulation
 
-**Status:** Not started
+**Status:** Complete
 
 **Purpose:** Reduce per-frame Monte Carlo variance while retaining responsiveness to change.
 
@@ -155,6 +182,16 @@ This is distinct from progressive still-image accumulation and from external den
 - Choose an initial maximum effective history range, then tune it using measured stability and responsiveness.
 - Use no history on invalid/disoccluded pixels.
 
+**Implemented:**
+
+- Valid nearest-neighbor reprojected HDR history blends with current beauty using `1 / historyLength` current-frame weight.
+- Per-pixel history length starts at one after rejection, increments only on accepted history, and is capped by `GameManager.temporalMaxHistoryLength` (default `16`).
+- Temporal history stores the blended HDR radiance, while progressive still accumulation remains independent.
+- `TemporalDenoised` and `TemporalHistoryLength` debug modes expose the temporal-only result and effective history range.
+- `TemporalDenoisedTint` presents temporal output with a magenta overlay wherever validated history actually contributed; untinted pixels used current beauty only.
+- With temporal denoising enabled, the bounded temporal HDR result is tone mapped and presented. Unsupported or rejected paths present current beauty only.
+- When `enableFrameAccumulation` is also enabled, the renderer automatically selects bounded temporal accumulation while the camera is moving and switches to independent progressive still accumulation once camera motion stops. Temporal history continues updating while still, so it is immediately available when movement resumes. The camera-motion thresholds are configurable through `temporalMotionDistance` and `temporalMotionAngle`.
+
 **Validation:**
 
 - Compare raw, spatial-only, and temporal-only output during camera motion.
@@ -162,7 +199,7 @@ This is distinct from progressive still-image accumulation and from external den
 
 ## Milestone 8: History Clamping
 
-**Status:** Not started
+**Status:** Complete
 
 **Purpose:** Prevent stale bright or dark history from contaminating current pixels.
 
@@ -172,6 +209,15 @@ This is distinct from progressive still-image accumulation and from external den
 - Clamp reprojected history to a plausible luminance-aware range before blending.
 - Tune conservatively for sparse bright paths; avoid independent RGB clamping that causes hue shifts.
 
+**Implemented:**
+
+- Accepted history luminance is constrained to the current pixel's 3x3 neighborhood luminance range before blending.
+- Clamping rescales the complete HDR color by luminance rather than clipping RGB channels independently, preserving hue.
+- Current-frame weight increases with reprojected motion in pixels, preventing a capped `15/16` history contribution from visibly dragging across the image during faster camera movement.
+- Camera motion and rotation shorten effective history to a conservative two-frame average rather than eliminating temporal contribution entirely. Validation failures and camera cuts still reject history completely.
+- Motion vectors use Unity's render-texture GPU projection convention for both current and previous endpoints, avoiding the Metal clip-space orientation mismatch that otherwise rejects or misaligns history during motion.
+- Feature generation runs in a separate `CSFeatures` dispatch so `CSMain` stays within Metal's eight-UAV limit; temporal resolve packs acceptance/rejection into one diagnostics target and reuses the next-radiance history as output to remain within the same limit.
+
 **Validation:**
 
 - Test moving emissive objects, reflections, lighting changes, fireflies, and caustic receivers.
@@ -179,16 +225,20 @@ This is distinct from progressive still-image accumulation and from external den
 
 ## Milestone 9: Luminance Moments And Variance
 
-**Status:** Not started
+**Status:** Complete
 
 **Purpose:** Identify where residual uncertainty requires stronger spatial filtering.
 
 **Work:**
 
-- Accumulate first and second luminance moments with temporal history.
-- Derive non-negative variance from those moments.
-- Estimate variance spatially for newly disoccluded pixels with insufficient history.
-- Store variance in a bandwidth-conscious scalar format after validating range requirements.
+- Temporal reprojection now accumulates first and second luminance moments in double-buffered
+  half-precision `RG` histories and writes a non-negative scalar variance texture.
+- Moment/variance generation runs as a separate two-UAV dispatch, preserving the temporal
+  reprojection kernel's Metal-compatible eight-UAV limit.
+- Rejected/disoccluded pixels initialize their moments from current beauty and use a local 3x3
+  current-frame luminance estimate for variance, avoiding invalid history reuse or treating
+  newly visible noisy pixels as noiseless.
+- `TemporalVariance` provides a log-scaled diagnostic view.
 
 **Validation:**
 
@@ -197,16 +247,18 @@ This is distinct from progressive still-image accumulation and from external den
 
 ## Milestone 10: Variance-Guided A-Trous Filtering
 
-**Status:** Not started
+**Status:** Complete
 
 **Purpose:** Complete the initial SVGF-style pipeline by adapting spatial filtering to residual uncertainty.
 
 **Work:**
 
-- Feed temporally accumulated HDR radiance and variance into A-trous filtering.
-- Scale luminance edge thresholds using center/neighborhood variance.
-- Filter or propagate variance through the A-trous iterations as required by the selected formulation.
-- Evaluate whether history stores temporal radiance, filtered radiance, or a lightly filtered intermediate; choose based on measured blur/stability.
+- When temporal presentation is active, the existing A-Trous passes consume bounded temporal HDR
+  radiance and scalar variance. Variance relaxes only the luminance edge threshold for noisy
+  pixels; geometry, normal, albedo, identity, and validity stops remain unchanged.
+- Temporal history continues to store unfiltered temporal radiance, preventing spatial blur from
+  feeding back into future reprojection. `temporalVarianceGuidedFiltering` allows direct
+  temporal-only comparison.
 
 **Validation:**
 
@@ -215,16 +267,21 @@ This is distinct from progressive still-image accumulation and from external den
 
 ## Milestone 11: Dynamic Geometry And Difficult Materials
 
-**Status:** Not started
+**Status:** Complete (conservative primary-surface policy)
 
 **Purpose:** Extend temporal reuse safely beyond static opaque primary surfaces.
 
 **Work:**
 
-- Add stable object IDs and previous transforms for dynamic spheres and meshes.
-- Derive motion from object-local hit information and previous transforms.
-- Define conservative reactive/history policies for glass, water, mirrors, glossy reflections, emissive surfaces, fog, and depth of field.
-- Start by reducing or rejecting temporal history for paths whose primary motion does not represent visible radiance motion.
+- Stable primary identities remain part of every validation. Camera-only motion remains the
+  supported dynamic-geometry policy: scene/material changes reset temporal state rather than
+  reusing invalid history. Object-local previous-transform motion is deferred until the renderer
+  preserves local hit coordinates in a feature buffer.
+- Glass and static water boundaries are classified as transmission and capped at four effective
+  history samples. Metals, highly glossy surfaces, emissive hits, and fog remain fully reactive;
+  animated water remains a global reject because wave motion is not yet represented.
+- This milestone intentionally favors short-lived noise over ghosting. Full dynamic-object and
+  specular-path motion remains a future quality extension, not a prerequisite for safe reuse.
 
 **Validation:**
 

@@ -12,6 +12,7 @@ namespace GPURayTracing.Tests
     public class RayTracingComputeRegressionTests
     {
         private const string ComputeShaderPath = "Assets/Scripts/RayTracingCompute.compute";
+        private const string DenoiserShaderPath = "Assets/Resources/RayTracingSpatialDenoiser.compute";
         private const float Epsilon = 0.0001f;
 
         [Test]
@@ -101,6 +102,31 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void DenoiserShader_TemporalKernelsCompile()
+        {
+            if (!SystemInfo.supportsComputeShaders)
+            {
+                Assert.Ignore("Compute shaders are not supported by the active graphics device.");
+            }
+
+            ComputeShader denoiser = AssetDatabase.LoadAssetAtPath<ComputeShader>(DenoiserShaderPath);
+            Assert.That(denoiser, Is.Not.Null, $"Missing compute shader at {DenoiserShaderPath}");
+            // Batch mode uses Unity's Null graphics device, which cannot compile GPU kernels.
+            if (SystemInfo.graphicsDeviceType == UnityEngine.Rendering.GraphicsDeviceType.Null)
+            {
+                Assert.Ignore("Temporal compute kernels require a graphics device to compile.");
+            }
+            Assert.That(denoiser.HasKernel("CSGenerateCameraMotion"), Is.True);
+            Assert.That(denoiser.HasKernel("CSTemporalReprojectValidate"), Is.True);
+            Assert.That(denoiser.HasKernel("CSUpdateTemporalMoments"), Is.True);
+            Assert.That(denoiser.HasKernel("CSVisualizeTemporal"), Is.True);
+            Assert.That(denoiser.HasKernel("CSVisualizeFeature"), Is.True);
+
+            ComputeShader renderer = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
+            Assert.That(renderer.HasKernel("CSFeatures"), Is.True);
+        }
+
+        [Test]
         public void GameManager_DefaultFireflyClamp_IsEnabled()
         {
             Type managerType = Type.GetType("GameManager, Assembly-CSharp");
@@ -148,6 +174,39 @@ namespace GPURayTracing.Tests
             finally
             {
                 UnityEngine.Object.DestroyImmediate(gameObject);
+            }
+        }
+
+        [Test]
+        public void GameManager_CameraRotation_StopsBeforeVerticalPolesAndCanRotateBack()
+        {
+            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+            Assert.That(managerType, Is.Not.Null, "Could not load GameManager from Assembly-CSharp");
+
+            MethodInfo rotateMethod = managerType.GetMethod("RotateCamera", BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(rotateMethod, Is.Not.Null);
+
+            var cameraObject = new GameObject("Camera Pitch Limit Test");
+            try
+            {
+                cameraObject.transform.eulerAngles = new Vector3(88.0f, 10.0f, 0.0f);
+                rotateMethod.Invoke(null, new object[] { cameraObject.transform, 5.0f, 5.0f });
+                Assert.That(Mathf.DeltaAngle(0.0f, cameraObject.transform.eulerAngles.x), Is.EqualTo(89.0f).Within(Epsilon));
+                Assert.That(Mathf.DeltaAngle(0.0f, cameraObject.transform.eulerAngles.y), Is.EqualTo(15.0f).Within(Epsilon));
+
+                rotateMethod.Invoke(null, new object[] { cameraObject.transform, 0.0f, -10.0f });
+                Assert.That(Mathf.DeltaAngle(0.0f, cameraObject.transform.eulerAngles.x), Is.EqualTo(79.0f).Within(Epsilon));
+
+                cameraObject.transform.eulerAngles = new Vector3(-88.0f, 10.0f, 0.0f);
+                rotateMethod.Invoke(null, new object[] { cameraObject.transform, 0.0f, -5.0f });
+                Assert.That(Mathf.DeltaAngle(0.0f, cameraObject.transform.eulerAngles.x), Is.EqualTo(-89.0f).Within(Epsilon));
+
+                rotateMethod.Invoke(null, new object[] { cameraObject.transform, 0.0f, 10.0f });
+                Assert.That(Mathf.DeltaAngle(0.0f, cameraObject.transform.eulerAngles.x), Is.EqualTo(-79.0f).Within(Epsilon));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(cameraObject);
             }
         }
 

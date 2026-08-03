@@ -790,11 +790,6 @@ namespace GPURayTracing.Tests
                 shader.SetTexture(kernel, "Result", result);
                 shader.SetTexture(kernel, "AccumulationResult", accumulation);
                 shader.SetTexture(kernel, "Beauty", beauty);
-                shader.SetTexture(kernel, "FeatureNormal", featureNormal);
-                shader.SetTexture(kernel, "FeatureAlbedo", featureAlbedo);
-                shader.SetTexture(kernel, "FeatureDepth", featureDepth);
-                shader.SetTexture(kernel, "FeatureIdentity", featureIdentity);
-                shader.SetTexture(kernel, "FeatureValidity", featureValidity);
                 shader.SetTexture(kernel, "_SkyboxTexture", skybox);
                 shader.SetTexture(kernel, "_MeshAlbedoTextures", meshTextures);
                 shader.SetTexture(kernel, "_MeshMetallicRoughnessTextures", meshDataTextures);
@@ -815,6 +810,8 @@ namespace GPURayTracing.Tests
                     new Vector3(1.0f, 1.0f, -1.0f));
                 shader.SetMatrix("_CameraToWorld", cameraToWorld);
                 shader.SetMatrix("_CameraInverseProjection", Matrix4x4.Perspective(48.0f, 1.0f, 0.1f, 100.0f).inverse);
+                shader.SetVector("_FrameJitterNdc", Vector4.zero);
+                shader.SetInt("_UseTemporalJitter", 0);
                 shader.SetVector("_SkyboxLight", Vector4.one);
                 shader.SetInt("_Seed", 1);
                 shader.SetInt("_SampleOffset", 0);

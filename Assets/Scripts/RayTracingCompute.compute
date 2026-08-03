@@ -1,5 +1,6 @@
 ﻿// Each #kernel tells which function to compile; you can have many kernels
 #pragma kernel CSMain
+#pragma kernel CSFeatures
 #pragma kernel CSFocusQuery
 #pragma kernel CSRegressionProbe
 #pragma kernel ClearCausticPhotons CAUSTICS_ENABLED
@@ -39,6 +40,8 @@ RWStructuredBuffer<float4> _FocusQueryResult;
 
 float4x4 _CameraToWorld;
 float4x4 _CameraInverseProjection;
+float2 _FrameJitterNdc;
+int _UseTemporalJitter;
 
 Texture2D<float4> _SkyboxTexture;
 SamplerState sampler_SkyboxTexture;
@@ -3712,7 +3715,12 @@ void WriteDenoiserFeatures(uint2 pixel, uint width, uint height)
         return;
     }
 
-    FeatureNormal[pixel] = float4(normalize(hit.normal), 1.0f);
+    // Normal alpha is a reactive flag, preserving the existing eight-UAV production contract.
+    // Transmission boundaries get a short temporal history. Other view-dependent paths remain
+    // fully reactive because primary-surface motion cannot represent their radiance motion.
+    float reactive = (IsGlassMaterial(hit) || hit.materialType == MaterialWater) ? 0.5f
+        : (hit.materialType == MaterialMetal || hit.lightIndex >= 0 || hit.smoothness > 0.8f) ? 1.0f : 0.0f;
+    FeatureNormal[pixel] = float4(normalize(hit.normal), reactive);
     FeatureAlbedo[pixel] = float4(saturate(GetAlbedo(hit)), 1.0f);
     FeatureDepth[pixel] = hit.distance;
     FeatureIdentity[pixel] = GetFeatureIdentity(hit);
@@ -4345,6 +4353,19 @@ void CSFocusQuery(uint3 id : SV_DispatchThreadID)
 }
 
 [numthreads(8,4,1)]
+void CSFeatures(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    FeatureValidity.GetDimensions(width, height);
+    if (id.x >= width || id.y >= height)
+    {
+        return;
+    }
+
+    WriteDenoiserFeatures(id.xy, width, height);
+}
+
+[numthreads(8,4,1)]
 void CSMain (uint3 id : SV_DispatchThreadID)
 {
     // Get the dimensions of the RenderTexture
@@ -4356,8 +4377,6 @@ void CSMain (uint3 id : SV_DispatchThreadID)
         return;
     }
 
-    WriteDenoiserFeatures(id.xy, width, height);
-
     // Transform pixel to [-1,1] range
     float3 result = float3(0.0f, 0.0f, 0.0f);
     [loop]
@@ -4365,6 +4384,10 @@ void CSMain (uint3 id : SV_DispatchThreadID)
     {
         uint rngState = CreateRngState(id.xy, _SampleOffset + (uint)i);
         float2 uv = ((id.xy + float2(rand(rngState), rand(rngState))) / float2(width, height)) * 2.0f - 1.0f;
+        if (_UseTemporalJitter != 0)
+        {
+            uv += _FrameJitterNdc;
+        }
         Ray ray = CreateCameraRay(uv);
 
         if (_ApertureRadius > 0.0f)
@@ -4413,36 +4436,6 @@ void CSMain (uint3 id : SV_DispatchThreadID)
     if (_DebugRenderMode == DebugRawBeauty)
     {
         Result[id.xy] = float4(color, 1.0f);
-        return;
-    }
-
-    if (_DebugRenderMode == DebugFeatureNormal)
-    {
-        Result[id.xy] = float4(FeatureNormal[id.xy].rgb * 0.5f + 0.5f, 1.0f);
-        return;
-    }
-
-    if (_DebugRenderMode == DebugFeatureAlbedo)
-    {
-        Result[id.xy] = float4(FeatureAlbedo[id.xy].rgb, 1.0f);
-        return;
-    }
-
-    if (_DebugRenderMode == DebugFeatureDepth)
-    {
-        Result[id.xy] = saturate(FeatureDepth[id.xy] / 25.0f).xxxx;
-        return;
-    }
-
-    if (_DebugRenderMode == DebugFeatureIdentity)
-    {
-        Result[id.xy] = float4(GetFeatureIdentityDebugColor(FeatureIdentity[id.xy]), 1.0f);
-        return;
-    }
-
-    if (_DebugRenderMode == DebugFeatureValidity)
-    {
-        Result[id.xy] = FeatureValidity[id.xy].xxxx;
         return;
     }
 

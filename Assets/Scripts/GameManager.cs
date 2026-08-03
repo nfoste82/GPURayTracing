@@ -10,6 +10,8 @@ using Debug = UnityEngine.Debug;
 
 public class GameManager : MonoBehaviour
 {
+    private const float MaxCameraPitch = 89.0f;
+
     [SerializeField, HideInInspector]
     private RayTracingBvhBakeAsset bvhBake;
 
@@ -46,6 +48,41 @@ public class GameManager : MonoBehaviour
     [Range(0.01f, 4.0f)]
     [Tooltip("How quickly filtering stops across HDR luminance changes.")]
     public float spatialDenoiserLuminanceSigma = 0.03f;
+
+    [Header("Temporal denoising")]
+    [Tooltip("Uses camera-only temporal reprojection and bounded HDR accumulation while the camera moves, then allows progressive still accumulation when it stops.")]
+    public bool enableTemporalDenoising = false;
+
+    [Range(1, 64)]
+    [Tooltip("Maximum effective temporal samples per pixel. Higher values reduce noise but respond more slowly to valid lighting changes.")]
+    public int temporalMaxHistoryLength = 16;
+
+    [Tooltip("Camera translation at or above this per-frame distance uses temporal accumulation instead of still-frame accumulation.")]
+    [Min(0.00001f)]
+    public float temporalMotionDistance = 0.0001f;
+
+    [Tooltip("Camera rotation at or above this per-frame angle uses temporal accumulation instead of still-frame accumulation.")]
+    [Min(0.0001f)]
+    public float temporalMotionAngle = 0.01f;
+
+    [Range(0.01f, 1.0f)]
+    [Tooltip("Relative primary-hit depth difference allowed when validating reprojected history.")]
+    public float temporalDepthThreshold = 0.05f;
+
+    [Range(-1.0f, 1.0f)]
+    [Tooltip("Minimum primary-hit normal dot product allowed when validating reprojected history.")]
+    public float temporalNormalThreshold = 0.9f;
+
+    [Tooltip("Camera translation at or above this distance is treated as a cut and resets temporal history.")]
+    [Min(0.01f)]
+    public float temporalCameraCutDistance = 5.0f;
+
+    [Tooltip("Camera rotation at or above this angle is treated as a cut and resets temporal history.")]
+    [Range(1.0f, 180.0f)]
+    public float temporalCameraCutAngle = 45.0f;
+
+    [Tooltip("Applies the spatial A-Trous passes to temporally accumulated radiance, using temporal luminance variance to relax filtering only where noise remains.")]
+    public bool temporalVarianceGuidedFiltering = true;
     
     [Header("Quality settings (Higher quality -> Slower)")]
     [Range(1, 32)]
@@ -171,7 +208,15 @@ public class GameManager : MonoBehaviour
         SpatialDenoised = 17,
         AtrousIteration1 = 18,
         AtrousIteration2 = 19,
-        AtrousIteration3 = 20
+        AtrousIteration3 = 20,
+        MotionVectors = 21,
+        TemporalReprojectedRadiance = 22,
+        TemporalHistoryAcceptance = 23,
+        TemporalRejectionReason = 24,
+        TemporalDenoised = 25,
+        TemporalHistoryLength = 26,
+        TemporalDenoisedTint = 27,
+        TemporalVariance = 28
     }
 
     [Header("Debug render modes")]
@@ -288,6 +333,39 @@ public class GameManager : MonoBehaviour
     private RenderTexture _denoiserIteration2Texture;
     private RenderTexture _denoiserIteration3Texture;
     private ComputeShader _spatialDenoiserShader;
+    private RenderTexture _motionVectorTexture;
+    private RenderTexture _temporalRadianceHistoryA;
+    private RenderTexture _temporalRadianceHistoryB;
+    private RenderTexture _temporalNormalHistoryA;
+    private RenderTexture _temporalNormalHistoryB;
+    private RenderTexture _temporalDepthHistoryA;
+    private RenderTexture _temporalDepthHistoryB;
+    private RenderTexture _temporalIdentityHistoryA;
+    private RenderTexture _temporalIdentityHistoryB;
+    private RenderTexture _temporalValidityHistoryA;
+    private RenderTexture _temporalValidityHistoryB;
+    private RenderTexture _temporalHistoryLengthA;
+    private RenderTexture _temporalHistoryLengthB;
+    private RenderTexture _temporalMomentsA;
+    private RenderTexture _temporalMomentsB;
+    private RenderTexture _temporalVarianceTexture;
+    private RenderTexture _temporalReprojectedRadianceTexture;
+    private RenderTexture _temporalDiagnosticsTexture;
+    private bool _temporalHistoryReadIsA = true;
+    private bool _temporalHistoryValid;
+    private bool _temporalDynamicSceneChanged;
+    private bool _hasTemporalStateHash;
+    private int _temporalStateHash;
+    private Matrix4x4 _currentUnjitteredViewProjection;
+    private Matrix4x4 _previousUnjitteredViewProjection;
+    private Vector2 _currentTemporalJitterNdc;
+    private Vector2 _previousTemporalJitterNdc;
+    private Vector3 _previousTemporalCameraPosition;
+    private Quaternion _previousTemporalCameraRotation;
+    private uint _temporalFrameIndex;
+    private bool _hasRenderedCameraState;
+    private Vector3 _lastRenderedCameraPosition;
+    private Quaternion _lastRenderedCameraRotation;
     private Vector2Int _textureSize;
     private int _accumulatedFrameCount;
     private long _renderedFrameCount;
@@ -785,6 +863,13 @@ public class GameManager : MonoBehaviour
         spatialDenoiserNormalPower = Mathf.Max(1.0f, spatialDenoiserNormalPower);
         spatialDenoiserAlbedoSigma = Mathf.Max(0.01f, spatialDenoiserAlbedoSigma);
         spatialDenoiserLuminanceSigma = Mathf.Max(0.01f, spatialDenoiserLuminanceSigma);
+        temporalDepthThreshold = Mathf.Max(0.01f, temporalDepthThreshold);
+        temporalNormalThreshold = Mathf.Clamp(temporalNormalThreshold, -1.0f, 1.0f);
+        temporalCameraCutDistance = Mathf.Max(0.01f, temporalCameraCutDistance);
+        temporalCameraCutAngle = Mathf.Clamp(temporalCameraCutAngle, 1.0f, 180.0f);
+        temporalMaxHistoryLength = Mathf.Clamp(temporalMaxHistoryLength, 1, 64);
+        temporalMotionDistance = Mathf.Max(0.00001f, temporalMotionDistance);
+        temporalMotionAngle = Mathf.Max(0.0001f, temporalMotionAngle);
         SyncUnitySkyboxPreview();
     }
 
@@ -828,6 +913,7 @@ public class GameManager : MonoBehaviour
         _featureIdentityTexture?.Release();
         _featureValidityTexture?.Release();
         ReleaseSpatialDenoiserResources();
+        ReleaseTemporalDenoiserResources();
         _textureSize = new Vector2Int(width, height);
         _outputTexture = new RenderTexture(_textureSize.x, _textureSize.y, 24)
         {
@@ -850,6 +936,7 @@ public class GameManager : MonoBehaviour
         _featureIdentityTexture = CreateFeatureTexture(RenderTextureFormat.RFloat);
         _featureValidityTexture = CreateFeatureTexture(RenderTextureFormat.RHalf);
         ResetFrameAccumulation();
+        ResetTemporalHistory();
     }
 
     private RenderTexture CreateFeatureTexture(RenderTextureFormat format)
@@ -909,6 +996,106 @@ public class GameManager : MonoBehaviour
             || debugRenderMode == DebugRenderMode.AtrousIteration1
             || debugRenderMode == DebugRenderMode.AtrousIteration2
             || debugRenderMode == DebugRenderMode.AtrousIteration3;
+    }
+
+    private bool IsTemporalDebugMode()
+    {
+        return debugRenderMode == DebugRenderMode.MotionVectors
+            || debugRenderMode == DebugRenderMode.TemporalReprojectedRadiance
+            || debugRenderMode == DebugRenderMode.TemporalHistoryAcceptance
+            || debugRenderMode == DebugRenderMode.TemporalRejectionReason
+            || debugRenderMode == DebugRenderMode.TemporalDenoised
+            || debugRenderMode == DebugRenderMode.TemporalHistoryLength
+            || debugRenderMode == DebugRenderMode.TemporalDenoisedTint
+            || debugRenderMode == DebugRenderMode.TemporalVariance;
+    }
+
+    private bool ShouldRunTemporalDenoiser()
+    {
+        // Keep temporal history warm while the camera is still. The still-image path remains the
+        // presented output, but its stable history is immediately available when motion resumes.
+        return enableTemporalDenoising || IsTemporalDebugMode();
+    }
+
+    private bool ShouldUseTemporalAccumulation()
+    {
+        return enableTemporalDenoising && debugRenderMode == DebugRenderMode.FinalColor && IsCameraMoving();
+    }
+
+    private bool IsCameraMoving()
+    {
+        return _hasRenderedCameraState
+            && (Vector3.Distance(renderTextureCamera.transform.position, _lastRenderedCameraPosition) >= temporalMotionDistance
+                || Quaternion.Angle(renderTextureCamera.transform.rotation, _lastRenderedCameraRotation) >= temporalMotionAngle);
+    }
+
+    private void EnsureTemporalDenoiserResources()
+    {
+        EnsureSpatialDenoiserResources();
+        if (_spatialDenoiserShader == null || _temporalRadianceHistoryA != null)
+        {
+            return;
+        }
+
+        _motionVectorTexture = CreateFeatureTexture(RenderTextureFormat.RGHalf);
+        _temporalRadianceHistoryA = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
+        _temporalRadianceHistoryB = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
+        _temporalNormalHistoryA = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
+        _temporalNormalHistoryB = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
+        _temporalDepthHistoryA = CreateFeatureTexture(RenderTextureFormat.RHalf);
+        _temporalDepthHistoryB = CreateFeatureTexture(RenderTextureFormat.RHalf);
+        _temporalIdentityHistoryA = CreateFeatureTexture(RenderTextureFormat.RFloat);
+        _temporalIdentityHistoryB = CreateFeatureTexture(RenderTextureFormat.RFloat);
+        _temporalValidityHistoryA = CreateFeatureTexture(RenderTextureFormat.RHalf);
+        _temporalValidityHistoryB = CreateFeatureTexture(RenderTextureFormat.RHalf);
+        _temporalHistoryLengthA = CreateFeatureTexture(RenderTextureFormat.RHalf);
+        _temporalHistoryLengthB = CreateFeatureTexture(RenderTextureFormat.RHalf);
+        _temporalMomentsA = CreateFeatureTexture(RenderTextureFormat.RGHalf);
+        _temporalMomentsB = CreateFeatureTexture(RenderTextureFormat.RGHalf);
+        _temporalVarianceTexture = CreateFeatureTexture(RenderTextureFormat.RHalf);
+        _temporalReprojectedRadianceTexture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
+        _temporalDiagnosticsTexture = CreateFeatureTexture(RenderTextureFormat.RGHalf);
+    }
+
+    private void ReleaseTemporalDenoiserResources()
+    {
+        _motionVectorTexture?.Release();
+        _temporalRadianceHistoryA?.Release();
+        _temporalRadianceHistoryB?.Release();
+        _temporalNormalHistoryA?.Release();
+        _temporalNormalHistoryB?.Release();
+        _temporalDepthHistoryA?.Release();
+        _temporalDepthHistoryB?.Release();
+        _temporalIdentityHistoryA?.Release();
+        _temporalIdentityHistoryB?.Release();
+        _temporalValidityHistoryA?.Release();
+        _temporalValidityHistoryB?.Release();
+        _temporalHistoryLengthA?.Release();
+        _temporalHistoryLengthB?.Release();
+        _temporalMomentsA?.Release();
+        _temporalMomentsB?.Release();
+        _temporalVarianceTexture?.Release();
+        _temporalReprojectedRadianceTexture?.Release();
+        _temporalDiagnosticsTexture?.Release();
+        _motionVectorTexture = null;
+        _temporalRadianceHistoryA = null;
+        _temporalRadianceHistoryB = null;
+        _temporalNormalHistoryA = null;
+        _temporalNormalHistoryB = null;
+        _temporalDepthHistoryA = null;
+        _temporalDepthHistoryB = null;
+        _temporalIdentityHistoryA = null;
+        _temporalIdentityHistoryB = null;
+        _temporalValidityHistoryA = null;
+        _temporalValidityHistoryB = null;
+        _temporalHistoryLengthA = null;
+        _temporalHistoryLengthB = null;
+        _temporalMomentsA = null;
+        _temporalMomentsB = null;
+        _temporalVarianceTexture = null;
+        _temporalReprojectedRadianceTexture = null;
+        _temporalDiagnosticsTexture = null;
+        _temporalHistoryReadIsA = true;
     }
 
     private void Update()
@@ -1035,23 +1222,39 @@ public class GameManager : MonoBehaviour
             camera.transform.position += camera.transform.right * movementDelta * 3f;
         }
         
+        float yawDelta = 0.0f;
         if (Input.GetKey(KeyCode.LeftArrow))
         {
-            camera.transform.eulerAngles += new Vector3(0f, -movementDelta * 50f, 0f);
+            yawDelta = -movementDelta * 50.0f;
         }
         else if (Input.GetKey(KeyCode.RightArrow))
         {
-            camera.transform.eulerAngles += new Vector3(0f, movementDelta * 50f, 0f);
+            yawDelta = movementDelta * 50.0f;
         }
-        
+
+        float pitchDelta = 0.0f;
         if (Input.GetKey(KeyCode.UpArrow))
         {
-            camera.transform.eulerAngles += new Vector3(movementDelta * 50f, 0f, 0f);
+            pitchDelta = movementDelta * 50.0f;
         }
         else if (Input.GetKey(KeyCode.DownArrow))
         {
-            camera.transform.eulerAngles += new Vector3(-movementDelta * 50f, 0f, 0f);
+            pitchDelta = -movementDelta * 50.0f;
         }
+
+        if (yawDelta != 0.0f || pitchDelta != 0.0f)
+        {
+            RotateCamera(camera.transform, yawDelta, pitchDelta);
+        }
+    }
+
+    private static void RotateCamera(Transform cameraTransform, float yawDelta, float pitchDelta)
+    {
+        Vector3 eulerAngles = cameraTransform.eulerAngles;
+        float pitch = Mathf.DeltaAngle(0.0f, eulerAngles.x);
+        eulerAngles.x = Mathf.Clamp(pitch + pitchDelta, -MaxCameraPitch, MaxCameraPitch);
+        eulerAngles.y += yawDelta;
+        cameraTransform.eulerAngles = eulerAngles;
     }
 
     private void HandleClickToFocusInput()
@@ -1086,6 +1289,7 @@ public class GameManager : MonoBehaviour
         _featureIdentityTexture?.Release();
         _featureValidityTexture?.Release();
         ReleaseSpatialDenoiserResources();
+        ReleaseTemporalDenoiserResources();
         _sphereBuffer?.Release();
         _lightBuffer?.Release();
         _triangleBuffer?.Release();
@@ -1149,6 +1353,15 @@ public class GameManager : MonoBehaviour
         shader.SetTexture(kernelHandle, "Result", _outputTexture);
         shader.SetTexture(kernelHandle, "AccumulationResult", _accumulationTexture);
         shader.SetTexture(kernelHandle, "Beauty", _beautyTexture);
+        int threadGroupsX = Mathf.CeilToInt(_textureSize.x / (float)RenderThreadCountX);
+        int threadGroupsY = Mathf.CeilToInt(_textureSize.y / (float)RenderThreadCountY);
+        shader.Dispatch(kernelHandle, threadGroupsX, threadGroupsY, 1);
+    }
+
+    private void UpdateFeaturesFromCompute()
+    {
+        int kernelHandle = shader.FindKernel("CSFeatures");
+        SetShaderParameters(kernelHandle);
         shader.SetTexture(kernelHandle, "FeatureNormal", _featureNormalTexture);
         shader.SetTexture(kernelHandle, "FeatureAlbedo", _featureAlbedoTexture);
         shader.SetTexture(kernelHandle, "FeatureDepth", _featureDepthTexture);
@@ -1159,7 +1372,27 @@ public class GameManager : MonoBehaviour
         shader.Dispatch(kernelHandle, threadGroupsX, threadGroupsY, 1);
     }
 
-    private void RunSpatialDenoiser()
+    private void PresentFeatureDebugMode()
+    {
+        EnsureSpatialDenoiserResources();
+        int kernel = _spatialDenoiserShader.FindKernel("CSVisualizeFeature");
+        _spatialDenoiserShader.SetTexture(kernel, "FeatureNormal", _featureNormalTexture);
+        _spatialDenoiserShader.SetTexture(kernel, "FeatureAlbedo", _featureAlbedoTexture);
+        _spatialDenoiserShader.SetTexture(kernel, "FeatureDepth", _featureDepthTexture);
+        _spatialDenoiserShader.SetTexture(kernel, "FeatureIdentity", _featureIdentityTexture);
+        _spatialDenoiserShader.SetTexture(kernel, "FeatureValidity", _featureValidityTexture);
+        _spatialDenoiserShader.SetTexture(kernel, "PresentationResult", _outputTexture);
+        _spatialDenoiserShader.SetInt("_FeatureDebugMode", (int)debugRenderMode - (int)DebugRenderMode.FeatureNormal + 1);
+        _spatialDenoiserShader.Dispatch(kernel,
+            Mathf.CeilToInt(_textureSize.x / 8.0f), Mathf.CeilToInt(_textureSize.y / 8.0f), 1);
+    }
+
+    private bool IsFeatureDebugMode()
+    {
+        return debugRenderMode >= DebugRenderMode.FeatureNormal && debugRenderMode <= DebugRenderMode.FeatureValidity;
+    }
+
+    private void RunSpatialDenoiser(RenderTexture source = null, RenderTexture variance = null)
     {
         EnsureSpatialDenoiserResources();
         if (_spatialDenoiserShader == null || _denoiserPingTexture == null)
@@ -1173,12 +1406,14 @@ public class GameManager : MonoBehaviour
         _spatialDenoiserShader.SetTexture(atrousKernel, "FeatureDepth", _featureDepthTexture);
         _spatialDenoiserShader.SetTexture(atrousKernel, "FeatureIdentity", _featureIdentityTexture);
         _spatialDenoiserShader.SetTexture(atrousKernel, "FeatureValidity", _featureValidityTexture);
+        _spatialDenoiserShader.SetTexture(atrousKernel, "Variance", variance ?? _featureValidityTexture);
         _spatialDenoiserShader.SetFloat("_DepthSigma", spatialDenoiserDepthSigma);
         _spatialDenoiserShader.SetFloat("_NormalPower", spatialDenoiserNormalPower);
         _spatialDenoiserShader.SetFloat("_AlbedoSigma", spatialDenoiserAlbedoSigma);
         _spatialDenoiserShader.SetFloat("_LuminanceSigma", spatialDenoiserLuminanceSigma);
+        _spatialDenoiserShader.SetInt("_UseVarianceGuidance", variance != null ? 1 : 0);
 
-        RenderTexture input = _beautyTexture;
+        RenderTexture input = source ?? _beautyTexture;
         RenderTexture output = _denoiserPingTexture;
         int requiredDebugIterations = debugRenderMode == DebugRenderMode.AtrousIteration3 ? 3
             : debugRenderMode == DebugRenderMode.AtrousIteration2 ? 2
@@ -1231,10 +1466,232 @@ public class GameManager : MonoBehaviour
         _spatialDenoiserShader.Dispatch(presentKernel, threadGroupsX, threadGroupsY, 1);
     }
 
+    private void RunTemporalDenoiser()
+    {
+        EnsureTemporalDenoiserResources();
+        if (_spatialDenoiserShader == null || _motionVectorTexture == null)
+        {
+            return;
+        }
+
+        int threadGroupsX = Mathf.CeilToInt(_textureSize.x / 8.0f);
+        int threadGroupsY = Mathf.CeilToInt(_textureSize.y / 8.0f);
+        int motionKernel = _spatialDenoiserShader.FindKernel("CSGenerateCameraMotion");
+        _spatialDenoiserShader.SetTexture(motionKernel, "FeatureDepth", _featureDepthTexture);
+        _spatialDenoiserShader.SetTexture(motionKernel, "FeatureValidity", _featureValidityTexture);
+        _spatialDenoiserShader.SetTexture(motionKernel, "GeneratedMotionVectors", _motionVectorTexture);
+        _spatialDenoiserShader.SetMatrix("_CurrentUnjitteredViewProjection", _currentUnjitteredViewProjection);
+        _spatialDenoiserShader.SetMatrix("_PreviousUnjitteredViewProjection", _previousUnjitteredViewProjection);
+        _spatialDenoiserShader.SetMatrix("_CameraToWorld", renderTextureCamera.cameraToWorldMatrix);
+        _spatialDenoiserShader.SetMatrix("_CameraInverseProjection", renderTextureCamera.projectionMatrix.inverse);
+        _spatialDenoiserShader.Dispatch(motionKernel, threadGroupsX, threadGroupsY, 1);
+
+        RenderTexture previousRadiance = _temporalHistoryReadIsA ? _temporalRadianceHistoryA : _temporalRadianceHistoryB;
+        RenderTexture nextRadiance = _temporalHistoryReadIsA ? _temporalRadianceHistoryB : _temporalRadianceHistoryA;
+        RenderTexture previousNormal = _temporalHistoryReadIsA ? _temporalNormalHistoryA : _temporalNormalHistoryB;
+        RenderTexture nextNormal = _temporalHistoryReadIsA ? _temporalNormalHistoryB : _temporalNormalHistoryA;
+        RenderTexture previousDepth = _temporalHistoryReadIsA ? _temporalDepthHistoryA : _temporalDepthHistoryB;
+        RenderTexture nextDepth = _temporalHistoryReadIsA ? _temporalDepthHistoryB : _temporalDepthHistoryA;
+        RenderTexture previousIdentity = _temporalHistoryReadIsA ? _temporalIdentityHistoryA : _temporalIdentityHistoryB;
+        RenderTexture nextIdentity = _temporalHistoryReadIsA ? _temporalIdentityHistoryB : _temporalIdentityHistoryA;
+        RenderTexture previousValidity = _temporalHistoryReadIsA ? _temporalValidityHistoryA : _temporalValidityHistoryB;
+        RenderTexture nextValidity = _temporalHistoryReadIsA ? _temporalValidityHistoryB : _temporalValidityHistoryA;
+        RenderTexture previousHistoryLength = _temporalHistoryReadIsA ? _temporalHistoryLengthA : _temporalHistoryLengthB;
+        RenderTexture nextHistoryLength = _temporalHistoryReadIsA ? _temporalHistoryLengthB : _temporalHistoryLengthA;
+        RenderTexture previousMoments = _temporalHistoryReadIsA ? _temporalMomentsA : _temporalMomentsB;
+        RenderTexture nextMoments = _temporalHistoryReadIsA ? _temporalMomentsB : _temporalMomentsA;
+        int validationKernel = _spatialDenoiserShader.FindKernel("CSTemporalReprojectValidate");
+        _spatialDenoiserShader.SetTexture(validationKernel, "Beauty", _beautyTexture);
+        _spatialDenoiserShader.SetTexture(validationKernel, "FeatureNormal", _featureNormalTexture);
+        _spatialDenoiserShader.SetTexture(validationKernel, "FeatureDepth", _featureDepthTexture);
+        _spatialDenoiserShader.SetTexture(validationKernel, "FeatureIdentity", _featureIdentityTexture);
+        _spatialDenoiserShader.SetTexture(validationKernel, "FeatureValidity", _featureValidityTexture);
+        _spatialDenoiserShader.SetTexture(validationKernel, "MotionVectors", _motionVectorTexture);
+        _spatialDenoiserShader.SetTexture(validationKernel, "PreviousRadiance", previousRadiance);
+        _spatialDenoiserShader.SetTexture(validationKernel, "PreviousNormal", previousNormal);
+        _spatialDenoiserShader.SetTexture(validationKernel, "PreviousDepth", previousDepth);
+        _spatialDenoiserShader.SetTexture(validationKernel, "PreviousIdentity", previousIdentity);
+        _spatialDenoiserShader.SetTexture(validationKernel, "PreviousValidity", previousValidity);
+        _spatialDenoiserShader.SetTexture(validationKernel, "PreviousHistoryLength", previousHistoryLength);
+        _spatialDenoiserShader.SetTexture(validationKernel, "ReprojectedRadiance", _temporalReprojectedRadianceTexture);
+        _spatialDenoiserShader.SetTexture(validationKernel, "NextRadiance", nextRadiance);
+        _spatialDenoiserShader.SetTexture(validationKernel, "NextNormal", nextNormal);
+        _spatialDenoiserShader.SetTexture(validationKernel, "NextDepth", nextDepth);
+        _spatialDenoiserShader.SetTexture(validationKernel, "NextIdentity", nextIdentity);
+        _spatialDenoiserShader.SetTexture(validationKernel, "NextValidity", nextValidity);
+        _spatialDenoiserShader.SetTexture(validationKernel, "NextHistoryLength", nextHistoryLength);
+        _spatialDenoiserShader.SetTexture(validationKernel, "TemporalDiagnostics", _temporalDiagnosticsTexture);
+        _spatialDenoiserShader.SetInt("_TemporalHistoryValid", _temporalHistoryValid ? 1 : 0);
+        _spatialDenoiserShader.SetInt("_TemporalUnsupported", IsTemporalPathUnsupported() ? 1 : 0);
+        _spatialDenoiserShader.SetFloat("_TemporalDepthThreshold", temporalDepthThreshold);
+        _spatialDenoiserShader.SetFloat("_TemporalNormalThreshold", temporalNormalThreshold);
+        _spatialDenoiserShader.SetInt("_TemporalMaxHistoryLength", temporalMaxHistoryLength);
+        _spatialDenoiserShader.SetFloat("_TemporalCameraRotationDelta", _hasRenderedCameraState
+            ? Quaternion.Angle(renderTextureCamera.transform.rotation, _lastRenderedCameraRotation) : 0.0f);
+        _spatialDenoiserShader.Dispatch(validationKernel, threadGroupsX, threadGroupsY, 1);
+
+        int momentsKernel = _spatialDenoiserShader.FindKernel("CSUpdateTemporalMoments");
+        _spatialDenoiserShader.SetTexture(momentsKernel, "Beauty", _beautyTexture);
+        _spatialDenoiserShader.SetTexture(momentsKernel, "MotionVectors", _motionVectorTexture);
+        _spatialDenoiserShader.SetTexture(momentsKernel, "HistoryLength", nextHistoryLength);
+        _spatialDenoiserShader.SetTexture(momentsKernel, "TemporalDiagnostics", _temporalDiagnosticsTexture);
+        _spatialDenoiserShader.SetTexture(momentsKernel, "PreviousMoments", previousMoments);
+        _spatialDenoiserShader.SetTexture(momentsKernel, "NextMoments", nextMoments);
+        _spatialDenoiserShader.SetTexture(momentsKernel, "NextVariance", _temporalVarianceTexture);
+        _spatialDenoiserShader.SetFloat("_TemporalCameraRotationDelta", _hasRenderedCameraState
+            ? Quaternion.Angle(renderTextureCamera.transform.rotation, _lastRenderedCameraRotation) : 0.0f);
+        _spatialDenoiserShader.Dispatch(momentsKernel, threadGroupsX, threadGroupsY, 1);
+
+        if (IsTemporalDebugMode())
+        {
+            int debugMode = debugRenderMode == DebugRenderMode.MotionVectors ? 1
+                : debugRenderMode == DebugRenderMode.TemporalReprojectedRadiance ? 2
+                : debugRenderMode == DebugRenderMode.TemporalHistoryAcceptance ? 3
+                : debugRenderMode == DebugRenderMode.TemporalRejectionReason ? 4
+                : debugRenderMode == DebugRenderMode.TemporalDenoised ? 5
+                : debugRenderMode == DebugRenderMode.TemporalHistoryLength ? 6
+                : debugRenderMode == DebugRenderMode.TemporalDenoisedTint ? 7 : 8;
+            int visualizeKernel = _spatialDenoiserShader.FindKernel("CSVisualizeTemporal");
+            _spatialDenoiserShader.SetTexture(visualizeKernel, "MotionVectors", _motionVectorTexture);
+            _spatialDenoiserShader.SetTexture(visualizeKernel, "ReprojectedRadiance", _temporalReprojectedRadianceTexture);
+            _spatialDenoiserShader.SetTexture(visualizeKernel, "NextRadiance", nextRadiance);
+            _spatialDenoiserShader.SetTexture(visualizeKernel, "TemporalDiagnostics", _temporalDiagnosticsTexture);
+            _spatialDenoiserShader.SetTexture(visualizeKernel, "HistoryLength", nextHistoryLength);
+            _spatialDenoiserShader.SetTexture(visualizeKernel, "Variance", _temporalVarianceTexture);
+            _spatialDenoiserShader.SetTexture(visualizeKernel, "PresentationResult", _outputTexture);
+            _spatialDenoiserShader.SetInt("_TemporalDebugMode", debugMode);
+            _spatialDenoiserShader.SetFloat("_Exposure", exposure);
+            _spatialDenoiserShader.SetInt("_TemporalMaxHistoryLength", temporalMaxHistoryLength);
+            _spatialDenoiserShader.Dispatch(visualizeKernel, threadGroupsX, threadGroupsY, 1);
+        }
+        else if (ShouldUseTemporalAccumulation())
+        {
+            if (temporalVarianceGuidedFiltering)
+            {
+                RunSpatialDenoiser(nextRadiance, _temporalVarianceTexture);
+            }
+            else
+            {
+                int presentKernel = _spatialDenoiserShader.FindKernel("CSPresent");
+                _spatialDenoiserShader.SetTexture(presentKernel, "InputBeauty", nextRadiance);
+                _spatialDenoiserShader.SetTexture(presentKernel, "PresentationResult", _outputTexture);
+                _spatialDenoiserShader.SetFloat("_Exposure", exposure);
+                _spatialDenoiserShader.Dispatch(presentKernel, threadGroupsX, threadGroupsY, 1);
+            }
+        }
+
+        _temporalHistoryReadIsA = !_temporalHistoryReadIsA;
+        _temporalHistoryValid = true;
+    }
+
     private void ResetFrameAccumulation()
     {
         _accumulatedFrameCount = 0;
         _hasAccumulationStateHash = false;
+    }
+
+    private void ResetTemporalHistory()
+    {
+        _temporalHistoryValid = false;
+        _hasTemporalStateHash = false;
+        _temporalHistoryReadIsA = true;
+    }
+
+    private bool IsTemporalPathUnsupported()
+    {
+        // Pinhole primary features still provide conservative surface motion under depth of field.
+        // Difficult primary materials are classified per pixel through FeatureNormal.a. Static
+        // water and transmission use capped history; animated water still lacks wave motion.
+        return IsFogEnabled()
+            || _temporalDynamicSceneChanged
+            || (_water != null && _water.WaveSpeed > 0.0f && _water.WaveAmplitude > 0.0f);
+    }
+
+    private void PrepareTemporalCameraState()
+    {
+        Matrix4x4 gpuProjection = GL.GetGPUProjectionMatrix(renderTextureCamera.projectionMatrix, true);
+        _currentUnjitteredViewProjection = gpuProjection * renderTextureCamera.worldToCameraMatrix;
+        _currentTemporalJitterNdc = GetTemporalJitterNdc(_temporalFrameIndex, _textureSize);
+        int stateHash = CalculateTemporalStateHash();
+        bool cameraCut = _temporalHistoryValid && (Vector3.Distance(renderTextureCamera.transform.position, _previousTemporalCameraPosition) >= temporalCameraCutDistance
+            || Quaternion.Angle(renderTextureCamera.transform.rotation, _previousTemporalCameraRotation) >= temporalCameraCutAngle);
+        if (!_hasTemporalStateHash || stateHash != _temporalStateHash || cameraCut)
+        {
+            ResetTemporalHistory();
+            _temporalStateHash = stateHash;
+            _hasTemporalStateHash = true;
+        }
+
+        if (!_temporalHistoryValid)
+        {
+            _previousUnjitteredViewProjection = _currentUnjitteredViewProjection;
+            _previousTemporalJitterNdc = _currentTemporalJitterNdc;
+        }
+    }
+
+    private void CommitTemporalCameraState()
+    {
+        _previousUnjitteredViewProjection = _currentUnjitteredViewProjection;
+        _previousTemporalJitterNdc = _currentTemporalJitterNdc;
+        _previousTemporalCameraPosition = renderTextureCamera.transform.position;
+        _previousTemporalCameraRotation = renderTextureCamera.transform.rotation;
+        _temporalFrameIndex++;
+    }
+
+    private void CommitRenderedCameraState()
+    {
+        _lastRenderedCameraPosition = renderTextureCamera.transform.position;
+        _lastRenderedCameraRotation = renderTextureCamera.transform.rotation;
+        _hasRenderedCameraState = true;
+    }
+
+    private static Vector2 GetTemporalJitterNdc(uint frameIndex, Vector2Int size)
+    {
+        float Halton(uint index, uint radix)
+        {
+            float result = 0.0f;
+            float fraction = 1.0f / radix;
+            while (index > 0)
+            {
+                result += fraction * (index % radix);
+                index /= radix;
+                fraction /= radix;
+            }
+            return result;
+        }
+
+        return new Vector2(
+            (Halton(frameIndex + 1, 2) - 0.5f) * 2.0f / Mathf.Max(1, size.x),
+            (Halton(frameIndex + 1, 3) - 0.5f) * 2.0f / Mathf.Max(1, size.y));
+    }
+
+    private int CalculateTemporalStateHash()
+    {
+        unchecked
+        {
+            int hash = 17;
+            hash = AddHash(hash, _textureSize.x);
+            hash = AddHash(hash, _textureSize.y);
+            hash = AddHash(hash, numberOfPasses);
+            hash = AddHash(hash, numBounces);
+            hash = AddHash(hash, shadowQuality);
+            hash = AddHash(hash, lightSamplingStrategy.GetHashCode());
+            hash = AddHash(hash, lightSampleCount);
+            hash = AddHash(hash, maxLightSamples);
+            hash = AddHash(hash, cameraFocalDistance);
+            hash = AddHash(hash, GetCameraApertureRadius());
+            hash = AddHash(hash, enableCaustics ? 1 : 0);
+            hash = AddHash(hash, IsFogEnabled() ? 1 : 0);
+            hash = AddHash(hash, _water != null ? _water.GetInstanceID() : 0);
+            hash = AddHash(hash, skyboxTexture != null ? skyboxTexture.GetInstanceID() : 0);
+            hash = AddHash(hash, _spheres.Count);
+            for (int i = 0; i < _spheres.Count; i++) hash = AddHash(hash, _spheres[i]);
+            hash = AddHash(hash, _lights.Count);
+            for (int i = 0; i < _lights.Count; i++) hash = AddHash(hash, _lights[i]);
+            hash = AddHash(hash, _meshObjects.Count);
+            for (int i = 0; i < _meshObjects.Count; i++) hash = AddHash(hash, _meshObjects[i]);
+            return hash;
+        }
     }
 
     private void EnsureCausticResources()
@@ -1589,7 +2046,8 @@ public class GameManager : MonoBehaviour
     private bool ShouldUseFrameAccumulation()
     {
         bool animatedWater = _water != null && _water.WaveAmplitude > 0.0f && _water.WaveSpeed > 0.0f && !_singleFrame;
-        return enableFrameAccumulation && debugRenderMode == DebugRenderMode.FinalColor && !animatedWater;
+        return enableFrameAccumulation && debugRenderMode == DebugRenderMode.FinalColor && !animatedWater
+            && !ShouldUseTemporalAccumulation();
     }
 
     private float GetRenderTime()
@@ -1801,6 +2259,11 @@ public class GameManager : MonoBehaviour
     public void RenderImage(RenderTexture src, RenderTexture dest)
     {
         EnsureOutputTextureSize(src.width, src.height);
+        if (!ShouldRunTemporalDenoiser() && _temporalRadianceHistoryA != null)
+        {
+            ReleaseTemporalDenoiserResources();
+            ResetTemporalHistory();
+        }
 
         // Detect a switch to a debug variant that has not been compiled yet. The first Dispatch of
         // a new variant blocks the main thread while the GPU backend compiles it. To avoid an
@@ -1854,11 +2317,17 @@ public class GameManager : MonoBehaviour
 
         cameraFocalDistance = autoFocusDistance;
 
+        _temporalDynamicSceneChanged = false;
         UpdateSpheres();
         UpdateTriangles();
         UpdateTopLevelBvh();
         UpdateShadowBvh();
         UpdateCausticPhotonMap();
+
+        if (ShouldRunTemporalDenoiser())
+        {
+            PrepareTemporalCameraState();
+        }
 
         bool useFrameAccumulation = ShouldUseFrameAccumulation();
         if (useFrameAccumulation)
@@ -1886,7 +2355,20 @@ public class GameManager : MonoBehaviour
         }
         long dispatchStart = _startupProfilePending ? Stopwatch.GetTimestamp() : 0;
         UpdateTextureFromCompute(kernelHandle);
-        if (!useDedicatedCausticsDebugKernel && ShouldRunSpatialDenoiser())
+        if (!useDedicatedCausticsDebugKernel && (ShouldRunSpatialDenoiser() || ShouldRunTemporalDenoiser() || IsFeatureDebugMode()))
+        {
+            UpdateFeaturesFromCompute();
+        }
+        if (!useDedicatedCausticsDebugKernel && IsFeatureDebugMode())
+        {
+            PresentFeatureDebugMode();
+        }
+        if (!useDedicatedCausticsDebugKernel && ShouldRunTemporalDenoiser())
+        {
+            RunTemporalDenoiser();
+            CommitTemporalCameraState();
+        }
+        if (!useDedicatedCausticsDebugKernel && ShouldRunSpatialDenoiser() && !IsTemporalDebugMode())
         {
             RunSpatialDenoiser();
         }
@@ -1901,6 +2383,7 @@ public class GameManager : MonoBehaviour
         {
             _accumulatedFrameCount++;
         }
+        CommitRenderedCameraState();
 
         // The dispatch above triggered (and blocked on) any first-time variant compile. Record
         // that this debug mode is now warm so future switches to it are instant, and clear the
@@ -2025,9 +2508,11 @@ public class GameManager : MonoBehaviour
             var sphere = _spheres[i];
             var sphereObject = _sphereObjects[i];
 
-            sphere.position = sphereObject.transform.TransformPoint(sphereObject.collider.center);
-
-            sphere.radius = GetWorldSphereRadius(sphereObject.collider, sphereObject.transform);
+            Vector3 position = sphereObject.transform.TransformPoint(sphereObject.collider.center);
+            float radius = GetWorldSphereRadius(sphereObject.collider, sphereObject.transform);
+            _temporalDynamicSceneChanged |= sphere.position != position || !Mathf.Approximately(sphere.radius, radius);
+            sphere.position = position;
+            sphere.radius = radius;
 
             var material = sphereObject.material;
             sphere.color = material.Color.ToVector3();
@@ -2054,9 +2539,11 @@ public class GameManager : MonoBehaviour
             var lightData = _lights[i];
             var lightObject = _lightObjects[i];
 
-            lightData.position = lightObject.transform.TransformPoint(lightObject.collider.center);
-
-            lightData.radius = GetWorldSphereRadius(lightObject.collider, lightObject.transform);
+            Vector3 position = lightObject.transform.TransformPoint(lightObject.collider.center);
+            float radius = GetWorldSphereRadius(lightObject.collider, lightObject.transform);
+            _temporalDynamicSceneChanged |= lightData.position != position || !Mathf.Approximately(lightData.radius, radius);
+            lightData.position = position;
+            lightData.radius = radius;
             lightData.area = Mathf.PI * lightData.radius * lightData.radius;
             lightData.type = LightTypeSphere;
 
@@ -2092,6 +2579,7 @@ public class GameManager : MonoBehaviour
         }
 
         UpdateMeshChangeCache(out bool geometryChanged, out bool materialChanged);
+        _temporalDynamicSceneChanged |= geometryChanged || materialChanged;
         if (!geometryChanged && !materialChanged)
         {
             return;
@@ -3940,6 +4428,8 @@ public class GameManager : MonoBehaviour
 
         shader.SetMatrix("_CameraToWorld", renderTextureCamera.cameraToWorldMatrix);
         shader.SetMatrix("_CameraInverseProjection", renderTextureCamera.projectionMatrix.inverse);
+        shader.SetVector("_FrameJitterNdc", new Vector4(_currentTemporalJitterNdc.x, _currentTemporalJitterNdc.y, 0.0f, 0.0f));
+        shader.SetInt("_UseTemporalJitter", ShouldRunTemporalDenoiser() ? 1 : 0);
 
         _skyboxLightColorAsVector = new Vector4(_skyboxLightColor.r / 255f, _skyboxLightColor.g / 255f, _skyboxLightColor.b / 255f, 1.0f);
         shader.SetVector("_SkyboxLight", _skyboxLightColorAsVector);
@@ -3955,7 +4445,10 @@ public class GameManager : MonoBehaviour
 
         shader.SetInt("_NumberOfPasses", numberOfPasses);
         shader.SetInt("_NumBounces", numBounces);
-        shader.SetInt("_DebugRenderMode", (int)debugRenderMode);
+        // Temporal modes are presented by RayTracingSpatialDenoiser after CSMain. Keep CSMain
+        // on its normal HDR beauty path so an out-of-range renderer debug value cannot write
+        // an untonemapped fallback before the temporal presentation pass runs.
+        shader.SetInt("_DebugRenderMode", IsTemporalDebugMode() ? (int)DebugRenderMode.FinalColor : (int)debugRenderMode);
         shader.SetInt("_UseFrameAccumulation", ShouldUseFrameAccumulation() ? 1 : 0);
         shader.SetInt("_AccumulatedFrameCount", _accumulatedFrameCount);
         shader.SetInt("_SampleOffset", CalculateSampleOffset());
