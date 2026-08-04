@@ -54,8 +54,105 @@ public sealed class GameManagerEditor : Editor
 
         EditorGUILayout.PropertyField(serializedObject.FindProperty("bakeBvhUponExit"), new GUIContent("Bake upon exit"));
         EditorGUILayout.Space();
-        DrawPropertiesExcluding(serializedObject, "m_Script", "bvhBake", "bakeBvhUponExit");
+        DrawPropertiesExcluding(
+            serializedObject,
+            "m_Script",
+            "bvhBake",
+            "bakeBvhUponExit",
+            "videoSamplesPerFrame",
+            "videoFrameTimeStep",
+            "videoDuration",
+            "videoOutputFolder",
+            "videoEncodeMp4",
+            "videoFfmpegPath");
+        DrawVideoCaptureSettings(manager);
         serializedObject.ApplyModifiedProperties();
+    }
+
+    private void DrawVideoCaptureSettings(GameManager manager)
+    {
+        EditorGUILayout.Space();
+        EditorGUILayout.LabelField("Video Capture", EditorStyles.boldLabel);
+        EditorGUILayout.PropertyField(
+            serializedObject.FindProperty("videoSamplesPerFrame"),
+            new GUIContent("Quality Samples Per Output Frame"));
+        EditorGUILayout.PropertyField(
+            serializedObject.FindProperty("videoFrameTimeStep"),
+            new GUIContent("Output Frame Time Step (seconds)"));
+        EditorGUILayout.PropertyField(
+            serializedObject.FindProperty("videoDuration"),
+            new GUIContent("Video Duration (seconds)"));
+        EditorGUILayout.PropertyField(serializedObject.FindProperty("videoOutputFolder"));
+        EditorGUILayout.PropertyField(serializedObject.FindProperty("videoEncodeMp4"));
+        if (serializedObject.FindProperty("videoEncodeMp4").boolValue)
+        {
+            EditorGUILayout.PropertyField(serializedObject.FindProperty("videoFfmpegPath"));
+        }
+
+        int frameCount = GameManager.CalculateVideoFrameCount(manager.videoDuration, manager.videoFrameTimeStep);
+        var overlay = manager.GetComponent<RayTracingBenchmarkOverlay>();
+        float averageFrameMs = overlay != null ? overlay.AverageFrameMs : 0.0f;
+        double estimateSeconds = GameManager.EstimateVideoCaptureSeconds(
+            frameCount,
+            manager.videoSamplesPerFrame,
+            Mathf.Max(1, manager.numberOfPasses),
+            averageFrameMs,
+            manager.enableCaustics);
+        string estimate = estimateSeconds > 0.0
+            ? FormatDuration(estimateSeconds)
+            : "available after frame statistics have been collected in Play mode";
+        EditorGUILayout.HelpBox(
+            $"Output frames: {frameCount:N0} ({manager.videoDuration:0.###} seconds / {manager.videoFrameTimeStep:0.######}-second timestep)\n" +
+            $"Quality: {manager.videoSamplesPerFrame:N0} samples accumulated into each output frame\n" +
+            $"Estimated render time: {estimate}\n" +
+            "Changing quality samples does not change the output frame count. Lossless PNG frames are retained; ffmpeg creates video.mp4 after capture. Encoding and disk-write time are not included in the estimate.",
+            MessageType.Info);
+
+        if (manager.IsVideoEncodingActive)
+        {
+            EditorGUILayout.HelpBox($"Encoding MP4 with ffmpeg...\n{manager.VideoOutputPath}", MessageType.Info);
+            Repaint();
+        }
+        else if (manager.IsVideoCaptureActive)
+        {
+            float progress = manager.VideoCaptureFrameCount > 0
+                ? manager.VideoCaptureCompletedFrameCount / (float)manager.VideoCaptureFrameCount
+                : 0.0f;
+            EditorGUI.ProgressBar(
+                EditorGUILayout.GetControlRect(false, 20.0f),
+                progress,
+                $"{manager.VideoCaptureCompletedFrameCount:N0} / {manager.VideoCaptureFrameCount:N0} frames");
+            EditorGUILayout.LabelField("Output", manager.VideoCaptureDirectory ?? string.Empty);
+            if (GUILayout.Button("Cancel Capture"))
+            {
+                manager.CancelVideoCapture();
+            }
+            Repaint();
+        }
+        else
+        {
+            using (new EditorGUI.DisabledScope(!EditorApplication.isPlaying || frameCount <= 0 || manager.IsVideoEncodingActive))
+            {
+                if (GUILayout.Button("Start Video Capture"))
+                {
+                    serializedObject.ApplyModifiedProperties();
+                    manager.StartVideoCapture();
+                }
+            }
+        }
+    }
+
+    private static string FormatDuration(double totalSeconds)
+    {
+        if (totalSeconds < 60.0)
+        {
+            return $"{totalSeconds:0.0} seconds";
+        }
+
+        TimeSpan duration = TimeSpan.FromSeconds(totalSeconds);
+        return duration.TotalHours >= 1.0
+            ? $"{(int)duration.TotalHours}:{duration.Minutes:00}:{duration.Seconds:00}"
+            : $"{duration.Minutes}:{duration.Seconds:00}";
     }
 
     private static BakeStatus GetBakeStatus(RayTracingBvhBakeAsset bake, string signature)

@@ -14,6 +14,8 @@ public class RayTracingBenchmarkOverlay : MonoBehaviour
     private float _averageFrameMs;
     private GUIStyle _style;
 
+    public float AverageFrameMs => _averageFrameMs;
+
     private void Awake()
     {
         if (gameManager == null)

@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Reflection;
+using System.IO;
 using NUnit.Framework;
 using UnityEngine;
 
@@ -28,6 +29,78 @@ public class RayTracingBenchmarkToolTests
         {
             UnityEngine.Object.DestroyImmediate(gameObject);
         }
+    }
+
+    [TestCase(5.0f, 1.0f / 30.0f, 150)]
+    [TestCase(5.0f, 1.0f / 60.0f, 300)]
+    [TestCase(1.01f, 0.5f, 3)]
+    [TestCase(0.0f, 0.5f, 0)]
+    public void VideoCapture_CalculatesOutputFrameCount(float duration, float timeStep, int expected)
+    {
+        Type managerType = GetRuntimeType("GameManager");
+        MethodInfo method = managerType.GetMethod("CalculateVideoFrameCount", BindingFlags.Public | BindingFlags.Static);
+
+        Assert.That(method, Is.Not.Null);
+        Assert.That(method.Invoke(null, new object[] { duration, timeStep }), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void VideoCapture_EstimatesRenderTimeFromCurrentSampleRate()
+    {
+        Type managerType = GetRuntimeType("GameManager");
+        MethodInfo method = managerType.GetMethod(
+            "EstimateVideoCaptureSeconds",
+            BindingFlags.Public | BindingFlags.Static,
+            null,
+            new[] { typeof(int), typeof(int), typeof(int), typeof(float) },
+            null);
+
+        Assert.That(method, Is.Not.Null);
+        double seconds = (double)method.Invoke(null, new object[] { 150, 128, 4, 20.0f });
+        Assert.That(seconds, Is.EqualTo(96.0).Within(0.0001));
+    }
+
+    [Test]
+    public void VideoCapture_WithCaustics_UsesOnePhotonBatchPerRequestedSample()
+    {
+        Type managerType = GetRuntimeType("GameManager");
+        MethodInfo dispatchSamplesMethod = managerType.GetMethod(
+            "GetVideoSamplesPerDispatch",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        MethodInfo estimateMethod = managerType.GetMethod(
+            "EstimateVideoCaptureSeconds",
+            BindingFlags.Public | BindingFlags.Static,
+            null,
+            new[] { typeof(int), typeof(int), typeof(int), typeof(float), typeof(bool) },
+            null);
+
+        Assert.That(dispatchSamplesMethod, Is.Not.Null);
+        Assert.That(dispatchSamplesMethod.Invoke(null, new object[] { 128, true }), Is.EqualTo(1));
+        Assert.That(dispatchSamplesMethod.Invoke(null, new object[] { 128, false }), Is.EqualTo(32));
+
+        Assert.That(estimateMethod, Is.Not.Null);
+        double seconds = (double)estimateMethod.Invoke(null, new object[] { 150, 128, 4, 20.0f, true });
+        Assert.That(seconds, Is.EqualTo(384.0).Within(0.0001));
+    }
+
+    [Test]
+    public void VideoCapture_EncoderUsesTimestepAsFrameRateAndNumberedPngInput()
+    {
+        Type managerType = GetRuntimeType("GameManager");
+        MethodInfo method = managerType.GetMethod(
+            "BuildVideoEncoderArguments",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        Assert.That(method, Is.Not.Null);
+        string directory = Path.Combine("capture root", "frames");
+        string output = Path.Combine(directory, "video.mp4");
+        string arguments = (string)method.Invoke(null, new object[] { directory, output, 1.0f / 30.0f });
+
+        Assert.That(arguments, Does.Contain("-framerate 30"));
+        Assert.That(arguments, Does.Contain("frame_%06d.png"));
+        Assert.That(arguments, Does.Contain("-c:v libx264"));
+        Assert.That(arguments, Does.Contain("-pix_fmt yuv420p"));
+        Assert.That(arguments, Does.EndWith("\"" + output + "\""));
     }
 
     [Test]

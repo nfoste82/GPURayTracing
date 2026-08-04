@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using DefaultNamespace;
@@ -458,8 +459,49 @@ public class GameManager : MonoBehaviour
     [Tooltip("Freezes simulation time and progressively refines the current view. Camera and scene changes reset accumulation and render the updated view.")]
     public bool _singleFrame = false;
 
+    [Header("Video capture")]
+    [Tooltip("Total path-tracing samples per pixel accumulated for each output frame.")]
+    [Min(1)]
+    public int videoSamplesPerFrame = 128;
+
+    [Tooltip("Simulation time advanced between output frames, in seconds.")]
+    [Min(0.000001f)]
+    public float videoFrameTimeStep = 1.0f / 30.0f;
+
+    [Tooltip("Total simulated duration to capture, in seconds.")]
+    [Min(0.000001f)]
+    public float videoDuration = 5.0f;
+
+    [Tooltip("Absolute output folder, or a folder relative to Application.persistentDataPath.")]
+    public string videoOutputFolder = "VideoFrames";
+
+    [Tooltip("Encodes the completed PNG sequence as an H.264 MP4 while retaining the lossless source frames.")]
+    public bool videoEncodeMp4 = true;
+
+    [Tooltip("Optional ffmpeg executable path. Leave blank to search PATH and common Homebrew locations.")]
+    public string videoFfmpegPath = "";
+
     private bool _previousSingleFrame;
     private float _singleFrameRenderTime;
+    private bool _videoCaptureActive;
+    private bool _videoCaptureAwaitingSimulationStep;
+    private int _videoCaptureFrameIndex;
+    private int _videoCaptureFrameCount;
+    private int _videoCaptureDispatchesPerFrame;
+    private string _videoCaptureDirectory;
+    private bool _videoPreviousSingleFrame;
+    private float _videoPreviousSingleFrameRenderTime;
+    private bool _videoPreviousFrameAccumulation;
+    private bool _videoPreviousTemporalDenoising;
+    private bool _videoPreviousDynamicQuality;
+    private int _videoPreviousNumberOfPasses;
+    private int _videoPreviousTargetFrameRate;
+    private int _videoPreviousVSyncCount;
+    private float _videoPreviousTimeScale;
+    private float _videoPreviousCaptureDeltaTime;
+    private Process _videoEncodingProcess;
+    private bool _videoEncodingActive;
+    private string _videoOutputPath;
 
     // Compute-shader variants compile synchronously on their first Dispatch, which freezes the
     // main thread (the spinning-wheel stall) the first time a debug render mode is selected. We
@@ -490,6 +532,12 @@ public class GameManager : MonoBehaviour
     public Vector2Int TextureSize => _textureSize;
     public int AccumulatedFrameCount => _accumulatedFrameCount;
     public float DynamicQualityAverageFrameMs => _dynamicQualityAverageFrameMs;
+    public bool IsVideoCaptureActive => _videoCaptureActive;
+    public int VideoCaptureCompletedFrameCount => _videoCaptureFrameIndex;
+    public int VideoCaptureFrameCount => _videoCaptureActive ? _videoCaptureFrameCount : CalculateVideoFrameCount(videoDuration, videoFrameTimeStep);
+    public string VideoCaptureDirectory => _videoCaptureDirectory;
+    public bool IsVideoEncodingActive => _videoEncodingActive;
+    public string VideoOutputPath => _videoOutputPath;
     public bool HasCausticResources => _causticPhotonBuffer != null && _causticPhotonMetadataBuffer != null
         && _causticGridCellHeadBuffer != null && _causticPhotonNextBuffer != null
         && _causticTargetPairBuffer != null && _causticTargetTriangleBuffer != null;
@@ -878,6 +926,9 @@ public class GameManager : MonoBehaviour
         temporalMotionDistance = Mathf.Max(0.00001f, temporalMotionDistance);
         temporalMotionAngle = Mathf.Max(0.0001f, temporalMotionAngle);
         causticPreservationThreshold = Mathf.Clamp(causticPreservationThreshold, 1.5f, 32.0f);
+        videoSamplesPerFrame = Mathf.Max(1, videoSamplesPerFrame);
+        videoFrameTimeStep = Mathf.Max(0.000001f, videoFrameTimeStep);
+        videoDuration = Mathf.Max(0.000001f, videoDuration);
         SyncUnitySkyboxPreview();
     }
 
@@ -1116,6 +1167,8 @@ public class GameManager : MonoBehaviour
 
     private void Update()
     {
+        UpdateVideoEncoding();
+
         if (_buffersNeedRebuilding)
         {
             RebuildBuffers();
@@ -1133,6 +1186,15 @@ public class GameManager : MonoBehaviour
         }
 
         UpdateDynamicQuality();
+
+        if (_videoCaptureActive)
+        {
+            if (Input.GetKeyDown(KeyCode.Escape))
+            {
+                CancelVideoCapture();
+            }
+            return;
+        }
 
         HandleInputForCamera(renderTextureCamera);
         HandleClickToFocusInput();
@@ -1296,6 +1358,12 @@ public class GameManager : MonoBehaviour
     
     private void OnDestroy()
     {
+        if (_videoCaptureActive)
+        {
+            FinishVideoCapture(false);
+        }
+        _videoEncodingProcess?.Dispose();
+        _videoEncodingProcess = null;
         _outputTexture?.Release();
         _accumulationTexture?.Release();
         _beautyTexture?.Release();
@@ -2337,6 +2405,13 @@ public class GameManager : MonoBehaviour
     public void RenderImage(RenderTexture src, RenderTexture dest)
     {
         EnsureOutputTextureSize(src.width, src.height);
+        if (_videoCaptureActive && _videoCaptureAwaitingSimulationStep)
+        {
+            _singleFrameRenderTime = Time.time;
+            Time.timeScale = 0.0f;
+            Time.captureDeltaTime = 0.0f;
+            _videoCaptureAwaitingSimulationStep = false;
+        }
         if (!ShouldRunTemporalDenoiser() && _temporalRadianceHistoryA != null)
         {
             ReleaseTemporalDenoiserResources();
@@ -2476,7 +2551,323 @@ public class GameManager : MonoBehaviour
         _appliedFogEnabled = fogEnabled;
         _pendingVariantWarmup = false;
 
+        if (_videoCaptureActive && !_videoCaptureAwaitingSimulationStep
+            && _accumulatedFrameCount >= _videoCaptureDispatchesPerFrame)
+        {
+            SaveVideoFrameAndAdvance();
+        }
+
         Graphics.Blit(_outputTexture, dest);
+    }
+
+    public static int CalculateVideoFrameCount(float duration, float frameTimeStep)
+    {
+        if (duration <= 0.0f || frameTimeStep <= 0.0f)
+        {
+            return 0;
+        }
+
+        double frameCount = Math.Ceiling((double)duration / frameTimeStep - 0.0000001);
+        return frameCount >= int.MaxValue ? int.MaxValue : Math.Max(1, (int)frameCount);
+    }
+
+    public static double EstimateVideoCaptureSeconds(
+        int frameCount,
+        int samplesPerFrame,
+        int currentSamplesPerFrame,
+        float averageFrameMs)
+    {
+        return EstimateVideoCaptureSeconds(
+            frameCount,
+            samplesPerFrame,
+            currentSamplesPerFrame,
+            averageFrameMs,
+            false);
+    }
+
+    public static double EstimateVideoCaptureSeconds(
+        int frameCount,
+        int samplesPerFrame,
+        int currentSamplesPerFrame,
+        float averageFrameMs,
+        bool causticsEnabled)
+    {
+        if (frameCount <= 0 || samplesPerFrame <= 0 || currentSamplesPerFrame <= 0 || averageFrameMs <= 0.0f)
+        {
+            return 0.0;
+        }
+
+        // A caustic photon batch advances once per dispatch rather than once per camera sample.
+        // Capture therefore dispatches every requested caustic sample separately.
+        if (causticsEnabled)
+        {
+            return frameCount * (double)samplesPerFrame * averageFrameMs / 1000.0;
+        }
+
+        return frameCount * (double)samplesPerFrame / currentSamplesPerFrame * averageFrameMs / 1000.0;
+    }
+
+    public void StartVideoCapture()
+    {
+        if (_videoCaptureActive || _videoEncodingActive || !Application.isPlaying)
+        {
+            return;
+        }
+
+        int frameCount = CalculateVideoFrameCount(videoDuration, videoFrameTimeStep);
+        if (frameCount <= 0)
+        {
+            Debug.LogError("Video capture requires a positive duration and frame time step.", this);
+            return;
+        }
+        if (debugRenderMode != DebugRenderMode.FinalColor)
+        {
+            Debug.LogError("Video capture requires the FinalColor debug render mode so frame accumulation is available.", this);
+            return;
+        }
+
+        int samplesPerFrame = Mathf.Max(1, videoSamplesPerFrame);
+        int samplesPerDispatch = GetVideoSamplesPerDispatch(samplesPerFrame, enableCaustics);
+        string outputRoot = string.IsNullOrWhiteSpace(videoOutputFolder) ? "VideoFrames" : videoOutputFolder.Trim();
+        if (!Path.IsPathRooted(outputRoot))
+        {
+            outputRoot = Path.Combine(Application.persistentDataPath, outputRoot);
+        }
+
+        try
+        {
+            _videoCaptureDirectory = Path.Combine(outputRoot, DateTime.Now.ToString("yyyyMMdd_HHmmss_fff"));
+            int suffix = 1;
+            while (Directory.Exists(_videoCaptureDirectory))
+            {
+                _videoCaptureDirectory = Path.Combine(outputRoot, $"{DateTime.Now:yyyyMMdd_HHmmss_fff}_{suffix++}");
+            }
+            Directory.CreateDirectory(_videoCaptureDirectory);
+        }
+        catch (Exception exception)
+        {
+            Debug.LogError($"Could not create video capture directory: {exception.Message}", this);
+            _videoCaptureDirectory = null;
+            return;
+        }
+
+        _videoPreviousSingleFrame = _singleFrame;
+        _videoPreviousSingleFrameRenderTime = _singleFrameRenderTime;
+        _videoPreviousFrameAccumulation = enableFrameAccumulation;
+        _videoPreviousTemporalDenoising = enableTemporalDenoising;
+        _videoPreviousDynamicQuality = enableDynamicQuality;
+        _videoPreviousNumberOfPasses = numberOfPasses;
+        _videoPreviousTargetFrameRate = Application.targetFrameRate;
+        _videoPreviousVSyncCount = QualitySettings.vSyncCount;
+        _videoPreviousTimeScale = Time.timeScale;
+        _videoPreviousCaptureDeltaTime = Time.captureDeltaTime;
+
+        _videoCaptureFrameIndex = 0;
+        _videoCaptureFrameCount = frameCount;
+        _videoCaptureDispatchesPerFrame = samplesPerFrame / samplesPerDispatch;
+        _videoCaptureAwaitingSimulationStep = false;
+        _videoCaptureActive = true;
+        _singleFrame = true;
+        _previousSingleFrame = true;
+        _singleFrameRenderTime = Time.time;
+        enableFrameAccumulation = true;
+        enableTemporalDenoising = false;
+        enableDynamicQuality = false;
+        numberOfPasses = samplesPerDispatch;
+        EnableSingleFrameSettings();
+        Application.targetFrameRate = 1000;
+        ResetFrameAccumulation();
+
+        Debug.Log(
+            $"Video capture started: {frameCount:N0} frames, {samplesPerFrame:N0} samples per frame, " +
+            $"output '{_videoCaptureDirectory}'. Press Escape to cancel.",
+            this);
+    }
+
+    public void CancelVideoCapture()
+    {
+        if (!_videoCaptureActive)
+        {
+            return;
+        }
+
+        Debug.Log($"Video capture cancelled after {_videoCaptureFrameIndex:N0} of {_videoCaptureFrameCount:N0} frames.", this);
+        FinishVideoCapture(false);
+    }
+
+    private static int GetVideoSamplesPerDispatch(int samplesPerFrame, bool causticsEnabled)
+    {
+        if (causticsEnabled)
+        {
+            return 1;
+        }
+
+        for (int candidate = Mathf.Min(MaxNumberOfPasses, samplesPerFrame); candidate > 1; candidate--)
+        {
+            if (samplesPerFrame % candidate == 0)
+            {
+                return candidate;
+            }
+        }
+        return 1;
+    }
+
+    private void SaveVideoFrameAndAdvance()
+    {
+        string path = Path.Combine(_videoCaptureDirectory, $"frame_{_videoCaptureFrameIndex:D6}.png");
+        RenderTexture previous = RenderTexture.active;
+        var texture = new Texture2D(_textureSize.x, _textureSize.y, TextureFormat.RGB24, false);
+        try
+        {
+            RenderTexture.active = _outputTexture;
+            texture.ReadPixels(new Rect(0, 0, _textureSize.x, _textureSize.y), 0, 0, false);
+            texture.Apply(false, false);
+            File.WriteAllBytes(path, texture.EncodeToPNG());
+        }
+        catch (Exception exception)
+        {
+            Debug.LogError($"Video capture failed while writing '{path}': {exception.Message}", this);
+            FinishVideoCapture(false);
+            return;
+        }
+        finally
+        {
+            RenderTexture.active = previous;
+            DestroyRuntimeObject(texture);
+        }
+
+        _videoCaptureFrameIndex++;
+        if (_videoCaptureFrameIndex >= _videoCaptureFrameCount)
+        {
+            string completedDirectory = _videoCaptureDirectory;
+            int completedFrameCount = _videoCaptureFrameCount;
+            FinishVideoCapture(true);
+            if (videoEncodeMp4)
+            {
+                StartVideoEncoding(completedDirectory, videoFrameTimeStep);
+            }
+            Debug.Log(
+                $"Video capture complete: {completedFrameCount:N0} PNG frames written to '{completedDirectory}'." +
+                (_videoEncodingActive ? " MP4 encoding started." : string.Empty),
+                this);
+            return;
+        }
+
+        ResetFrameAccumulation();
+        _videoCaptureAwaitingSimulationStep = true;
+        Time.captureDeltaTime = Mathf.Max(0.000001f, videoFrameTimeStep);
+        Time.timeScale = 1.0f;
+    }
+
+    private void FinishVideoCapture(bool completed)
+    {
+        _videoCaptureActive = false;
+        _videoCaptureAwaitingSimulationStep = false;
+        _singleFrame = _videoPreviousSingleFrame;
+        _previousSingleFrame = _videoPreviousSingleFrame;
+        _singleFrameRenderTime = _videoPreviousSingleFrameRenderTime;
+        enableFrameAccumulation = _videoPreviousFrameAccumulation;
+        enableTemporalDenoising = _videoPreviousTemporalDenoising;
+        enableDynamicQuality = _videoPreviousDynamicQuality;
+        numberOfPasses = _videoPreviousNumberOfPasses;
+        Application.targetFrameRate = _videoPreviousTargetFrameRate;
+        QualitySettings.vSyncCount = _videoPreviousVSyncCount;
+        Time.captureDeltaTime = _videoPreviousCaptureDeltaTime;
+        Time.timeScale = _videoPreviousTimeScale;
+        ResetFrameAccumulation();
+
+        if (!completed)
+        {
+            _videoCaptureFrameCount = 0;
+        }
+    }
+
+    private void StartVideoEncoding(string frameDirectory, float frameTimeStep)
+    {
+        string executable = ResolveFfmpegExecutable(videoFfmpegPath);
+        _videoOutputPath = Path.Combine(frameDirectory, "video.mp4");
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = executable,
+            Arguments = BuildVideoEncoderArguments(frameDirectory, _videoOutputPath, frameTimeStep),
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        try
+        {
+            _videoEncodingProcess = Process.Start(startInfo);
+            _videoEncodingActive = _videoEncodingProcess != null;
+            if (!_videoEncodingActive)
+            {
+                Debug.LogError("ffmpeg did not start. The lossless PNG sequence has been retained.", this);
+            }
+        }
+        catch (Exception exception)
+        {
+            _videoEncodingProcess = null;
+            _videoEncodingActive = false;
+            Debug.LogError(
+                $"Could not start ffmpeg at '{executable}': {exception.Message}. " +
+                "Set Video Ffmpeg Path or install ffmpeg. The lossless PNG sequence has been retained.",
+                this);
+        }
+    }
+
+    private void UpdateVideoEncoding()
+    {
+        if (!_videoEncodingActive || _videoEncodingProcess == null || !_videoEncodingProcess.HasExited)
+        {
+            return;
+        }
+
+        int exitCode = _videoEncodingProcess.ExitCode;
+        _videoEncodingProcess.Dispose();
+        _videoEncodingProcess = null;
+        _videoEncodingActive = false;
+        if (exitCode == 0 && File.Exists(_videoOutputPath))
+        {
+            Debug.Log($"Video encoding complete: '{_videoOutputPath}'.", this);
+        }
+        else
+        {
+            Debug.LogError(
+                $"ffmpeg exited with code {exitCode}. The lossless PNG sequence has been retained in '{_videoCaptureDirectory}'.",
+                this);
+        }
+    }
+
+    private static string ResolveFfmpegExecutable(string configuredPath)
+    {
+        if (!string.IsNullOrWhiteSpace(configuredPath))
+        {
+            return configuredPath.Trim();
+        }
+
+        string[] commonPaths = { "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg" };
+        for (int i = 0; i < commonPaths.Length; i++)
+        {
+            if (File.Exists(commonPaths[i]))
+            {
+                return commonPaths[i];
+            }
+        }
+        return "ffmpeg";
+    }
+
+    private static string BuildVideoEncoderArguments(string frameDirectory, string outputPath, float frameTimeStep)
+    {
+        double frameRate = 1.0 / Math.Max(0.000001, frameTimeStep);
+        string frameRateText = frameRate.ToString("0.########", CultureInfo.InvariantCulture);
+        string inputPath = Path.Combine(frameDirectory, "frame_%06d.png");
+        return $"-y -framerate {frameRateText} -start_number 0 -i {QuoteProcessArgument(inputPath)} " +
+            "-vf \"pad=ceil(iw/2)*2:ceil(ih/2)*2\" " +
+            $"-c:v libx264 -preset slow -crf 18 -pix_fmt yuv420p -movflags +faststart {QuoteProcessArgument(outputPath)}";
+    }
+
+    private static string QuoteProcessArgument(string value)
+    {
+        return "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
     }
 
     private static int GetShaderVariantKey(DebugRenderMode mode, bool causticsEnabled, bool fogEnabled)

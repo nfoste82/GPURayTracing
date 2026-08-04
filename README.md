@@ -25,6 +25,12 @@ There are multiple quality settings on the GameManager object in the root scene.
 
 ![Water with reflection, refraction, light absorption](water_scene.png)
 
+## Water Caustics Video
+
+<video src="media/water-caustics-video.mp4" controls muted loop playsinline width="720">
+  Your browser does not support embedded video. Download [the MP4](media/water-caustics-video.mp4).
+</video>
+
 ![Volumetric Fog](volumetric_fog.png)
 
 ![Default scene](default_scene.png)
