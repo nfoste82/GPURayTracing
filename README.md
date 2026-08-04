@@ -1,5 +1,5 @@
 # Realtime Path Tracing
-Realtime 3D path-tracer running in a GPU compute shader in Unity.
+Realtime 3D path-tracer running in a GPU compute shader in Unity. Full disclosure that LLMs were used during the later work on this project.
 
 Features:
 * GPU compute-shader path tracing for spheres and registered triangle meshes
