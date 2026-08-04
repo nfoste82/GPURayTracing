@@ -15,7 +15,7 @@ Realtime 3D path-tracer running in a GPU compute shader in Unity. Full disclosur
 * Spatial denoising (basic hand-rolled, not machine-learned denoising)
 
 ## Features missing or approximate:
-* Spectral refractions (different wavelengths of light refract differently)
+* Spectral refractions (different wavelengths of light refract differently), current lighting system does not handle wavelengths
 * Temporal denoising is a work-in-progress
 * Glass smoothness and opacity directly affect how reflective its surface is currently, I need to change this so there can be less reflective glass regardless of smoothness
 * Considering adding the option for machine-learning-based upscaling and denoising, and when rendering in real time, possibly even frame insertion to improve frame rate
