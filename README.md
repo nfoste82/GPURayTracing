@@ -37,6 +37,7 @@ Project has only been tested for MacOS, but all code should be OS-agnostic, so i
 ![Water with reflection, refraction, light absorption](water_scene.png)
 
 https://github.com/user-attachments/assets/c2fa9427-c246-47ff-9919-e17c34094d6f
+
 Note: This video was rendered offline, at around 45 seconds per frame.
 
 ### Volumetric Fog
