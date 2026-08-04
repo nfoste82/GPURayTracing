@@ -1,7 +1,7 @@
 # Realtime Path Tracing
 Realtime 3D path-tracer running in a GPU compute shader in Unity. Full disclosure that LLMs were used during the later work on this project.
 
-Features:
+## Features:
 * GPU compute-shader path tracing for spheres and registered triangle meshes
 * Emissive sphere and mesh lights with direct-light sampling -- (128 triangle limit for mesh lights currently)
 * Surface reflections (configurable smoothness of surfaces), diffuse indirect lighting, and multiple ray bounces
@@ -14,7 +14,7 @@ Features:
 * Volumetric fog (homogeneous fog)
 * Spatial denoising (basic hand-rolled, not machine-learned denoising)
 
-Features missing or approximate:
+## Features missing or approximate:
 * Spectral refractions (different wavelengths of light refract differently)
 * Temporal denoising is a work-in-progress
 * Glass smoothness and opacity directly affect how reflective its surface is currently, I need to change this so there can be less reflective glass regardless of smoothness
@@ -41,7 +41,7 @@ https://github.com/user-attachments/assets/c2fa9427-c246-47ff-9919-e17c34094d6f
 ### Volumetric Fog
 ![Volumetric Fog](volumetric_fog.png)
 
-### Special Thanks!
+### Special Thanks
 Thanks to these projects which have been great reference and learning material:
 
 * https://github.com/knightcrawler25/GLSL-PathTracer/
