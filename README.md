@@ -38,7 +38,9 @@ Project has only been tested for MacOS, but all code should be OS-agnostic, so i
 
 https://github.com/user-attachments/assets/c2fa9427-c246-47ff-9919-e17c34094d6f
 
-Note: This video was rendered offline, at around 45 seconds per frame.
+https://github.com/user-attachments/assets/4ff5669a-c7db-427c-8167-707b0ca8e22f
+
+Note: These video were rendered offline, at around 45-75 seconds per frame.
 
 ### Volumetric Fog
 ![Volumetric Fog](volumetric_fog.png)
