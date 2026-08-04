@@ -3,6 +3,7 @@
 #pragma kernel CSGenerateCameraMotion
 #pragma kernel CSTemporalReprojectValidate
 #pragma kernel CSUpdateTemporalMoments
+#pragma kernel CSGeneratePreservationMask
 #pragma kernel CSVisualizeTemporal
 #pragma kernel CSVisualizeFeature
 
@@ -23,6 +24,7 @@ Texture2D<float> PreviousValidity;
 Texture2D<float> PreviousHistoryLength;
 Texture2D<float> HistoryLength;
 Texture2D<float> Variance;
+Texture2D<float> PreservationMask;
 Texture2D<float2> MotionVectors;
 RWTexture2D<float2> GeneratedMotionVectors;
 RWTexture2D<float4> ReprojectedRadiance;
@@ -33,6 +35,7 @@ RWTexture2D<float> NextIdentity;
 RWTexture2D<float> NextValidity;
 RWTexture2D<float> NextHistoryLength;
 RWTexture2D<float2> TemporalDiagnostics;
+RWTexture2D<float> GeneratedPreservationMask;
 float4x4 _CurrentUnjitteredViewProjection;
 float4x4 _PreviousUnjitteredViewProjection;
 float4x4 _CameraToWorld;
@@ -53,6 +56,8 @@ float _NormalPower;
 float _AlbedoSigma;
 float _LuminanceSigma;
 float _Exposure;
+float _CausticPreservationThreshold;
+int _EnableCausticPreservation;
 
 static const float Kernel[5] = { 1.0f, 4.0f, 6.0f, 4.0f, 1.0f };
 
@@ -152,6 +157,16 @@ void CSAtrous(uint3 id : SV_DispatchThreadID)
 
             float weight = Kernel[kx + 2] * Kernel[ky + 2];
             float3 sampleColor = InputBeauty[sampleCoordinate].rgb;
+            // Sparse photon-map caustics are valid HDR outliers. Do not diffuse them into nearby
+            // receiver pixels or replace them with their lower-energy neighbors.
+            if (_EnableCausticPreservation != 0 && PreservationMask[pixel] > 0.5f && sampleCoordinate != pixel)
+            {
+                continue;
+            }
+            if (_EnableCausticPreservation != 0 && PreservationMask[sampleCoordinate] > 0.5f && sampleCoordinate != pixel)
+            {
+                continue;
+            }
             if (centerValidity > 0.5f)
             {
                 if (FeatureIdentity[sampleCoordinate] != centerIdentity)
@@ -179,6 +194,48 @@ void CSAtrous(uint3 id : SV_DispatchThreadID)
     }
 
     FilteredBeauty[pixel] = float4(sum / max(0.0001f, totalWeight), 1.0f);
+}
+
+[numthreads(8, 8, 1)]
+void CSGeneratePreservationMask(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    GeneratedPreservationMask.GetDimensions(width, height);
+    if (id.x >= width || id.y >= height)
+    {
+        return;
+    }
+
+    uint2 pixel = id.xy;
+    if (_EnableCausticPreservation == 0 || FeatureValidity[pixel] <= 0.5f)
+    {
+        GeneratedPreservationMask[pixel] = 0.0f;
+        return;
+    }
+
+    float centerLuminance = Luminance(Beauty[pixel].rgb);
+    float neighborSum = 0.0f;
+    int neighborCount = 0;
+    [unroll]
+    for (int y = -1; y <= 1; y++)
+    {
+        [unroll]
+        for (int x = -1; x <= 1; x++)
+        {
+            if (x == 0 && y == 0)
+            {
+                continue;
+            }
+
+            uint2 samplePixel = uint2(clamp(int2(pixel) + int2(x, y), int2(0, 0), int2(width - 1, height - 1)));
+            neighborSum += Luminance(Beauty[samplePixel].rgb);
+            neighborCount++;
+        }
+    }
+
+    float neighborMean = neighborSum / max(1, neighborCount);
+    GeneratedPreservationMask[pixel] = centerLuminance > 0.01f
+        && centerLuminance > neighborMean * _CausticPreservationThreshold ? 1.0f : 0.0f;
 }
 
 [numthreads(8, 8, 1)]
@@ -421,6 +478,10 @@ void CSVisualizeTemporal(uint3 id : SV_DispatchThreadID)
     {
         float variance = Variance[id.xy];
         PresentationResult[id.xy] = float4(saturate(log2(1.0f + variance) * 0.25f).xxx, 1.0f);
+    }
+    else if (_TemporalDebugMode == 9)
+    {
+        PresentationResult[id.xy] = PreservationMask[id.xy].xxxx;
     }
     else
     {

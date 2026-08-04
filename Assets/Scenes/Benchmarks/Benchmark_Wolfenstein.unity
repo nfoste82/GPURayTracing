@@ -26,7 +26,7 @@ RenderSettings:
   m_AmbientIntensity: 1
   m_AmbientMode: 0
   m_SubtractiveShadowColor: {r: 0.42, g: 0.478, b: 0.627, a: 1}
-  m_SkyboxMaterial: {fileID: 10304, guid: 0000000000000000f000000000000000, type: 0}
+  m_SkyboxMaterial: {fileID: 0}
   m_HaloStrength: 0.5
   m_FlareStrength: 1
   m_FlareFadeSpeed: 3
@@ -182,6 +182,9 @@ MonoBehaviour:
     serializedVersion: 2
     rgba: 4278214103
   AlbedoTexture: {fileID: 0}
+  Metallic: 0
+  MetallicRoughnessTexture: {fileID: 0}
+  NormalTexture: {fileID: 0}
   InterpolateNormals: 0
   Smoothness: 1
   Opacity: 1
@@ -328,6 +331,9 @@ MonoBehaviour:
     serializedVersion: 2
     rgba: 4281353294
   AlbedoTexture: {fileID: 0}
+  Metallic: 0
+  MetallicRoughnessTexture: {fileID: 0}
+  NormalTexture: {fileID: 0}
   InterpolateNormals: 0
   Smoothness: 0.28
   Opacity: 1
@@ -501,6 +507,9 @@ MonoBehaviour:
     serializedVersion: 2
     rgba: 4283316224
   AlbedoTexture: {fileID: 0}
+  Metallic: 0
+  MetallicRoughnessTexture: {fileID: 0}
+  NormalTexture: {fileID: 0}
   InterpolateNormals: 0
   Smoothness: 0.25
   Opacity: 1
@@ -647,6 +656,9 @@ MonoBehaviour:
     serializedVersion: 2
     rgba: 4281749084
   AlbedoTexture: {fileID: 0}
+  Metallic: 0
+  MetallicRoughnessTexture: {fileID: 0}
+  NormalTexture: {fileID: 0}
   InterpolateNormals: 0
   Smoothness: 0.2
   Opacity: 1
@@ -714,6 +726,9 @@ MonoBehaviour:
     serializedVersion: 2
     rgba: 4281877530
   AlbedoTexture: {fileID: 0}
+  Metallic: 0
+  MetallicRoughnessTexture: {fileID: 0}
+  NormalTexture: {fileID: 0}
   InterpolateNormals: 0
   Smoothness: 0.25
   Opacity: 1
@@ -802,6 +817,9 @@ MonoBehaviour:
     serializedVersion: 2
     rgba: 4287070240
   AlbedoTexture: {fileID: 0}
+  Metallic: 0
+  MetallicRoughnessTexture: {fileID: 0}
+  NormalTexture: {fileID: 0}
   InterpolateNormals: 0
   Smoothness: 0.35
   Opacity: 1
@@ -1246,6 +1264,9 @@ MonoBehaviour:
     serializedVersion: 2
     rgba: 4279828585
   AlbedoTexture: {fileID: 0}
+  Metallic: 0
+  MetallicRoughnessTexture: {fileID: 0}
+  NormalTexture: {fileID: 0}
   InterpolateNormals: 0
   Smoothness: 0.2
   Opacity: 1
@@ -1392,6 +1413,9 @@ MonoBehaviour:
     serializedVersion: 2
     rgba: 4294967295
   AlbedoTexture: {fileID: 2800000, guid: 156c72542ab2f4c5da85219b1dc3daf0, type: 3}
+  Metallic: 0
+  MetallicRoughnessTexture: {fileID: 0}
+  NormalTexture: {fileID: 0}
   InterpolateNormals: 0
   Smoothness: 0.18
   Opacity: 1
@@ -1695,6 +1719,9 @@ MonoBehaviour:
     serializedVersion: 2
     rgba: 4294967295
   AlbedoTexture: {fileID: 2800000, guid: 156c72542ab2f4c5da85219b1dc3daf0, type: 3}
+  Metallic: 0
+  MetallicRoughnessTexture: {fileID: 0}
+  NormalTexture: {fileID: 0}
   InterpolateNormals: 0
   Smoothness: 0.18
   Opacity: 1
@@ -2070,8 +2097,26 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 1e815bd5baf2049ce8b7e41505390e72, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::GameManager
+  bvhBake: {fileID: 11400000, guid: 1222819fe73f742989e7972cfc3d06b2, type: 2}
+  bakeBvhUponExit: 1
+  profileStartup: 1
   shader: {fileID: 7200000, guid: adaed5b09d5374556b1cda0917c8f291, type: 3}
   renderTextureCamera: {fileID: 60064917}
+  enableSpatialDenoising: 0
+  spatialDenoiserIterations: 1
+  spatialDenoiserDepthSigma: 0.25
+  spatialDenoiserNormalPower: 64
+  spatialDenoiserAlbedoSigma: 0.25
+  spatialDenoiserLuminanceSigma: 0.03
+  enableTemporalDenoising: 0
+  temporalMaxHistoryLength: 16
+  temporalMotionDistance: 0.0001
+  temporalMotionAngle: 0.01
+  temporalDepthThreshold: 0.05
+  temporalNormalThreshold: 0.9
+  temporalCameraCutDistance: 5
+  temporalCameraCutAngle: 45
+  temporalVarianceGuidedFiltering: 1
   numberOfPasses: 2
   enableFrameAccumulation: 1
   numBounces: 6
@@ -2098,8 +2143,17 @@ MonoBehaviour:
   dynamicQualityIncreaseHeadroom: 0.25
   debugRenderMode: 0
   cameraAutoFocus: 0
+  enableClickToFocus: 1
+  trackClickedFocusPoint: 1
   autoFocusTransparentOpacityThreshold: 0.5
   cameraFocalDistance: 10
+  cameraApertureMode: 1
+  cameraApertureRadius: 0.005
+  cameraFStop: 2.8
+  cameraApertureScale: 1
+  cameraApertureBladeCount: 0
+  cameraApertureBladeRotation: 0
+  cameraAnamorphicRatio: 1
   lightFalloffScale: 0.035
   exposure: 1.25
   fireflyClamp: 0
@@ -2109,6 +2163,8 @@ MonoBehaviour:
     rgba: 4278716424
   skyboxTexture: {fileID: 2800000, guid: 498101212922c43cb9800ac08f1737bd, type: 3}
   defaultMeshAlbedoTexture: {fileID: 0}
+  defaultMeshMetallicRoughnessTexture: {fileID: 0}
+  defaultMeshNormalTexture: {fileID: 0}
   syncUnitySkyboxToRayTracedSkybox: 1
   unitySkyboxExposure: 1
   unitySkyboxRotation: 0
@@ -2264,6 +2320,9 @@ MonoBehaviour:
     serializedVersion: 2
     rgba: 4294967295
   AlbedoTexture: {fileID: 2800000, guid: 156c72542ab2f4c5da85219b1dc3daf0, type: 3}
+  Metallic: 0
+  MetallicRoughnessTexture: {fileID: 0}
+  NormalTexture: {fileID: 0}
   InterpolateNormals: 0
   Smoothness: 0.18
   Opacity: 1
@@ -2331,6 +2390,9 @@ MonoBehaviour:
     serializedVersion: 2
     rgba: 4281757816
   AlbedoTexture: {fileID: 0}
+  Metallic: 0
+  MetallicRoughnessTexture: {fileID: 0}
+  NormalTexture: {fileID: 0}
   InterpolateNormals: 0
   Smoothness: 0.2
   Opacity: 1
@@ -2597,6 +2659,9 @@ MonoBehaviour:
     serializedVersion: 2
     rgba: 4280438900
   AlbedoTexture: {fileID: 0}
+  Metallic: 0
+  MetallicRoughnessTexture: {fileID: 0}
+  NormalTexture: {fileID: 0}
   InterpolateNormals: 0
   Smoothness: 1
   Opacity: 1
@@ -2685,6 +2750,9 @@ MonoBehaviour:
     serializedVersion: 2
     rgba: 4285108886
   AlbedoTexture: {fileID: 0}
+  Metallic: 0
+  MetallicRoughnessTexture: {fileID: 0}
+  NormalTexture: {fileID: 0}
   InterpolateNormals: 0
   Smoothness: 0.4
   Opacity: 1

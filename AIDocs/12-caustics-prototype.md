@@ -267,7 +267,16 @@ Milestones 1 and 2 are implemented as the initial prototype. Milestone 3 correct
 - Implemented: closed glass meshes are targeted by sampling their triangle surfaces with an area-to-solid-angle PDF correction, validating visibility against their mesh BVHs, and transporting boundary-by-boundary through the same medium-stack loop. This avoids the sparse photon maps produced by loose bounding-sphere targeting on non-convex meshes.
 - Implemented: glass mesh photon Fresnel, transmission, and reflection use interpolated vertex normals when `InterpolateNormals` is enabled, while intersections and boundary identity remain geometric.
 - Implemented: CPU-built importance distributions compact eligible light/refractor pairs, remove per-photon scene-wide candidate scans, weight pairs by approximate useful flux, and area-weight glass-mesh triangle targets with exact PDF compensation.
-- Add procedural water only after static glass behavior and photon-map invalidation are stable.
+- Implemented: the registered finite procedural water volume is a photon target and uses the same
+  nearest-boundary, Fresnel/Snell, medium-stack, and absorption transport as camera paths. Targeting
+  never bypasses an enclosing water boundary, so glass spheres/meshes inside water participate in
+  order. Animated wave phases rebuild the photon map; use single-frame mode for stable accumulation.
+- Implemented: camera paths gather photon radiance after specular water/glass boundaries, so
+  underwater receivers remain visible from above the surface. Water target validation accepts the
+  bounded ray-march intersection rather than comparing it to the exact sampled wave point, avoiding
+  structured photon gaps caused by march/refinement position error. The water surface's two sample
+  coordinates use independently hashed dimensions rather than paired affine bit-reversal sequences,
+  which otherwise project into visible line and grid correlations after refraction.
 
 ## Prototype Acceptance Criteria
 

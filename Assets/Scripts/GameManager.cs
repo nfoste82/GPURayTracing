@@ -83,6 +83,11 @@ public class GameManager : MonoBehaviour
 
     [Tooltip("Applies the spatial A-Trous passes to temporally accumulated radiance, using temporal luminance variance to relax filtering only where noise remains.")]
     public bool temporalVarianceGuidedFiltering = true;
+
+    [Header("Caustic preservation")]
+    [Tooltip("Prevents the denoiser from diffusing isolated HDR caustic candidates into neighboring receiver pixels. Higher values preserve only stronger local outliers.")]
+    [Range(1.5f, 32.0f)]
+    public float causticPreservationThreshold = 4.0f;
     
     [Header("Quality settings (Higher quality -> Slower)")]
     [Range(1, 32)]
@@ -131,7 +136,7 @@ public class GameManager : MonoBehaviour
     public int lightSampleCount = 1;
 
     [Header("Caustics prototype")]
-    [Tooltip("Builds a photon map for sphere and triangle-light caustics through glass spheres and closed meshes. Disabled by default.")]
+    [Tooltip("Builds a photon map for sphere and triangle-light caustics through glass, closed meshes, and the registered water volume. Disabled by default.")]
     public bool enableCaustics = false;
 
     [Range(64, 4194200)]
@@ -216,7 +221,8 @@ public class GameManager : MonoBehaviour
         TemporalDenoised = 25,
         TemporalHistoryLength = 26,
         TemporalDenoisedTint = 27,
-        TemporalVariance = 28
+        TemporalVariance = 28,
+        CausticPreservationMask = 29
     }
 
     [Header("Debug render modes")]
@@ -332,6 +338,7 @@ public class GameManager : MonoBehaviour
     private RenderTexture _denoiserIteration1Texture;
     private RenderTexture _denoiserIteration2Texture;
     private RenderTexture _denoiserIteration3Texture;
+    private RenderTexture _causticPreservationMaskTexture;
     private ComputeShader _spatialDenoiserShader;
     private RenderTexture _motionVectorTexture;
     private RenderTexture _temporalRadianceHistoryA;
@@ -870,6 +877,7 @@ public class GameManager : MonoBehaviour
         temporalMaxHistoryLength = Mathf.Clamp(temporalMaxHistoryLength, 1, 64);
         temporalMotionDistance = Mathf.Max(0.00001f, temporalMotionDistance);
         temporalMotionAngle = Mathf.Max(0.0001f, temporalMotionAngle);
+        causticPreservationThreshold = Mathf.Clamp(causticPreservationThreshold, 1.5f, 32.0f);
         SyncUnitySkyboxPreview();
     }
 
@@ -973,6 +981,7 @@ public class GameManager : MonoBehaviour
         _denoiserIteration1Texture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
         _denoiserIteration2Texture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
         _denoiserIteration3Texture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
+        _causticPreservationMaskTexture = CreateFeatureTexture(RenderTextureFormat.RHalf);
     }
 
     private void ReleaseSpatialDenoiserResources()
@@ -982,11 +991,13 @@ public class GameManager : MonoBehaviour
         _denoiserIteration1Texture?.Release();
         _denoiserIteration2Texture?.Release();
         _denoiserIteration3Texture?.Release();
+        _causticPreservationMaskTexture?.Release();
         _denoiserPingTexture = null;
         _denoiserPongTexture = null;
         _denoiserIteration1Texture = null;
         _denoiserIteration2Texture = null;
         _denoiserIteration3Texture = null;
+        _causticPreservationMaskTexture = null;
     }
 
     private bool ShouldRunSpatialDenoiser()
@@ -1015,6 +1026,11 @@ public class GameManager : MonoBehaviour
         // Keep temporal history warm while the camera is still. The still-image path remains the
         // presented output, but its stable history is immediately available when motion resumes.
         return enableTemporalDenoising || IsTemporalDebugMode();
+    }
+
+    private bool IsCausticPreservationDebugMode()
+    {
+        return debugRenderMode == DebugRenderMode.CausticPreservationMask;
     }
 
     private bool ShouldUseTemporalAccumulation()
@@ -1392,6 +1408,17 @@ public class GameManager : MonoBehaviour
         return debugRenderMode >= DebugRenderMode.FeatureNormal && debugRenderMode <= DebugRenderMode.FeatureValidity;
     }
 
+    private void GenerateCausticPreservationMask(int threadGroupsX, int threadGroupsY)
+    {
+        int kernel = _spatialDenoiserShader.FindKernel("CSGeneratePreservationMask");
+        _spatialDenoiserShader.SetTexture(kernel, "Beauty", _beautyTexture);
+        _spatialDenoiserShader.SetTexture(kernel, "FeatureValidity", _featureValidityTexture);
+        _spatialDenoiserShader.SetTexture(kernel, "GeneratedPreservationMask", _causticPreservationMaskTexture);
+        _spatialDenoiserShader.SetFloat("_CausticPreservationThreshold", causticPreservationThreshold);
+        _spatialDenoiserShader.SetInt("_EnableCausticPreservation", enableCaustics ? 1 : 0);
+        _spatialDenoiserShader.Dispatch(kernel, threadGroupsX, threadGroupsY, 1);
+    }
+
     private void RunSpatialDenoiser(RenderTexture source = null, RenderTexture variance = null)
     {
         EnsureSpatialDenoiserResources();
@@ -1407,11 +1434,13 @@ public class GameManager : MonoBehaviour
         _spatialDenoiserShader.SetTexture(atrousKernel, "FeatureIdentity", _featureIdentityTexture);
         _spatialDenoiserShader.SetTexture(atrousKernel, "FeatureValidity", _featureValidityTexture);
         _spatialDenoiserShader.SetTexture(atrousKernel, "Variance", variance ?? _featureValidityTexture);
+        _spatialDenoiserShader.SetTexture(atrousKernel, "PreservationMask", _causticPreservationMaskTexture);
         _spatialDenoiserShader.SetFloat("_DepthSigma", spatialDenoiserDepthSigma);
         _spatialDenoiserShader.SetFloat("_NormalPower", spatialDenoiserNormalPower);
         _spatialDenoiserShader.SetFloat("_AlbedoSigma", spatialDenoiserAlbedoSigma);
         _spatialDenoiserShader.SetFloat("_LuminanceSigma", spatialDenoiserLuminanceSigma);
         _spatialDenoiserShader.SetInt("_UseVarianceGuidance", variance != null ? 1 : 0);
+        _spatialDenoiserShader.SetInt("_EnableCausticPreservation", enableCaustics ? 1 : 0);
 
         RenderTexture input = source ?? _beautyTexture;
         RenderTexture output = _denoiserPingTexture;
@@ -1421,6 +1450,10 @@ public class GameManager : MonoBehaviour
         int iterations = Mathf.Clamp(Mathf.Max(spatialDenoiserIterations, requiredDebugIterations), 1, 5);
         int threadGroupsX = Mathf.CeilToInt(_textureSize.x / 8.0f);
         int threadGroupsY = Mathf.CeilToInt(_textureSize.y / 8.0f);
+        if (enableCaustics)
+        {
+            GenerateCausticPreservationMask(threadGroupsX, threadGroupsY);
+        }
         for (int iteration = 0; iteration < iterations; iteration++)
         {
             _spatialDenoiserShader.SetTexture(atrousKernel, "InputBeauty", input);
@@ -1542,6 +1575,11 @@ public class GameManager : MonoBehaviour
             ? Quaternion.Angle(renderTextureCamera.transform.rotation, _lastRenderedCameraRotation) : 0.0f);
         _spatialDenoiserShader.Dispatch(momentsKernel, threadGroupsX, threadGroupsY, 1);
 
+        if (enableCaustics || IsCausticPreservationDebugMode())
+        {
+            GenerateCausticPreservationMask(threadGroupsX, threadGroupsY);
+        }
+
         if (IsTemporalDebugMode())
         {
             int debugMode = debugRenderMode == DebugRenderMode.MotionVectors ? 1
@@ -1550,7 +1588,8 @@ public class GameManager : MonoBehaviour
                 : debugRenderMode == DebugRenderMode.TemporalRejectionReason ? 4
                 : debugRenderMode == DebugRenderMode.TemporalDenoised ? 5
                 : debugRenderMode == DebugRenderMode.TemporalHistoryLength ? 6
-                : debugRenderMode == DebugRenderMode.TemporalDenoisedTint ? 7 : 8;
+                : debugRenderMode == DebugRenderMode.TemporalDenoisedTint ? 7
+                : debugRenderMode == DebugRenderMode.TemporalVariance ? 8 : 9;
             int visualizeKernel = _spatialDenoiserShader.FindKernel("CSVisualizeTemporal");
             _spatialDenoiserShader.SetTexture(visualizeKernel, "MotionVectors", _motionVectorTexture);
             _spatialDenoiserShader.SetTexture(visualizeKernel, "ReprojectedRadiance", _temporalReprojectedRadianceTexture);
@@ -1558,6 +1597,7 @@ public class GameManager : MonoBehaviour
             _spatialDenoiserShader.SetTexture(visualizeKernel, "TemporalDiagnostics", _temporalDiagnosticsTexture);
             _spatialDenoiserShader.SetTexture(visualizeKernel, "HistoryLength", nextHistoryLength);
             _spatialDenoiserShader.SetTexture(visualizeKernel, "Variance", _temporalVarianceTexture);
+            _spatialDenoiserShader.SetTexture(visualizeKernel, "PreservationMask", _causticPreservationMaskTexture);
             _spatialDenoiserShader.SetTexture(visualizeKernel, "PresentationResult", _outputTexture);
             _spatialDenoiserShader.SetInt("_TemporalDebugMode", debugMode);
             _spatialDenoiserShader.SetFloat("_Exposure", exposure);
@@ -1582,6 +1622,24 @@ public class GameManager : MonoBehaviour
 
         _temporalHistoryReadIsA = !_temporalHistoryReadIsA;
         _temporalHistoryValid = true;
+    }
+
+    private void PresentCausticPreservationMask()
+    {
+        EnsureSpatialDenoiserResources();
+        if (_spatialDenoiserShader == null || _causticPreservationMaskTexture == null)
+        {
+            return;
+        }
+
+        int threadGroupsX = Mathf.CeilToInt(_textureSize.x / 8.0f);
+        int threadGroupsY = Mathf.CeilToInt(_textureSize.y / 8.0f);
+        GenerateCausticPreservationMask(threadGroupsX, threadGroupsY);
+        int kernel = _spatialDenoiserShader.FindKernel("CSVisualizeTemporal");
+        _spatialDenoiserShader.SetTexture(kernel, "PreservationMask", _causticPreservationMaskTexture);
+        _spatialDenoiserShader.SetTexture(kernel, "PresentationResult", _outputTexture);
+        _spatialDenoiserShader.SetInt("_TemporalDebugMode", 9);
+        _spatialDenoiserShader.Dispatch(kernel, threadGroupsX, threadGroupsY, 1);
     }
 
     private void ResetFrameAccumulation()
@@ -1678,18 +1736,14 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, lightSamplingStrategy.GetHashCode());
             hash = AddHash(hash, lightSampleCount);
             hash = AddHash(hash, maxLightSamples);
-            hash = AddHash(hash, cameraFocalDistance);
             hash = AddHash(hash, GetCameraApertureRadius());
             hash = AddHash(hash, enableCaustics ? 1 : 0);
             hash = AddHash(hash, IsFogEnabled() ? 1 : 0);
             hash = AddHash(hash, _water != null ? _water.GetInstanceID() : 0);
             hash = AddHash(hash, skyboxTexture != null ? skyboxTexture.GetInstanceID() : 0);
             hash = AddHash(hash, _spheres.Count);
-            for (int i = 0; i < _spheres.Count; i++) hash = AddHash(hash, _spheres[i]);
             hash = AddHash(hash, _lights.Count);
-            for (int i = 0; i < _lights.Count; i++) hash = AddHash(hash, _lights[i]);
             hash = AddHash(hash, _meshObjects.Count);
-            for (int i = 0; i < _meshObjects.Count; i++) hash = AddHash(hash, _meshObjects[i]);
             return hash;
         }
     }
@@ -1802,6 +1856,15 @@ public class GameManager : MonoBehaviour
                         (mesh.boundsMax - mesh.boundsMin).magnitude * 0.5f),
                     pairWeights, ref maximumWeight);
             }
+
+            if (IsCausticRefractor(_water))
+            {
+                Vector2 waterSize = _water.Size;
+                AddCausticTargetPair(lightIndex, 2, -1, 0, 0,
+                    GetCausticPairWeight(light, _water.TopCenter,
+                        new Vector3(waterSize.x, 0.0f, waterSize.y).magnitude * 0.5f),
+                    pairWeights, ref maximumWeight);
+            }
         }
 
         if (_causticTargetPairs.Count == 0)
@@ -1863,6 +1926,11 @@ public class GameManager : MonoBehaviour
         return (material.materialType == 2 || material.opacity < 1.0f) && material.opacity < 1.0f;
     }
 
+    private static bool IsCausticRefractor(Water water)
+    {
+        return water != null && water.Opacity < 1.0f;
+    }
+
     private static float GetCausticPairWeight(Light light, Vector3 targetPosition, float targetRadius)
     {
         Vector3 lightPosition = light.type == LightTypeTriangle
@@ -1892,6 +1960,16 @@ public class GameManager : MonoBehaviour
         for (int i = 0; i < _meshInfos.Count; i++)
         {
             EncapsulateCausticBounds(_meshInfos[i].boundsMin, _meshInfos[i].boundsMax,
+                ref hasBounds, ref boundsMin, ref boundsMax);
+        }
+        if (_water != null)
+        {
+            Vector2 waterSize = _water.Size;
+            float waveHeight = Mathf.Max(0.001f, _water.WaveAmplitude);
+            Vector3 halfSize = new Vector3(waterSize.x * 0.5f, 0.0f, waterSize.y * 0.5f);
+            EncapsulateCausticBounds(
+                _water.TopCenter - halfSize + Vector3.down * (_water.Depth + waveHeight),
+                _water.TopCenter + halfSize + Vector3.up * waveHeight,
                 ref hasBounds, ref boundsMin, ref boundsMax);
         }
 
@@ -2040,7 +2118,7 @@ public class GameManager : MonoBehaviour
         shader.SetInt("_NumMeshes", _meshInfos.Count);
         shader.SetInt("_NumTopLevelBvhNodes", _topLevelBvhNodes.Count);
         shader.SetInt("_NumShadowBvhNodes", _shadowBvhNodes.Count);
-        shader.SetInt("_WaterEnabled", 0);
+        SetWaterShaderParameters();
     }
 
     private bool ShouldUseFrameAccumulation()
@@ -2355,7 +2433,7 @@ public class GameManager : MonoBehaviour
         }
         long dispatchStart = _startupProfilePending ? Stopwatch.GetTimestamp() : 0;
         UpdateTextureFromCompute(kernelHandle);
-        if (!useDedicatedCausticsDebugKernel && (ShouldRunSpatialDenoiser() || ShouldRunTemporalDenoiser() || IsFeatureDebugMode()))
+        if (!useDedicatedCausticsDebugKernel && (ShouldRunSpatialDenoiser() || ShouldRunTemporalDenoiser() || IsFeatureDebugMode() || IsCausticPreservationDebugMode()))
         {
             UpdateFeaturesFromCompute();
         }
@@ -2367,6 +2445,10 @@ public class GameManager : MonoBehaviour
         {
             RunTemporalDenoiser();
             CommitTemporalCameraState();
+        }
+        else if (!useDedicatedCausticsDebugKernel && IsCausticPreservationDebugMode())
+        {
+            PresentCausticPreservationMask();
         }
         if (!useDedicatedCausticsDebugKernel && ShouldRunSpatialDenoiser() && !IsTemporalDebugMode())
         {
@@ -4515,26 +4597,7 @@ public class GameManager : MonoBehaviour
         shader.SetFloat("_AnamorphicRatio", Mathf.Clamp(cameraAnamorphicRatio, 0.25f, 4.0f));
         shader.SetFloat("_Exposure", exposure);
         shader.SetFloat("_FireflyClamp", Mathf.Max(0.0f, fireflyClamp));
-        bool waterEnabled = _water != null;
-        Vector3 waterCenter = waterEnabled ? _water.TopCenter : Vector3.zero;
-        Vector2 waterSize = waterEnabled ? _water.Size : Vector2.one;
-        Color32 waterColor = waterEnabled ? _water.Color : new Color32(255, 255, 255, 255);
-        shader.SetInt("_WaterEnabled", waterEnabled ? 1 : 0);
-        shader.SetVector("_WaterCenter", new Vector4(waterCenter.x, waterCenter.y, waterCenter.z, 0.0f));
-        shader.SetVector("_WaterSize", new Vector4(waterSize.x, waterSize.y, 0.0f, 0.0f));
-        shader.SetFloat("_WaterDepth", waterEnabled ? _water.Depth : 1.0f);
-        var waterColorVector = waterColor.ToVector3();
-        shader.SetVector("_WaterColor", new Vector4(waterColorVector.x, waterColorVector.y, waterColorVector.z, 0.0f));
-        shader.SetFloat("_WaterSmoothness", waterEnabled ? _water.Smoothness : 0.0f);
-        shader.SetFloat("_WaterOpacity", waterEnabled ? Mathf.Clamp01(_water.Opacity) : 0.0f);
-        shader.SetFloat("_WaterAbsorptionStrength", waterEnabled ? Mathf.Max(0.0f, _water.AbsorptionStrength) : 0.0f);
-        shader.SetFloat("_WaterRefraction", waterEnabled ? _water.RefractionIndex : 1.0f);
-        shader.SetFloat("_WaterWaveAmplitude", waterEnabled ? Mathf.Max(0.0f, _water.WaveAmplitude) : 0.0f);
-        shader.SetFloat("_WaterWaveScale", waterEnabled ? Mathf.Max(0.001f, _water.WaveScale) : 1.0f);
-        shader.SetFloat("_WaterWaveSpeed", waterEnabled ? Mathf.Max(0.0f, _water.WaveSpeed) : 0.0f);
-        shader.SetFloat("_WaterTime", Application.isPlaying ? GetRenderTime() : 0.0f);
-        shader.SetInt("_WaterMarchSteps", waterEnabled ? Mathf.Clamp(_water.MarchSteps, 8, 64) : 8);
-        shader.SetInt("_WaterRefinementSteps", waterEnabled ? Mathf.Clamp(_water.RefinementSteps, 2, 8) : 2);
+        SetWaterShaderParameters();
         bool fogEnabled = IsFogEnabled();
         Vector3 fogCenter = fogEnabled ? _fogVolume.Center : Vector3.zero;
         Vector3 fogSize = fogEnabled ? _fogVolume.Size : Vector3.one;
@@ -4561,6 +4624,30 @@ public class GameManager : MonoBehaviour
         bool hasTransparentShadowBlockers = _hasTransparentSphereBlockers || _hasTransparentMeshBlockers;
         shader.SetInt("_HasTransparentShadowBlockers", hasTransparentShadowBlockers ? 1 : 0);
         SetSceneBuffers(kernelHandle);
+    }
+
+    private void SetWaterShaderParameters()
+    {
+        bool waterEnabled = _water != null;
+        Vector3 waterCenter = waterEnabled ? _water.TopCenter : Vector3.zero;
+        Vector2 waterSize = waterEnabled ? _water.Size : Vector2.one;
+        Color32 waterColor = waterEnabled ? _water.Color : new Color32(255, 255, 255, 255);
+        shader.SetInt("_WaterEnabled", waterEnabled ? 1 : 0);
+        shader.SetVector("_WaterCenter", new Vector4(waterCenter.x, waterCenter.y, waterCenter.z, 0.0f));
+        shader.SetVector("_WaterSize", new Vector4(waterSize.x, waterSize.y, 0.0f, 0.0f));
+        shader.SetFloat("_WaterDepth", waterEnabled ? _water.Depth : 1.0f);
+        Vector3 waterColorVector = waterColor.ToVector3();
+        shader.SetVector("_WaterColor", new Vector4(waterColorVector.x, waterColorVector.y, waterColorVector.z, 0.0f));
+        shader.SetFloat("_WaterSmoothness", waterEnabled ? _water.Smoothness : 0.0f);
+        shader.SetFloat("_WaterOpacity", waterEnabled ? Mathf.Clamp01(_water.Opacity) : 0.0f);
+        shader.SetFloat("_WaterAbsorptionStrength", waterEnabled ? Mathf.Max(0.0f, _water.AbsorptionStrength) : 0.0f);
+        shader.SetFloat("_WaterRefraction", waterEnabled ? _water.RefractionIndex : 1.0f);
+        shader.SetFloat("_WaterWaveAmplitude", waterEnabled ? Mathf.Max(0.0f, _water.WaveAmplitude) : 0.0f);
+        shader.SetFloat("_WaterWaveScale", waterEnabled ? Mathf.Max(0.001f, _water.WaveScale) : 1.0f);
+        shader.SetFloat("_WaterWaveSpeed", waterEnabled ? Mathf.Max(0.0f, _water.WaveSpeed) : 0.0f);
+        shader.SetFloat("_WaterTime", Application.isPlaying ? GetRenderTime() : 0.0f);
+        shader.SetInt("_WaterMarchSteps", waterEnabled ? Mathf.Clamp(_water.MarchSteps, 8, 64) : 8);
+        shader.SetInt("_WaterRefinementSteps", waterEnabled ? Mathf.Clamp(_water.RefinementSteps, 2, 8) : 2);
     }
 
     private void EnsureMeshTextureArrays()
@@ -4730,6 +4817,29 @@ public class GameManager : MonoBehaviour
             for (int i = 0; i < _meshObjects.Count; i++)
             {
                 hash = AddHash(hash, _meshObjects[i]);
+            }
+            hash = AddHash(hash, _water != null ? _water.GetInstanceID() : 0);
+            if (_water != null)
+            {
+                hash = AddHash(hash, _water.TopCenter);
+                hash = AddHash(hash, new Vector3(_water.Size.x, _water.Size.y, _water.Depth));
+                hash = AddHash(hash, _water.Color.r);
+                hash = AddHash(hash, _water.Color.g);
+                hash = AddHash(hash, _water.Color.b);
+                hash = AddHash(hash, _water.Smoothness);
+                hash = AddHash(hash, _water.Opacity);
+                hash = AddHash(hash, _water.AbsorptionStrength);
+                hash = AddHash(hash, _water.RefractionIndex);
+                hash = AddHash(hash, _water.WaveAmplitude);
+                hash = AddHash(hash, _water.WaveScale);
+                hash = AddHash(hash, _water.WaveSpeed);
+                hash = AddHash(hash, _water.MarchSteps);
+                hash = AddHash(hash, _water.RefinementSteps);
+                // Frozen water is deterministic in single-frame mode; include the phase otherwise.
+                if (!_singleFrame && _water.WaveAmplitude > 0.0f && _water.WaveSpeed > 0.0f)
+                {
+                    hash = AddHash(hash, GetRenderTime());
+                }
             }
             return hash;
         }

@@ -290,16 +290,23 @@ This is distinct from progressive still-image accumulation and from external den
 
 ## Milestone 12: Caustic Preservation, Performance, And Completion
 
-**Status:** Not started
+**Status:** Complete
 
 **Purpose:** Make the denoiser viable for the target scenes without erasing rare high-energy transport.
 
 **Work:**
 
-- Measure denoising against high-sample caustic references using peak luminance, total receiver energy, shape, sharpness, and temporal stability.
-- Add a separate caustic signal, preservation/reactive mask, or independently tuned filtering path only if measurements show the beauty denoiser consistently destroys valid caustics.
-- Tune render formats, iteration counts, resource lifetimes, and internal resolution only after correctness is established.
-- Preserve a no-denoise fallback and confirm disabled-path resource isolation.
+- `CSGeneratePreservationMask` detects isolated HDR receiver outliers against a 3x3 luminance
+  neighborhood while caustics are enabled. The configurable `causticPreservationThreshold`
+  defaults to `4`, preserving focused caustic candidates without broadly classifying highlights.
+- A-Trous passes preserve marked pixels and exclude marked neighbors from ordinary filtering. This
+  avoids smearing sparse photon-map energy while retaining geometry/albedo edge stopping and the
+  raw/no-denoise comparison paths.
+- `CausticPreservationMask` exposes the mask for scene-specific tuning. The resource is allocated
+  only with spatial denoiser resources and contains zeroes when caustics are disabled.
+- Moment/variance uses half precision; radiance remains HDR half/float according to its existing
+  history/output role. Resolution and iteration tuning remain runtime settings rather than a
+  hidden quality change.
 
 **Completion Criteria:**
 

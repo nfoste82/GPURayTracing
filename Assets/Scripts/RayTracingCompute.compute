@@ -206,6 +206,18 @@ float CausticSequenceSample(uint photonIndex, uint dimension)
     uint bits = reversebits(photonIndex * permutation + scramble);
     return min((bits + 0.5f) * 2.3283064365386963e-10f, 0.99999994f);
 }
+
+float CausticDecorrelatedSample(uint photonIndex, uint dimension)
+{
+    // Independent hashes avoid the visible 2D lattices produced when two affine bit-reversal
+    // dimensions are used directly as coordinates on an area light or refractor.
+    uint bits = Hash(
+        _CausticSeed
+        ^ (_CausticFrameIndex * 2246822519u)
+        ^ (photonIndex * 747796405u)
+        ^ (dimension * 2891336453u));
+    return min((bits + 0.5f) * 2.3283064365386963e-10f, 0.99999994f);
+}
 #endif
 
 uint CreateRngState(uint2 pixel, uint sampleIndex)
@@ -3320,6 +3332,44 @@ float3 GatherCausticRadiance(RayHit hit)
     float normalization = max(1.0f, _CausticPhotonAttemptCount * PI * radiusSquared);
     return photonPower * GetAlbedo(hit) * (_CausticIntensity / normalization);
 }
+
+float3 TraceVisibleCausticRadiance(Ray ray, inout uint rngState)
+{
+    float3 throughput = float3(1.0f, 1.0f, 1.0f);
+    MediumStack mediumStack = CreateMediumStack(ray.origin);
+
+    [loop]
+    for (int bounce = 0; bounce < _NumBounces; bounce++)
+    {
+        RayHit hit = GetNearestIntersection(ray);
+        throughput *= GetActiveMediumSegmentTransmittance(ray, hit.distance, mediumStack);
+        if (!HasPathEnergy(throughput) || DidHitSky(hit) || DidHitLight(hit))
+        {
+            return float3(0.0f, 0.0f, 0.0f);
+        }
+        ApplyFiniteMediumExitAfterSegment(mediumStack, ray, hit);
+
+        if (IsCausticReceiver(hit))
+        {
+            return throughput * GatherCausticRadiance(hit);
+        }
+
+        // Photon radiance is visible through specular boundaries, but not after an opaque bounce.
+        if (!IsGlassMaterial(hit))
+        {
+            return float3(0.0f, 0.0f, 0.0f);
+        }
+
+        int remainingBounces = _NumBounces - bounce;
+        ScatterResult scatter = CreateScatteredRay(ray, hit, bounce, remainingBounces, mediumStack, rngState);
+        ApplyMediumTransition(mediumStack, hit, scatter.mediumTransition);
+        ray = scatter.ray;
+        throughput *= scatter.attenuation;
+        bounce += scatter.bouncesConsumed - 1;
+    }
+
+    return float3(0.0f, 0.0f, 0.0f);
+}
 #endif
 
 float3 TracePath(Ray ray, inout uint rngState)
@@ -3331,6 +3381,9 @@ float3 TracePath(Ray ray, inout uint rngState)
     float previousMaterialPdf = 0.0f;
     bool previousDirectLightSampled = false;
     bool previousSoftShadows = false;
+#if defined(CAUSTICS_ENABLED)
+    bool canGatherCaustics = true;
+#endif
 
     [loop]
     for (int bounce = 0; bounce < _NumBounces; bounce++)
@@ -3406,7 +3459,7 @@ float3 TracePath(Ray ray, inout uint rngState)
         }
 
 #if defined(CAUSTICS_ENABLED)
-        if (bounce == 0)
+        if (canGatherCaustics)
         {
             radiance += throughput * GatherCausticRadiance(hit);
         }
@@ -3428,6 +3481,9 @@ float3 TracePath(Ray ray, inout uint rngState)
         previousSurfacePosition = hit.position;
         previousMaterialPdf = scatter.materialPdf;
         previousDirectLightSampled = sampledDirectLight;
+#if defined(CAUSTICS_ENABLED)
+        canGatherCaustics = canGatherCaustics && IsGlassMaterial(hit);
+#endif
         ray = scatter.ray;
         throughput *= scatter.attenuation;
         bounce += scatter.bouncesConsumed - 1;
@@ -3464,8 +3520,7 @@ float3 ClampFirefly(float3 radiance)
 float3 TraceCausticPaths(Ray ray, inout uint rngState)
 {
 #if defined(CAUSTICS_ENABLED)
-    RayHit visibleHit = GetNearestIntersection(ray);
-    return GatherCausticRadiance(visibleHit);
+    return TraceVisibleCausticRadiance(ray, rngState);
 #else
     float3 throughput = float3(1.0f, 1.0f, 1.0f);
     MediumStack mediumStack = CreateMediumStack(ray.origin);
@@ -3827,6 +3882,7 @@ bool TraceCausticPhotonTransport(
         {
             return false;
         }
+        ApplyFiniteMediumExitAfterSegment(mediumStack, photonRay, hit);
 
         if (IsCausticReceiver(hit))
         {
@@ -3841,7 +3897,7 @@ bool TraceCausticPhotonTransport(
             return true;
         }
 
-        if (!IsGlassMaterial(hit) || IsWaterMaterial(hit))
+        if (!IsGlassMaterial(hit))
         {
             return false;
         }
@@ -3926,7 +3982,7 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
         refractorRadius = refractor.radius;
         refractorIndex = targetPair.refractorIndex;
     }
-    else
+    else if (targetPair.refractorType == 1)
     {
         MeshInfo refractor = _Meshes[targetPair.refractorIndex];
         refractorPosition = (refractor.boundsMin + refractor.boundsMax) * 0.5f;
@@ -3936,6 +3992,15 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
             targetPair, CausticSequenceSample(id.x, 2u));
         refractorTriangleIndex = targetTriangle.triangleIndex;
         targetTriangleProbability = targetTriangle.selectionProbability;
+    }
+    else
+    {
+        float2 halfWaterSize = max(_WaterSize, float2(0.01f, 0.01f)) * 0.5f;
+        float2 waterSample = float2(
+            CausticDecorrelatedSample(id.x, 5u),
+            CausticDecorrelatedSample(id.x, 6u));
+        refractorPosition.xz = _WaterCenter.xz + (waterSample - 0.5f) * (halfWaterSize * 2.0f);
+        refractorPosition.y = GetWaterWaveHeight(refractorPosition.xz);
     }
 
     float3 emissionPosition = light.position;
@@ -3987,6 +4052,27 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
             / max(1e-8f, targetTriangleProbability * targetDistanceSquared);
     }
 
+    float waterTargetInversePdf = 0.0f;
+    if (targetPair.refractorType == 2)
+    {
+        float3 toTarget = refractorPosition - emissionPosition;
+        float targetDistanceSquared = dot(toTarget, toTarget);
+        if (targetDistanceSquared <= 1e-8f)
+        {
+            return;
+        }
+
+        float3 targetDirection = toTarget * rsqrt(targetDistanceSquared);
+        float targetCosine = abs(dot(GetWaterNormal(refractorPosition.xz), -targetDirection));
+        if (targetCosine <= 1e-6f)
+        {
+            return;
+        }
+
+        float targetArea = max(1e-6f, _WaterSize.x * _WaterSize.y);
+        waterTargetInversePdf = targetArea * targetCosine / targetDistanceSquared;
+    }
+
     float3 toRefractor = refractorPosition - emissionPosition;
     float distanceToRefractor = length(toRefractor);
     float emitterRadius = light.type == LightTypeSphere ? light.radius : 0.0f;
@@ -4026,19 +4112,38 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
             return;
         }
     }
+    else
+    {
+        IntersectWater(photonRay, refractorHit);
+        // The sampled wave point is exact, while IntersectWater locates it with bounded marching
+        // and refinement. A fixed position tolerance rejects photons in march-aligned bands.
+        if (!IsWaterMaterial(refractorHit))
+        {
+            return;
+        }
+    }
     if (DidHitSky(refractorHit))
     {
         return;
     }
 
     float coneSolidAngle = 2.0f * PI * max(1e-6f, 1.0f - cosThetaMax);
-    float inverseDirectionalPdf = refractorMeshIndex >= 0 ? meshTargetInversePdf : coneSolidAngle;
+    float inverseDirectionalPdf = refractorMeshIndex >= 0 ? meshTargetInversePdf
+        : targetPair.refractorType == 2 ? waterTargetInversePdf
+        : coneSolidAngle;
     float selectionScale = inverseDirectionalPdf * emissionAreaScale * emitterCosine
         / max(1e-8f, targetPair.selectionProbability);
+    // Targeting only chooses an efficient emission direction. When water is a target, start at the
+    // actual nearest boundary so an enclosing water volume is crossed before an interior refractor.
+    RayHit firstTransportHit = refractorHit;
+    if (targetPair.refractorType == 2)
+    {
+        firstTransportHit = GetNearestIntersection(photonRay);
+    }
     CausticPhoton photon;
     if (!TraceCausticPhotonTransport(
         photonRay,
-        refractorHit,
+        firstTransportHit,
         light.emission * selectionScale,
         rngState,
         photon))
@@ -4331,8 +4436,7 @@ void CSCausticsDebug(uint3 id : SV_DispatchThreadID)
     {
         uint rngState = CreateRngState(id.xy, _SampleOffset + (uint)i);
         float2 uv = ((id.xy + float2(rand(rngState), rand(rngState))) / float2(width, height)) * 2.0f - 1.0f;
-        RayHit visibleHit = GetNearestIntersection(CreateCameraRay(uv));
-        result += GatherCausticRadiance(visibleHit);
+        result += TraceVisibleCausticRadiance(CreateCameraRay(uv), rngState);
     }
     Result[id.xy] = float4(result / max(1, _NumberOfPasses), 1.0f);
 }

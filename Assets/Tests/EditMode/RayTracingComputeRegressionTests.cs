@@ -14,6 +14,9 @@ namespace GPURayTracing.Tests
         private const string ComputeShaderPath = "Assets/Scripts/RayTracingCompute.compute";
         private const string DenoiserShaderPath = "Assets/Resources/RayTracingSpatialDenoiser.compute";
         private const float Epsilon = 0.0001f;
+        // Transform.eulerAngles round-trips through a quaternion, producing roughly 0.00025 degrees
+        // of platform-dependent error near the pitch limits.
+        private const float CameraRotationEpsilon = 0.001f;
 
         [Test]
         public void ProductionShader_ReflectionRefractionAndAbsorptionBaselines_AreStable()
@@ -119,11 +122,58 @@ namespace GPURayTracing.Tests
             Assert.That(denoiser.HasKernel("CSGenerateCameraMotion"), Is.True);
             Assert.That(denoiser.HasKernel("CSTemporalReprojectValidate"), Is.True);
             Assert.That(denoiser.HasKernel("CSUpdateTemporalMoments"), Is.True);
+            Assert.That(denoiser.HasKernel("CSGeneratePreservationMask"), Is.True);
             Assert.That(denoiser.HasKernel("CSVisualizeTemporal"), Is.True);
             Assert.That(denoiser.HasKernel("CSVisualizeFeature"), Is.True);
 
             ComputeShader renderer = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
             Assert.That(renderer.HasKernel("CSFeatures"), Is.True);
+        }
+
+        [Test]
+        public void GameManager_TemporalStateHash_IgnoresPerFrameFocusAndSceneMotion()
+        {
+            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+            Assert.That(managerType, Is.Not.Null, "Could not load GameManager from Assembly-CSharp");
+
+            var gameObject = new GameObject("Temporal State Hash Test");
+            var cameraObject = new GameObject("Temporal State Hash Camera");
+            try
+            {
+                Component manager = gameObject.AddComponent(managerType);
+                Camera camera = cameraObject.AddComponent<Camera>();
+                managerType.GetField("renderTextureCamera").SetValue(manager, camera);
+
+                MethodInfo hashMethod = managerType.GetMethod("CalculateTemporalStateHash", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.That(hashMethod, Is.Not.Null);
+                int initialHash = (int)hashMethod.Invoke(manager, null);
+
+                managerType.GetField("cameraFocalDistance").SetValue(manager, 42.0f);
+                int focusHash = (int)hashMethod.Invoke(manager, null);
+                Assert.That(focusHash, Is.EqualTo(initialHash),
+                    "Autofocus changes during camera motion must not reset temporal history.");
+
+                FieldInfo spheresField = managerType.GetField("_spheres", BindingFlags.NonPublic | BindingFlags.Instance);
+                object spheres = spheresField.GetValue(manager);
+                Type sphereType = managerType.GetNestedType("Sphere", BindingFlags.NonPublic);
+                object sphere = Activator.CreateInstance(sphereType);
+                sphereType.GetField("position").SetValue(sphere, Vector3.zero);
+                spheres.GetType().GetMethod("Add").Invoke(spheres, new[] { sphere });
+                int sceneHash = (int)hashMethod.Invoke(manager, null);
+                Assert.That(sceneHash, Is.Not.EqualTo(initialHash), "Object-count changes must reset temporal history.");
+
+                object movedSphere = spheres.GetType().GetProperty("Item").GetValue(spheres, new object[] { 0 });
+                sphereType.GetField("position").SetValue(movedSphere, Vector3.one);
+                spheres.GetType().GetProperty("Item").SetValue(spheres, movedSphere, new object[] { 0 });
+                int movedHash = (int)hashMethod.Invoke(manager, null);
+                Assert.That(movedHash, Is.EqualTo(sceneHash),
+                    "Per-frame object motion is rejected through temporal validity and must not reset all history.");
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(cameraObject);
+                UnityEngine.Object.DestroyImmediate(gameObject);
+            }
         }
 
         [Test]
@@ -191,18 +241,18 @@ namespace GPURayTracing.Tests
             {
                 cameraObject.transform.eulerAngles = new Vector3(88.0f, 10.0f, 0.0f);
                 rotateMethod.Invoke(null, new object[] { cameraObject.transform, 5.0f, 5.0f });
-                Assert.That(Mathf.DeltaAngle(0.0f, cameraObject.transform.eulerAngles.x), Is.EqualTo(89.0f).Within(Epsilon));
-                Assert.That(Mathf.DeltaAngle(0.0f, cameraObject.transform.eulerAngles.y), Is.EqualTo(15.0f).Within(Epsilon));
+                Assert.That(Mathf.DeltaAngle(0.0f, cameraObject.transform.eulerAngles.x), Is.EqualTo(89.0f).Within(CameraRotationEpsilon));
+                Assert.That(Mathf.DeltaAngle(0.0f, cameraObject.transform.eulerAngles.y), Is.EqualTo(15.0f).Within(CameraRotationEpsilon));
 
                 rotateMethod.Invoke(null, new object[] { cameraObject.transform, 0.0f, -10.0f });
-                Assert.That(Mathf.DeltaAngle(0.0f, cameraObject.transform.eulerAngles.x), Is.EqualTo(79.0f).Within(Epsilon));
+                Assert.That(Mathf.DeltaAngle(0.0f, cameraObject.transform.eulerAngles.x), Is.EqualTo(79.0f).Within(CameraRotationEpsilon));
 
                 cameraObject.transform.eulerAngles = new Vector3(-88.0f, 10.0f, 0.0f);
                 rotateMethod.Invoke(null, new object[] { cameraObject.transform, 0.0f, -5.0f });
-                Assert.That(Mathf.DeltaAngle(0.0f, cameraObject.transform.eulerAngles.x), Is.EqualTo(-89.0f).Within(Epsilon));
+                Assert.That(Mathf.DeltaAngle(0.0f, cameraObject.transform.eulerAngles.x), Is.EqualTo(-89.0f).Within(CameraRotationEpsilon));
 
                 rotateMethod.Invoke(null, new object[] { cameraObject.transform, 0.0f, 10.0f });
-                Assert.That(Mathf.DeltaAngle(0.0f, cameraObject.transform.eulerAngles.x), Is.EqualTo(-79.0f).Within(Epsilon));
+                Assert.That(Mathf.DeltaAngle(0.0f, cameraObject.transform.eulerAngles.x), Is.EqualTo(-79.0f).Within(CameraRotationEpsilon));
             }
             finally
             {
@@ -568,6 +618,23 @@ namespace GPURayTracing.Tests
             Assert.That(method, Does.Contain("\"_MeshAlbedoTextures\""));
             Assert.That(method, Does.Contain("\"_MeshMetallicRoughnessTextures\""));
             Assert.That(method, Does.Contain("\"_MeshNormalTextures\""));
+        }
+
+        [Test]
+        public void WaterCausticTarget_UsesDecorrelatedSurfaceCoordinates()
+        {
+            string shaderSource = System.IO.File.ReadAllText("Assets/Scripts/RayTracingCompute.compute");
+            int waterTargetStart = shaderSource.IndexOf(
+                "float2 waterSample = float2(", StringComparison.Ordinal);
+            int waterTargetEnd = shaderSource.IndexOf(
+                "refractorPosition.y = GetWaterWaveHeight", waterTargetStart, StringComparison.Ordinal);
+
+            Assert.That(waterTargetStart, Is.GreaterThanOrEqualTo(0));
+            Assert.That(waterTargetEnd, Is.GreaterThan(waterTargetStart));
+            string waterTarget = shaderSource.Substring(waterTargetStart, waterTargetEnd - waterTargetStart);
+            Assert.That(waterTarget, Does.Contain("CausticDecorrelatedSample(id.x, 5u)"));
+            Assert.That(waterTarget, Does.Contain("CausticDecorrelatedSample(id.x, 6u)"));
+            Assert.That(waterTarget, Does.Not.Contain("CausticSequenceSample"));
         }
 
         [Test]

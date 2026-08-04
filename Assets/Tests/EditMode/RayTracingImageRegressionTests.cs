@@ -132,6 +132,7 @@ namespace GPURayTracing.Tests
             public int maxBounces = 10;
             public float gatherRadius = 0.28f;
             public float intensity = 1.0f;
+            public bool waterEnabled;
         }
 
         private sealed class CausticMap : IDisposable
@@ -498,6 +499,25 @@ namespace GPURayTracing.Tests
             Assert.That(metadata[0], Is.GreaterThan(0u), "receiver-hit photon count");
             Assert.That(metadata[1], Is.EqualTo(0u), "overflow count");
             Assert.That(photons.Length, Is.EqualTo((int)metadata[3]));
+            foreach (CausticPhotonData photon in photons)
+            {
+                Assert.That(Mathf.Abs(photon.position.y), Is.LessThan(0.005f), "receiver height");
+                Assert.That(photon.power.x + photon.power.y + photon.power.z, Is.GreaterThan(0.0f));
+            }
+        }
+
+        [Test]
+        public void CausticPhotonGeneration_WaterVolume_ProducesReceiverPhotons()
+        {
+            LightData[] lights = CreateCausticLights();
+
+            CausticPhotonData[] photons = GenerateCausticPhotons(
+                Array.Empty<SphereData>(), lights,
+                new CausticOptions { photonCount = 4096, waterEnabled = true }, out uint[] metadata);
+
+            Assert.That(metadata[2], Is.EqualTo(4096u), "attempted photon count");
+            Assert.That(metadata[0], Is.GreaterThan(0u), "water transmission should reach the receiver");
+            Assert.That(metadata[1], Is.EqualTo(0u), "overflow count");
             foreach (CausticPhotonData photon in photons)
             {
                 Assert.That(Mathf.Abs(photon.position.y), Is.LessThan(0.005f), "receiver height");
@@ -1009,7 +1029,7 @@ namespace GPURayTracing.Tests
             int clearGridKernel = shader.FindKernel("ClearCausticGrid");
             int buildGridKernel = shader.FindKernel("BuildCausticGrid");
             BuildCausticTargets(sphereBuffer, lightBuffer, triangleBuffer, meshBuffer,
-                sphereCount, lightCount, triangleCount, meshCount, out CausticTargetPairData[] targetPairs,
+                sphereCount, lightCount, triangleCount, meshCount, options.waterEnabled, out CausticTargetPairData[] targetPairs,
                 out CausticTargetTriangleData[] targetTriangles);
             var map = new CausticMap(options.photonCount, targetPairs, targetTriangles);
             var meshDataTextures = CreateMeshTextureArray();
@@ -1022,7 +1042,7 @@ namespace GPURayTracing.Tests
             shader.SetInt("_NumTopLevelBvhNodes", 0);
             shader.SetInt("_NumShadowBvhNodes", 0);
             shader.SetInt("_NumCausticTargetPairs", targetPairs.Length);
-            SetWater(shader, false);
+            SetWater(shader, options.waterEnabled);
             SetCausticBuffers(shader, clearKernel, map);
             SetCausticBuffers(shader, traceKernel, map);
             SetCausticBuffers(shader, clearGridKernel, map);
@@ -1048,7 +1068,7 @@ namespace GPURayTracing.Tests
         }
 
         private static void BuildCausticTargets(ComputeBuffer spheres, ComputeBuffer lights, ComputeBuffer triangles,
-            ComputeBuffer meshes, int sphereCount, int lightCount, int triangleCount, int meshCount,
+            ComputeBuffer meshes, int sphereCount, int lightCount, int triangleCount, int meshCount, bool includeWater,
             out CausticTargetPairData[] pairs, out CausticTargetTriangleData[] targetTriangles)
         {
             var sphereData = new SphereData[sphereCount];
@@ -1123,6 +1143,16 @@ namespace GPURayTracing.Tests
                         refractorIndex = meshIndex,
                         triangleStart = targetStart,
                         triangleCount = mesh.triangleCount
+                    });
+                }
+
+                if (includeWater)
+                {
+                    pairList.Add(new CausticTargetPairData
+                    {
+                        lightIndex = lightIndex,
+                        refractorType = 2,
+                        refractorIndex = -1
                     });
                 }
             }
