@@ -159,11 +159,12 @@ void CSAtrous(uint3 id : SV_DispatchThreadID)
             float3 sampleColor = InputBeauty[sampleCoordinate].rgb;
             // Sparse photon-map caustics are valid HDR outliers. Do not diffuse them into nearby
             // receiver pixels or replace them with their lower-energy neighbors.
-            if (_EnableCausticPreservation != 0 && PreservationMask[pixel] > 0.5f && sampleCoordinate != pixel)
+            bool isCenterSample = all(sampleCoordinate == pixel);
+            if (_EnableCausticPreservation != 0 && PreservationMask[pixel] > 0.5f && !isCenterSample)
             {
                 continue;
             }
-            if (_EnableCausticPreservation != 0 && PreservationMask[sampleCoordinate] > 0.5f && sampleCoordinate != pixel)
+            if (_EnableCausticPreservation != 0 && PreservationMask[sampleCoordinate] > 0.5f && !isCenterSample)
             {
                 continue;
             }

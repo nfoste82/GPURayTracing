@@ -689,12 +689,12 @@ namespace GPURayTracing.Tests
 
         private static readonly Vector4[] SphereCausticBaseline =
         {
-            new Vector4(0.00201454f, 0.00192074f, 0.00172278f, 1.0f),
+            new Vector4(0.00228615f, 0.00218024f, 0.00195586f, 1.0f),
             new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
             new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
             new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
             new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
-            new Vector4(1.31163200f, 1.25106800f, 1.12242400f, 1.0f)
+            new Vector4(1.69952700f, 1.62167700f, 1.45531500f, 1.0f)
         };
 
         private static SphereData Sphere(Vector3 position, Vector3 color, float radius, float smoothness, float opacity, float refraction, int materialType)

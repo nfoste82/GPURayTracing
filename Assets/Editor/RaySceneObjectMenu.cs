@@ -48,6 +48,14 @@ public static class RaySceneObjectMenu
         FinishCreate(gameObject, "Create Fog Volume");
     }
 
+    [MenuItem("GameObject/Ray Tracing/Water Volume", false, 4)]
+    private static void CreateWaterVolume(MenuCommand command)
+    {
+        var gameObject = CreateBaseObject(command, "Water Volume");
+        gameObject.AddComponent<Water>();
+        FinishCreate(gameObject, "Create Water Volume");
+    }
+
     private static GameObject CreateBaseObject(MenuCommand command, string name)
     {
         var gameObject = new GameObject(name);

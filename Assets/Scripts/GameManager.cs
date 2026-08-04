@@ -145,12 +145,12 @@ public class GameManager : MonoBehaviour
     public int causticPhotonCount = 65536;
 
     [Range(0.01f, 2.0f)]
-    public float causticGatherRadius = 0.2f;
+    public float causticGatherRadius = 0.025f;
 
     public int causticSeed = 1;
 
     [Range(0.0f, 10.0f)]
-    public float causticIntensity = 1.0f;
+    public float causticIntensity = 4.0f;
 
     [Header("Volumetric fog")]
     [Tooltip("Globally enables the registered FogVolume without disabling its component or changing shader resources.")]
@@ -2858,6 +2858,11 @@ public class GameManager : MonoBehaviour
     private static string BuildVideoEncoderArguments(string frameDirectory, string outputPath, float frameTimeStep)
     {
         double frameRate = 1.0 / Math.Max(0.000001, frameTimeStep);
+        double roundedFrameRate = Math.Round(frameRate);
+        if (Math.Abs(frameRate - roundedFrameRate) < 0.0001)
+        {
+            frameRate = roundedFrameRate;
+        }
         string frameRateText = frameRate.ToString("0.########", CultureInfo.InvariantCulture);
         string inputPath = Path.Combine(frameDirectory, "frame_%06d.png");
         return $"-y -framerate {frameRateText} -start_number 0 -i {QuoteProcessArgument(inputPath)} " +
