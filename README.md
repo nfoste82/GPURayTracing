@@ -21,21 +21,19 @@ There are multiple quality settings on the GameManager object in the root scene.
 
 ![Dragon model rendered in a Cornell box](dragon_cornell_box.png)
 
+### Caustics
 ![Caustics](caustics.png)
 
+### Water with light absorption, reflection, refraction, and caustics
 ![Water with reflection, refraction, light absorption](water_scene.png)
 
-## Water Caustics Video
+https://github.com/user-attachments/assets/c2fa9427-c246-47ff-9919-e17c34094d6f
 
-<video src="media/water-caustics-video.mp4" controls muted loop playsinline width="720">
-  Your browser does not support embedded video. Download [the MP4](media/water-caustics-video.mp4).
-</video>
-
+### Volumetric Fog
 ![Volumetric Fog](volumetric_fog.png)
 
-![Default scene](default_scene.png)
-
-Special Thanks to these projects which have been great reference/learning material:
+### Special Thanks!
+Thanks to these projects which have been great reference and learning material:
 
 * https://github.com/knightcrawler25/GLSL-PathTracer/
 * https://github.com/tylertms/vkrt
