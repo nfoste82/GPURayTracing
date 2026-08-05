@@ -3563,6 +3563,12 @@ public class GameManager : MonoBehaviour
         var expectedKeys = new HashSet<string>();
         foreach (var meshObject in _meshObjects)
         {
+            if (meshObject.mesh == null)
+            {
+                _bvhBakeLoadStatus = "bake is out-of-date: a runtime mesh is missing";
+                return false;
+            }
+
             bool interpolateNormals = meshObject.material != null && meshObject.material.InterpolateNormals;
             string key = GetEditorMeshIdentity(meshObject.mesh) + (interpolateNormals ? ":smooth" : ":flat");
             expectedKeys.Add(key);
@@ -3575,10 +3581,16 @@ public class GameManager : MonoBehaviour
 
         foreach (var entry in bvhBake.meshes)
         {
+            if (entry.mesh == null)
+            {
+                _bvhBakeLoadStatus = "bake is out-of-date: a baked mesh is missing";
+                return false;
+            }
+
             string key = entry.meshIdentity + (entry.interpolateNormals ? ":smooth" : ":flat");
-            string path = entry.mesh == null ? string.Empty : UnityEditor.AssetDatabase.GetAssetPath(entry.mesh);
+            string path = UnityEditor.AssetDatabase.GetAssetPath(entry.mesh);
             string dependencyHash = string.IsNullOrEmpty(path)
-                ? $"scene:{entry.mesh?.vertexCount ?? 0}:{(entry.mesh == null ? 0 : GetMeshIndexCount(entry.mesh))}"
+                ? $"scene:{entry.mesh.vertexCount}:{GetMeshIndexCount(entry.mesh)}"
                 : UnityEditor.AssetDatabase.GetAssetDependencyHash(path).ToString();
             if (!expectedKeys.Remove(key)
                 || entry.mesh.vertexCount != entry.vertexCount
@@ -4640,6 +4652,31 @@ public class GameManager : MonoBehaviour
             return;
         }
 
+        // RayObjectPreview adds a MeshFilter to collider-backed lights for Scene-view display.
+        // Prefer their analytic collider representation so that preview geometry cannot turn one
+        // sphere light into an emissive triangle mesh.
+        if (rayLight != null && sphereCollider != null)
+        {
+            var radius = GetWorldSphereRadius(sphereCollider, obj.transform);
+            var lightData = new Light
+            {
+                position = obj.transform.TransformPoint(sphereCollider.center),
+                radius = radius,
+                area = Mathf.PI * radius * radius,
+                emission = rayLight.Color.ToVector3(),
+                type = LightTypeSphere
+            };
+            _lights.Insert(_lightObjects.Count, lightData);
+            _lightObjects.Add(new RayTracedLight
+            {
+                obj = obj,
+                transform = obj.transform,
+                light = rayLight,
+                collider = sphereCollider
+            });
+            return;
+        }
+
         var meshFilter = obj.GetComponent<MeshFilter>();
         if ((material != null || rayLight != null) && meshFilter != null && meshFilter.sharedMesh != null)
         {
@@ -4662,28 +4699,6 @@ public class GameManager : MonoBehaviour
                 previousMetallicRoughnessTexture = material != null ? material.MetallicRoughnessTexture : null,
                 previousNormalTexture = material != null ? material.NormalTexture : null,
                 previousInterpolateNormals = material != null && material.InterpolateNormals
-            });
-            return;
-        }
-
-        if (rayLight != null && sphereCollider != null)
-        {
-            var radius = GetWorldSphereRadius(sphereCollider, obj.transform);
-            var lightData = new Light
-            {
-                position = obj.transform.TransformPoint(sphereCollider.center),
-                radius = radius,
-                area = Mathf.PI * radius * radius,
-                emission = rayLight.Color.ToVector3(),
-                type = LightTypeSphere
-            };
-            _lights.Insert(_lightObjects.Count, lightData);
-            _lightObjects.Add(new RayTracedLight
-            {
-                obj = obj,
-                transform = obj.transform,
-                light = rayLight,
-                collider = sphereCollider
             });
             return;
         }

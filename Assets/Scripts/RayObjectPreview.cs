@@ -138,8 +138,13 @@ public class RayObjectPreview : MonoBehaviour
         if (_rayLight != null)
         {
             color *= 2.0f;
+            color.a = 1.0f;
             SetColor(material, "_EmissionColor", color);
             material.EnableKeyword("_EMISSION");
+        }
+        else
+        {
+            color.a = Mathf.Clamp01(_rayMaterial.Opacity);
         }
 
         SetColor(material, "_BaseColor", color);

@@ -22,7 +22,7 @@ If the object has `RayMeshPrimitive`, `RayTracingObject.OnEnable()` first calls 
 
 - If it has `RayMaterial` and `SphereCollider`, it becomes a ray-traced sphere in `_spheres` and `_sphereObjects`.
 - If it has `RayMaterial` and `MeshFilter`, but no `SphereCollider`, it becomes a triangle mesh in `_triangles`, `_meshInfos`, `_bvhNodes`, and `_meshObjects`.
-- If it has `RayLight` and `SphereCollider`, it becomes an emissive sphere light in `_lights` and `_lightObjects`.
+- If it has `RayLight` and `SphereCollider`, it becomes an emissive sphere light in `_lights` and `_lightObjects`, even when `RayObjectPreview` has added a Scene-view `MeshFilter`.
 - If it has `RayLight` and `MeshFilter`, but no `SphereCollider`, it becomes an emissive mesh light: its triangles are uploaded to `_triangles`, and each triangle also contributes an entry to `_lights` for direct-light sampling.
 
 Sphere objects and sphere lights require a `SphereCollider`. The collider center is transformed to world space for the ray-traced sphere position, and the collider radius is scaled by the largest absolute axis of the object's lossy scale for the ray-traced sphere radius. Mesh objects and mesh lights require a `MeshFilter`; the shared mesh triangles are transformed to world space, sorted into a per-mesh BVH, and uploaded with mesh and BVH node metadata.

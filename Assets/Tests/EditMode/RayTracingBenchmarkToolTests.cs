@@ -182,6 +182,44 @@ public class RayTracingBenchmarkToolTests
     }
 
     [Test]
+    public void GameManager_RegistersColliderBackedLightAsSphereWhenPreviewMeshExists()
+    {
+        var root = new GameObject("Game Manager sphere light registration test");
+        var lightObject = new GameObject("Collider-backed light with preview mesh");
+        Mesh previewMesh = null;
+        try
+        {
+            Type managerType = GetRuntimeType("GameManager");
+            Type lightType = GetRuntimeType("RayLight");
+            Type rayTracingObjectType = GetRuntimeType("RayTracingObject");
+            Component manager = root.AddComponent(managerType);
+            lightObject.transform.SetParent(root.transform);
+
+            previewMesh = new Mesh
+            {
+                vertices = new[] { Vector3.zero, Vector3.right, Vector3.up },
+                triangles = new[] { 0, 1, 2 }
+            };
+            lightObject.AddComponent<SphereCollider>().radius = 1.5f;
+            lightObject.AddComponent<MeshFilter>().sharedMesh = previewMesh;
+            lightObject.AddComponent(lightType);
+            Component rayTracingObject = lightObject.AddComponent(rayTracingObjectType);
+
+            managerType.GetMethod("RegisterObject").Invoke(manager, new object[] { rayTracingObject });
+
+            Assert.That(GetCollectionCount(manager, "_lightObjects"), Is.EqualTo(1));
+            Assert.That(GetCollectionCount(manager, "_lights"), Is.EqualTo(1));
+            Assert.That(GetCollectionCount(manager, "_meshObjects"), Is.Zero);
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(lightObject);
+            UnityEngine.Object.DestroyImmediate(root);
+            UnityEngine.Object.DestroyImmediate(previewMesh);
+        }
+    }
+
+    [Test]
     public void GameManager_ClassifiesMaterialEditsWithoutGeometryRebuild()
     {
         var root = new GameObject("Game Manager mesh change test");
