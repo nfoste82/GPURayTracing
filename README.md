@@ -1,23 +1,32 @@
 # Realtime Path Tracing
-Realtime 3D raytracer running in a GPU compute shader in Unity.
+Realtime 3D path-tracer running in a GPU compute shader in Unity. Full disclosure that LLMs were used during the later work on this project.
 
-Features:
+## Features:
 * GPU compute-shader path tracing for spheres and registered triangle meshes
-* Emissive sphere and mesh lights with direct-light sampling
-* Surface reflections, diffuse indirect lighting, and multiple ray bounces
+* Emissive sphere and mesh lights with direct-light sampling -- (128 triangle limit for mesh lights currently)
+* Surface reflections (configurable smoothness of surfaces), diffuse indirect lighting, and multiple ray bounces
 * Glass reflection/refraction, distance-based absorption, and colored transparent shadows
-* Mesh UV/albedo textures
-* Optional animated procedural water with reflection, refraction, and underwater absorption
+* Mesh UV/albedo/metallic/normal texturing
+* Optional animated procedural water with reflection, refraction, and underwater RGB absorption
 * Hard and soft shadows
-* Depth of field with auto-focusing
+* Depth of field, variable camera aperture, different aperture types, ability to focus on a point in the scene even while camera is in motion
 * Frame accumulation, dynamic quality, debug views, and benchmark scenes
-* Volumetric fog
+* Volumetric fog (homogeneous fog)
+* Spatial denoising (basic hand-rolled, not machine-learned denoising)
 
-Features missing or approximate:
-* Spectral refractions (different wavelengths of light refract differently)
-* Material texture maps beyond mesh albedo
+## Features missing or approximate:
+* Spectral refractions (different wavelengths of light refract differently), current lighting system does not handle wavelengths
+* Temporal denoising is a work-in-progress
+* Glass smoothness and opacity directly affect how reflective its surface is currently, I need to change this so there can be less reflective glass regardless of smoothness
+* Considering adding the option for machine-learning-based upscaling and denoising, and when rendering in real time, possibly even frame insertion to improve frame rate
+* Fog that isn't homogenous
+* Subsurface scattering
+* Ability to see the scene within Unity's scene view, most objects currently do not have meshes or textures that Unity can see
+* Shader compilation can take quite a while, I'd like to optimize this
 
-There are multiple quality settings on the GameManager object in the root scene. At normal settings you should be able to easily sustain 60+ frames per second. At the highest settings you'll end up with frames taking hundreds of milliseconds to render and you'll need image accumulation on to get good clarity.
+There are multiple quality settings on the GameManager object in the root scene. Depending on the scene and quality, and your hardware, your frame rate may vary by quite a bit. Realtime can look decent on the right hardware with the right scene and settings. Some features like water and caustics are too expensive to look good in realtime currently.
+
+Project has only been tested for MacOS, but all code should be OS-agnostic, so if it works in Unity then you should be able to run it.
 
 ![Dragon model rendered in a Cornell box](dragon_cornell_box.png)
 
@@ -29,10 +38,14 @@ There are multiple quality settings on the GameManager object in the root scene.
 
 https://github.com/user-attachments/assets/c2fa9427-c246-47ff-9919-e17c34094d6f
 
+https://github.com/user-attachments/assets/4ff5669a-c7db-427c-8167-707b0ca8e22f
+
+Note: These video were rendered offline, at around 45-75 seconds per frame.
+
 ### Volumetric Fog
 ![Volumetric Fog](volumetric_fog.png)
 
-### Special Thanks!
+### Special Thanks
 Thanks to these projects which have been great reference and learning material:
 
 * https://github.com/knightcrawler25/GLSL-PathTracer/
