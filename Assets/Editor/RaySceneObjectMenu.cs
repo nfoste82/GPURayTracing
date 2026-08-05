@@ -18,7 +18,6 @@ public static class RaySceneObjectMenu
         material.RefractionIndex = 1.0f;
 
         gameObject.AddComponent<RayTracingObject>();
-        gameObject.AddComponent<RayObjectPreview>();
 
         FinishCreate(gameObject, "Create Ray Traced Sphere");
     }
@@ -34,7 +33,6 @@ public static class RaySceneObjectMenu
         light.Color = Color.white;
 
         gameObject.AddComponent<RayTracingObject>();
-        gameObject.AddComponent<RayObjectPreview>();
 
         FinishCreate(gameObject, "Create Ray Traced Light");
     }

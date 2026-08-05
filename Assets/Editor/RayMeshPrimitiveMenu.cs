@@ -42,7 +42,6 @@ public static class RayMeshPrimitiveMenu
         rayMaterial.Opacity = 0.5f;
         rayMaterial.RefractionIndex = 1.5f;
 
-        meshRenderer.sharedMaterial = CreatePreviewMaterial(color);
         meshCollider.sharedMesh = meshFilter.sharedMesh;
         meshCollider.convex = false;
 
@@ -50,14 +49,4 @@ public static class RayMeshPrimitiveMenu
         Selection.activeGameObject = gameObject;
     }
 
-    private static Material CreatePreviewMaterial(Color32 color)
-    {
-        var shader = Shader.Find("Standard") ?? Shader.Find("Diffuse");
-        var material = new Material(shader)
-        {
-            name = "Ray Mesh Preview Material",
-            color = color
-        };
-        return material;
-    }
 }

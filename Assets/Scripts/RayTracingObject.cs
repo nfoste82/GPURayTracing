@@ -1,24 +1,36 @@
 using UnityEngine;
 
+[ExecuteAlways]
 public class RayTracingObject : MonoBehaviour
 {
     private void OnEnable()
     {
+        if (GetComponent<RayObjectPreview>() == null)
+        {
+            gameObject.AddComponent<RayObjectPreview>();
+        }
+
         var meshPrimitive = GetComponent<RayMeshPrimitive>();
         if (meshPrimitive != null)
         {
             meshPrimitive.EnsureMesh();
         }
 
-        GetComponentInParent<GameManager>().RegisterObject(this);
+        if (Application.isPlaying)
+        {
+            GetComponentInParent<GameManager>().RegisterObject(this);
+        }
     }
 
     private void OnDisable()
     {
-        var gameManager = GetComponentInParent<GameManager>();
-        if (gameManager != null)
+        if (Application.isPlaying)
         {
-            gameManager.UnregisterObject(this);
+            var gameManager = GetComponentInParent<GameManager>();
+            if (gameManager != null)
+            {
+                gameManager.UnregisterObject(this);
+            }
         }
     }
 

@@ -38,7 +38,6 @@ public class RayMeshPrimitive : MonoBehaviour
         _meshFilter.sharedMesh = mesh;
         _meshCollider.sharedMesh = mesh;
         _meshCollider.convex = false;
-        EnsurePreviewMaterial();
     }
 
     private void Awake()
@@ -77,28 +76,6 @@ public class RayMeshPrimitive : MonoBehaviour
         {
             EnsureMesh();
         }
-    }
-
-    private void EnsurePreviewMaterial()
-    {
-        if (_meshRenderer == null || IsUsablePreviewMaterial(_meshRenderer.sharedMaterial))
-        {
-            return;
-        }
-
-        var rayMaterial = GetComponent<RayMaterial>();
-        var color = rayMaterial != null ? rayMaterial.Color : new Color32(180, 205, 255, 255);
-        var shader = Shader.Find("Standard") ?? Shader.Find("Diffuse");
-        _meshRenderer.sharedMaterial = new Material(shader)
-        {
-            name = "Ray Mesh Preview Material",
-            color = color
-        };
-    }
-
-    private static bool IsUsablePreviewMaterial(Material material)
-    {
-        return material != null && material.shader != null;
     }
 
     private static Mesh CreateMesh(PrimitiveType type)

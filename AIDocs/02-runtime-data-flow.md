@@ -116,7 +116,7 @@ On `Start()`, `GameManager` ensures that the generic benchmark runner and live p
 
 `RayTracingObject.OnDrawGizmos()` draws sphere/light-sphere gizmos using the world-space collider center and scaled radius. Sphere gizmo alpha follows `RayMaterial.Opacity`; light-sphere gizmos use full opacity because `RayLight` has no opacity field.
 
-`RayObjectPreview` can be attached to sphere/light objects to add a rasterized sphere mesh preview and, for `RayLight`, an optional Unity point-light preview. Its `MeshRenderer` is visible outside Play mode and hidden during Play mode by default, so the Game view remains compute-rendered.
+`RayTracingObject` executes in Edit mode so it can automatically attach `RayObjectPreview` to existing scene objects without regenerating scenes; registration with `GameManager` remains Play-mode-only. The preview supplies raster sphere geometry when the object is collider-defined, synchronizes ray-material color and albedo texture through the project-owned `Hidden/RayTracing/ScenePreview` shader, and adds an optional point-light preview to ray lights. Its `MeshRenderer` is visible outside Play mode and hidden during Play mode by default, so the Game view remains compute-rendered.
 
 ## Shader Parameters
 

@@ -1,14 +1,17 @@
 using UnityEngine;
 
 [ExecuteAlways]
-[RequireComponent(typeof(SphereCollider))]
 public class RayObjectPreview : MonoBehaviour
 {
     [SerializeField]
-    private bool hideMeshRendererInPlayMode = true;
+    private bool hideRendererInPlayMode = true;
 
     [SerializeField]
     private bool showUnityPointLightForRayLights = true;
+
+    private const string PreviewMaterialName = "Ray Tracing Preview Material";
+    private const string PreviewShaderName = "Hidden/RayTracing/ScenePreview";
+    private static readonly Vector3 PreviewKeyLightDirection = new Vector3(0.35f, 0.8f, 0.45f).normalized;
 
     private MeshFilter _meshFilter;
     private MeshRenderer _meshRenderer;
@@ -16,28 +19,19 @@ public class RayObjectPreview : MonoBehaviour
     private RayMaterial _rayMaterial;
     private RayLight _rayLight;
     private Light _unityLight;
+    private Mesh _sphereMesh;
+    private Vector3[] _sphereVertices;
     private float _previewRadius = -1.0f;
     private Vector3 _previewCenter;
 
-    private void Reset()
-    {
-        EnsurePreviewComponents();
-        SyncPreview();
-    }
-
     private void OnEnable()
     {
-        EnsurePreviewComponents();
         SyncPreview();
     }
 
     private void OnValidate()
     {
-        if (!Application.isPlaying)
-        {
-            EnsurePreviewComponents();
-            SyncPreview();
-        }
+        SyncPreview();
     }
 
     private void Update()
@@ -45,11 +39,25 @@ public class RayObjectPreview : MonoBehaviour
         SyncPreview();
     }
 
-    private void EnsurePreviewComponents()
+    private void OnDestroy()
+    {
+        if (_sphereMesh == null)
+        {
+            return;
+        }
+
+        DestroyPreviewObject(_sphereMesh);
+    }
+
+    private void SyncPreview()
     {
         _sphereCollider = GetComponent<SphereCollider>();
         _rayMaterial = GetComponent<RayMaterial>();
         _rayLight = GetComponent<RayLight>();
+        if (_rayMaterial == null && _rayLight == null)
+        {
+            return;
+        }
 
         _meshFilter = GetComponent<MeshFilter>();
         if (_meshFilter == null)
@@ -63,120 +71,174 @@ public class RayObjectPreview : MonoBehaviour
             _meshRenderer = gameObject.AddComponent<MeshRenderer>();
         }
 
-        if (_meshFilter.sharedMesh == null)
+        if (_sphereCollider != null)
         {
-            _meshFilter.sharedMesh = CreateSphereMesh(_sphereCollider.center, _sphereCollider.radius);
-            _previewRadius = _sphereCollider.radius;
-            _previewCenter = _sphereCollider.center;
+            SyncSphereMesh();
         }
 
-        if (!IsUsablePreviewMaterial(_meshRenderer.sharedMaterial))
-        {
-            _meshRenderer.sharedMaterial = GetPreviewMaterial(_rayMaterial, _rayLight);
-        }
-
-        if (_rayLight != null && showUnityPointLightForRayLights)
-        {
-            _unityLight = GetComponent<Light>();
-            if (_unityLight == null)
-            {
-                _unityLight = gameObject.AddComponent<Light>();
-            }
-        }
-        else
-        {
-            _unityLight = GetComponent<Light>();
-        }
+        SyncMaterial();
+        _meshRenderer.enabled = !Application.isPlaying || !hideRendererInPlayMode;
+        SyncLight();
     }
 
-    private void SyncPreview()
+    private void SyncSphereMesh()
     {
-        if (_sphereCollider == null || _meshRenderer == null)
+        if (_sphereMesh == null || _sphereVertices == null)
         {
+            var sourceMesh = Resources.GetBuiltinResource<Mesh>("New-Sphere.fbx");
+            if (sourceMesh == null)
+            {
+                return;
+            }
+
+            _sphereMesh = Instantiate(sourceMesh);
+            _sphereMesh.name = "Ray Sphere Preview Mesh";
+            _sphereMesh.hideFlags = HideFlags.HideAndDontSave;
+            _sphereVertices = _sphereMesh.vertices;
+        }
+
+        if (Mathf.Approximately(_previewRadius, _sphereCollider.radius) && _previewCenter == _sphereCollider.center)
+        {
+            _meshFilter.sharedMesh = _sphereMesh;
             return;
         }
 
-        if (!Mathf.Approximately(_previewRadius, _sphereCollider.radius) || _previewCenter != _sphereCollider.center)
+        var vertices = new Vector3[_sphereVertices.Length];
+        for (int i = 0; i < _sphereVertices.Length; i++)
         {
-            _meshFilter.sharedMesh = CreateSphereMesh(_sphereCollider.center, _sphereCollider.radius);
-            _previewRadius = _sphereCollider.radius;
-            _previewCenter = _sphereCollider.center;
+            vertices[i] = _sphereVertices[i] * _sphereCollider.radius * 2.0f + _sphereCollider.center;
         }
+        _sphereMesh.vertices = vertices;
+        _sphereMesh.RecalculateBounds();
+        _meshFilter.sharedMesh = _sphereMesh;
+        _previewRadius = _sphereCollider.radius;
+        _previewCenter = _sphereCollider.center;
+    }
 
-        _meshRenderer.enabled = !Application.isPlaying || !hideMeshRendererInPlayMode;
-
+    private void SyncMaterial()
+    {
         var material = _meshRenderer.sharedMaterial;
-        if (IsUsablePreviewMaterial(material))
+        var previewShader = Shader.Find(PreviewShaderName);
+        if (material == null || material.name != PreviewMaterialName || material.shader != previewShader)
         {
-            material.color = GetPreviewColor(_rayMaterial, _rayLight);
+            if (previewShader == null)
+            {
+                return;
+            }
+
+            material = new Material(previewShader)
+            {
+                name = PreviewMaterialName,
+                hideFlags = HideFlags.HideAndDontSave
+            };
+            _meshRenderer.sharedMaterial = material;
         }
 
-        if (_unityLight != null)
+        Color color = _rayLight != null ? _rayLight.Color : _rayMaterial.Color;
+        if (_rayLight != null)
         {
-            bool showLight = _rayLight != null && showUnityPointLightForRayLights;
-            _unityLight.enabled = showLight;
-            _unityLight.type = LightType.Point;
-            _unityLight.color = GetPreviewColor(null, _rayLight);
-            _unityLight.range = Mathf.Max(1.0f, _sphereCollider.radius * 8.0f);
-            _unityLight.intensity = showLight ? 1.0f : 0.0f;
+            color *= 2.0f;
+            SetColor(material, "_EmissionColor", color);
+            material.EnableKeyword("_EMISSION");
+        }
+
+        SetColor(material, "_BaseColor", color);
+        SetColor(material, "_Color", color);
+        SetColor(material, "_PreviewAmbientColor", GetPreviewAmbientColor());
+        SetVector(material, "_PreviewKeyLightDirection", PreviewKeyLightDirection);
+        SetTexture(material, "_BaseMap", _rayMaterial != null ? _rayMaterial.AlbedoTexture : null);
+        SetTexture(material, "_MainTex", _rayMaterial != null ? _rayMaterial.AlbedoTexture : null);
+
+        if (_rayMaterial != null)
+        {
+            SetFloat(material, "_Metallic", GetPreviewMetallic());
+            SetFloat(material, "_Glossiness", _rayMaterial.Smoothness);
+            SetFloat(material, "_Smoothness", _rayMaterial.Smoothness);
+            SetTexture(material, "_MetallicGlossMap", _rayMaterial.MetallicRoughnessTexture);
+            SetTexture(material, "_BumpMap", _rayMaterial.NormalTexture);
         }
     }
 
-    private static Material GetPreviewMaterial(RayMaterial rayMaterial, RayLight rayLight)
+    private void SyncLight()
     {
-        var shader = Shader.Find("Standard") ?? Shader.Find("Diffuse");
-        var material = new Material(shader)
+        if (_rayLight == null || !showUnityPointLightForRayLights)
         {
-            name = "Ray Object Preview Material",
-            color = GetPreviewColor(rayMaterial, rayLight)
-        };
-        return material;
-    }
-
-    private static bool IsUsablePreviewMaterial(Material material)
-    {
-        return material != null && material.shader != null;
-    }
-
-    private static Color GetPreviewColor(RayMaterial rayMaterial, RayLight rayLight)
-    {
-        if (rayLight != null)
-        {
-            return rayLight.Color;
+            if (_unityLight != null)
+            {
+                _unityLight.enabled = false;
+            }
+            return;
         }
 
-        if (rayMaterial != null)
+        _unityLight = GetComponent<Light>();
+        if (_unityLight == null)
         {
-            return rayMaterial.Color;
+            _unityLight = gameObject.AddComponent<Light>();
         }
-        return Color.white;
+
+        _unityLight.enabled = true;
+        _unityLight.type = LightType.Point;
+        _unityLight.color = _rayLight.Color;
+        _unityLight.range = Mathf.Max(1.0f, _sphereCollider != null ? _sphereCollider.radius * 8.0f : 4.0f);
+        _unityLight.intensity = 1.0f;
     }
 
-    private static Mesh CreateSphereMesh(Vector3 center, float radius)
+    private float GetPreviewMetallic()
     {
-        var temporary = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        var sourceMesh = temporary.GetComponent<MeshFilter>().sharedMesh;
-        var mesh = Instantiate(sourceMesh);
-        mesh.name = "Ray Sphere Preview Mesh";
-        mesh.hideFlags = HideFlags.HideAndDontSave;
-
-        var vertices = mesh.vertices;
-        for (int i = 0; i < vertices.Length; i++)
+        if (_rayMaterial.Type == RayMaterial.MaterialType.Metal && Mathf.Approximately(_rayMaterial.Metallic, 0.0f))
         {
-            vertices[i] = vertices[i] * radius * 2.0f + center;
+            return 1.0f;
         }
-        mesh.vertices = vertices;
-        mesh.RecalculateBounds();
+        return _rayMaterial.Metallic;
+    }
 
+    private Color GetPreviewAmbientColor()
+    {
+        var manager = GetComponentInParent<GameManager>();
+        return manager != null ? manager._skyboxLightColor : RenderSettings.ambientSkyColor;
+    }
+
+    private static void SetColor(Material material, string propertyName, Color value)
+    {
+        if (material.HasProperty(propertyName))
+        {
+            material.SetColor(propertyName, value);
+        }
+    }
+
+    private static void SetFloat(Material material, string propertyName, float value)
+    {
+        if (material.HasProperty(propertyName))
+        {
+            material.SetFloat(propertyName, value);
+        }
+    }
+
+    private static void SetVector(Material material, string propertyName, Vector3 value)
+    {
+        if (material.HasProperty(propertyName))
+        {
+            material.SetVector(propertyName, value);
+        }
+    }
+
+    private static void SetTexture(Material material, string propertyName, Texture value)
+    {
+        if (material.HasProperty(propertyName))
+        {
+            material.SetTexture(propertyName, value);
+        }
+    }
+
+    private static void DestroyPreviewObject(Object target)
+    {
         if (Application.isPlaying)
         {
-            Destroy(temporary);
+            Destroy(target);
         }
         else
         {
-            DestroyImmediate(temporary);
+            DestroyImmediate(target);
         }
-
-        return mesh;
     }
 }
