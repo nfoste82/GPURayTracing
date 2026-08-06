@@ -26,7 +26,7 @@ RenderSettings:
   m_AmbientIntensity: 1
   m_AmbientMode: 0
   m_SubtractiveShadowColor: {r: 0.42, g: 0.478, b: 0.627, a: 1}
-  m_SkyboxMaterial: {fileID: 10304, guid: 0000000000000000f000000000000000, type: 0}
+  m_SkyboxMaterial: {fileID: 0}
   m_HaloStrength: 0.5
   m_FlareStrength: 1
   m_FlareFadeSpeed: 3
@@ -254,7 +254,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 1e815bd5baf2049ce8b7e41505390e72, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::GameManager
-  bvhBake: {fileID: 0}
+  bvhBake: {fileID: 11400000, guid: 99fd6e609fb2944e0856d2c55f7ddfe1, type: 2}
   bakeBvhUponExit: 1
   profileStartup: 1
   shader: {fileID: 7200000, guid: adaed5b09d5374556b1cda0917c8f291, type: 3}
@@ -276,6 +276,7 @@ MonoBehaviour:
   temporalVarianceGuidedFiltering: 1
   causticPreservationThreshold: 4
   numberOfPasses: 1
+  subpixelJitterScale: 1
   enableFrameAccumulation: 1
   numBounces: 10
   shadowQuality: 0
@@ -495,6 +496,8 @@ MonoBehaviour:
   InterpolateNormals: 0
   Smoothness: 0.08
   Opacity: 1
+  Specular: 0
+  Transmission: 1
   RefractionIndex: 1
 --- !u!135 &963094824
 SphereCollider:
@@ -659,6 +662,8 @@ MonoBehaviour:
   InterpolateNormals: 0
   Smoothness: 0.5
   Opacity: 1
+  Specular: 0
+  Transmission: 1
   RefractionIndex: 1
 --- !u!1 &1730637204
 GameObject:
@@ -802,6 +807,8 @@ MonoBehaviour:
   InterpolateNormals: 1
   Smoothness: 1
   Opacity: 0.121
+  Specular: 0
+  Transmission: 1
   RefractionIndex: 1.391
 --- !u!1 &1891341623
 GameObject:
@@ -1004,6 +1011,7 @@ MonoBehaviour:
   Color:
     serializedVersion: 2
     rgba: 4294967295
+  Intensity: 1
 --- !u!135 &1891341631
 SphereCollider:
   m_ObjectHideFlags: 0

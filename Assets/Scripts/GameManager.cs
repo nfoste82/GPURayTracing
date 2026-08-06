@@ -124,6 +124,10 @@ public class GameManager : MonoBehaviour
     [Range(1, 32)]
     public int numberOfPasses = 1;
 
+    [Range(0.0f, 2.0f)]
+    [Tooltip("Width of the random sub-pixel camera filter in pixel units. 1 uses the full pixel footprint and is the correct anti-aliasing default; values above 1 deliberately blur across neighboring pixels.")]
+    public float subpixelJitterScale = 1.0f;
+
     [Tooltip("Progressively averages final-color renders while the camera, scene, and quality settings are unchanged. Debug render modes are not accumulated.")]
     public bool enableFrameAccumulation = true;
 
@@ -958,6 +962,7 @@ public class GameManager : MonoBehaviour
         spatialDenoiserNormalPower = Mathf.Max(1.0f, spatialDenoiserNormalPower);
         spatialDenoiserAlbedoSigma = Mathf.Max(0.01f, spatialDenoiserAlbedoSigma);
         spatialDenoiserLuminanceSigma = Mathf.Max(0.01f, spatialDenoiserLuminanceSigma);
+        subpixelJitterScale = Mathf.Clamp(subpixelJitterScale, 0.0f, 2.0f);
         temporalDepthThreshold = Mathf.Max(0.01f, temporalDepthThreshold);
         temporalNormalThreshold = Mathf.Clamp(temporalNormalThreshold, -1.0f, 1.0f);
         temporalCameraCutDistance = Mathf.Max(0.01f, temporalCameraCutDistance);
@@ -5028,6 +5033,7 @@ public class GameManager : MonoBehaviour
         }
 
         shader.SetInt("_NumberOfPasses", numberOfPasses);
+        shader.SetFloat("_SubpixelJitterScale", subpixelJitterScale);
         shader.SetInt("_NumBounces", numBounces);
         // Temporal modes are presented by RayTracingSpatialDenoiser after CSMain. Keep CSMain
         // on its normal HDR beauty path so an out-of-range renderer debug value cannot write
@@ -5202,6 +5208,7 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, _textureSize.x);
             hash = AddHash(hash, _textureSize.y);
             hash = AddHash(hash, numberOfPasses);
+            hash = AddHash(hash, subpixelJitterScale);
             hash = AddHash(hash, numBounces);
             hash = AddHash(hash, shadowQuality);
             hash = AddHash(hash, topLevelBvhMinObjectCount);

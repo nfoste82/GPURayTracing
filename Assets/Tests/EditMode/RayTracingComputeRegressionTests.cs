@@ -34,7 +34,7 @@ namespace GPURayTracing.Tests
             }
 
             int kernel = shader.FindKernel("CSRegressionProbe");
-            var buffer = new ComputeBuffer(41, sizeof(float) * 4);
+            var buffer = new ComputeBuffer(42, sizeof(float) * 4);
             var sphereBuffer = new ComputeBuffer(1, 64);
             try
             {
@@ -53,7 +53,7 @@ namespace GPURayTracing.Tests
                 shader.SetBuffer(kernel, "RegressionResults", buffer);
                 shader.Dispatch(kernel, 1, 1, 1);
 
-                var results = new Vector4[41];
+                var results = new Vector4[42];
                 buffer.GetData(results);
 
                 AssertVector(results[0], new Vector4(0.70710677f, 0.70710677f, 0.0f, 1.0f), "reflection");
@@ -98,6 +98,7 @@ namespace GPURayTracing.Tests
                 AssertVector(results[38], new Vector4(1.0f, 0.25f, 0.5f, 1.0f), "small triangle intersection", 0.0002f);
                 AssertVector(results[39], new Vector4(0.04f, 0.04f, 0.04f, 0.04f), "glass F0 is independent of opacity and color");
                 AssertVector(results[40], new Vector4(0.232f, 0.232f, 1.0f, 1.0f), "glass specular minimum controls Fresnel reflection");
+                AssertVector(results[41], new Vector4(0.0f, -1.0f, 0.0f, 1.0f), "sphere inside hit uses inward shading and outward geometric normals");
             }
             finally
             {
@@ -175,6 +176,36 @@ namespace GPURayTracing.Tests
             {
                 UnityEngine.Object.DestroyImmediate(cameraObject);
                 UnityEngine.Object.DestroyImmediate(gameObject);
+            }
+        }
+
+        [Test]
+        public void GameManager_AccumulationStateHash_ResetsWhenSubpixelFilterChanges()
+        {
+            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+            Assert.That(managerType, Is.Not.Null, "Could not load GameManager from Assembly-CSharp");
+
+            var gameObject = new GameObject("Subpixel Filter State Hash Test");
+            var cameraObject = new GameObject("Subpixel Filter State Hash Camera");
+            try
+            {
+                Component manager = gameObject.AddComponent(managerType);
+                Camera camera = cameraObject.AddComponent<Camera>();
+                managerType.GetField("renderTextureCamera").SetValue(manager, camera);
+
+                MethodInfo hashMethod = managerType.GetMethod("CalculateAccumulationStateHash", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.That(hashMethod, Is.Not.Null);
+                int defaultHash = (int)hashMethod.Invoke(manager, null);
+
+                managerType.GetField("subpixelJitterScale").SetValue(manager, 1.25f);
+                int changedFilterHash = (int)hashMethod.Invoke(manager, null);
+                Assert.That(changedFilterHash, Is.Not.EqualTo(defaultHash),
+                    "Changing the sub-pixel filter must reset progressive accumulation.");
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(gameObject);
+                UnityEngine.Object.DestroyImmediate(cameraObject);
             }
         }
 

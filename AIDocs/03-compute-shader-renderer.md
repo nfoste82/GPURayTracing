@@ -14,6 +14,7 @@ Important shader globals:
 - `_MeshAlbedoTextures`: fixed-size `Texture2DArray` containing active mesh albedo textures. Triangle hits interpolate uploaded UVs and sample `textureIndex`; untextured meshes keep using `RayMaterial.Color` only.
 - `_SkyboxLight`: skybox lighting multiplier.
 - `_NumberOfPasses`: per-frame samples per pixel.
+- `_SubpixelJitterScale`: width of the random primary-ray pixel filter. `1` samples the full pixel footprint; values above `1` intentionally extend into neighboring pixels and blur the image.
 - `_UseFrameAccumulation`, `_AccumulatedFrameCount`, `_SampleOffset`: control progressive final-color accumulation and advance deterministic sample indices across frames. The sample sequence also advances when accumulation is disabled, so animated scenes do not repeat the same stochastic samples every frame.
 - `_NumBounces`: maximum bounces for `TracePath()`.
 - `_DebugRenderMode`: selects final path-traced color or a debug visualization.
@@ -113,7 +114,7 @@ The scene also uploads a top-level BVH over ray-traced spheres, emissive light s
 3. Transforming the direction through `_CameraToWorld`.
 4. Normalizing the result.
 
-`CSMain` maps each pixel to `[-1, 1]` UV space with subpixel jitter from `rand()`.
+`CSMain` maps each pixel to `[-1, 1]` UV space with subpixel jitter from `rand()`. The jitter samples the full pixel footprint by default (`_SubpixelJitterScale = 1`); progressive accumulation and `_NumberOfPasses` increase the number of such samples rather than widening that footprint.
 
 ## Tone Mapping And Exposure
 

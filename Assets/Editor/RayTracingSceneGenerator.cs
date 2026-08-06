@@ -12,7 +12,7 @@ public static class RayTracingSceneGenerator
     private const string GeneratedSceneFolder = "Assets/Scenes/Generated";
     private const string GeneratedAssetFolder = "Assets/Scenes/Generated/GeneratedAssets";
     private const string ComputeShaderPath = "Assets/Scripts/RayTracingCompute.compute";
-    private const string SkyboxPath = "Assets/skyboxOcean.jpg";
+    private const string SkyboxPath = "Assets/Textures/Skyboxes/skyboxOcean.jpg";
     private const string StanfordDragonModelPath = "Assets/Models/Dragon/stanford-dragon-pbr.fbx";
     private const string WolfensteinTextureAtlasPath = "Assets/wolf3d_textures.png";
     private const string TeapotLidModelPath = "Assets/Models/Teapot/Mesh000.obj";
@@ -402,20 +402,22 @@ public static class RayTracingSceneGenerator
 
         var context = CreateBaseScene(new SceneSettings
         {
-            SceneName = "Benchmark_Glass", CameraPosition = new Vector3(0.0f, 5.5f, -16.0f), CameraEuler = new Vector3(12.0f, 0.0f, 0.0f),
+            SceneName = "Benchmark_Glass", 
+            CameraPosition = new Vector3(0.0f, 4.5f, -5.11f), 
+            CameraEuler = new Vector3(36.0f, 0.0f, 0.0f),
             NumBounces = 8, ShadowQuality = 1
         });
         
         AddFloor(context.Root, new Vector2(0.0f, 3.0f), new Vector2(16.0f, 16.0f), 0.5f);
-        AddLight(context.Root, "Key Light", new Vector3(-3.0f, 9.0f, -4.0f), 1.5f, new Color32(255, 235, 220, 255));
-        AddLight(context.Root, "Blue Light", new Vector3(4.0f, 5.5f, 4.0f), 0.8f, new Color32(110, 165, 255, 255));
+        AddLight(context.Root, "Key Light", new Vector3(-3.0f, 9.0f, -4.0f), 1.5f, new Color32(255, 235, 220, 255), 4f);
+        AddLight(context.Root, "Blue Light", new Vector3(4.0f, 5.5f, 4.0f), 0.8f, new Color32(110, 165, 255, 255), 2f);
 
         for (int i = 0; i < 28; i++)
         {
             float angle = i * Mathf.PI * 2.0f / 28.0f;
             float radius = 4.0f + (i % 4) * 0.45f;
             var color = Color.HSVToRGB(i / 28.0f, 0.32f, 1.0f);
-            AddSphere(context.Root, "Glass Sphere", new Vector3(Mathf.Cos(angle) * radius, 0.95f, Mathf.Sin(angle) * radius + 3.0f), 0.8f, color, RayMaterial.MaterialType.Glass, 1.0f, 0.35f, 1.5f);
+            AddSphere(context.Root, "Glass Sphere", new Vector3(Mathf.Cos(angle) * radius, 0.95f, Mathf.Sin(angle) * radius + 3.0f), 0.8f, color, RayMaterial.MaterialType.Glass, 1.0f, 0.78f, 1.5f, 0.15f);
         }
 
         AddPrimitiveMesh(context.Root, "Glass Pyramid", RayMeshPrimitive.PrimitiveType.Pyramid, new Vector3(0.0f, 1.4f, 3.0f), new Vector3(0.0f, 45.0f, 0.0f), Vector3.one * 2.2f, new Color32(180, 215, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.4f, 1.65f);
@@ -652,7 +654,7 @@ public static class RayTracingSceneGenerator
             var localZ = -3.0f + i * 1.1f + Mathf.Sin(i * 1.7f) * 1.8f;
             var y = 0.7f + (i % 4) * 0.04f;
             var color = Color.HSVToRGB(0.08f + i * 0.012f, 0.65f, 0.55f);
-            AddSphere(context.Root, "Depth Gradient Pebble", new Vector3(x, y, localZ + 5.0f), 0.25f + (i % 3) * 0.08f, color, RayMaterial.MaterialType.Glass, 1.0f, 0.3f, 1.25f);
+            AddSphere(context.Root, "Depth Gradient Pebble", new Vector3(x, y, localZ + 5.0f), 0.25f + (i % 3) * 0.08f, color, RayMaterial.MaterialType.Glass, 1.0f, 0.4f, 1.5f, specular: 0.2f, transmission: 0.89f);
         }
 
         AddSphere(context.Root, "Half Submerged Red Marker", new Vector3(-3.2f, 0.95f, 1.2f), 0.62f, new Color32(220, 65, 45, 255), RayMaterial.MaterialType.Metal, 0.72f);
@@ -767,7 +769,7 @@ public static class RayTracingSceneGenerator
         var context = CreateBaseScene(new SceneSettings
         {
             SceneName = sceneName,
-            CameraPosition = new Vector3(0.0f, 3.0f, -7.5f),
+            CameraPosition = new Vector3(0.0f, 3.24f, -6.24f),
             CameraEuler = Vector3.zero,
             NumBounces = 8,
             CameraFocalDistance = 13.5f,
@@ -861,7 +863,8 @@ public static class RayTracingSceneGenerator
                 1.0f,
                 0.04f,
                 refractionIndex,
-                0.02f);
+                0.04f,
+                0.95f);
         }
 
         Save(context.Scene, sceneName);
@@ -915,20 +918,20 @@ public static class RayTracingSceneGenerator
             FireflyClamp = 0.0f,
             TopLevelBvhMinObjectCount = 0, 
             ShadowBvhMinObjectCount = 0,
-            SkyboxLightColor = new Color(154f, 154f, 154f), 
+            SkyboxLightColor = new Color32(255, 245, 223, 255), 
             CameraApertureMode = GameManager.CameraApertureMode.Pinhole,
             FieldOfView = 33.6f,
         });
 
         const float stageWidth = 19.0f;
-        AddPrimitiveMesh(context.Root, "White Receiver", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 0.02f, 4.8f), Vector3.zero, new Vector3(stageWidth, 0.04f, 7.0f), new Color32(235, 235, 230, 255), RayMaterial.MaterialType.Diffuse, 0.08f, 1.0f);
+        AddPrimitiveMesh(context.Root, "White Receiver", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 0.02f, 4.8f), Vector3.zero, new Vector3(stageWidth, 0.04f, 7.0f), new Color32(140, 140, 140, 255), RayMaterial.MaterialType.Diffuse, 0.08f, 1.0f);
         const float lightWidth = 4.0f;
         const float lightDepth = 2.0f;
         const float lightHeight = 7.1f;
         const float lightZ = 4.8f;
         const float lightBorder = 0.5f;
         AddPrimitiveMesh(context.Root, "Overhead Light Frame", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, lightHeight + 0.03f, lightZ), new Vector3(10.8f, 0f, 0f), new Vector3(lightWidth + lightBorder * 2.0f, 0.06f, lightDepth + lightBorder * 2.0f), new Color32(54, 50, 42, 255), RayMaterial.MaterialType.Diffuse, 0.2f, 1.0f);
-        AddMeshLight(context.Root, "Overhead Area Light", CreateHorizontalQuadMesh("Demofox Refraction Area Light", lightWidth, lightDepth, 1.0f, 1.0f), new Vector3(0.0f, lightHeight - 0.1f, lightZ), new Vector3(10.8f, 0f, 0f), Vector3.one, Color.white, 9.0f);
+        AddMeshLight(context.Root, "Overhead Area Light", CreateHorizontalQuadMesh("Demofox Refraction Area Light", lightWidth, lightDepth, 1.0f, 1.0f), new Vector3(0.0f, lightHeight - 0.1f, lightZ), new Vector3(10.8f, 0f, 0f), Vector3.one, new Color32(255, 246, 223, 255), 9.0f);
 
         const int stripeCount = 100;
         const float stripeWidth = stageWidth / stripeCount;
@@ -1077,7 +1080,7 @@ public static class RayTracingSceneGenerator
             1.0f);
     }
 
-    private static GameObject AddLight(Transform parent, string name, Vector3 position, float radius, Color color)
+    private static GameObject AddLight(Transform parent, string name, Vector3 position, float radius, Color color, float intensity = 1.0f)
     {
         var obj = new GameObject(name);
         obj.transform.SetParent(parent, false);
@@ -1090,6 +1093,7 @@ public static class RayTracingSceneGenerator
 
         var light = obj.AddComponent<RayLight>();
         light.Color = color;
+        light.Intensity = intensity;
 
         obj.AddComponent<RayTracingObject>();
         return obj;

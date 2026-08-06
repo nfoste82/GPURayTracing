@@ -573,12 +573,12 @@ namespace GPURayTracing.Tests
 
         private static readonly Vector4[] GlassBaseline =
         {
-            new Vector4(0.22656580f, 0.39283580f, 0.57727160f, 1.0f),
-            new Vector4(0.27920510f, 0.49489120f, 0.69961030f, 1.0f),
-            new Vector4(0.05708998f, 0.02876188f, 0.04846103f, 1.0f),
+            new Vector4(0.22502670f, 0.39189720f, 0.57762590f, 1.0f),
+            new Vector4(0.27923740f, 0.49491320f, 0.69961660f, 1.0f),
+            new Vector4(0.01259302f, 0.01352454f, 0.03193457f, 1.0f),
             new Vector4(0.23362190f, 0.42053790f, 0.62714530f, 1.0f),
             new Vector4(0.32048560f, 0.52215090f, 0.71243460f, 1.0f),
-            new Vector4(0.07051557f, 0.07885190f, 0.17340640f, 1.0f),
+            new Vector4(0.01259302f, 0.00704346f, 0.01204914f, 1.0f),
             new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f),
             new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f),
             new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f)
@@ -841,6 +841,7 @@ namespace GPURayTracing.Tests
                 shader.SetInt("_Seed", 1);
                 shader.SetInt("_SampleOffset", 0);
                 shader.SetInt("_NumberOfPasses", numberOfPasses);
+                shader.SetFloat("_SubpixelJitterScale", 1.0f);
                 shader.SetInt("_NumBounces", 6);
                 shader.SetInt("_DebugRenderMode", 0);
                 shader.SetInt("_UseFrameAccumulation", 0);

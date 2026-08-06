@@ -6,9 +6,9 @@ This document covers direct lighting, shadow behavior, material scattering, and 
 
 Direct lighting comes from emissive sphere lights and emissive mesh-triangle lights.
 
-`GetLightHittingPoint()` computes direct lighting by drawing one or more lights per shading point and shading each with stochastic samples across the light shape. Sphere lights use disk samples across the emissive sphere radius. Mesh lights are represented as one light per emissive triangle and use uniform barycentric samples across the triangle. Bounce 0 uses `max(1, _ShadowQuality + 1)` samples per shaded light, while later bounces use one sample per shaded light to reduce cost. The actual per-light shading work lives in `SampleSingleLight()`.
+`GetLightHittingPoint()` computes direct lighting by drawing one or more lights per shading point and shading each with stochastic samples across the light shape. Sphere lights use disk samples across the emissive sphere radius. Mesh lights are represented as one light per emissive triangle and use uniform barycentric samples across the triangle. Bounce 0 uses `max(1, _ShadowQuality + 1)` samples per shaded light, while later bounces use one sample per shaded light to reduce cost. The actual per-light shading work lives in `SampleSingleLight()`. Shadow-ray offsets select the geometric-normal side containing the sampled light direction, which is necessary when shading an inner glass boundary.
 
-Each disk sample first checks `saturate(dot(directionToLight, hit.normal))`, and samples whose direction is at or behind the surface (N·L <= 0) are skipped entirely, so back-facing light directions contribute nothing. Lit samples are evaluated by the shared `EvaluateMaterialBrdf()`: diffuse materials use energy-reduced Lambert reflection and all reflective materials use a GGX microfacet lobe with Schlick Fresnel and Smith masking-shadowing. Water keeps its physical dielectric Fresnel response independent of opacity; unlike tinted glass, water albedo is reserved for volume absorption and does not tint direct or environment reflection. Shadow rays are spawned from `hit.position` offset along the surface normal (`hit.normal * 0.001`), not along the light direction.
+Each disk sample first checks `saturate(dot(directionToLight, hit.normal))`, and samples whose direction is at or behind the surface (N·L <= 0) are skipped entirely, so back-facing light directions contribute nothing. Lit samples are evaluated by the shared `EvaluateMaterialBrdf()`: diffuse materials use energy-reduced Lambert reflection and all reflective materials use a GGX microfacet lobe with Schlick Fresnel and Smith masking-shadowing. Water keeps its physical dielectric Fresnel response independent of opacity; unlike tinted glass, water albedo is reserved for volume absorption and does not tint direct or environment reflection. Shadow rays are spawned from `hit.position` on the geometric-normal side containing the sampled light direction.
 
 Direct light from sampled light points is accumulated additively rather than combined with a channel-wise max operation. Sphere-light falloff uses the historical clamped inverse-square-style distance term scaled by light radius and `_LightFalloffScale`. Mesh lights use the area-light geometry term: triangle area and emitter facing divided by squared distance scaled by `_LightFalloffScale`. Back-facing triangle lights therefore do not illuminate a shading point. Transparent shadow blockers attenuate direct light with accumulated RGB transmittance, so colored glass can filter light before it reaches the shaded point.
 
@@ -76,14 +76,13 @@ Sphere and closed-mesh helpers report only internal distance they consume while 
 
 `RefractSnell()` implements Snell-law refraction and reports failure when the requested transition would exceed the critical angle. Glass-to-air failures are total internal reflection events and reflect the ray back into the current medium.
 
-Transparent/glass sphere refraction is approximate. `ApplySphereRefraction()`:
+Transparent/glass sphere refraction uses explicit path events at both boundaries. `ApplySphereRefraction()`:
 
 1. Refracts from the current stack medium into the sphere using `RefractSnell()`, or from the sphere into the revealed parent medium on an exit hit.
-2. For entry hits, casts a bounded internal ray up to the current sphere exit while ignoring that current sphere.
-3. If another scene object is hit before the exit, continues tracing inside the current sphere so interpenetrating transparent objects can be seen.
-4. If no closer internal object is hit, estimates the exit point by finding a closest point across the sphere chord.
-5. Computes the exit normal.
-6. Refracts back into the source/parent medium, or reflects on total internal reflection.
+2. For entry hits, starts the next path segment just inside the sphere and pushes the sphere medium.
+3. Normal scene traversal finds the nearest enclosed object or the sphere's rear boundary.
+4. Sphere intersections retain an outward geometric normal but face the shading normal against the incident ray, allowing direct light and Fresnel reflection on inner boundaries.
+5. The rear boundary is shaded and independently selects Fresnel reflection or transmission. Reflection and total internal reflection preserve the sphere medium; transmission removes it.
 
 Glass material scattering uses the independent `Specular` minimum plus Schlick Fresnel reflectance to randomly choose first-surface reflection, and `Transmission` to select among the remaining paths independently of opacity. Smoothness uses the shared `roughness = 1 - smoothness`, `alpha = roughness^2` mapping to sample a GGX microfacet normal independently at each crossed boundary; smoothness `1` retains exact Snell directions, while lower values blur both reflected and transmitted paths. Caustic photons use the same boundary-normal sampling, so frosted glass broadens the photon pattern rather than retaining a sharp caustic. Reflected glass paths remain untinted while transmitted paths are filtered by distance-based absorption. Internal TIR bounces consume from the same `_NumBounces` path budget as regular scene bounces, so a ray with only two bounces remaining can only spend two bounces on glass entry/exit/internal reflection work.
 

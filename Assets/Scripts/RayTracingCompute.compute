@@ -55,6 +55,7 @@ SamplerState sampler_MeshNormalTextures;
 float4 _SkyboxLight;
 
 int _NumberOfPasses;
+float _SubpixelJitterScale;
 int _ShadowQuality;
 int _NumBounces;
 int _DebugRenderMode;
@@ -1248,8 +1249,10 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere, int objectInd
     {
         bestHit.position = ray.origin + t * ray.direction;
         bestHit.obj_position = sphere.position;
-        bestHit.normal = normalize(bestHit.position - sphere.position);
-        bestHit.geometricNormal = bestHit.normal;
+        bestHit.geometricNormal = normalize(bestHit.position - sphere.position);
+        bestHit.normal = dot(bestHit.geometricNormal, ray.direction) > 0.0f
+            ? -bestHit.geometricNormal
+            : bestHit.geometricNormal;
         bestHit.emission = sphere.emission;
         bestHit.color = sphere.color;
         bestHit.obj_radius = sphere.radius;
@@ -2490,7 +2493,8 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
         float3 ptToOffset = offsetPt - hit.position;
         float distanceToLight = length(ptToOffset);
         ptToOffset = normalize(ptToOffset);
-        float3 shadowOrigin = hit.position + hit.geometricNormal * 0.001f;
+        float shadowOffsetSign = dot(ptToOffset, hit.geometricNormal) >= 0.0f ? 1.0f : -1.0f;
+        float3 shadowOrigin = hit.position + hit.geometricNormal * (0.001f * shadowOffsetSign);
 #if defined(FOG_ENABLED)
         if (volumeEvent)
         {
@@ -3028,42 +3032,8 @@ void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int r
     }
 
     ray.direction = entryDirection;
-
-    Ray insideRay = CreateRay(hit.position + ray.direction * 0.001f, ray.direction);
-    float exitDistance = GetSphereExitDistance(insideRay, hit.obj_position, hit.obj_radius);
-    RayHit interiorHit = GetNearestIntersectionBounded(insideRay, exitDistance, -2, hit.objectIndex);
-    if (!DidHitSky(interiorHit))
-    {
-        ray.origin = insideRay.origin;
-        mediumTransition = MediumTransitionEnter;
-        return;
-    }
-
-    if (remainingBounces <= bouncesConsumed)
-    {
-        ray.origin = insideRay.origin;
-        ray.direction = insideRay.direction;
-        mediumTransition = MediumTransitionEnter;
-        return;
-    }
-
-    float3 halfway = GetClosestPointOnLineSegment(ray.origin, ray.origin + (2.0f * hit.obj_radius * ray.direction), hit.obj_position);
-    float3 offset = ((halfway - ray.origin) * 2.0f);
-    ray.origin += offset;
-    float3 exitPointNormal = normalize(ray.origin - hit.obj_position);
-
-    mediumDistanceTraveled = length(offset);
-    bouncesConsumed++;
-
-    float3 exitDirection;
-    float3 exitBoundaryNormal = SampleDielectricBoundaryNormal(-exitPointNormal, -exitPointNormal, ray.direction, hit.smoothness, targetRefraction, sourceRefraction, rngState);
-    if (!RefractSnell(ray.direction, targetRefraction, sourceRefraction, exitBoundaryNormal, exitDirection))
-    {
-        exitDirection = reflect(ray.direction, exitBoundaryNormal);
-        mediumTransition = MediumTransitionEnter;
-    }
-
-    ray.direction = exitDirection;
+    ray.origin = hit.position + ray.direction * 0.001f;
+    mediumTransition = MediumTransitionEnter;
 }
 
 void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int remainingBounces, bool entering, float sourceRefraction, float targetRefraction, float3 boundaryNormal, inout uint rngState, out int bouncesConsumed, out int mediumTransition, out float mediumDistanceTraveled)
@@ -4444,6 +4414,21 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
         GetSurfaceF0(opaqueGlassHit, opaqueGlassHit.color).x,
         opaqueGlassHit.transmission,
         1.0f);
+
+    Sphere normalProbeSphere;
+    normalProbeSphere.position = float3(0.0f, 0.0f, 0.0f);
+    normalProbeSphere.color = 1.0f;
+    normalProbeSphere.emission = 0.0f;
+    normalProbeSphere.radius = 1.0f;
+    normalProbeSphere.smoothness = 1.0f;
+    normalProbeSphere.opacity = 0.0f;
+    normalProbeSphere.specular = 0.0f;
+    normalProbeSphere.transmission = 1.0f;
+    normalProbeSphere.refraction = 1.5f;
+    normalProbeSphere.materialType = MaterialGlass;
+    RayHit insideSphereHit = CreateRayHit();
+    IntersectSphere(CreateRay(float3(0.0f, 0.0f, 0.0f), normal), insideSphereHit, normalProbeSphere, 0);
+    RegressionResults[41] = float4(insideSphereHit.normal, dot(insideSphereHit.geometricNormal, normal));
 }
 
 #if defined(CAUSTICS_ENABLED)
@@ -4462,7 +4447,14 @@ void CSCausticsDebug(uint3 id : SV_DispatchThreadID)
     for (int i = 0; i < _NumberOfPasses; i++)
     {
         uint rngState = CreateRngState(id.xy, _SampleOffset + (uint)i);
-        float2 uv = ((id.xy + float2(rand(rngState), rand(rngState))) / float2(width, height)) * 2.0f - 1.0f;
+        float2 pixelJitter = float2(rand(rngState), rand(rngState));
+        // Keep the default sequence and pixel footprint bit-for-bit unchanged for existing
+        // renders. Wider filters trade aliasing for deliberate cross-pixel blur.
+        if (_SubpixelJitterScale != 1.0f)
+        {
+            pixelJitter = (pixelJitter - 0.5f) * _SubpixelJitterScale + 0.5f;
+        }
+        float2 uv = ((id.xy + pixelJitter) / float2(width, height)) * 2.0f - 1.0f;
         result += TraceVisibleCausticRadiance(CreateCameraRay(uv), rngState);
     }
     Result[id.xy] = float4(result / max(1, _NumberOfPasses), 1.0f);
@@ -4514,7 +4506,14 @@ void CSMain (uint3 id : SV_DispatchThreadID)
     for (int i = 0; i < _NumberOfPasses; i++)
     {
         uint rngState = CreateRngState(id.xy, _SampleOffset + (uint)i);
-        float2 uv = ((id.xy + float2(rand(rngState), rand(rngState))) / float2(width, height)) * 2.0f - 1.0f;
+        float2 pixelJitter = float2(rand(rngState), rand(rngState));
+        // Keep the default sequence and pixel footprint bit-for-bit unchanged for existing
+        // renders. Wider filters trade aliasing for deliberate cross-pixel blur.
+        if (_SubpixelJitterScale != 1.0f)
+        {
+            pixelJitter = (pixelJitter - 0.5f) * _SubpixelJitterScale + 0.5f;
+        }
+        float2 uv = ((id.xy + pixelJitter) / float2(width, height)) * 2.0f - 1.0f;
         if (_UseTemporalJitter != 0)
         {
             uv += _FrameJitterNdc;
