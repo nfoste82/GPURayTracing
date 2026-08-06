@@ -34,8 +34,8 @@ namespace GPURayTracing.Tests
             }
 
             int kernel = shader.FindKernel("CSRegressionProbe");
-            var buffer = new ComputeBuffer(39, sizeof(float) * 4);
-            var sphereBuffer = new ComputeBuffer(1, 56);
+            var buffer = new ComputeBuffer(41, sizeof(float) * 4);
+            var sphereBuffer = new ComputeBuffer(1, 64);
             try
             {
                 shader.SetInt("_NumSpheres", 0);
@@ -53,7 +53,7 @@ namespace GPURayTracing.Tests
                 shader.SetBuffer(kernel, "RegressionResults", buffer);
                 shader.Dispatch(kernel, 1, 1, 1);
 
-                var results = new Vector4[39];
+                var results = new Vector4[41];
                 buffer.GetData(results);
 
                 AssertVector(results[0], new Vector4(0.70710677f, 0.70710677f, 0.0f, 1.0f), "reflection");
@@ -96,6 +96,8 @@ namespace GPURayTracing.Tests
                 Assert.That(new Vector3(results[37].x, results[37].y, results[37].z).sqrMagnitude,
                     Is.EqualTo(1.0f).Within(0.001f), "rough glass microfacet normal should remain normalized");
                 AssertVector(results[38], new Vector4(1.0f, 0.25f, 0.5f, 1.0f), "small triangle intersection", 0.0002f);
+                AssertVector(results[39], new Vector4(0.04f, 0.04f, 0.04f, 0.04f), "glass F0 is independent of opacity and color");
+                AssertVector(results[40], new Vector4(0.232f, 0.232f, 1.0f, 1.0f), "glass specular minimum controls Fresnel reflection");
             }
             finally
             {
@@ -440,14 +442,14 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
-        public void BenchmarkCaustics_ProductionSamplingDistribution_HasValidTargets()
+        public void CausticsScene_ProductionSamplingDistribution_HasValidTargets()
         {
             Scene previousScene = SceneManager.GetActiveScene();
             string previousScenePath = previousScene.path;
             try
             {
                 Scene scene = EditorSceneManager.OpenScene(
-                    "Assets/Scenes/Benchmarks/Benchmark_Caustics.unity",
+                    "Assets/Scenes/Generated/Caustics.unity",
                     OpenSceneMode.Single);
                 Assert.That(scene.IsValid(), Is.True);
 

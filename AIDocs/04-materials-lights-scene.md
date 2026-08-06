@@ -26,12 +26,14 @@ Fields:
 - `NormalTexture`: optional mesh-only tangent-space normal map. Imported tangents are transformed with the mesh when available; meshes without tangents use a stable fallback basis. Mapped normals affect shading and optics while geometric normals remain authoritative for boundaries and ray offsets.
 - `InterpolateNormals`: mesh-only smooth shading. When enabled and the mesh contains vertex normals, the renderer barycentrically interpolates those normals for lighting and opaque reflection. Triangle geometry is still used for intersections, ray-origin offsets, shadow boundaries, and glass refraction.
 - `Smoothness`: controls metal/glass reflection roughness by randomizing the hit normal. Higher values preserve the normal more closely.
-- `Opacity`: controls glass transmission probability and absorption density. `1` is fully reflective/opaque, while lower values transmit more often and apply weaker color filtering through the material. Note that any opacity below `1` makes the shader treat the hit as glass (see below), regardless of `Type`.
+- `Opacity`: controls glass absorption density and transparent-shadow strength, but does not increase surface reflection. Together with `Color`, this provides Beer-Lambert-style RGB absorption through the distance traveled inside glass. Dielectric reflection remains controlled by IOR, viewing angle, and smoothness. Note that any opacity below `1` makes the shader treat the hit as glass (see below), regardless of `Type`.
+- `Specular`: glass's minimum reflection chance. IOR-based Fresnel raises this toward `1` at grazing angles. `0` is IOR-only physical glass; `0.02` matches the Demofox reference's explicit minimum reflection.
+- `Transmission`: glass transmission chance after reflection. `1` retains fully refractive glass; lower values reserve the remaining paths as absorbed/opaque without increasing reflection.
 - `RefractionIndex`: used by glass Fresnel reflectance and the custom approximate refraction path.
 
 The emissive material constant (`MaterialEmissive = 3` in the shader) is not selectable here. It is assigned internally to `RayLight` sphere and mesh lights during registration.
 
-In the shader, material color is retrieved through `GetAlbedo(hit)`. Diffuse and metal paths attenuate throughput by albedo. Glass transmission attenuates throughput with distance-based RGB absorption using albedo/color and opacity, while glass reflection blends from white toward material color as opacity increases.
+In the shader, material color is retrieved through `GetAlbedo(hit)`. Diffuse and metal paths attenuate throughput by albedo. Glass transmission attenuates throughput with distance-based RGB absorption using albedo/color and opacity, while dielectric reflection remains untinted.
 
 The glass/refraction path is selected by `IsGlassMaterial(hit)`, which is true when `materialType == Glass` **or** when `hit.opacity < 1.0`. So a `Diffuse` or `Metal` object with opacity under `1` will render through the glass transmission/Fresnel path.
 
@@ -39,7 +41,7 @@ Material behavior:
 
 - `Diffuse`: direct lighting with cosine-weighted hemisphere scattering for later bounces.
 - `Metal`: reflective scattering, with `Smoothness` controlling roughness.
-- `Glass`: opacity-scaled Schlick Fresnel weights approximate sphere refraction/transmission. Triangle meshes use approximate closed-mesh entry/exit refraction. Transmitted glass paths and transparent shadows apply accumulated RGB absorption, so light loses energy and changes color through colored layers.
+- `Glass`: `Specular` establishes a minimum reflection chance and Schlick Fresnel weights derived from the medium IORs raise it toward one at grazing angles. `Transmission` independently controls the remaining refractive paths. Transmitted glass paths and transparent shadows apply accumulated RGB absorption, so light loses energy and changes color through colored layers.
 
 ## Ray Mesh Primitives
 
@@ -53,7 +55,7 @@ The generated primitive material defaults are intended for glass/refraction test
 
 `RayTracingObject.OnDrawGizmos()` draws Scene view gizmos for sphere and light-sphere objects. Regular sphere gizmo color comes from `RayMaterial.Color` and alpha comes from `RayMaterial.Opacity`. Light-sphere gizmo color comes from `RayLight.Color` and uses full alpha because lights do not expose opacity.
 
-`RayObjectPreview` is automatically added to every `RayTracingObject`. For sphere and light-sphere objects, it creates a raster sphere mesh from the collider; for mesh objects and lights it reuses the existing mesh. It synchronizes a transient material using the project-owned, double-sided `Hidden/RayTracing/ScenePreview` shader. The shader applies a deliberately sub-unit fixed directional key light and a scaled ambient fill color from the nearest `GameManager._skyboxLightColor`, preserving lighting headroom so white geometry remains visibly shaded. It does not enumerate Unity/ray-traced lights, render shadows, or use GI. It shows `RayMaterial` color and albedo without depending on render-pipeline shaders, and maps `RayMaterial.Opacity` to standard raster alpha blending for Scene-view transparency. Double-sided preview rendering keeps generated planes visible from either side, matching the compute renderer's intersection behavior. Ray lights receive an optional Unity point light. The preview renderer is hidden in Play mode by default, so these editor/Unity-scene aids never participate in compute-shader shading. Metallic-roughness, normal mapping, glass, and other path-traced responses remain Game-view-only approximations.
+`RayObjectPreview` is automatically added to every `RayTracingObject`. For sphere and light-sphere objects, it creates a raster sphere mesh from the collider; for mesh objects and lights it reuses the existing mesh. It synchronizes a transient material using the project-owned, double-sided `Hidden/RayTracing/ScenePreview` shader. The shader applies a deliberately sub-unit fixed directional key light and a scaled ambient fill color from the nearest `GameManager._skyboxLightColor`, preserving lighting headroom so white geometry remains visibly shaded. It does not enumerate Unity/ray-traced lights, render shadows, or use GI. It shows `RayMaterial` color and albedo without depending on render-pipeline shaders, and maps `RayMaterial.Opacity` to standard raster alpha blending for Scene-view transparency. Double-sided preview rendering keeps generated planes visible from either side, matching the compute renderer's intersection behavior. Ray lights receive an optional Unity point light and scale their preview emission by `Intensity`. The preview renderer is hidden in Play mode by default, so these editor/Unity-scene aids never participate in compute-shader shading. Metallic-roughness, normal mapping, glass, and other path-traced responses remain Game-view-only approximations.
 
 `GameObject > Ray Tracing > Sphere` and `GameObject > Ray Tracing > Light Sphere` create ray-tracing components; the preview is attached automatically when the object is enabled.
 
@@ -64,6 +66,7 @@ The generated primitive material defaults are intended for glass/refraction test
 Fields:
 
 - `Color`: uploaded as normalized RGB emission.
+- `Intensity`: nonnegative HDR emission multiplier. Values above `1` make the light brighter than the normalized skybox and other default lights without clipping its color.
 
 Light objects are stored in `_Lights` using a compact light layout. Sphere lights also participate in the top-level BVH as directly visible light objects. Mesh lights are uploaded through `_Triangles` with emissive material data, so when a camera/path ray directly hits a mesh-light triangle, `TracePath()` adds its emission and terminates the path.
 
@@ -81,7 +84,7 @@ Unity meshes are traced by the compute shader only when they are registered thro
 
 Imported model assets such as FBX files are supported through their imported `MeshFilter`/`Mesh` data, but the mesh must be CPU-readable because `GameManager` reads vertices, indices, and UVs to build its own ray-tracing triangle buffer and per-mesh BVH. For model importer assets this means Unity's Read/Write import setting must be enabled. The Dragon Cornell benchmark generator enables this automatically for `Assets/Models/stanford-dragon-pbr.fbx` before loading its mesh.
 
-`Tools > Ray Tracing > Generate Teapot Material Scene` creates `Assets/Scenes/Benchmarks/Benchmark_TeapotMaterials.unity`. It uses both meshes under `Assets/Models/Teapot`, applies the original RenderMan swatch albedo, metallic-roughness, and normal maps from `Assets/Textures/RenderManSwatch`, and places six material variants over `Assets/checkerboard.png`. Existing generated output is not overwritten.
+`Tools > Ray Tracing > Generate Teapot Material Scene` creates `Assets/Scenes/Generated/TeapotMaterials.unity`. It uses both meshes under `Assets/Models/Teapot`, applies the original RenderMan swatch albedo, metallic-roughness, and normal maps from `Assets/Textures/RenderManSwatch`, and places six material variants over `Assets/checkerboard.png`. Existing generated output is not overwritten by the menu command.
 
 The scene’s `Directional Light` is a Unity light and is not used by the compute shader lighting model.
 

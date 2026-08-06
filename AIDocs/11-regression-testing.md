@@ -23,7 +23,7 @@ The project uses EditMode tests under `Assets/Tests/EditMode/` to make rendering
 - Production GPU probes cover the MIS power heuristic and triangle area-to-solid-angle PDF conversion.
 - A focused high-sample image regression verifies that a reflected sphere light does not develop a dark center.
 - Caustics coverage dispatches the production clear/trace kernels with a fixed seed and the compact target-pair/mesh-triangle buffers, compares canonically sorted photon records, verifies sphere and triangle emitters produce receiver photons through sphere glass, requires useful photon yield through closed-mesh glass, checks the multi-event sphere transport bounce budget, verifies default-disabled resource isolation, locks the smooth-kernel focused sphere-caustic image signature, and checks energy stability across photon counts and gather radii.
-- A production-scene caustics lifecycle test loads `Benchmark_Caustics`, builds the real `GameManager` sampling distribution, verifies valid normalized target probabilities for both the light/refractor pair CDF and each glass mesh's area-weighted triangle CDF, dispatches its production photon-map update, and requires indexed receiver photons. This closes the gap where in-memory image fixtures could validate photon generation without exercising CPU target-distribution construction. The per-mesh triangle CDF assertions (positive per-triangle probability, monotonic cumulative values, probabilities summing to one, and a final entry reaching exactly one) matter because photon power divides by the triangle probability: a normalization error there scales mesh photon power toward zero or negative without changing photon counts, so counting stored or indexed photons alone cannot detect it.
+- A production-scene caustics lifecycle test loads `Assets/Scenes/Generated/Caustics.unity`, builds the real `GameManager` sampling distribution, verifies valid normalized target probabilities for both the light/refractor pair CDF and each glass mesh's area-weighted triangle CDF, dispatches its production photon-map update, and requires indexed receiver photons. This closes the gap where in-memory image fixtures could validate photon generation without exercising CPU target-distribution construction. The per-mesh triangle CDF assertions (positive per-triangle probability, monotonic cumulative values, probabilities summing to one, and a final entry reaching exactly one) matter because photon power divides by the triangle probability: a normalization error there scales mesh photon power toward zero or negative without changing photon counts, so counting stored or indexed photons alone cannot detect it.
 - Benchmark-tool coverage verifies that both overlays default to hidden, use the `Z`/`X`/`B` controls, and are added idempotently to the `GameManager` GameObject.
 - Registration coverage verifies that a collider-backed `RayLight` remains one analytic sphere light when a Scene-view preview mesh is also present.
 
@@ -43,6 +43,29 @@ From the command line on this project's current macOS Unity version:
 ```
 
 Unity Test Framework `1.6.0` exits after a command-line run without requiring `-quit`. In Unity `6.3`, supplying `-quit` can terminate the editor before the test run starts.
+
+## Scene Capture Comparisons
+
+`RayTracingSceneCapture` is an editor tool, not a test. It loads the production scenes supplied on its command line, enters Play mode, renders a `512x512` final-color image with 200 deterministic accumulated samples by default, and writes PNGs for visual before/after comparison. It fixes the random seed, freezes simulation, and disables dynamic quality and temporal denoising. Scenes do not need to be in Build Settings. The output subfolder defaults to a local timestamp in `YYYY-MM-DD_HH-MM-SS` format; `-rayTracingCaptureLabel` can override it for named before/after comparisons.
+
+The tool can also be run non-interactively, which allows automated change workflows to capture before/after images. Close any Unity instance using the project first, then run:
+
+```sh
+/Applications/Unity/Hub/Editor/6000.3.18f1/Unity.app/Contents/MacOS/Unity \
+  -batchmode \
+   -projectPath /Users/nic.foster/Projects/GPURayTracing \
+   -executeMethod RayTracingSceneCapture.CaptureFromCommandLine \
+   -rayTracingGenerateScenes \
+   -rayTracingWidth 1024 \
+   -rayTracingHeight 768 \
+   -rayTracingSamples 400 \
+   -rayTracingCaptureLabel before \
+   -rayTracingOutput /tmp/gpuraytracing-captures \
+   -rayTracingScenes "Assets/Scenes/Root.unity;Assets/Scenes/Generated/CornellBox.unity" \
+  -logFile /tmp/gpuraytracing-scene-capture.log
+```
+
+`-rayTracingScenes` is required and accepts semicolon-separated project-relative scene paths. `-rayTracingGenerateScenes` is optional; when supplied, it overwrites only the requested generated scene paths before capture. `-rayTracingWidth`, `-rayTracingHeight`, and `-rayTracingSamples` each accept a positive integer and default to `512`, `512`, and `200`, respectively. Run the same command with `-rayTracingCaptureLabel after` after the renderer change. Compare like-named PNGs in the two output folders. GPU output is not pixel-identical across all platforms, so use the same graphics backend for a meaningful comparison.
 
 The GPU probe is skipped if the active graphics device does not support compute shaders or does not compile the probe kernel. On macOS, `-nographics` imports the compute shader without an executable Metal kernel, so it runs the CPU suite and skips the GPU probe. Run through the Test Runner or omit `-nographics` to validate all tests.
 

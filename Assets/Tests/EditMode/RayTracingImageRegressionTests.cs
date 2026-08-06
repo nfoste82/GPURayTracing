@@ -22,6 +22,8 @@ namespace GPURayTracing.Tests
             public float smoothness;
             public float opacity;
             public float refraction;
+            public float specular;
+            public float transmission;
             public int materialType;
         }
 
@@ -60,6 +62,8 @@ namespace GPURayTracing.Tests
             public float opacity;
             public Vector3 emission;
             public float refraction;
+            public float specular;
+            public float transmission;
             public int materialType;
             public int meshIndex;
             public int textureIndex;
@@ -569,12 +573,12 @@ namespace GPURayTracing.Tests
 
         private static readonly Vector4[] GlassBaseline =
         {
-            new Vector4(0.23247780f, 0.40982100f, 0.60921080f, 1.0f),
-            new Vector4(0.27923580f, 0.49491170f, 0.69961580f, 1.0f),
-            new Vector4(0.07772866f, 0.09289114f, 0.22937990f, 1.0f),
-            new Vector4(0.23362680f, 0.42054410f, 0.62715090f, 1.0f),
-            new Vector4(0.32049640f, 0.52216240f, 0.71244370f, 1.0f),
-            new Vector4(0.08211526f, 0.17106510f, 0.36212190f, 1.0f),
+            new Vector4(0.22656580f, 0.39283580f, 0.57727160f, 1.0f),
+            new Vector4(0.27920510f, 0.49489120f, 0.69961030f, 1.0f),
+            new Vector4(0.05708998f, 0.02876188f, 0.04846103f, 1.0f),
+            new Vector4(0.23362190f, 0.42053790f, 0.62714530f, 1.0f),
+            new Vector4(0.32048560f, 0.52215090f, 0.71243460f, 1.0f),
+            new Vector4(0.07051557f, 0.07885190f, 0.17340640f, 1.0f),
             new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f),
             new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f),
             new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f)
@@ -582,15 +586,15 @@ namespace GPURayTracing.Tests
 
         private static readonly Vector4[] InsideGlassCameraBaseline =
         {
-            new Vector4(0.06897468f, 0.26850930f, 0.56323390f, 1.0f),
-            new Vector4(0.07095850f, 0.28002760f, 0.56663660f, 1.0f),
-            new Vector4(0.08264316f, 0.33252030f, 0.63506090f, 1.0f),
-            new Vector4(0.12095230f, 0.40670570f, 0.69129310f, 1.0f),
-            new Vector4(0.05965437f, 0.26917870f, 0.58426960f, 1.0f),
-            new Vector4(0.03567521f, 0.05659353f, 0.18828310f, 1.0f),
-            new Vector4(0.09326624f, 0.33712860f, 0.62404300f, 1.0f),
-            new Vector4(0.07205451f, 0.28918140f, 0.59165610f, 1.0f),
-            new Vector4(0.04443362f, 0.22381070f, 0.55126830f, 1.0f)
+            new Vector4(0.10890430f, 0.32960290f, 0.58115630f, 1.0f),
+            new Vector4(0.13743680f, 0.41616670f, 0.68381760f, 1.0f),
+            new Vector4(0.14077130f, 0.42367290f, 0.69050750f, 1.0f),
+            new Vector4(0.15848610f, 0.45310660f, 0.71314140f, 1.0f),
+            new Vector4(0.09136747f, 0.33912740f, 0.63450150f, 1.0f),
+            new Vector4(0.04174894f, 0.02055860f, 0.02197600f, 1.0f),
+            new Vector4(0.10657580f, 0.35463530f, 0.63019130f, 1.0f),
+            new Vector4(0.10678040f, 0.35482970f, 0.63025460f, 1.0f),
+            new Vector4(0.10697200f, 0.35501160f, 0.63031360f, 1.0f)
         };
 
         private static readonly Vector4[] WaterBaseline =
@@ -604,10 +608,10 @@ namespace GPURayTracing.Tests
 
         private static readonly Vector4[] NestedWaterGlassBaseline =
         {
-            new Vector4(0.18151350f, 0.34703530f, 0.54318140f, 1.0f),
-            new Vector4(0.11754310f, 0.26860310f, 0.47664970f, 1.0f), new Vector4(0.02927951f, 0.08683124f, 0.20704730f, 1.0f),
+            new Vector4(0.18156200f, 0.34713010f, 0.54329470f, 1.0f),
+            new Vector4(0.11754290f, 0.26860270f, 0.47664930f, 1.0f), new Vector4(0.02930538f, 0.08688708f, 0.20714760f, 1.0f),
             new Vector4(0.24839830f, 0.47703760f, 0.68394960f, 1.0f), new Vector4(0.16319830f, 0.34220730f, 0.55730190f, 1.0f),
-            new Vector4(0.10823700f, 0.23281910f, 0.42639530f, 1.0f), new Vector4(0.07051557f, 0.16169770f, 0.32682100f, 1.0f),
+            new Vector4(0.15502020f, 0.32527220f, 0.53905920f, 1.0f), new Vector4(0.07051557f, 0.16169770f, 0.32682100f, 1.0f),
             new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f), new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f)
         };
 
@@ -616,29 +620,29 @@ namespace GPURayTracing.Tests
             new Vector4(0.03493490f, 0.12596900f, 0.27270570f, 1.0f),
             new Vector4(0.02053524f, 0.08846512f, 0.22868340f, 1.0f), new Vector4(0.04203858f, 0.13829840f, 0.30726390f, 1.0f),
             new Vector4(0.04517544f, 0.16485880f, 0.36035240f, 1.0f), new Vector4(0.00754808f, 0.05908050f, 0.18263530f, 1.0f),
-            new Vector4(0.02180066f, 0.04988710f, 0.13236390f, 1.0f), new Vector4(0.01195038f, 0.11639280f, 0.32787310f, 1.0f),
+            new Vector4(0.01259302f, 0.00665446f, 0.00627632f, 1.0f), new Vector4(0.01195038f, 0.11639280f, 0.32787310f, 1.0f),
             new Vector4(0.01341614f, 0.07492283f, 0.20799020f, 1.0f), new Vector4(0.01850257f, 0.07965415f, 0.20648710f, 1.0f)
         };
 
         private static readonly Vector4[] ClosedMeshGlassBaseline =
         {
-            new Vector4(0.23998970f, 0.43214260f, 0.63635950f, 1.0f),
-            new Vector4(0.28581480f, 0.49898150f, 0.70027660f, 1.0f), new Vector4(0.09598774f, 0.14305790f, 0.29182940f, 1.0f),
-            new Vector4(0.22758950f, 0.44474000f, 0.66269180f, 1.0f), new Vector4(0.32049640f, 0.52216240f, 0.71244370f, 1.0f),
-            new Vector4(0.19471410f, 0.25117770f, 0.44578280f, 1.0f), new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f),
+            new Vector4(0.23386160f, 0.42362850f, 0.62396780f, 1.0f),
+            new Vector4(0.28581550f, 0.49898240f, 0.70027730f, 1.0f), new Vector4(0.02817204f, 0.00970107f, 0.00976967f, 1.0f),
+            new Vector4(0.22758460f, 0.44473420f, 0.66268700f, 1.0f), new Vector4(0.32048560f, 0.52215090f, 0.71243460f, 1.0f),
+            new Vector4(0.07051557f, 0.03160396f, 0.03853699f, 1.0f), new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f),
             new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f), new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f)
         };
 
         private static readonly Vector4[] NestedWaterClosedMeshGlassBaseline =
         {
-            new Vector4(0.18097640f, 0.34582010f, 0.54162000f, 1.0f),
-            new Vector4(0.22305880f, 0.44508630f, 0.65819690f, 1.0f),
-            new Vector4(0.07771638f, 0.19563340f, 0.38385870f, 1.0f),
-            new Vector4(0.14704270f, 0.31458850f, 0.52744720f, 1.0f),
-            new Vector4(0.15809020f, 0.33278250f, 0.54688910f, 1.0f),
-            new Vector4(0.14189050f, 0.29741830f, 0.50610320f, 1.0f),
+            new Vector4(0.18070360f, 0.34529040f, 0.54096070f, 1.0f),
+            new Vector4(0.22306350f, 0.44508800f, 0.65819670f, 1.0f),
+            new Vector4(0.07771677f, 0.19563420f, 0.38385990f, 1.0f),
+            new Vector4(0.14704260f, 0.31458840f, 0.52744710f, 1.0f),
+            new Vector4(0.15809010f, 0.33278250f, 0.54688910f, 1.0f),
+            new Vector4(0.14189040f, 0.29741820f, 0.50610320f, 1.0f),
             new Vector4(0.03751515f, 0.09106692f, 0.20648710f, 1.0f),
-            new Vector4(0.25984190f, 0.45849140f, 0.66317850f, 1.0f),
+            new Vector4(0.22847110f, 0.41391780f, 0.62113910f, 1.0f),
             new Vector4(0.03751515f, 0.09106692f, 0.20648710f, 1.0f)
         };
 
@@ -662,39 +666,39 @@ namespace GPURayTracing.Tests
 
         private static readonly Vector4[] TransparentSphereShadowBaseline =
         {
-            new Vector4(0.59021960f, 0.68056270f, 0.77781230f, 1.0f), new Vector4(0.82931020f, 0.83592510f, 0.85907780f, 1.0f),
-            new Vector4(0.87337030f, 0.87379360f, 0.88621900f, 1.0f), new Vector4(0.89839020f, 0.89437120f, 0.89855610f, 1.0f),
-            new Vector4(0.62780360f, 0.68533950f, 0.76859270f, 1.0f), new Vector4(0.71824620f, 0.76264970f, 0.82743100f, 1.0f),
-            new Vector4(0.71807360f, 0.75461450f, 0.81409770f, 1.0f), new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f),
-            new Vector4(0.29516810f, 0.48179030f, 0.63754430f, 1.0f)
+            new Vector4(0.58508450f, 0.67746930f, 0.77647260f, 1.0f), new Vector4(0.82931160f, 0.83592620f, 0.85907860f, 1.0f),
+            new Vector4(0.87332720f, 0.87375580f, 0.88619090f, 1.0f), new Vector4(0.89842370f, 0.89440270f, 0.89858200f, 1.0f),
+            new Vector4(0.62780290f, 0.68533930f, 0.76859290f, 1.0f), new Vector4(0.71810750f, 0.76255630f, 0.82738180f, 1.0f),
+            new Vector4(0.71800480f, 0.75456530f, 0.81407000f, 1.0f), new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f),
+            new Vector4(0.41480110f, 0.60484840f, 0.73107030f, 1.0f)
         };
 
         private static readonly Vector4[] TransparentMeshShadowBaseline =
         {
-            new Vector4(0.59425080f, 0.67260960f, 0.76893200f, 1.0f), new Vector4(0.83547960f, 0.83497420f, 0.85474570f, 1.0f),
-            new Vector4(0.87337030f, 0.87379360f, 0.88621900f, 1.0f), new Vector4(0.89839020f, 0.89437120f, 0.89855610f, 1.0f),
-            new Vector4(0.62780360f, 0.68533950f, 0.76859270f, 1.0f), new Vector4(0.71824620f, 0.76264970f, 0.82743100f, 1.0f),
-            new Vector4(0.71807360f, 0.75461450f, 0.81409770f, 1.0f), new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f),
+            new Vector4(0.58701330f, 0.66842480f, 0.76629810f, 1.0f), new Vector4(0.83024440f, 0.83358560f, 0.85404960f, 1.0f),
+            new Vector4(0.87332720f, 0.87375580f, 0.88619090f, 1.0f), new Vector4(0.89842370f, 0.89440270f, 0.89858200f, 1.0f),
+            new Vector4(0.62780290f, 0.68533930f, 0.76859290f, 1.0f), new Vector4(0.71810750f, 0.76255630f, 0.82738180f, 1.0f),
+            new Vector4(0.71800480f, 0.75456530f, 0.81407000f, 1.0f), new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f),
             new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f)
         };
 
         private static readonly Vector4[] StackedTransparentShadowBaseline =
         {
-            new Vector4(0.59458100f, 0.67413610f, 0.76927520f, 1.0f), new Vector4(0.83547960f, 0.83497420f, 0.85474570f, 1.0f),
-            new Vector4(0.87337030f, 0.87379360f, 0.88621900f, 1.0f), new Vector4(0.89839020f, 0.89437120f, 0.89855610f, 1.0f),
-            new Vector4(0.62780360f, 0.68533950f, 0.76859270f, 1.0f), new Vector4(0.71824620f, 0.76264970f, 0.82743100f, 1.0f),
-            new Vector4(0.71807360f, 0.75461450f, 0.81409770f, 1.0f), new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f),
-            new Vector4(0.29516810f, 0.48179030f, 0.63754430f, 1.0f)
+            new Vector4(0.58226880f, 0.66773920f, 0.76593450f, 1.0f), new Vector4(0.83024440f, 0.83358560f, 0.85404960f, 1.0f),
+            new Vector4(0.87332720f, 0.87375580f, 0.88619090f, 1.0f), new Vector4(0.89842370f, 0.89440270f, 0.89858200f, 1.0f),
+            new Vector4(0.62780290f, 0.68533930f, 0.76859290f, 1.0f), new Vector4(0.71810750f, 0.76255630f, 0.82738180f, 1.0f),
+            new Vector4(0.71800480f, 0.75456530f, 0.81407000f, 1.0f), new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f),
+            new Vector4(0.41480110f, 0.60484840f, 0.73107030f, 1.0f)
         };
 
         private static readonly Vector4[] SphereCausticBaseline =
         {
-            new Vector4(0.00228615f, 0.00218024f, 0.00195586f, 1.0f),
+            new Vector4(0.00241748f, 0.00230459f, 0.00206686f, 1.0f),
             new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
             new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
             new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
             new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
-            new Vector4(1.69952700f, 1.62167700f, 1.45531500f, 1.0f)
+            new Vector4(1.84854700f, 1.76322300f, 1.58193300f, 1.0f)
         };
 
         private static SphereData Sphere(Vector3 position, Vector3 color, float radius, float smoothness, float opacity, float refraction, int materialType)
@@ -708,6 +712,7 @@ namespace GPURayTracing.Tests
                 smoothness = smoothness,
                 opacity = opacity,
                 refraction = refraction,
+                transmission = 1.0f,
                 materialType = materialType
             };
         }
@@ -780,9 +785,9 @@ namespace GPURayTracing.Tests
             meshTextures = meshTextures ?? CreateMeshTextureArray();
             var meshDataTextures = CreateMeshTextureArray();
             var meshNormalTextures = CreateNormalTextureArray();
-            ComputeBuffer sphereBuffer = CreateBuffer(spheres, 56);
+            ComputeBuffer sphereBuffer = CreateBuffer(spheres, 64);
             ComputeBuffer lightBuffer = CreateBuffer(lights, 72);
-            ComputeBuffer triangleBuffer = CreateBuffer(triangles, 224);
+            ComputeBuffer triangleBuffer = CreateBuffer(triangles, 232);
             ComputeBuffer meshBuffer = CreateBuffer(meshes, 48);
             ComputeBuffer bvhBuffer = CreateBuffer(bvhNodes, 48);
             ComputeBuffer topLevelBuffer = CreateDummyBuffer(48);
@@ -866,7 +871,7 @@ namespace GPURayTracing.Tests
                 SetFogDisabled(shader);
                 shader.DisableKeyword("FOG_ENABLED");
 
-                shader.Dispatch(kernel, Mathf.CeilToInt(width / 8.0f), Mathf.CeilToInt(height / 4.0f), 1);
+                shader.Dispatch(kernel, Mathf.CeilToInt(width / 4.0f), Mathf.CeilToInt(height / 4.0f), 1);
                 return ReadSignature(result, width, height, probes, includePeak);
             }
             finally
@@ -973,9 +978,9 @@ namespace GPURayTracing.Tests
                 Assert.Ignore("The active graphics device did not compile the caustics kernels. Run without -nographics.");
             }
 
-            ComputeBuffer sphereBuffer = CreateBuffer(spheres, 56);
+            ComputeBuffer sphereBuffer = CreateBuffer(spheres, 64);
             ComputeBuffer lightBuffer = CreateBuffer(lights, 72);
-            ComputeBuffer triangleBuffer = CreateBuffer(triangles, 224);
+            ComputeBuffer triangleBuffer = CreateBuffer(triangles, 232);
             ComputeBuffer meshBuffer = CreateBuffer(meshes, 48);
             ComputeBuffer bvhBuffer = CreateBuffer(bvhNodes, 48);
             ComputeBuffer topLevelBuffer = CreateDummyBuffer(48);
@@ -1059,9 +1064,9 @@ namespace GPURayTracing.Tests
             shader.SetTexture(traceKernel, "_MeshMetallicRoughnessTextures", meshDataTextures);
             shader.SetTexture(traceKernel, "_MeshNormalTextures", meshNormalTextures);
             shader.Dispatch(clearKernel, 1, 1, 1);
-            shader.Dispatch(traceKernel, Mathf.CeilToInt(options.photonCount / 64.0f), 1, 1);
+            shader.Dispatch(traceKernel, Mathf.CeilToInt(options.photonCount / 32.0f), 1, 1);
             shader.Dispatch(clearGridKernel, 1024, 1, 1);
-            shader.Dispatch(buildGridKernel, Mathf.CeilToInt(options.photonCount / 64.0f), 1, 1);
+            shader.Dispatch(buildGridKernel, Mathf.CeilToInt(options.photonCount / 32.0f), 1, 1);
             UnityEngine.Object.DestroyImmediate(meshDataTextures);
             UnityEngine.Object.DestroyImmediate(meshNormalTextures);
             return map;
@@ -1432,6 +1437,7 @@ namespace GPURayTracing.Tests
                 opacity = opacity,
                 emission = emission,
                 refraction = opacity < 1.0f ? 1.5f : 1.0f,
+                transmission = 1.0f,
                 materialType = materialType,
                 meshIndex = 0,
                 textureIndex = textureIndex,
@@ -1542,6 +1548,7 @@ namespace GPURayTracing.Tests
                 opacity = 0.3f,
                 emission = Vector3.zero,
                 refraction = 1.5f,
+                transmission = 1.0f,
                 materialType = 2,
                 meshIndex = 0,
                 textureIndex = -1,

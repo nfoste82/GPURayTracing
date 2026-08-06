@@ -246,6 +246,8 @@ struct Sphere
     float smoothness;
     float opacity;
     float refraction;
+    float specular;
+    float transmission;
     int materialType;
 };
 
@@ -286,6 +288,8 @@ struct MeshTriangle
     float opacity;
     float3 emission;
     float refraction;
+    float specular;
+    float transmission;
     int materialType;
     int meshIndex;
     int textureIndex;
@@ -503,6 +507,8 @@ struct RayHit
     float metallic;
     float opacity;
     float refraction;
+    float specular;
+    float transmission;
     int materialType;
     int meshIndex;
     int objectIndex;
@@ -869,6 +875,8 @@ RayHit CreateRayHit()
     hit.smoothness = 0.0f;
     hit.metallic = 0.0f;
     hit.opacity = 1.0f;
+    hit.specular = 0.0f;
+    hit.transmission = 1.0f;
     hit.refraction = 1.0f;
     hit.materialType = MaterialDiffuse;
     hit.meshIndex = -1;
@@ -1054,6 +1062,8 @@ void SetWaterHit(Ray ray, float hitT, float3 outwardNormal, inout RayHit bestHit
     bestHit.smoothness = _WaterSmoothness;
     bestHit.metallic = 0.0f;
     bestHit.opacity = saturate(_WaterOpacity);
+    bestHit.specular = 0.0f;
+    bestHit.transmission = 1.0f;
     bestHit.refraction = max(1.0f, _WaterRefraction);
     bestHit.materialType = MaterialWater;
     bestHit.meshIndex = -1;
@@ -1248,6 +1258,8 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere, int objectInd
         bestHit.metallic = sphere.materialType == MaterialMetal ? 1.0f : 0.0f;
         bestHit.opacity = sphere.opacity;
         bestHit.refraction = sphere.refraction;
+        bestHit.specular = sphere.specular;
+        bestHit.transmission = sphere.transmission;
         bestHit.materialType = sphere.materialType;
         bestHit.meshIndex = -1;
         bestHit.objectIndex = objectIndex;
@@ -1268,6 +1280,8 @@ void IntersectLightSphere(Ray ray, inout RayHit bestHit, Light light, int object
     sphere.radius = light.radius;
     sphere.smoothness = 0.0f;
     sphere.opacity = 1.0f;
+    sphere.specular = 0.0f;
+    sphere.transmission = 1.0f;
     sphere.refraction = 1.0f;
     sphere.materialType = MaterialEmissive;
     IntersectSphere(ray, bestHit, sphere, objectIndex);
@@ -1469,17 +1483,14 @@ float3 GetTriangleOpticalNormal(MeshTriangle meshTriangle, float3 geometricNorma
     return dot(mappedNormal, geometricNormal) < 0.0f ? -mappedNormal : mappedNormal;
 }
 
-void IntersectTriangle(Ray ray, inout RayHit bestHit, MeshTriangle meshTriangle)
+RayHit IntersectTriangle(Ray ray, RayHit currentHit, MeshTriangle meshTriangle)
 {
+    RayHit bestHit = currentHit;
     float hitDistance;
     float3 normal;
     float2 barycentric;
-    if (!IntersectTriangleRaw(ray, meshTriangle, hitDistance, normal, barycentric))
-    {
-        return;
-    }
-
-    if (hitDistance > 0.001f && hitDistance < bestHit.distance)
+    if (IntersectTriangleRaw(ray, meshTriangle, hitDistance, normal, barycentric)
+        && hitDistance > 0.001f && hitDistance < bestHit.distance)
     {
         float3 geometricNormal = normal;
         float2 uv = meshTriangle.uv0 * (1.0f - barycentric.x - barycentric.y)
@@ -1508,6 +1519,8 @@ void IntersectTriangle(Ray ray, inout RayHit bestHit, MeshTriangle meshTriangle)
         bestHit.metallic = meshTriangle.metallic;
         bestHit.opacity = meshTriangle.opacity;
         bestHit.refraction = meshTriangle.refraction;
+        bestHit.specular = meshTriangle.specular;
+        bestHit.transmission = meshTriangle.transmission;
         bestHit.materialType = meshTriangle.materialType;
         bestHit.meshIndex = meshTriangle.meshIndex;
         bestHit.objectIndex = -1;
@@ -1517,6 +1530,8 @@ void IntersectTriangle(Ray ray, inout RayHit bestHit, MeshTriangle meshTriangle)
         bestHit.normalTextureIndex = meshTriangle.normalTextureIndex;
         bestHit.lightIndex = meshTriangle.lightIndex;
     }
+
+    return bestHit;
 }
 
 // Slab AABB test that takes a precomputed inverse ray direction so BVH traversal does not
@@ -1632,7 +1647,7 @@ void IntersectMeshBvh(Ray ray, inout RayHit bestHit, MeshInfo meshInfo)
             [loop]
             for (int i = 0; i < node.triangleCount; i++)
             {
-                IntersectTriangle(ray, bestHit, _Triangles[node.triangleStart + i]);
+                bestHit = IntersectTriangle(ray, bestHit, _Triangles[node.triangleStart + i]);
             }
             continue;
         }
@@ -2304,13 +2319,10 @@ float3 GetSurfaceF0(RayHit hit, float3 albedo)
     {
         float refraction = max(1.0f, hit.refraction);
         float dielectricF0 = (1.0f - refraction) / (1.0f + refraction);
-        dielectricF0 = max(0.02f, dielectricF0 * dielectricF0);
-        if (IsWaterMaterial(hit))
-        {
-            return dielectricF0.xxx;
-        }
-
-        return lerp(dielectricF0.xxx * saturate(hit.opacity), saturate(albedo), saturate(hit.opacity));
+        dielectricF0 *= dielectricF0;
+        return IsWaterMaterial(hit)
+            ? dielectricF0.xxx
+            : lerp(saturate(hit.specular).xxx, float3(1.0f, 1.0f, 1.0f), dielectricF0);
     }
 
     return lerp(float3(0.04f, 0.04f, 0.04f), saturate(albedo), GetMetallicRoughness(hit).x);
@@ -2868,6 +2880,11 @@ float GetFresnelReflectance(Ray ray, RayHit hit, float sourceRefraction, float t
     return GetFresnelReflectanceForNormal(ray, hit, sourceRefraction, targetRefraction, hit.normal);
 }
 
+float GetGlassReflectionProbability(float fresnelReflectance, RayHit hit)
+{
+    return lerp(saturate(hit.specular), 1.0f, fresnelReflectance);
+}
+
 float3 GetCausticOpticalNormal(RayHit hit)
 {
     return hit.normal;
@@ -3203,9 +3220,9 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
         bool entering;
         float2 transitionIndices = GetBoundaryTransitionIndices(mediumStack, hit, entering);
         float3 boundaryNormal = SampleDielectricBoundaryNormal(hit.normal, hit.geometricNormal, sourceRay.direction, hit.smoothness, transitionIndices.x, transitionIndices.y, rngState);
-        float transmission = GetTransmissionAmount(hit);
         float fresnelReflectance = GetFresnelReflectanceForNormal(sourceRay, hit, transitionIndices.x, transitionIndices.y, boundaryNormal);
-        float transmissionProbability = transmission * (1.0f - fresnelReflectance);
+        float reflectionProbability = GetGlassReflectionProbability(fresnelReflectance, hit);
+        float transmissionProbability = saturate(hit.transmission) * (1.0f - reflectionProbability);
 
         if (rand(rngState) < transmissionProbability)
         {
@@ -3227,8 +3244,7 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
 
         scatteredRay.direction = reflect(sourceRay.direction, boundaryNormal);
         scatteredRay.origin = hit.position + scatteredRay.direction * 0.001f;
-        float3 reflectionTint = lerp(float3(1.0f, 1.0f, 1.0f), albedo, hit.opacity);
-        return CreateScatterResult(scatteredRay, reflectionTint, 1, MediumTransitionNone);
+        return CreateScatterResult(scatteredRay, float3(1.0f, 1.0f, 1.0f), 1, MediumTransitionNone);
     }
 
     BrdfSample brdfSample = SampleMaterialBrdf(sourceRay, hit, rngState);
@@ -3651,17 +3667,17 @@ float3 GetDebugRenderColor(Ray ray, inout uint rngState)
             return GetAlbedo(hit) * 0.12f;
         }
 
-        float transmission = GetTransmissionAmount(hit);
         MediumStack mediumStack = CreateMediumStack(ray.origin);
         bool entering;
         float2 transitionIndices = GetBoundaryTransitionIndices(mediumStack, hit, entering);
         float fresnelReflectance = GetFresnelReflectance(ray, hit, transitionIndices.x, transitionIndices.y);
-        if (transmission <= 0.0f || rand(rngState) < fresnelReflectance)
+        float reflectionProbability = GetGlassReflectionProbability(fresnelReflectance, hit);
+        if (rand(rngState) < reflectionProbability)
         {
-            return float3(1.0f, fresnelReflectance, 0.0f);
+            return float3(1.0f, reflectionProbability, 0.0f);
         }
 
-        return float3(0.0f, fresnelReflectance, transmission);
+        return float3(0.0f, reflectionProbability, GetTransmissionAmount(hit) * hit.transmission);
     }
 
     if (_DebugRenderMode == DebugBounceCount || _DebugRenderMode == DebugThroughput)
@@ -3824,7 +3840,7 @@ int SelectCausticTargetPair(float sample)
     [loop]
     while (low < high)
     {
-        int middle = low + (high - low) / 2;
+        int middle = low + ((high - low) >> 1);
         if (sample <= _CausticTargetPairs[middle].cumulativeProbability)
         {
             high = middle;
@@ -3844,7 +3860,7 @@ CausticTargetTriangle SelectCausticTargetTriangle(CausticTargetPair pair, float 
     [loop]
     while (low < high)
     {
-        int middle = low + (high - low) / 2;
+        int middle = low + ((high - low) >> 1);
         if (sample <= _CausticTargetTriangles[middle].cumulativeProbability)
         {
             high = middle;
@@ -3918,7 +3934,8 @@ bool TraceCausticPhotonTransport(
             transitionIndices.x,
             transitionIndices.y,
             opticalNormal);
-        float transmissionProbability = GetTransmissionAmount(hit) * (1.0f - fresnelReflectance);
+        float reflectionProbability = GetGlassReflectionProbability(fresnelReflectance, hit);
+        float transmissionProbability = saturate(hit.transmission) * (1.0f - reflectionProbability);
         float3 transmittedDirection;
         bool canTransmit = RefractSnell(
             photonRay.direction,
@@ -3938,7 +3955,6 @@ bool TraceCausticPhotonTransport(
         else
         {
             photonRay.direction = normalize(reflect(photonRay.direction, opticalNormal));
-            throughput *= lerp(float3(1.0f, 1.0f, 1.0f), saturate(hit.color), hit.opacity);
         }
 
         hasSpecularEvent = true;
@@ -3949,7 +3965,7 @@ bool TraceCausticPhotonTransport(
     return false;
 }
 
-[numthreads(64,1,1)]
+[numthreads(32,1,1)]
 void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
 {
     if (id.x >= (uint)max(0, _CausticPhotonAttemptCount))
@@ -4232,6 +4248,7 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     glassHit.objectIndex = 7;
     glassHit.refraction = 1.5f;
     glassHit.opacity = 0.6f;
+    glassHit.transmission = 1.0f;
     glassHit.color = float3(0.8f, 0.9f, 1.0f);
     glassHit.normal = normal;
     glassHit.geometricNormal = normal;
@@ -4367,7 +4384,7 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     smoothTriangle.interpolateNormals = 1;
     smoothTriangle.lightIndex = -1;
     RayHit smoothHit = CreateRayHit();
-    IntersectTriangle(CreateRay(float3(0.0f, 0.0f, 1.0f), float3(0.0f, 0.0f, -1.0f)), smoothHit, smoothTriangle);
+    smoothHit = IntersectTriangle(CreateRay(float3(0.0f, 0.0f, 1.0f), float3(0.0f, 0.0f, -1.0f)), smoothHit, smoothTriangle);
     RegressionResults[30] = float4(smoothHit.normal, dot(smoothHit.geometricNormal, float3(0.0f, 0.0f, 1.0f)));
     RegressionResults[34] = float4(GetCausticOpticalNormal(smoothHit), 1.0f);
     smoothHit.materialType = MaterialGlass;
@@ -4417,6 +4434,16 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     RegressionResults[31] = float4(PowerHeuristic(0.25f, 0.5f), PowerHeuristic(0.5f, 0.25f), PowerHeuristic(1.0f, 1.0f), 1.0f);
     RegressionResults[32] = float4(GetLightShapePdf(triangleLight, float3(0.0f, 0.0f, 0.0f), float3(0.0f, 2.0f, 0.0f)), GetSurfaceF0(waterHit, waterHit.color));
     RegressionResults[33] = float4(ClampFirefly(float3(4.0f, 2.0f, 1.0f)), 1.0f);
+    RayHit opaqueGlassHit = glassHit;
+    opaqueGlassHit.opacity = 1.0f;
+    opaqueGlassHit.color = float3(0.1f, 0.4f, 0.9f);
+    RegressionResults[39] = float4(GetSurfaceF0(glassHit, glassHit.color), GetSurfaceF0(opaqueGlassHit, opaqueGlassHit.color).x);
+    opaqueGlassHit.specular = 0.2f;
+    RegressionResults[40] = float4(
+        GetGlassReflectionProbability(0.04f, opaqueGlassHit),
+        GetSurfaceF0(opaqueGlassHit, opaqueGlassHit.color).x,
+        opaqueGlassHit.transmission,
+        1.0f);
 }
 
 #if defined(CAUSTICS_ENABLED)
@@ -4469,7 +4496,7 @@ void CSFeatures(uint3 id : SV_DispatchThreadID)
     WriteDenoiserFeatures(id.xy, width, height);
 }
 
-[numthreads(8,4,1)]
+[numthreads(4,4,1)]
 void CSMain (uint3 id : SV_DispatchThreadID)
 {
     // Get the dimensions of the RenderTexture

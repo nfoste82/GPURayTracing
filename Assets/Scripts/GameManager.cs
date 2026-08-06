@@ -13,6 +13,36 @@ public class GameManager : MonoBehaviour
 {
     private const float MaxCameraPitch = 89.0f;
 
+    public void InitSceneSettings(SceneSettings settings)
+    {
+        numberOfPasses = settings.NumberOfPasses;
+        enableFrameAccumulation = settings.EnableFrameAccumulation;
+        numBounces = settings.NumBounces;
+        shadowQuality = settings.ShadowQuality;
+        topLevelBvhMinObjectCount = settings.TopLevelBvhMinObjectCount;
+        shadowBvhMinObjectCount = settings.ShadowBvhMinObjectCount;
+        shadowRandomness = settings.ShadowRandomness;
+        lightSamplingStrategy = settings.LightSamplingStrategy;
+        lightSampleCount = settings.LightSampleCount;
+        enableCaustics = settings.EnableCaustics;
+        causticPhotonCount = settings.CausticPhotonCount;
+        causticGatherRadius = settings.CausticGatherRadius;
+        causticSeed = settings.CausticSeed;
+        causticIntensity = settings.CausticIntensity;
+        fogDensityScale = settings.FogDensityScale;
+        fogScatteringScale = settings.FogScatteringScale;
+        fogInScatteringIntensity = settings.FogInScatteringIntensity;
+        enableFogMultipleScattering = settings.EnableFogMultipleScattering;
+        cameraAutoFocus = settings.CameraAutoFocus;
+        cameraFocalDistance = settings.CameraFocalDistance;
+        cameraApertureMode = settings.CameraApertureMode;
+        lightFalloffScale = settings.LightFalloffScale;
+        exposure = settings.Exposure;
+        fireflyClamp = settings.FireflyClamp;
+        randomNoise = settings.RandomNoise;
+        _skyboxLightColor = settings.SkyboxLightColor;
+    }
+
     [SerializeField, HideInInspector]
     private RayTracingBvhBakeAsset bvhBake;
 
@@ -573,7 +603,7 @@ public class GameManager : MonoBehaviour
     private static bool _buffersNeedRebuilding = false;
     private static readonly List<RayTracingObject> _rayTracingObjects = new List<RayTracingObject>();
 
-    private const int SphereStride = 56;
+    private const int SphereStride = 64;
     private const int LightStride = 72;
     private const int MinNumberOfPasses = 1;
     private const int MaxNumberOfPasses = 32;
@@ -586,7 +616,7 @@ public class GameManager : MonoBehaviour
     private const int DynamicLightSampleDivisor = 10;
     private const float DynamicQualitySmoothing = 0.08f;
     private const float DynamicQualityAdjustmentInterval = 0.75f;
-    private const int TriangleStride = 224;
+    private const int TriangleStride = 232;
     private const int MeshInfoStride = 48;
     private const int BvhNodeStride = 48;
     private const int TopLevelBvhNodeStride = 48;
@@ -594,8 +624,12 @@ public class GameManager : MonoBehaviour
     private const int CausticTargetPairStride = 32;
     private const int CausticTargetTriangleStride = 12;
     private const int CausticMetadataCount = 6;
-    private const int CausticTraceThreadCount = 64;
-    private const int RenderThreadCountX = 8;
+    // The photon transport kernel carries a medium stack and intersection state. A 32-thread
+    // group keeps Metal register allocation within its recommended per-group budget.
+    private const int CausticTraceThreadCount = 32;
+    // CSMain combines path tracing with optional volumetric fog. Keeping its groups at 16 threads
+    // avoids Metal's recommended temporary-register budget being exceeded.
+    private const int RenderThreadCountX = 4;
     private const int RenderThreadCountY = 4;
     private const int MaxCausticGridCells = 262144;
     private const int BvhLeafTriangleCount = 4;
@@ -619,6 +653,8 @@ public class GameManager : MonoBehaviour
         public float smoothness;
         public float opacity;
         public float refraction;
+        public float specular;
+        public float transmission;
         public int materialType;
         
         public float Intersect(Vector3 origin, Vector3 direction)
@@ -724,6 +760,8 @@ public class GameManager : MonoBehaviour
         public float opacity;
         public Vector3 emission;
         public float refraction;
+        public float specular;
+        public float transmission;
         public int materialType;
         public int meshIndex;
         public int textureIndex;
@@ -854,6 +892,8 @@ public class GameManager : MonoBehaviour
         public float previousMetallic;
         public float previousOpacity;
         public float previousRefraction;
+        public float previousSpecular;
+        public float previousTransmission;
         public int previousMaterialType;
         public Texture2D previousAlbedoTexture;
         public Texture2D previousMetallicRoughnessTexture;
@@ -2560,6 +2600,39 @@ public class GameManager : MonoBehaviour
         Graphics.Blit(_outputTexture, dest);
     }
 
+    public void ExportCurrentRenderPng(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new ArgumentException("An output image path is required.", nameof(path));
+        }
+        if (_outputTexture == null)
+        {
+            throw new InvalidOperationException("The ray tracer has not rendered an image yet.");
+        }
+
+        string directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        RenderTexture previous = RenderTexture.active;
+        var texture = new Texture2D(_textureSize.x, _textureSize.y, TextureFormat.RGB24, false);
+        try
+        {
+            RenderTexture.active = _outputTexture;
+            texture.ReadPixels(new Rect(0, 0, _textureSize.x, _textureSize.y), 0, 0, false);
+            texture.Apply(false, false);
+            File.WriteAllBytes(path, texture.EncodeToPNG());
+        }
+        finally
+        {
+            RenderTexture.active = previous;
+            DestroyRuntimeObject(texture);
+        }
+    }
+
     public static int CalculateVideoFrameCount(float duration, float frameTimeStep)
     {
         if (duration <= 0.0f || frameTimeStep <= 0.0f)
@@ -2997,6 +3070,8 @@ public class GameManager : MonoBehaviour
             sphere.refraction = material.RefractionIndex;
             sphere.opacity = material.Opacity;
             sphere.smoothness = material.Smoothness;
+            sphere.specular = material.Specular;
+            sphere.transmission = material.Transmission;
             sphere.materialType = (int)material.Type;
 
             if (sphere.opacity < ShadowBlockerOpaqueThreshold)
@@ -3026,7 +3101,7 @@ public class GameManager : MonoBehaviour
             lightData.type = LightTypeSphere;
 
             var light = lightObject.light;
-            lightData.emission = light.Color.ToVector3();
+            lightData.emission = light.Color.ToVector3() * Mathf.Max(0.0f, light.Intensity);
             
             _lights[i] = lightData;
         }
@@ -3144,11 +3219,13 @@ public class GameManager : MonoBehaviour
             var light = meshObject.light;
             var localToWorld = meshObject.transform.localToWorldMatrix;
             var color = material != null ? material.Color.ToVector3() : Vector3.one;
-            var emission = light != null ? light.Color.ToVector3() : Vector3.zero;
+            var emission = light != null ? light.Color.ToVector3() * Mathf.Max(0.0f, light.Intensity) : Vector3.zero;
             var smoothness = material != null ? material.Smoothness : 0.0f;
             var metallic = material != null ? GetEffectiveMetallic(material) : 0.0f;
             var opacity = material != null ? Mathf.Clamp01(material.Opacity) : 1.0f;
             var refraction = material != null ? material.RefractionIndex : 1.0f;
+            var specular = material != null ? Mathf.Clamp01(material.Specular) : 0.0f;
+            var transmission = material != null ? Mathf.Clamp01(material.Transmission) : 1.0f;
             var materialType = light != null ? 3 : (int)material.Type;
             var albedoTexture = material != null ? material.AlbedoTexture : null;
             var metallicRoughnessTexture = material != null ? material.MetallicRoughnessTexture : null;
@@ -3168,6 +3245,8 @@ public class GameManager : MonoBehaviour
                 || !Mathf.Approximately(meshObject.previousMetallic, metallic)
                 || !Mathf.Approximately(meshObject.previousOpacity, opacity)
                 || !Mathf.Approximately(meshObject.previousRefraction, refraction)
+                || !Mathf.Approximately(meshObject.previousSpecular, specular)
+                || !Mathf.Approximately(meshObject.previousTransmission, transmission)
                 || meshObject.previousMaterialType != materialType
                 || meshObject.previousAlbedoTexture != albedoTexture
                 || meshObject.previousMetallicRoughnessTexture != metallicRoughnessTexture
@@ -3188,6 +3267,8 @@ public class GameManager : MonoBehaviour
             meshObject.previousMetallic = metallic;
             meshObject.previousOpacity = opacity;
             meshObject.previousRefraction = refraction;
+            meshObject.previousSpecular = specular;
+            meshObject.previousTransmission = transmission;
             meshObject.previousMaterialType = materialType;
             meshObject.previousAlbedoTexture = albedoTexture;
             meshObject.previousMetallicRoughnessTexture = metallicRoughnessTexture;
@@ -3210,11 +3291,13 @@ public class GameManager : MonoBehaviour
             var light = meshObject.light;
             bool isLight = light != null;
             var color = material != null ? material.Color.ToVector3() : Vector3.one;
-            var emission = isLight ? light.Color.ToVector3() : Vector3.zero;
+            var emission = isLight ? light.Color.ToVector3() * Mathf.Max(0.0f, light.Intensity) : Vector3.zero;
             float smoothness = material != null ? material.Smoothness : 0.0f;
             float metallic = material != null ? GetEffectiveMetallic(material) : 0.0f;
             float opacity = material != null ? Mathf.Clamp01(material.Opacity) : 1.0f;
             float refraction = material != null ? material.RefractionIndex : 1.0f;
+            float specular = material != null ? Mathf.Clamp01(material.Specular) : 0.0f;
+            float transmission = material != null ? Mathf.Clamp01(material.Transmission) : 1.0f;
             int materialType = isLight ? 3 : (int)material.Type;
             int textureIndex = material != null ? GetMeshAlbedoTextureIndex(material.AlbedoTexture) : -1;
             int metallicRoughnessTextureIndex = material != null ? GetMeshTextureIndex(material.MetallicRoughnessTexture, _meshMetallicRoughnessTextures) : -1;
@@ -3243,6 +3326,8 @@ public class GameManager : MonoBehaviour
                 triangle.metallic = metallic;
                 triangle.opacity = opacity;
                 triangle.refraction = refraction;
+                triangle.specular = specular;
+                triangle.transmission = transmission;
                 triangle.materialType = materialType;
                 triangle.textureIndex = textureIndex;
                 triangle.metallicRoughnessTextureIndex = metallicRoughnessTextureIndex;
@@ -3290,11 +3375,13 @@ public class GameManager : MonoBehaviour
             var light = meshObject.light;
             bool isLight = light != null;
             var color = material != null ? material.Color.ToVector3() : Vector3.one;
-            var emission = isLight ? light.Color.ToVector3() : Vector3.zero;
+            var emission = isLight ? light.Color.ToVector3() * Mathf.Max(0.0f, light.Intensity) : Vector3.zero;
             var smoothness = material != null ? material.Smoothness : 0.0f;
             var metallic = material != null ? GetEffectiveMetallic(material) : 0.0f;
             var opacity = material != null ? Mathf.Clamp01(material.Opacity) : 1.0f;
             var refraction = material != null ? material.RefractionIndex : 1.0f;
+            var specular = material != null ? Mathf.Clamp01(material.Specular) : 0.0f;
+            var transmission = material != null ? Mathf.Clamp01(material.Transmission) : 1.0f;
             int materialType = isLight ? 3 : (int)material.Type;
             int textureIndex = material != null ? GetMeshAlbedoTextureIndex(material.AlbedoTexture) : -1;
             int metallicRoughnessTextureIndex = material != null ? GetMeshTextureIndex(material.MetallicRoughnessTexture, _meshMetallicRoughnessTextures) : -1;
@@ -3314,6 +3401,8 @@ public class GameManager : MonoBehaviour
                 triangle.metallic = metallic;
                 triangle.opacity = opacity;
                 triangle.refraction = refraction;
+                triangle.specular = specular;
+                triangle.transmission = transmission;
                 triangle.materialType = materialType;
                 triangle.meshIndex = meshIndex;
                 triangle.textureIndex = textureIndex;
@@ -3704,8 +3793,7 @@ public class GameManager : MonoBehaviour
 
     public void EditorGetMeshBvhTemplateCounts(Mesh mesh, bool interpolateNormals, out int triangleCount, out int nodeCount)
     {
-        long key = ((long)mesh.GetInstanceID() << 1) | (interpolateNormals ? 1L : 0L);
-        MeshBvhTemplate template = _meshBvhTemplates[key];
+        MeshBvhTemplate template = GetOrBuildMeshBvhTemplate(mesh, interpolateNormals);
         triangleCount = template.triangles.Count;
         nodeCount = template.nodes.Count;
     }
@@ -3721,8 +3809,7 @@ public class GameManager : MonoBehaviour
             for (int meshIndex = 0; meshIndex < asset.meshes.Count; meshIndex++)
             {
                 var entry = asset.meshes[meshIndex];
-                long key = ((long)entry.mesh.GetInstanceID() << 1) | (entry.interpolateNormals ? 1L : 0L);
-                MeshBvhTemplate template = _meshBvhTemplates[key];
+                MeshBvhTemplate template = GetOrBuildMeshBvhTemplate(entry.mesh, entry.interpolateNormals);
                 writer.Write(template.triangles.Count);
                 writer.Write(template.nodes.Count);
                 for (int i = 0; i < template.triangles.Count; i++)
@@ -4639,6 +4726,8 @@ public class GameManager : MonoBehaviour
                 radius = GetWorldSphereRadius(sphereCollider, obj.transform),
                 opacity = material.Opacity,
                 refraction = material.RefractionIndex,
+                specular = material.Specular,
+                transmission = material.Transmission,
                 materialType = (int)material.Type,
             };
             _spheres.Add(sphere);
@@ -4663,7 +4752,7 @@ public class GameManager : MonoBehaviour
                 position = obj.transform.TransformPoint(sphereCollider.center),
                 radius = radius,
                 area = Mathf.PI * radius * radius,
-                emission = rayLight.Color.ToVector3(),
+                emission = rayLight.Color.ToVector3() * Mathf.Max(0.0f, rayLight.Intensity),
                 type = LightTypeSphere
             };
             _lights.Insert(_lightObjects.Count, lightData);
@@ -4689,11 +4778,13 @@ public class GameManager : MonoBehaviour
                 mesh = meshFilter.sharedMesh,
                 previousLocalToWorld = obj.transform.localToWorldMatrix,
                 previousColor = material != null ? material.Color.ToVector3() : Vector3.one,
-                previousEmission = rayLight != null ? rayLight.Color.ToVector3() : Vector3.zero,
+                previousEmission = rayLight != null ? rayLight.Color.ToVector3() * Mathf.Max(0.0f, rayLight.Intensity) : Vector3.zero,
                 previousSmoothness = material != null ? material.Smoothness : 0.0f,
                 previousMetallic = material != null ? GetEffectiveMetallic(material) : 0.0f,
                 previousOpacity = material != null ? Mathf.Clamp01(material.Opacity) : 1.0f,
                 previousRefraction = material != null ? material.RefractionIndex : 1.0f,
+                previousSpecular = material != null ? Mathf.Clamp01(material.Specular) : 0.0f,
+                previousTransmission = material != null ? Mathf.Clamp01(material.Transmission) : 1.0f,
                 previousMaterialType = rayLight != null ? 3 : (int)material.Type,
                 previousAlbedoTexture = material != null ? material.AlbedoTexture : null,
                 previousMetallicRoughnessTexture = material != null ? material.MetallicRoughnessTexture : null,
@@ -5295,6 +5386,8 @@ public class GameManager : MonoBehaviour
         hash = AddHash(hash, value.smoothness);
         hash = AddHash(hash, value.opacity);
         hash = AddHash(hash, value.refraction);
+        hash = AddHash(hash, value.specular);
+        hash = AddHash(hash, value.transmission);
         return AddHash(hash, value.materialType);
     }
 
@@ -5319,6 +5412,8 @@ public class GameManager : MonoBehaviour
         hash = AddHash(hash, value.previousMetallic);
         hash = AddHash(hash, value.previousOpacity);
         hash = AddHash(hash, value.previousRefraction);
+        hash = AddHash(hash, value.previousSpecular);
+        hash = AddHash(hash, value.previousTransmission);
         hash = AddHash(hash, value.previousMaterialType);
         hash = AddHash(hash, value.previousAlbedoTexture != null ? value.previousAlbedoTexture.GetInstanceID() : 0);
         hash = AddHash(hash, value.previousMetallicRoughnessTexture != null ? value.previousMetallicRoughnessTexture.GetInstanceID() : 0);

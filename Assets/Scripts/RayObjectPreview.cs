@@ -137,7 +137,7 @@ public class RayObjectPreview : MonoBehaviour
         Color color = _rayLight != null ? _rayLight.Color : _rayMaterial.Color;
         if (_rayLight != null)
         {
-            color *= 2.0f;
+            color *= 2.0f * Mathf.Max(0.0f, _rayLight.Intensity);
             color.a = 1.0f;
             SetColor(material, "_EmissionColor", color);
             material.EnableKeyword("_EMISSION");
@@ -185,7 +185,7 @@ public class RayObjectPreview : MonoBehaviour
         _unityLight.type = LightType.Point;
         _unityLight.color = _rayLight.Color;
         _unityLight.range = Mathf.Max(1.0f, _sphereCollider != null ? _sphereCollider.radius * 8.0f : 4.0f);
-        _unityLight.intensity = 1.0f;
+        _unityLight.intensity = Mathf.Max(0.0f, _rayLight.Intensity);
     }
 
     private float GetPreviewMetallic()

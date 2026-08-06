@@ -15,15 +15,15 @@ The renderer currently ray traces spheres, emissive sphere and mesh lights, regi
 - `Assets/Scripts/RayMaterial.cs`: Per-object render material data: material type, color, optional mesh albedo texture, smoothness, opacity, and refraction index.
 - `Assets/Scripts/RayMeshPrimitive.cs`: Procedural mesh primitive helper for ray-traced cube, pyramid, and dodecahedron test objects.
 - `Assets/Scripts/RayObjectPreview.cs`: Editor/runtime helper that adds rasterized sphere previews and optional Unity point-light previews for ray-traced sphere and light objects.
-- `Assets/Scripts/RayLight.cs`: Per-light sphere emission color.
+- `Assets/Scripts/RayLight.cs`: Per-light emission color and HDR intensity.
 - `Assets/Scripts/Water.cs`: Transform-backed finite water volume. Position sets the average wavy-top center, scale sets X/Z footprint and Y depth, and the component owns water material/wave settings. One active component is currently supported per `GameManager`.
 - `Assets/Scripts/ColorExtensions.cs`: Converts `Color32` to normalized `Vector3` values for GPU upload.
 - `Assets/Editor/RayMeshPrimitiveMenu.cs`: Adds `GameObject > Ray Tracing` menu entries for creating ray-traced mesh primitive test objects in the hierarchy.
 - `Assets/Editor/RaySceneObjectMenu.cs`: Adds `GameObject > Ray Tracing` menu entries for ray-traced spheres and light spheres.
-- `Assets/Editor/RayTracingBenchmarkSceneGenerator.cs`: Adds `Tools > Ray Tracing > Generate Benchmark Scenes` for creating focused performance scenes.
+- `Assets/Editor/RayTracingSceneGenerator.cs`: Adds `Tools > Ray Tracing > Generate Scenes` for creating focused performance and image-quality scenes.
 - `Assets/Editor/RayTracingShaderPrecompiler.cs`: Adds `Tools > Ray Tracing > Precompile Compute Shader`. Forces the compute shader to compile and dispatch once from edit mode (with timing and surfaced compile messages) so a slow or failing kernel shows up here instead of stalling Unity on first Play. Unity compiles compute kernels lazily on first `Dispatch`, which is why pathological kernels previously only hung when entering Play mode.
 - `Assets/Scenes/Root.unity`: Main scene with the camera, game manager, ray-traced spheres, light spheres, physics objects, and visual scene geometry.
-- `Assets/Scenes/Benchmarks/*.unity`: Generated benchmark scenes for stressing specific renderer paths.
+- `Assets/Scenes/Generated/*.unity`: Generated scenes for stressing specific renderer paths and validating image quality.
 
 ## Runtime Feature Set
 

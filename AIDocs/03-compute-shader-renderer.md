@@ -1,6 +1,6 @@
 # Compute Shader Renderer
 
-The renderer lives in `Assets/Scripts/RayTracingCompute.compute`. Its main image kernel, `CSMain`, uses `[numthreads(8,4,1)]` (32 threads) to reduce Metal's threadgroup-wide register demand. The shader also contains regression and optional caustics kernels.
+The renderer lives in `Assets/Scripts/RayTracingCompute.compute`. Its main image kernel, `CSMain`, uses `[numthreads(4,4,1)]` (16 threads) to keep Metal's threadgroup-wide temporary-register use within its recommended budget. The shader also contains regression and optional caustics kernels.
 
 ## GPU Inputs
 
@@ -159,11 +159,13 @@ Per bounce:
 9. Stop early when throughput is effectively black.
 10. Starting after the first few bounces, apply Russian roulette termination and scale surviving throughput by survival probability.
 
+Before frame accumulation, `ClampFirefly()` optionally caps each sample by luminance; `FireflyClamp = 0` disables that cap. The Demofox HDR-reference fixtures disable it so a bright area-light reflection is not reduced to the same radiance as the skybox before ACES tone mapping.
+
 Material scattering currently supports:
 
 - `Diffuse`: mixes cosine-weighted Lambert and GGX continuation samples and weights throughput by `brdf * abs(N dot L) / pdf`.
 - `Metal`: samples a GGX reflection lobe using albedo as Fresnel F0 and the same evaluation used for direct highlights.
-- `Glass`: uses opacity and Schlick Fresnel reflectance to choose reflection versus approximate transmission. Water keeps Fresnel independent of opacity and uses opacity only for the additional opaque reflective portion of its surface. Fresnel and Snell calculations use source/target IORs from the path medium stack. Transmitted paths are filtered by distance-based absorption. For spheres, the transmitted path refracts into the sphere, checks the bounded internal segment before the sphere exit for any closer scene object, and only refracts back out when no interior/interpenetrating hit is found. For mesh triangles, it uses an approximate closed-mesh entry/exit path that refracts into the mesh, finds the nearest exit triangle with the same `meshIndex`, then checks the top-level scene traversal for any closer object inside that bounded internal segment. If an interior object is found, tracing continues inside the transparent object; otherwise the ray refracts back out and continues from the exit point.
+- `Glass`: uses IOR-derived Schlick Fresnel reflectance to choose reflection versus approximate transmission independently of opacity. Water retains its separate opacity-scaled surface behavior. Fresnel and Snell calculations use source/target IORs from the path medium stack. Transmitted paths are filtered by distance-based absorption. For spheres, the transmitted path refracts into the sphere, checks the bounded internal segment before the sphere exit for any closer scene object, and only refracts back out when no interior/interpenetrating hit is found. For mesh triangles, it uses an approximate closed-mesh entry/exit path that refracts into the mesh, finds the nearest exit triangle with the same `meshIndex`, then checks the top-level scene traversal for any closer object inside that bounded internal segment. If an interior object is found, tracing continues inside the transparent object; otherwise the ray refracts back out and continues from the exit point.
 
 Note: the glass/refraction path is selected by `IsGlassMaterial(hit)`, which returns true when `materialType == Glass` **or** when `hit.opacity < 1.0`. A `Diffuse` or `Metal` object with opacity below `1` therefore takes the glass transmission/Fresnel path regardless of its declared material type.
 
