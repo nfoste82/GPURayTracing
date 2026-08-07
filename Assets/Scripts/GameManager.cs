@@ -58,7 +58,7 @@ public class GameManager : MonoBehaviour
 
     [Header("Spatial denoising")]
     [Tooltip("Applies an edge-aware spatial A-trous filter to linear HDR beauty. This does not use temporal history.")]
-    public bool enableSpatialDenoising = false;
+    public bool enableSpatialDenoising = true;
 
     [Range(1, 5)]
     [Tooltip("A-trous passes use increasing pixel steps: 1, 2, 4, 8, and 16.")]
@@ -78,7 +78,7 @@ public class GameManager : MonoBehaviour
 
     [Range(0.01f, 4.0f)]
     [Tooltip("How quickly filtering stops across HDR luminance changes.")]
-    public float spatialDenoiserLuminanceSigma = 0.03f;
+    public float spatialDenoiserLuminanceSigma = 0.08f;
 
     [Header("Temporal denoising")]
     [Tooltip("Uses camera-only temporal reprojection and bounded HDR accumulation while the camera moves, then allows progressive still accumulation when it stops.")]
@@ -124,9 +124,9 @@ public class GameManager : MonoBehaviour
     [Range(1, 32)]
     public int numberOfPasses = 1;
 
-    [Range(0.0f, 2.0f)]
+    [Range(0.0f, 5.0f)]
     [Tooltip("Width of the random sub-pixel camera filter in pixel units. 1 uses the full pixel footprint and is the correct anti-aliasing default; values above 1 deliberately blur across neighboring pixels.")]
-    public float subpixelJitterScale = 1.0f;
+    public float subpixelJitterScale = 1.4f;
 
     [Tooltip("Progressively averages final-color renders while the camera, scene, and quality settings are unchanged. Debug render modes are not accumulated.")]
     public bool enableFrameAccumulation = true;

@@ -59,7 +59,7 @@ public static class RayTracingSceneGenerator
             CreateDragonCornellBoxScene();
             CreateWolfensteinScene();
             CreateVolumetricFogScene();
-            GenerateTeapotMaterialScene();
+            CreateTeapotMaterialScene();
 
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
@@ -72,7 +72,7 @@ public static class RayTracingSceneGenerator
     }
 
     [MenuItem("Tools/Ray Tracing/Generate Teapot Material Scene")]
-    public static void GenerateTeapotMaterialScene()
+    public static void CreateTeapotMaterialScene()
     {
         const string sceneName = "Benchmark_TeapotMaterials";
         Directory.CreateDirectory(GeneratedSceneFolder);
@@ -122,29 +122,30 @@ public static class RayTracingSceneGenerator
         var context = CreateBaseScene(new SceneSettings
         {
             SceneName = sceneName,
-            CameraPosition = new Vector3(0.0f, 4.81f, -10.74f),
-            CameraEuler = new Vector3(22.03f, 0.0f, 0.0f),
-            NumBounces = 8,
+            CameraPosition = new Vector3(-0.1f, 15f, -36.17f),
+            CameraEuler = new Vector3(20.8f, 0.0f, 0.0f),
+            NumBounces = 12,
             ShadowQuality = 0,
-            CameraFocalDistance = 17.0f,
+            CameraApertureMode = GameManager.CameraApertureMode.Pinhole,
             Exposure = 2.5f,
-            LightFalloffScale = 0.035f,
-            SkyboxLightColor = new Color32(55, 55, 60, 255),
+            LightFalloffScale = 0.03f,
+            SkyboxLightColor = new Color32(18, 18, 18, 255),
             TopLevelBvhMinObjectCount = 0,
-            ShadowBvhMinObjectCount = 0
+            ShadowBvhMinObjectCount = 0,
+            FieldOfView = 10.7f
         });
 
-        AddRayMesh(context.Root, "Checkerboard Floor", CreateHorizontalQuadMesh("Teapot Checkerboard Floor", 22.0f, 20.0f, 6.0f, 6.0f), Vector3.zero, Vector3.zero, Vector3.one, Color.white, RayMaterial.MaterialType.Diffuse, 0.2f, 1.0f, 1.0f, checkerboard);
-        AddLight(context.Root, "Warm Key", new Vector3(-6.5f, 10.0f, -4.0f), 1.5f, new Color32(255, 230, 205, 255));
-        AddLight(context.Root, "Cool Fill", new Vector3(7.0f, 8.0f, 2.0f), 1.25f, new Color32(185, 215, 255, 255));
-        AddLight(context.Root, "Top Rim", new Vector3(0.0f, 11.0f, 9.0f), 1.0f, new Color32(255, 250, 235, 255));
+        AddRayMesh(context.Root, "Checkerboard Floor", CreateHorizontalQuadMesh("Teapot Checkerboard Floor", 22.0f, 20.0f, 6.0f, 6.0f), new Vector3(0f, 0f, 3.35f), Vector3.zero, new Vector3(1f, 1f, 1.5f), Color.white, RayMaterial.MaterialType.Diffuse, 0.2f, 1.0f, 1.0f, checkerboard);
+        AddLight(context.Root, "Front Left Fill", new Vector3(-23.25f, 17.2f, -8.7f), 3f, new Color32(225, 247, 255, 255), 2f);
+        AddLight(context.Root, "Back Light", new Vector3(0.73f, 3.47f, 23.4f), 1.5f, new Color32(255, 250, 235, 255), 2f);
+        AddLight(context.Root, "Front Right Fill", new Vector3(12.75f, 10f, -14.54f), 2.5f, new Color32(220, 234, 235, 255), 1.5f);
 
         AddTeapot(context.Root, "Blue Tiles", bodyMesh, lidMesh, new Vector3(-4.2f, 0.02f, 4.8f), Color.white, RayMaterial.MaterialType.Diffuse, 0.0f, 1.0f, tilesAlbedo, tilesMetalRough, tilesNormal);
         AddTeapot(context.Root, "Marble", bodyMesh, lidMesh, new Vector3(0.0f, 0.02f, 4.8f), Color.white, RayMaterial.MaterialType.Diffuse, 0.0f, 1.0f, marbleAlbedo, marbleMetalRough);
         AddTeapot(context.Root, "Blue Scratched", bodyMesh, lidMesh, new Vector3(4.2f, 0.02f, 4.8f), Color.white, RayMaterial.MaterialType.Diffuse, 0.0f, 1.0f, scratchesAlbedo, scratchesMetalRough, scratchesNormal);
-        AddTeapot(context.Root, "Striped Chrome", bodyMesh, lidMesh, new Vector3(-4.2f, 0.02f, 0.2f), Color.white, RayMaterial.MaterialType.Metal, 0.0f, 1.0f, stripedAlbedo, stripedMetalRough, stripedNormal);
-        AddTeapot(context.Root, "Teal Glass", bodyMesh, lidMesh, new Vector3(0.0f, 0.02f, 0.2f), new Color(0.085f, 0.917f, 0.848f, 1.0f), RayMaterial.MaterialType.Glass, 0.88f, 0.0f, null, null, null, 0.12f, 1.5f);
-        AddTeapot(context.Root, "Gold Circles", bodyMesh, lidMesh, new Vector3(4.2f, 0.02f, 0.2f), new Color(0.9f, 0.618f, 0.1f, 1.0f), RayMaterial.MaterialType.Diffuse, 0.5f, 1.0f, goldAlbedo, goldMetalRough, goldNormal);
+        AddTeapot(context.Root, "Striped Chrome", bodyMesh, lidMesh, new Vector3(-4.2f, 0.02f, -3.63f), Color.white, RayMaterial.MaterialType.Metal, 0.0f, 1.0f, stripedAlbedo, stripedMetalRough, stripedNormal);
+        AddTeapot(context.Root, "Teal Glass", bodyMesh, lidMesh, new Vector3(0.0f, 0.02f, -3.63f), new Color32(0, 221, 159, 255), RayMaterial.MaterialType.Glass, 0.88f, 0.0f, null, null, null, 0.25f, 1.5f);
+        AddTeapot(context.Root, "Gold Circles", bodyMesh, lidMesh, new Vector3(4.2f, 0.02f, -3.63f), new Color32(209, 136, 3, 255), RayMaterial.MaterialType.Diffuse, 0.5f, 1.0f, goldAlbedo, goldMetalRough, goldNormal);
 
         Save(context.Scene, sceneName);
         AssetDatabase.SaveAssets();
@@ -1187,11 +1188,22 @@ public static class RayTracingSceneGenerator
         var root = new GameObject(name);
         root.transform.SetParent(parent, false);
         root.transform.localPosition = position;
-        root.transform.localEulerAngles = new Vector3(0.0f, 90.0f, 0.0f);
+        root.transform.localEulerAngles = new Vector3(0.0f, -91.05f, 0.0f);
         root.transform.localScale = Vector3.one * 25.0f;
 
         ConfigureTeapotPart(AddRayMesh(root.transform, "Body", bodyMesh, Vector3.zero, Vector3.zero, Vector3.one, color, type, smoothness, opacity, refraction, albedoTexture), metallic, metallicRoughnessTexture, normalTexture);
-        ConfigureTeapotPart(AddRayMesh(root.transform, "Base", lidMesh, Vector3.zero, Vector3.zero, Vector3.one, color, type, smoothness, opacity, refraction, albedoTexture), metallic, metallicRoughnessTexture, normalTexture);
+        
+        ConfigureTeapotPart(
+            AddRayMesh(root.transform, "Base", lidMesh, Vector3.zero, Vector3.zero, Vector3.one, 
+                new Color32(25, 25, 25, 255), 
+                RayMaterial.MaterialType.Diffuse, 
+                0.4f, 
+                1.0f, 
+                0.0f, 
+                albedoTexture), 
+            0.0f, 
+            metallicRoughnessTexture, 
+            normalTexture);
     }
 
     private static void ConfigureTeapotPart(GameObject part, float metallic, Texture2D metallicRoughnessTexture, Texture2D normalTexture)
