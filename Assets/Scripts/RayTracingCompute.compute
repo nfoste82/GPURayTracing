@@ -1282,12 +1282,18 @@ float3 GetTerrainAlbedo(float2 uv)
 {
     int2 alphamapSize;
     _TerrainAlphamap.GetDimensions(alphamapSize.x, alphamapSize.y);
-    int2 alphamapPixel = min(alphamapSize - 1, (int2)(saturate(uv) * (alphamapSize - 1)));
-    float4 weights = _TerrainAlphamap.Load(int3(alphamapPixel, 0));
+    float2 alphamapPosition = saturate(uv) * (alphamapSize - 1);
+    int2 alphamap0 = (int2)floor(alphamapPosition);
+    int2 alphamap1 = min(alphamapSize - 1, alphamap0 + 1);
+    float2 alphamapBlend = frac(alphamapPosition);
+    float4 weights = lerp(
+        lerp(_TerrainAlphamap.Load(int3(alphamap0.x, alphamap0.y, 0)), _TerrainAlphamap.Load(int3(alphamap1.x, alphamap0.y, 0)), alphamapBlend.x),
+        lerp(_TerrainAlphamap.Load(int3(alphamap0.x, alphamap1.y, 0)), _TerrainAlphamap.Load(int3(alphamap1.x, alphamap1.y, 0)), alphamapBlend.x),
+        alphamapBlend.y);
     float weightSum = max(0.0001f, dot(weights, 1.0f));
     weights /= weightSum;
-    // Use wrapped coordinates explicitly. Compute-shader sampler state is backend-dependent, and
-    // relying on Unity's imported repeat mode previously clamped terrain layers to one edge texel.
+    // Use explicit wrapping and bilinear filtering so all backends match the terrain preview
+    // without depending on an imported texture's sampler state.
     float2 layerUv0 = frac(uv * _TerrainLayer0Tiling);
     float2 layerUv1 = frac(uv * _TerrainLayer1Tiling);
     float2 layerUv2 = frac(uv * _TerrainLayer2Tiling);
@@ -1296,10 +1302,24 @@ float3 GetTerrainAlbedo(float2 uv)
     int2 size1; _TerrainLayer1.GetDimensions(size1.x, size1.y);
     int2 size2; _TerrainLayer2.GetDimensions(size2.x, size2.y);
     int2 size3; _TerrainLayer3.GetDimensions(size3.x, size3.y);
-    float3 color0 = _TerrainLayer0.Load(int3(min(size0 - 1, (int2)(layerUv0 * size0)), 0)).rgb;
-    float3 color1 = _TerrainLayer1.Load(int3(min(size1 - 1, (int2)(layerUv1 * size1)), 0)).rgb;
-    float3 color2 = _TerrainLayer2.Load(int3(min(size2 - 1, (int2)(layerUv2 * size2)), 0)).rgb;
-    float3 color3 = _TerrainLayer3.Load(int3(min(size3 - 1, (int2)(layerUv3 * size3)), 0)).rgb;
+    float2 samplePosition0 = layerUv0 * size0 - 0.5f;
+    float2 samplePosition1 = layerUv1 * size1 - 0.5f;
+    float2 samplePosition2 = layerUv2 * size2 - 0.5f;
+    float2 samplePosition3 = layerUv3 * size3 - 0.5f;
+    int2 layer00 = (int2)floor(samplePosition0); int2 layer01 = layer00 + 1;
+    int2 layer10 = (int2)floor(samplePosition1); int2 layer11 = layer10 + 1;
+    int2 layer20 = (int2)floor(samplePosition2); int2 layer21 = layer20 + 1;
+    int2 layer30 = (int2)floor(samplePosition3); int2 layer31 = layer30 + 1;
+    layer00 = (layer00 % size0 + size0) % size0; layer01 = (layer01 % size0 + size0) % size0;
+    layer10 = (layer10 % size1 + size1) % size1; layer11 = (layer11 % size1 + size1) % size1;
+    layer20 = (layer20 % size2 + size2) % size2; layer21 = (layer21 % size2 + size2) % size2;
+    layer30 = (layer30 % size3 + size3) % size3; layer31 = (layer31 % size3 + size3) % size3;
+    float2 blend0 = frac(samplePosition0); float2 blend1 = frac(samplePosition1);
+    float2 blend2 = frac(samplePosition2); float2 blend3 = frac(samplePosition3);
+    float3 color0 = lerp(lerp(_TerrainLayer0.Load(int3(layer00.x, layer00.y, 0)).rgb, _TerrainLayer0.Load(int3(layer01.x, layer00.y, 0)).rgb, blend0.x), lerp(_TerrainLayer0.Load(int3(layer00.x, layer01.y, 0)).rgb, _TerrainLayer0.Load(int3(layer01.x, layer01.y, 0)).rgb, blend0.x), blend0.y);
+    float3 color1 = lerp(lerp(_TerrainLayer1.Load(int3(layer10.x, layer10.y, 0)).rgb, _TerrainLayer1.Load(int3(layer11.x, layer10.y, 0)).rgb, blend1.x), lerp(_TerrainLayer1.Load(int3(layer10.x, layer11.y, 0)).rgb, _TerrainLayer1.Load(int3(layer11.x, layer11.y, 0)).rgb, blend1.x), blend1.y);
+    float3 color2 = lerp(lerp(_TerrainLayer2.Load(int3(layer20.x, layer20.y, 0)).rgb, _TerrainLayer2.Load(int3(layer21.x, layer20.y, 0)).rgb, blend2.x), lerp(_TerrainLayer2.Load(int3(layer20.x, layer21.y, 0)).rgb, _TerrainLayer2.Load(int3(layer21.x, layer21.y, 0)).rgb, blend2.x), blend2.y);
+    float3 color3 = lerp(lerp(_TerrainLayer3.Load(int3(layer30.x, layer30.y, 0)).rgb, _TerrainLayer3.Load(int3(layer31.x, layer30.y, 0)).rgb, blend3.x), lerp(_TerrainLayer3.Load(int3(layer30.x, layer31.y, 0)).rgb, _TerrainLayer3.Load(int3(layer31.x, layer31.y, 0)).rgb, blend3.x), blend3.y);
     return color0 * weights.x + color1 * weights.y + color2 * weights.z + color3 * weights.w;
 }
 
