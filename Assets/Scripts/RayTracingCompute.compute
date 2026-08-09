@@ -22,6 +22,7 @@
 #pragma multi_compile _ DEBUG_RENDER
 #pragma multi_compile _ CAUSTICS_ENABLED
 #pragma multi_compile _ FOG_ENABLED
+#pragma multi_compile _ TERRAIN_ENABLED
 
 #include "RayTracingCompilerWarnings.hlsl"
 
@@ -91,6 +92,29 @@ float _WaterTime;
 int _WaterMarchSteps;
 int _WaterRefinementSteps;
 
+#if defined(TERRAIN_ENABLED)
+float3 _TerrainPosition;
+float3 _TerrainSize;
+int _TerrainCellResolution;
+int _TerrainHeightmapResolution;
+int _TerrainMarchSteps;
+int _TerrainRefinementSteps;
+StructuredBuffer<float> _TerrainHeights;
+Texture2D<float4> _TerrainAlphamap;
+SamplerState sampler_TerrainAlphamap;
+Texture2D<float4> _TerrainLayer0;
+Texture2D<float4> _TerrainLayer1;
+Texture2D<float4> _TerrainLayer2;
+Texture2D<float4> _TerrainLayer3;
+SamplerState sampler_TerrainLayer0;
+float2 _TerrainLayer0Tiling;
+float2 _TerrainLayer1Tiling;
+float2 _TerrainLayer2Tiling;
+float2 _TerrainLayer3Tiling;
+struct TerrainCell { float minHeight; float maxHeight; };
+StructuredBuffer<TerrainCell> _TerrainCells;
+#endif
+
 int _FogEnabled;
 float3 _FogBoundsMin;
 float3 _FogBoundsMax;
@@ -130,6 +154,9 @@ int _NumCausticTargetPairs;
 #endif
 
 static const float PI = 3.141593f;
+// Keep this finite sentinel well below the backend's float-literal limit. It is still vastly
+// farther than any supported scene or ray segment, including terrain and caustic probes.
+static const float RayMaxDistance = 1.0e20f;
 
 static const int DebugFinalColor = 0;
 static const int DebugNormals = 1;
@@ -148,6 +175,7 @@ static const int DebugFeatureAlbedo = 13;
 static const int DebugFeatureDepth = 14;
 static const int DebugFeatureIdentity = 15;
 static const int DebugFeatureValidity = 16;
+static const int DebugTerrainCells = 30;
 
 static const int MaterialDiffuse = 0;
 static const int MaterialMetal = 1;
@@ -872,7 +900,7 @@ RayHit CreateRayHit()
     hit.emission = float3(0.0f, 0.0f, 0.0f);
     hit.color = float3(0.0f, 0.0f, 0.0f);
     hit.obj_radius = 0.0f;
-    hit.distance = 1.#INF;
+    hit.distance = RayMaxDistance;
     hit.smoothness = 0.0f;
     hit.metallic = 0.0f;
     hit.opacity = 1.0f;
@@ -954,6 +982,10 @@ float3 GetWaterAbsorptionTransmittance(float distanceInWater)
 }
 
 void IntersectWater(Ray ray, inout RayHit bestHit);
+#if defined(TERRAIN_ENABLED)
+void IntersectTerrain(Ray ray, inout RayHit bestHit);
+#endif
+bool IntersectAabbInverse(float3 rayOrigin, float3 inverseDirection, float3 boundsMin, float3 boundsMax, float maxDistance, out float entryDistance);
 
 float GetWaterDistanceAlongRay(Ray ray, float maxDistance)
 {
@@ -964,12 +996,12 @@ float GetWaterDistanceAlongRay(Ray ray, float maxDistance)
 
     RayHit volumeExit = CreateRayHit();
     IntersectWater(ray, volumeExit);
-    if (volumeExit.distance >= 1.#INF)
+    if (volumeExit.distance >= RayMaxDistance)
     {
         return 0.0f;
     }
 
-    float segmentEndDistance = maxDistance < 1.#INF ? max(0.0f, maxDistance) : volumeExit.distance;
+    float segmentEndDistance = maxDistance < RayMaxDistance ? max(0.0f, maxDistance) : volumeExit.distance;
     return max(0.0f, min(segmentEndDistance, volumeExit.distance));
 }
 
@@ -1027,12 +1059,13 @@ bool IntersectWaterSurfaceBounds(Ray ray, float maxDistance, out float entryDist
     float3 boundsMin = float3(_WaterCenter.x - halfSize.x, _WaterCenter.y - waveHeight, _WaterCenter.z - halfSize.y);
     float3 boundsMax = float3(_WaterCenter.x + halfSize.x, _WaterCenter.y + waveHeight, _WaterCenter.z + halfSize.y);
 
-    // Axis-aligned regression rays contain exact zero components. Preserve the slab method's
-    // intended infinite reciprocal without asking the compiler to constant-fold 1 / 0.
     float3 inverseDirection;
-    inverseDirection.x = ray.direction.x == 0.0f ? 1.#INF : 1.0f / ray.direction.x;
-    inverseDirection.y = ray.direction.y == 0.0f ? 1.#INF : 1.0f / ray.direction.y;
-    inverseDirection.z = ray.direction.z == 0.0f ? 1.#INF : 1.0f / ray.direction.z;
+    if (ray.direction.x == 0.0f) inverseDirection.x = RayMaxDistance;
+    else inverseDirection.x = 1.0f / ray.direction.x;
+    if (ray.direction.y == 0.0f) inverseDirection.y = RayMaxDistance;
+    else inverseDirection.y = 1.0f / ray.direction.y;
+    if (ray.direction.z == 0.0f) inverseDirection.z = RayMaxDistance;
+    else inverseDirection.z = 1.0f / ray.direction.z;
     float3 t0 = (boundsMin - ray.origin) * inverseDirection;
     float3 t1 = (boundsMax - ray.origin) * inverseDirection;
     float3 tMin3 = min(t0, t1);
@@ -1156,7 +1189,7 @@ void IntersectWaterTop(Ray ray, inout RayHit bestHit)
         previousSignedDistance = dot(ray.direction, float3(0.0f, 1.0f, 0.0f)) > 0.0f ? -WaterHitEpsilon : WaterHitEpsilon;
     }
 
-    float hitT = 1.#INF;
+    float hitT = RayMaxDistance;
     int i;
     [loop]
     for (i = 1; i <= marchSteps; i++)
@@ -1219,6 +1252,140 @@ void IntersectWater(Ray ray, inout RayHit bestHit)
     IntersectWaterFlatBoundaries(ray, bestHit);
     IntersectWaterTop(ray, bestHit);
 }
+
+#if defined(TERRAIN_ENABLED)
+float GetTerrainHeight(float2 worldXZ)
+{
+    float2 uv = saturate((worldXZ - _TerrainPosition.xz) / max(_TerrainSize.xz, float2(0.001f, 0.001f)));
+    int resolution = max(1, _TerrainHeightmapResolution);
+    float2 samplePosition = uv * (resolution - 1);
+    int2 sample0 = min(resolution - 1, (int2)floor(samplePosition));
+    int2 sample1 = min(resolution - 1, sample0 + 1);
+    float2 blend = frac(samplePosition);
+    float height00 = _TerrainHeights[sample0.y * resolution + sample0.x];
+    float height10 = _TerrainHeights[sample0.y * resolution + sample1.x];
+    float height01 = _TerrainHeights[sample1.y * resolution + sample0.x];
+    float height11 = _TerrainHeights[sample1.y * resolution + sample1.x];
+    float normalizedHeight = lerp(lerp(height00, height10, blend.x), lerp(height01, height11, blend.x), blend.y);
+    return _TerrainPosition.y + normalizedHeight * _TerrainSize.y;
+}
+
+float3 GetTerrainNormal(float2 worldXZ)
+{
+    float2 sampleOffset = _TerrainSize.xz / max(1.0f, (float)(_TerrainHeightmapResolution - 1));
+    float heightX = GetTerrainHeight(worldXZ + float2(sampleOffset.x, 0.0f)) - GetTerrainHeight(worldXZ - float2(sampleOffset.x, 0.0f));
+    float heightZ = GetTerrainHeight(worldXZ + float2(0.0f, sampleOffset.y)) - GetTerrainHeight(worldXZ - float2(0.0f, sampleOffset.y));
+    return normalize(float3(-heightX / (2.0f * sampleOffset.x), 1.0f, -heightZ / (2.0f * sampleOffset.y)));
+}
+
+float3 GetTerrainAlbedo(float2 uv)
+{
+    int2 alphamapSize;
+    _TerrainAlphamap.GetDimensions(alphamapSize.x, alphamapSize.y);
+    int2 alphamapPixel = min(alphamapSize - 1, (int2)(saturate(uv) * (alphamapSize - 1)));
+    float4 weights = _TerrainAlphamap.Load(int3(alphamapPixel, 0));
+    float weightSum = max(0.0001f, dot(weights, 1.0f));
+    weights /= weightSum;
+    // Use wrapped coordinates explicitly. Compute-shader sampler state is backend-dependent, and
+    // relying on Unity's imported repeat mode previously clamped terrain layers to one edge texel.
+    float2 layerUv0 = frac(uv * _TerrainLayer0Tiling);
+    float2 layerUv1 = frac(uv * _TerrainLayer1Tiling);
+    float2 layerUv2 = frac(uv * _TerrainLayer2Tiling);
+    float2 layerUv3 = frac(uv * _TerrainLayer3Tiling);
+    int2 size0; _TerrainLayer0.GetDimensions(size0.x, size0.y);
+    int2 size1; _TerrainLayer1.GetDimensions(size1.x, size1.y);
+    int2 size2; _TerrainLayer2.GetDimensions(size2.x, size2.y);
+    int2 size3; _TerrainLayer3.GetDimensions(size3.x, size3.y);
+    float3 color0 = _TerrainLayer0.Load(int3(min(size0 - 1, (int2)(layerUv0 * size0)), 0)).rgb;
+    float3 color1 = _TerrainLayer1.Load(int3(min(size1 - 1, (int2)(layerUv1 * size1)), 0)).rgb;
+    float3 color2 = _TerrainLayer2.Load(int3(min(size2 - 1, (int2)(layerUv2 * size2)), 0)).rgb;
+    float3 color3 = _TerrainLayer3.Load(int3(min(size3 - 1, (int2)(layerUv3 * size3)), 0)).rgb;
+    return color0 * weights.x + color1 * weights.y + color2 * weights.z + color3 * weights.w;
+}
+
+void SetTerrainHit(Ray ray, float hitDistance, inout RayHit bestHit)
+{
+    float3 position = ray.origin + ray.direction * hitDistance;
+    float3 normal = GetTerrainNormal(position.xz);
+    bestHit.position = position;
+    bestHit.obj_position = _TerrainPosition;
+    bestHit.geometricNormal = dot(normal, ray.direction) > 0.0f ? -normal : normal;
+    bestHit.normal = bestHit.geometricNormal;
+    bestHit.emission = 0.0f;
+    bestHit.color = GetTerrainAlbedo((position.xz - _TerrainPosition.xz) / _TerrainSize.xz);
+    bestHit.obj_radius = 0.0f;
+    bestHit.distance = hitDistance;
+    bestHit.smoothness = 0.18f;
+    bestHit.metallic = 0.0f;
+    bestHit.opacity = 1.0f;
+    bestHit.refraction = 1.0f;
+    bestHit.specular = 0.0f;
+    bestHit.transmission = 1.0f;
+    bestHit.materialType = MaterialDiffuse;
+    bestHit.meshIndex = -1;
+    bestHit.objectIndex = -2;
+    bestHit.uv = (position.xz - _TerrainPosition.xz) / _TerrainSize.xz;
+    bestHit.textureIndex = -1;
+    bestHit.metallicRoughnessTextureIndex = -1;
+    bestHit.normalTextureIndex = -1;
+    bestHit.lightIndex = -1;
+}
+
+void IntersectTerrain(Ray ray, inout RayHit bestHit)
+{
+    float3 boundsMin = _TerrainPosition;
+    float3 boundsMax = _TerrainPosition + _TerrainSize;
+    float entry;
+    if (!IntersectAabbInverse(ray.origin, 1.0f / ray.direction, boundsMin, boundsMax, bestHit.distance, entry))
+    {
+        return;
+    }
+
+    float exit = min(bestHit.distance, min(
+        abs(ray.direction.x) < 1e-8f ? RayMaxDistance : ((ray.direction.x > 0.0f ? boundsMax.x : boundsMin.x) - ray.origin.x) / ray.direction.x,
+        min(abs(ray.direction.y) < 1e-8f ? RayMaxDistance : ((ray.direction.y > 0.0f ? boundsMax.y : boundsMin.y) - ray.origin.y) / ray.direction.y,
+            abs(ray.direction.z) < 1e-8f ? RayMaxDistance : ((ray.direction.z > 0.0f ? boundsMax.z : boundsMin.z) - ray.origin.z) / ray.direction.z)));
+    entry = max(0.001f, entry);
+    if (exit <= entry)
+    {
+        return;
+    }
+
+    // March at heightmap-texel scale across the full ray interval. Restarting a fixed march in
+    // each coarse DDA cell made the root approximation discontinuous at cell boundaries, which
+    // exposed the acceleration grid as visible facets at grazing angles.
+    float2 heightmapTexelSize = _TerrainSize.xz / max(1.0f, (float)(_TerrainHeightmapResolution - 1));
+    float2 traversedXZ = abs(ray.direction.xz) * (exit - entry);
+    int steps = clamp((int)ceil(max(traversedXZ.x / heightmapTexelSize.x, traversedXZ.y / heightmapTexelSize.y)), 1, 1024);
+    float previousT = entry;
+    float previousDistance = ray.origin.y + ray.direction.y * previousT - GetTerrainHeight((ray.origin + ray.direction * previousT).xz);
+    int step;
+    [loop]
+    for (step = 1; step <= steps; step++)
+    {
+        float sampleT = lerp(entry, exit, (float)step / steps);
+        float sampleDistance = ray.origin.y + ray.direction.y * sampleT - GetTerrainHeight((ray.origin + ray.direction * sampleT).xz);
+        if (previousDistance * sampleDistance <= 0.0f)
+        {
+            float low = previousT;
+            float high = sampleT;
+            int refinement;
+            [loop]
+            for (refinement = 0; refinement < 12; refinement++)
+            {
+                float mid = (low + high) * 0.5f;
+                float midDistance = ray.origin.y + ray.direction.y * mid - GetTerrainHeight((ray.origin + ray.direction * mid).xz);
+                if (previousDistance * midDistance <= 0.0f) high = mid;
+                else { low = mid; previousDistance = midDistance; }
+            }
+            SetTerrainHit(ray, high, bestHit);
+            return;
+        }
+        previousT = sampleT;
+        previousDistance = sampleDistance;
+    }
+}
+#endif
 
 void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere, int objectIndex)
 {
@@ -1362,7 +1529,7 @@ float GetMediumSegmentDistance(Ray ray, float hitDistance, MediumIdentity medium
         return GetWaterDistanceAlongRay(ray, hitDistance);
     }
 
-    return hitDistance < 1.#INF ? max(0.0f, hitDistance) : 0.0f;
+    return hitDistance < RayMaxDistance ? max(0.0f, hitDistance) : 0.0f;
 }
 
 float3 GetMediumSegmentTransmittance(MediumIdentity medium, float distanceThroughMedium)
@@ -1417,7 +1584,7 @@ bool IntersectTriangleRaw(Ray ray, MeshTriangle meshTriangle, out float hitDista
     float determinant = dot(edge1, p);
     float determinantScale = length(edge1) * length(p);
 
-    hitDistance = 1.#INF;
+    hitDistance = RayMaxDistance;
     normal = meshTriangle.normal;
     barycentric = float2(0.0f, 0.0f);
 
@@ -1660,8 +1827,8 @@ void IntersectMeshBvh(Ray ray, inout RayHit bestHit, MeshInfo meshInfo)
         // child fail its AABB test and skip its whole subtree.
         int leftIndex = node.leftChildIndex;
         int rightIndex = node.rightChildIndex;
-        float leftEntry = 1.#INF;
-        float rightEntry = 1.#INF;
+        float leftEntry = RayMaxDistance;
+        float rightEntry = RayMaxDistance;
         bool hitLeft = leftIndex >= 0 &&
             IntersectAabbInverse(ray.origin, inverseDirection, _BvhNodes[leftIndex].boundsMin, _BvhNodes[leftIndex].boundsMax, bestHit.distance, leftEntry);
         bool hitRight = rightIndex >= 0 &&
@@ -1746,7 +1913,7 @@ bool MeshBvhOccludes(Ray ray, float maxDistance, MeshInfo meshInfo)
 
 bool IntersectMeshBvhForExit(Ray ray, MeshInfo meshInfo, out float exitDistance, out float3 exitGeometricNormal, out float3 exitOpticalNormal)
 {
-    exitDistance = 1.#INF;
+    exitDistance = RayMaxDistance;
     exitGeometricNormal = float3(0.0f, 1.0f, 0.0f);
     exitOpticalNormal = exitGeometricNormal;
 
@@ -1815,7 +1982,7 @@ bool IntersectMeshBvhForExit(Ray ray, MeshInfo meshInfo, out float exitDistance,
         }
     }
 
-    return exitDistance < 1.#INF;
+    return exitDistance < RayMaxDistance;
 }
 
 RayHit GetNearestIntersectionBounded(Ray ray, float maxDistance, int ignoredMeshIndex, int ignoredSphereIndex)
@@ -1824,6 +1991,9 @@ RayHit GetNearestIntersectionBounded(Ray ray, float maxDistance, int ignoredMesh
 	bestHit.distance = maxDistance;
 
 	IntersectWater(ray, bestHit);
+	#if defined(TERRAIN_ENABLED)
+	IntersectTerrain(ray, bestHit);
+	#endif
 
 	if (_NumTopLevelBvhNodes <= 0)
 	{
@@ -1945,7 +2115,7 @@ RayHit GetNearestIntersectionBounded(Ray ray, float maxDistance, int ignoredMesh
 
 RayHit GetNearestIntersection(Ray ray)
 {
-	return GetNearestIntersectionBounded(ray, 1.#INF, -2, -1);
+    return GetNearestIntersectionBounded(ray, RayMaxDistance, -2, -1);
 }
 
 float3 GetClosestPointOnLineSegment(float3 linePointStart, float3 linePointEnd, float3 testPoint)
@@ -2834,7 +3004,7 @@ float3 GetRandomizedNormalBasedOnAmount(float3 normal, float amount, inout uint 
 
 bool DidHitSky(RayHit hit)
 {
-    return hit.distance >= 1.#INF;
+    return hit.distance >= RayMaxDistance;
 }
 
 bool DidHitLight(RayHit hit)
@@ -2936,7 +3106,7 @@ float3 SampleDielectricBoundaryNormal(float3 opticalNormal, float3 geometricNorm
             : geometricBoundaryNormal;
     }
 
-    [loop]
+    [unroll]
     for (int sampleIndex = 0; sampleIndex < 8; sampleIndex++)
     {
         float3 microfacetNormal = SampleGgxHalfDirection(opticalBoundaryNormal, roughness * roughness, rngState);
@@ -3076,7 +3246,7 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int
     [loop]
     while (bouncesConsumed < remainingBounces)
     {
-        float exitDistance = 1.#INF;
+        float exitDistance = RayMaxDistance;
         float3 exitGeometricNormal = hit.geometricNormal;
         float3 exitOpticalNormal = normal;
 
@@ -3101,7 +3271,7 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int
             }
         }
 
-        if (exitDistance >= 1.#INF)
+        if (exitDistance >= RayMaxDistance)
         {
             mediumDistanceTraveled = ThinTransparentSurfaceDistance;
             ray.direction = insideRay.direction;
@@ -3598,6 +3768,19 @@ float3 GetDebugRenderColor(Ray ray, inout uint rngState)
         }
 
         return float3(topLevelActive, shadowActive, 0.15f);
+    }
+
+    if (_DebugRenderMode == DebugTerrainCells)
+    {
+        if (DidHitSky(hit) || hit.objectIndex != -2)
+        {
+            return float3(0.0f, 0.0f, 0.0f);
+        }
+
+        float2 cellUv = frac(hit.uv * max(1, _TerrainCellResolution));
+        float2 distanceToBoundary = min(cellUv, 1.0f - cellUv);
+        float boundary = 1.0f - smoothstep(0.015f, 0.035f, min(distanceToBoundary.x, distanceToBoundary.y));
+        return float3(cellUv, boundary);
     }
 
     if (DidHitSky(hit))
@@ -4256,12 +4439,12 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     RegressionResults[13] = float4(GetCurrentMedium(underwaterStack).type, GetCurrentMedium(underwaterStack).refractionIndex, underwaterStack.count, underwaterStack.status);
 
     float3 waterOrigin = float3(_WaterCenter.x, _WaterCenter.y - 1.0f, _WaterCenter.z);
-    float waterSideDistance = GetWaterDistanceAlongRay(CreateRay(waterOrigin, float3(1.0f, 0.0f, 0.0f)), 1.#INF);
-    float waterSurfaceDistance = GetWaterDistanceAlongRay(CreateRay(waterOrigin, float3(0.0f, 1.0f, 0.0f)), 1.#INF);
+    float waterSideDistance = GetWaterDistanceAlongRay(CreateRay(waterOrigin, float3(1.0f, 0.0f, 0.0f)), RayMaxDistance);
+    float waterSurfaceDistance = GetWaterDistanceAlongRay(CreateRay(waterOrigin, float3(0.0f, 1.0f, 0.0f)), RayMaxDistance);
     float waterClippedDistance = GetWaterDistanceAlongRay(CreateRay(waterOrigin, float3(1.0f, 0.0f, 0.0f)), 2.0f);
-    RegressionResults[14] = float4(waterSideDistance, waterSurfaceDistance, waterClippedDistance, GetMediumSegmentDistance(CreateRay(waterOrigin, float3(1.0f, 0.0f, 0.0f)), 1.#INF, GetCurrentMedium(underwaterStack)));
+    RegressionResults[14] = float4(waterSideDistance, waterSurfaceDistance, waterClippedDistance, GetMediumSegmentDistance(CreateRay(waterOrigin, float3(1.0f, 0.0f, 0.0f)), RayMaxDistance, GetCurrentMedium(underwaterStack)));
 
-    float waterBottomDistance = GetWaterDistanceAlongRay(CreateRay(waterOrigin, float3(0.0f, -1.0f, 0.0f)), 1.#INF);
+    float waterBottomDistance = GetWaterDistanceAlongRay(CreateRay(waterOrigin, float3(0.0f, -1.0f, 0.0f)), RayMaxDistance);
     RayHit waterSideHit = CreateRayHit();
     IntersectWater(CreateRay(float3(_WaterCenter.x - 6.0f, _WaterCenter.y - 1.0f, _WaterCenter.z), float3(1.0f, 0.0f, 0.0f)), waterSideHit);
     RegressionResults[18] = float4(waterBottomDistance, waterSideHit.distance, waterSideHit.materialType, 1.0f);
@@ -4271,7 +4454,7 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     float3 waterSegment = GetMediumSegmentTransmittance(water, 2.0f);
     RegressionResults[15] = float4(glassSegment, 1.0f);
     RegressionResults[16] = float4(waterSegment, 1.0f);
-    RegressionResults[17] = float4(GetMediumSegmentTransmittance(air, 1000.0f), GetMediumSegmentDistance(CreateRay(float3(0.0f, 2.0f, 0.0f), float3(1.0f, 0.0f, 0.0f)), 1.#INF, air));
+    RegressionResults[17] = float4(GetMediumSegmentTransmittance(air, 1000.0f), GetMediumSegmentDistance(CreateRay(float3(0.0f, 2.0f, 0.0f), float3(1.0f, 0.0f, 0.0f)), RayMaxDistance, air));
 
     MediumStack waterStack = CreateMediumStack(float3(0.0f, 2.0f, 0.0f));
     ApplyMediumTransition(waterStack, waterHit, MediumTransitionEnter);

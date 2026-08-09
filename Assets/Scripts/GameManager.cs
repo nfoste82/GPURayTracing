@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -36,6 +37,7 @@ public class GameManager : MonoBehaviour
         cameraAutoFocus = settings.CameraAutoFocus;
         cameraFocalDistance = settings.CameraFocalDistance;
         cameraApertureMode = settings.CameraApertureMode;
+        cameraMovementSpeed = settings.CameraMovementSpeed;
         lightFalloffScale = settings.LightFalloffScale;
         exposure = settings.Exposure;
         fireflyClamp = settings.FireflyClamp;
@@ -257,11 +259,17 @@ public class GameManager : MonoBehaviour
         TemporalHistoryLength = 26,
         TemporalDenoisedTint = 27,
         TemporalVariance = 28,
-        CausticPreservationMask = 29
+        CausticPreservationMask = 29,
+        TerrainCells = 30
     }
 
     [Header("Debug render modes")]
     public DebugRenderMode debugRenderMode = DebugRenderMode.FinalColor;
+
+    [Header("Camera controls")]
+    [Tooltip("Camera movement speed in world units per second.")]
+    [Min(0.01f)]
+    public float cameraMovementSpeed = 3.0f;
 
     [Header("Camera focus and lens")]
     [Tooltip("Continuously focuses the center of the image. A successful click-to-focus selection disables this so the selected distance remains active.")]
@@ -913,10 +921,17 @@ public class GameManager : MonoBehaviour
 
     private Water _water;
     private FogVolume _fogVolume;
+    private RayTracingTerrain _terrain;
+    private ComputeBuffer _terrainCellBuffer;
+    private ComputeBuffer _terrainHeightBuffer;
+    private Texture2D _terrainAlphamapTexture;
+    private int _terrainDataInstanceId;
     private readonly Stopwatch _startupStopwatch = Stopwatch.StartNew();
     private readonly List<string> _startupProfilePhases = new List<string>();
     private double _startupRegistrationMilliseconds;
     private bool _startupProfilePending;
+    private bool _startupInitializationPending;
+    private string _startupInitializationStatus;
     private bool _loadedBakedMeshBvhs;
     private string _bvhBakeLoadStatus = "not attempted";
     private int _profileBuiltMeshTemplateCount;
@@ -935,7 +950,18 @@ public class GameManager : MonoBehaviour
         long bakedBvhLoadStart = Stopwatch.GetTimestamp();
         TryLoadBakedMeshBvhs();
         AddStartupProfilePhase($"baked mesh BVH load ({_bvhBakeLoadStatus})", bakedBvhLoadStart);
+        _startupInitializationPending = true;
+        _startupInitializationStatus = "Preparing ray tracing scene data";
+        StartCoroutine(InitializeStartupBuffers());
+    }
+
+    private IEnumerator InitializeStartupBuffers()
+    {
+        // Let the Game view paint the startup notice before synchronous buffer construction starts.
+        yield return new WaitForEndOfFrame();
+        _startupInitializationStatus = "Building ray tracing buffers";
         RebuildBuffers(_startupProfilePending);
+        _startupInitializationPending = false;
     }
 
     private void EnsureBenchmarkComponents()
@@ -1263,7 +1289,7 @@ public class GameManager : MonoBehaviour
     // apparently frozen application.
     private void OnGUI()
     {
-        if (!_pendingVariantWarmup)
+        if (!_pendingVariantWarmup && !_startupInitializationPending)
         {
             return;
         }
@@ -1289,7 +1315,10 @@ public class GameManager : MonoBehaviour
             boxWidth,
             boxHeight);
 
-        GUI.Box(rect, "Compiling shader variant, this may take a minute...", _compileNoticeStyle);
+        string message = _startupInitializationPending
+            ? _startupInitializationStatus + "\nStartup timings will be logged when initialization completes."
+            : "Compiling shader variant, this may take a minute...";
+        GUI.Box(rect, message, _compileNoticeStyle);
     }
 
     private void SetSingleFrameMode(bool enabled)
@@ -1329,20 +1358,20 @@ public class GameManager : MonoBehaviour
 
         if (Input.GetKey(KeyCode.W))
         {
-            camera.transform.position += camera.transform.forward * movementDelta * 3f;
+            camera.transform.position += camera.transform.forward * movementDelta * cameraMovementSpeed;
         }
         else if (Input.GetKey(KeyCode.S))
         {
-            camera.transform.position -= camera.transform.forward * movementDelta * 3f;
+            camera.transform.position -= camera.transform.forward * movementDelta * cameraMovementSpeed;
         }
         
         if (Input.GetKey(KeyCode.A))
         {
-            camera.transform.position -= camera.transform.right * movementDelta * 3f;
+            camera.transform.position -= camera.transform.right * movementDelta * cameraMovementSpeed;
         }
         else if (Input.GetKey(KeyCode.D))
         {
-            camera.transform.position += camera.transform.right * movementDelta * 3f;
+            camera.transform.position += camera.transform.right * movementDelta * cameraMovementSpeed;
         }
         
         float yawDelta = 0.0f;
@@ -1426,6 +1455,12 @@ public class GameManager : MonoBehaviour
         _bvhNodeBuffer?.Release();
         _topLevelBvhNodeBuffer?.Release();
         _shadowBvhNodeBuffer?.Release();
+        _terrainCellBuffer?.Release();
+        _terrainHeightBuffer?.Release();
+        if (_terrainAlphamapTexture != null)
+        {
+            Destroy(_terrainAlphamapTexture);
+        }
         if (_focusQueryInFlight)
         {
             _focusReadbackRequest.WaitForCompletion();
@@ -2232,6 +2267,7 @@ public class GameManager : MonoBehaviour
         shader.SetInt("_NumTopLevelBvhNodes", _topLevelBvhNodes.Count);
         shader.SetInt("_NumShadowBvhNodes", _shadowBvhNodes.Count);
         SetWaterShaderParameters();
+        SetTerrainShaderParameters(traceKernel);
     }
 
     private bool ShouldUseFrameAccumulation()
@@ -2450,6 +2486,11 @@ public class GameManager : MonoBehaviour
     public void RenderImage(RenderTexture src, RenderTexture dest)
     {
         EnsureOutputTextureSize(src.width, src.height);
+        if (_startupInitializationPending)
+        {
+            Graphics.Blit(src, dest);
+            return;
+        }
         if (_videoCaptureActive && _videoCaptureAwaitingSimulationStep)
         {
             _singleFrameRenderTime = Time.time;
@@ -5047,7 +5088,7 @@ public class GameManager : MonoBehaviour
         // final-color variant compiles without any debug intersection/scatter code (a large shader
         // compile-time saving). Only enable the debug variant when a debug mode is actually active.
         if (debugRenderMode == DebugRenderMode.FinalColor || debugRenderMode == DebugRenderMode.Caustics
-            || debugRenderMode >= DebugRenderMode.RawBeauty)
+            || (debugRenderMode >= DebugRenderMode.RawBeauty && debugRenderMode != DebugRenderMode.TerrainCells))
         {
             shader.DisableKeyword("DEBUG_RENDER");
         }
@@ -5106,6 +5147,7 @@ public class GameManager : MonoBehaviour
         shader.SetFloat("_Exposure", exposure);
         shader.SetFloat("_FireflyClamp", Mathf.Max(0.0f, fireflyClamp));
         SetWaterShaderParameters();
+        SetTerrainShaderParameters(kernelHandle);
         bool fogEnabled = IsFogEnabled();
         Vector3 fogCenter = fogEnabled ? _fogVolume.Center : Vector3.zero;
         Vector3 fogSize = fogEnabled ? _fogVolume.Size : Vector3.one;
@@ -5156,6 +5198,139 @@ public class GameManager : MonoBehaviour
         shader.SetFloat("_WaterTime", Application.isPlaying ? GetRenderTime() : 0.0f);
         shader.SetInt("_WaterMarchSteps", waterEnabled ? Mathf.Clamp(_water.MarchSteps, 8, 64) : 8);
         shader.SetInt("_WaterRefinementSteps", waterEnabled ? Mathf.Clamp(_water.RefinementSteps, 2, 8) : 2);
+    }
+
+    private void SetTerrainShaderParameters(int kernelHandle)
+    {
+        TerrainData data = _terrain != null ? _terrain.Data : null;
+        bool enabled = data != null && _terrainCellBuffer != null && _terrainHeightBuffer != null;
+        if (!enabled)
+        {
+            shader.DisableKeyword("TERRAIN_ENABLED");
+            return;
+        }
+
+        shader.EnableKeyword("TERRAIN_ENABLED");
+        Vector3 position = _terrain.Terrain.transform.position;
+        Vector3 size = data.size;
+        TerrainLayer[] layers = data.terrainLayers;
+        shader.SetTexture(kernelHandle, "_TerrainAlphamap", _terrainAlphamapTexture != null ? _terrainAlphamapTexture : Texture2D.blackTexture);
+        shader.SetTexture(kernelHandle, "_TerrainLayer0", GetTerrainLayerTexture(layers, 0));
+        shader.SetTexture(kernelHandle, "_TerrainLayer1", GetTerrainLayerTexture(layers, 1));
+        shader.SetTexture(kernelHandle, "_TerrainLayer2", GetTerrainLayerTexture(layers, 2));
+        shader.SetTexture(kernelHandle, "_TerrainLayer3", GetTerrainLayerTexture(layers, 3));
+        shader.SetVector("_TerrainLayer0Tiling", GetTerrainLayerTiling(layers, 0, size));
+        shader.SetVector("_TerrainLayer1Tiling", GetTerrainLayerTiling(layers, 1, size));
+        shader.SetVector("_TerrainLayer2Tiling", GetTerrainLayerTiling(layers, 2, size));
+        shader.SetVector("_TerrainLayer3Tiling", GetTerrainLayerTiling(layers, 3, size));
+        shader.SetVector("_TerrainPosition", new Vector4(position.x, position.y, position.z, 0.0f));
+        shader.SetVector("_TerrainSize", new Vector4(size.x, size.y, size.z, 0.0f));
+        shader.SetInt("_TerrainCellResolution", Mathf.Clamp(_terrain.AccelerationResolution, 4, 64));
+        shader.SetInt("_TerrainHeightmapResolution", _terrain.HeightmapResolution);
+        shader.SetInt("_TerrainMarchSteps", Mathf.Clamp(_terrain.MarchSteps, 4, 16));
+        shader.SetInt("_TerrainRefinementSteps", Mathf.Clamp(_terrain.RefinementSteps, 2, 8));
+        SetComputeBuffer("_TerrainCells", _terrainCellBuffer, kernelHandle);
+        SetComputeBuffer("_TerrainHeights", _terrainHeightBuffer, kernelHandle);
+    }
+
+    private static Texture2D GetTerrainLayerTexture(TerrainLayer[] layers, int index)
+    {
+        return layers != null && index < layers.Length && layers[index] != null && layers[index].diffuseTexture != null
+            ? layers[index].diffuseTexture
+            : Texture2D.whiteTexture;
+    }
+
+    private static Vector2 GetTerrainLayerTiling(TerrainLayer[] layers, int index, Vector3 terrainSize)
+    {
+        if (layers == null || index >= layers.Length || layers[index] == null)
+        {
+            return Vector2.one;
+        }
+
+        Vector2 tileSize = layers[index].tileSize;
+        return new Vector2(
+            terrainSize.x / Mathf.Max(0.001f, tileSize.x),
+            terrainSize.z / Mathf.Max(0.001f, tileSize.y));
+    }
+
+    public bool RegisterTerrain(RayTracingTerrain terrain)
+    {
+        if (_terrain != null && _terrain != terrain)
+        {
+            Debug.LogError($"Only one active RayTracingTerrain is supported by GameManager '{name}'.", terrain);
+            return false;
+        }
+
+        _terrain = terrain;
+        RebuildTerrainAcceleration();
+        ResetFrameAccumulation();
+        return true;
+    }
+
+    public void UnregisterTerrain(RayTracingTerrain terrain)
+    {
+        if (_terrain != terrain)
+        {
+            return;
+        }
+
+        _terrain = null;
+        _terrainDataInstanceId = 0;
+        _terrainCellBuffer?.Release();
+        _terrainCellBuffer = null;
+        _terrainHeightBuffer?.Release();
+        _terrainHeightBuffer = null;
+        if (_terrainAlphamapTexture != null)
+        {
+            Destroy(_terrainAlphamapTexture);
+            _terrainAlphamapTexture = null;
+        }
+        ResetFrameAccumulation();
+    }
+
+    private void RebuildTerrainAcceleration()
+    {
+        _terrainCellBuffer?.Release();
+        _terrainCellBuffer = null;
+        _terrainHeightBuffer?.Release();
+        _terrainHeightBuffer = null;
+        if (_terrainAlphamapTexture != null)
+        {
+            Destroy(_terrainAlphamapTexture);
+            _terrainAlphamapTexture = null;
+        }
+        TerrainData data = _terrain != null ? _terrain.Data : null;
+        if (data == null)
+        {
+            return;
+        }
+
+        RayTracingTerrain.TerrainCell[] cells = _terrain.BuildCells();
+        _terrainCellBuffer = new ComputeBuffer(Mathf.Max(1, cells.Length), sizeof(float) * 2);
+        _terrainCellBuffer.SetData(cells);
+        float[] heights = _terrain.BuildHeights();
+        _terrainHeightBuffer = new ComputeBuffer(Mathf.Max(1, heights.Length), sizeof(float));
+        _terrainHeightBuffer.SetData(heights.Length > 0 ? heights : new[] { 0.0f });
+        int alphaWidth = Mathf.Max(1, data.alphamapWidth);
+        int alphaHeight = Mathf.Max(1, data.alphamapHeight);
+        _terrainAlphamapTexture = new Texture2D(alphaWidth, alphaHeight, TextureFormat.RGBA32, false, true)
+        {
+            name = "Ray Tracing Terrain Alphamap",
+            filterMode = FilterMode.Bilinear,
+            wrapMode = TextureWrapMode.Clamp
+        };
+        Color[] alphamap = _terrain.BuildAlphamap();
+        _terrainAlphamapTexture.SetPixels(alphamap.Length > 0 ? alphamap : new[] { Color.black });
+        _terrainAlphamapTexture.Apply(false, true);
+        if (profileStartup)
+        {
+            Vector4 averageWeights = _terrain.GetAverageLayerWeights();
+            Debug.Log(
+                $"Terrain material upload: {data.terrainLayers.Length} layers, {alphaWidth}x{alphaHeight} alphamap, " +
+                $"average weights ({averageWeights.x:F2}, {averageWeights.y:F2}, {averageWeights.z:F2}, {averageWeights.w:F2}).",
+                _terrain);
+        }
+        _terrainDataInstanceId = data.GetInstanceID();
     }
 
     private void EnsureMeshTextureArrays()

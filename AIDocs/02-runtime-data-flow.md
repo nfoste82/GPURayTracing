@@ -175,7 +175,7 @@ Dynamic quality resets frame accumulation whenever it changes a setting. Adjustm
 
 ## Controls And Modes
 
-- WASD moves `renderTextureCamera`.
+- WASD moves `renderTextureCamera` at the inspector-configurable `cameraMovementSpeed` in world units per second.
 - Arrow keys rotate `renderTextureCamera`.
 - Left click focuses on the selected ray-traced surface when `enableClickToFocus` is enabled. Mostly transparent surfaces use the existing autofocus opacity threshold and the query includes shader-only procedural water.
 - `T` toggles single-frame mode.

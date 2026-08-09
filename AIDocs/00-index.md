@@ -18,6 +18,7 @@ Use this folder as focused context for LLM-assisted work on the Unity GPU ray tr
 - `12-caustics-prototype.md`: Proposed photon-mapped caustics prototype, disabled-path isolation, pipeline, estimator, lifecycle, testing, and staged implementation.
 - `13-denoising-and-upscaling.md`: Future reconstruction architecture, denoiser feature buffers, temporal motion/history requirements, Unity 6.3 implications, and DLSS/FSR/MetalFX/STP integration options.
 - `14-svgf-implementation-plan.md`: Ordered GPU-native A-trous/SVGF implementation milestones, current status, validation criteria, diagnostics, and remaining denoising work.
+- `15-terrain-rendering.md`: GPU heightfield terrain data flow, acceleration structure, scene generation, rank-based layer weight painting, coverage reporting, and limitations.
 
 ## Fast Context Selection
 
@@ -34,3 +35,5 @@ Use this folder as focused context for LLM-assisted work on the Unity GPU ray tr
 - To plan denoising, internal-resolution rendering, temporal upscaling, Unity 6.3 migration choices, or DLSS/FSR/MetalFX/STP integration, read `13-denoising-and-upscaling.md`, then `02-runtime-data-flow.md` and `03-compute-shader-renderer.md` before implementation.
 - To implement or continue the GPU-native A-trous/SVGF denoiser, read `14-svgf-implementation-plan.md` and `13-denoising-and-upscaling.md`, then the relevant renderer/shader documents.
 - To understand the project quickly before making broad changes, read `01-project-overview.md` first.
+- To change terrain layer textures, weights, or elevation/slope banding, read `15-terrain-rendering.md`; declare rules in rank/degree space via `TerrainLayerPainter` and verify with `Tools > Ray Tracing > Report Terrain Coverage`.
+- To regenerate generated scenes after changing generator code, use `Tools > Ray Tracing > Regenerate Scenes (Overwrite All)`; plain `Generate Scenes` skips scenes that already exist.

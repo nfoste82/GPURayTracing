@@ -23,6 +23,7 @@ Available modes:
 - `Caustics`: isolates currently discoverable caustic transport. It suppresses direct lighting and returns emissive radiance only for stochastic camera paths that hit a diffuse receiver, subsequently scatter from glass or water, and then reach an emitter. Black output is expected until one of these rare paths is sampled; use high `numberOfPasses` when diagnosing the current estimator.
 - `RawBeauty`: linear HDR beauty before exposure and tone mapping. This remains the existing accumulated radiance when frame accumulation is enabled.
 - `FeatureNormal`, `FeatureAlbedo`, `FeatureDepth`, `FeatureIdentity`, and `FeatureValidity`: stable, unjittered primary-hit reconstruction features. Depth uses the existing `HitDistance` display range, identity uses a deterministic hash color, and sky pixels are invalid.
+- `TerrainCells`: terrain-only diagnostic for the coarse acceleration-cell coordinate. Red and green show the fractional X/Z coordinate within a cell; blue highlights cell boundaries. Use it to compare a suspected terrain artifact with the acceleration grid. It renders black for non-terrain hits and sky.
 
 Debug modes still use the normal camera ray generation and depth-of-field jitter path, so high `numberOfPasses` can average noisy debug samples for modes involving randomized normals, direct light, or throughput.
 

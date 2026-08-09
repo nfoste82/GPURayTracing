@@ -473,6 +473,89 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void TerrainScene_UsesAllElevationPaintedLayers()
+        {
+            Scene previousScene = SceneManager.GetActiveScene();
+            string previousScenePath = previousScene.path;
+            try
+            {
+                Scene scene = EditorSceneManager.OpenScene(
+                    "Assets/Scenes/Generated/Terrain.unity",
+                    OpenSceneMode.Single);
+                Assert.That(scene.IsValid(), Is.True);
+
+                Terrain terrain = UnityEngine.Object.FindFirstObjectByType<Terrain>();
+                Assert.That(terrain, Is.Not.Null, "The generated terrain scene must contain a Terrain component");
+                TerrainData data = terrain.terrainData;
+                Assert.That(data, Is.Not.Null);
+                Assert.That(data.terrainLayers, Has.Length.EqualTo(4));
+
+                float[,,] weights = data.GetAlphamaps(0, 0, data.alphamapWidth, data.alphamapHeight);
+                var totals = new float[data.alphamapLayers];
+                var dominantCounts = new int[data.alphamapLayers];
+                for (int z = 0; z < data.alphamapHeight; z++)
+                {
+                    for (int x = 0; x < data.alphamapWidth; x++)
+                    {
+                        int dominant = 0;
+                        float best = -1.0f;
+                        for (int layer = 0; layer < totals.Length; layer++)
+                        {
+                            float weight = weights[z, x, layer];
+                            totals[layer] += weight;
+                            if (weight > best)
+                            {
+                                best = weight;
+                                dominant = layer;
+                            }
+                        }
+                        dominantCounts[dominant]++;
+                    }
+                }
+
+                float sampleCount = data.alphamapWidth * data.alphamapHeight;
+                for (int layer = 0; layer < 4; layer++)
+                {
+                    float averageWeight = totals[layer] / sampleCount;
+                    float dominantFraction = dominantCounts[layer] / sampleCount;
+                    TestContext.WriteLine(
+                        $"Terrain layer {layer} average weight: {averageWeight:F3}, " +
+                        $"dominant on {dominantFraction * 100.0f:F1}% of texels");
+                    Assert.That(averageWeight, Is.GreaterThan(0.01f),
+                        $"Terrain layer {layer} should cover a visible portion of the generated terrain");
+
+                    // Average weight alone cannot distinguish real variety from uniform mush: a
+                    // terrain where every texel blends all four layers equally passes that check
+                    // yet renders as one flat colour. Dominance is the property that matters.
+                    Assert.That(dominantFraction, Is.GreaterThan(0.02f),
+                        $"Terrain layer {layer} should be the strongest layer somewhere; a layer that is " +
+                        "never dominant is effectively invisible. Adjust its elevation ranks or slope " +
+                        "degrees in RayTracingSceneGenerator, then use " +
+                        "Tools > Ray Tracing > Regenerate Terrain Scene.");
+                }
+
+                // No single layer may swamp the terrain; that is the uniform-texture failure mode.
+                for (int layer = 0; layer < 4; layer++)
+                {
+                    Assert.That(dominantCounts[layer] / sampleCount, Is.LessThan(0.85f),
+                        $"Terrain layer {layer} dominates almost the entire terrain, so the other layers " +
+                        "are not visible. Its elevation band is probably far wider than intended.");
+                }
+            }
+            finally
+            {
+                if (!string.IsNullOrEmpty(previousScenePath))
+                {
+                    EditorSceneManager.OpenScene(previousScenePath, OpenSceneMode.Single);
+                }
+                else
+                {
+                    EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+                }
+            }
+        }
+
+        [Test]
         public void CausticsScene_ProductionSamplingDistribution_HasValidTargets()
         {
             Scene previousScene = SceneManager.GetActiveScene();

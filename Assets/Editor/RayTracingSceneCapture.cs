@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -27,6 +28,7 @@ public static class RayTracingSceneCapture
         string outputArgument = GetCommandLineArgument("-rayTracingOutput");
         bool generateScenes = HasCommandLineArgument("-rayTracingGenerateScenes");
         string label = GetCommandLineArgument("-rayTracingCaptureLabel") ?? DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
+        GameManager.DebugRenderMode debugRenderMode = GetDebugRenderMode();
         if (!TryGetCaptureSettings(out int samplesPerScene, out int captureWidth, out int captureHeight))
         {
             ExitBatchMode(1);
@@ -45,7 +47,126 @@ public static class RayTracingSceneCapture
             RayTracingSceneGenerator.GenerateScenes(scenes, true);
         }
         string outputRoot = string.IsNullOrWhiteSpace(outputArgument) ? GetDefaultOutputRoot() : outputArgument;
+        if (Application.isBatchMode)
+        {
+            CaptureInBatchMode(label, scenes, outputRoot, samplesPerScene, captureWidth, captureHeight, debugRenderMode);
+            return;
+        }
         StartCapture(label, scenes, outputRoot, samplesPerScene, captureWidth, captureHeight);
+    }
+
+    private static void CaptureInBatchMode(
+        string label,
+        IReadOnlyList<string> scenePaths,
+        string outputRoot,
+        int samplesPerScene,
+        int captureWidth,
+        int captureHeight,
+        GameManager.DebugRenderMode debugRenderMode)
+    {
+        try
+        {
+            foreach (string scenePath in scenePaths)
+            {
+                string trimmedPath = scenePath.Trim();
+                if (!File.Exists(trimmedPath))
+                {
+                    throw new FileNotFoundException("Ray tracing scene capture could not find its scene.", trimmedPath);
+                }
+
+                EditorSceneManager.OpenScene(trimmedPath);
+                GameManager manager = UnityEngine.Object.FindFirstObjectByType<GameManager>();
+                if (manager == null || manager.renderTextureCamera == null || manager.shader == null)
+                {
+                    throw new InvalidOperationException($"Scene capture requires a configured GameManager, render camera, and compute shader: {trimmedPath}");
+                }
+
+                manager.randomNoise = false;
+                manager.enableFrameAccumulation = true;
+                manager.enableDynamicQuality = false;
+                manager.enableTemporalDenoising = false;
+                manager.debugRenderMode = debugRenderMode;
+                manager.numberOfPasses = 1;
+                manager._singleFrame = true;
+                RayTracingTerrain terrain = UnityEngine.Object.FindFirstObjectByType<RayTracingTerrain>();
+                if (terrain != null && !manager.RegisterTerrain(terrain))
+                {
+                    throw new InvalidOperationException($"Scene capture could not register its terrain: {trimmedPath}");
+                }
+                InitializeBatchRenderer(manager, captureWidth, captureHeight);
+
+                _captureTarget = new RenderTexture(captureWidth, captureHeight, 24, RenderTextureFormat.ARGB32)
+                {
+                    name = "Ray Tracing Scene Capture",
+                    enableRandomWrite = true
+                };
+                _captureTarget.Create();
+                manager.renderTextureCamera.targetTexture = _captureTarget;
+                var source = new RenderTexture(captureWidth, captureHeight, 0, RenderTextureFormat.ARGB32);
+                source.Create();
+
+                try
+                {
+                    // RenderImage normally runs from a Game View callback. Invoke it directly because
+                    // batch-mode editor sessions do not repaint a Game View.
+                    for (int sample = 0; sample <= samplesPerScene; sample++)
+                    {
+                        manager.RenderImage(source, _captureTarget);
+                    }
+
+                    string sceneName = Path.GetFileNameWithoutExtension(trimmedPath);
+                    string outputPath = Path.Combine(outputRoot, SanitizePathSegment(label), sceneName + ".png");
+                    manager.ExportCurrentRenderPng(outputPath);
+                    Debug.Log($"Ray tracing scene capture wrote '{outputPath}'.");
+                }
+                finally
+                {
+                    source.Release();
+                    UnityEngine.Object.DestroyImmediate(source);
+                }
+                ReleaseCaptureTarget(manager.renderTextureCamera);
+            }
+
+            Debug.Log($"Ray tracing scene capture complete: '{Path.Combine(outputRoot, SanitizePathSegment(label))}'.");
+            ExitBatchMode(0);
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception);
+            ReleaseCaptureTarget(null);
+            ExitBatchMode(1);
+        }
+    }
+
+    private static void InitializeBatchRenderer(GameManager manager, int width, int height)
+    {
+        MethodInfo createOutputTexture = typeof(GameManager).GetMethod(
+            "CreateOutputTexture",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        if (createOutputTexture == null)
+        {
+            throw new MissingMethodException(typeof(GameManager).FullName, "CreateOutputTexture");
+        }
+
+        createOutputTexture.Invoke(manager, new object[] { width, height });
+        manager.RebuildBuffers(false);
+    }
+
+    private static GameManager.DebugRenderMode GetDebugRenderMode()
+    {
+        string argument = GetCommandLineArgument("-rayTracingDebugRenderMode");
+        if (argument == null)
+        {
+            return GameManager.DebugRenderMode.FinalColor;
+        }
+
+        if (Enum.TryParse(argument, true, out GameManager.DebugRenderMode mode)
+            && Enum.IsDefined(typeof(GameManager.DebugRenderMode), mode))
+        {
+            return mode;
+        }
+
+        throw new ArgumentException($"Unknown ray tracing debug render mode '{argument}'.");
     }
 
     private static void StartCapture(string label, IReadOnlyList<string> scenePaths, string outputRoot, int samplesPerScene, int captureWidth, int captureHeight)
@@ -233,8 +354,19 @@ public static class RayTracingSceneCapture
         }
         if (_captureTarget != null)
         {
+            if (RenderTexture.active == _captureTarget)
+            {
+                RenderTexture.active = null;
+            }
             _captureTarget.Release();
-            UnityEngine.Object.Destroy(_captureTarget);
+            if (Application.isPlaying)
+            {
+                UnityEngine.Object.Destroy(_captureTarget);
+            }
+            else
+            {
+                UnityEngine.Object.DestroyImmediate(_captureTarget);
+            }
             _captureTarget = null;
         }
     }

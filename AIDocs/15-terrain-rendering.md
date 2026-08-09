@@ -1,0 +1,35 @@
+# Terrain Rendering
+
+`RayTracingTerrain` registers one Unity `Terrain` with its parent `GameManager`. The renderer traces height data directly; it does not convert terrain into mesh triangles. Registration flattens `TerrainData.GetHeights()` into `_TerrainHeights`, and the shader performs explicit bilinear sampling. This guarantees that intersections and CPU acceleration bounds use the same orientation and values on every graphics API.
+
+## GPU Data
+
+At registration, `RayTracingTerrain.BuildCells()` creates a fixed-resolution X/Z grid of normalized min/max height pairs. `GameManager` uploads it as `_TerrainCells`, with the terrain transform, size, height buffer, alphamap, and the first four `TerrainLayer` diffuse textures. The current implementation uses the grid for ordered DDA traversal but does not reject cells from min/max values: steep generated terrain exposed false-negative cells when a ray entered below the surface, so correctness currently takes priority over that optimization.
+
+`IntersectTerrain()` first clips rays against the terrain AABB. It then marches continuously across that interval at the heightmap texel scale and uses binary refinement against the bilinearly sampled heightmap. A signed-distance crossing is required; the coarse X/Z cell grid is diagnostic-only and does not partition the intersection march, preventing its boundaries from appearing in the render.
+
+Terrain albedo blends the first four terrain-layer diffuse textures, respecting each `TerrainLayer.tileSize`. Registration copies `TerrainData.GetAlphamaps()` into a dedicated linear RGBA texture rather than binding Unity's internal terrain control texture, whose channel encoding is not a stable public rendering contract. The compute shader uses explicit integer texture loads for both this control texture and layer albedos, avoiding backend sampler-state ambiguity. The generated scene uses 2K CC0 Poly Haven albedos from `Assets/Textures/Terrain`: Dirt Floor, Sparse Grass, Rock 05, and Rock Boulder Dry. Layer weights are painted by rank/slope rules described under Layer Weight Painting. The generated Terrain also uses `Nature/Terrain/RayTracingPreview`, a minimal four-layer material for reliable textured Scene-view preview. The hit normal is derived from centered heightmap samples. Terrain currently uses a fixed diffuse material response and does not import TerrainLayer normal, mask, metallic, or additional alphamap textures.
+
+Terrain currently receives shadows from spheres and meshes but does not cast terrain-on-terrain shadows. The first shadow implementation re-entered the same sampled heightfield after the normal ray offset, producing repeated false self-shadow bands. A future implementation should carry terrain surface identity into shadow queries and use a slope-aware world-space bias before terrain shadow casting is enabled.
+
+## Generated Scene
+
+`Tools > Ray Tracing > Generate Scenes` creates `Assets/Scenes/Generated/Terrain.unity`. The terrain heightmap is deterministically generated from seed `481516`, stored in `RayTracingTerrain.Seed`, and serialized as `GeneratedAssets/SeededTerrain.asset`. It represents a 1 km x 1 km area with approximately 96 m of relief. Regenerating the selected scene uses the same seed and produces the same terrain.
+
+`Generate Scenes` skips any generated scene whose `.unity` file already exists, so generator edits do not appear until the scene is regenerated; the skip now logs a warning naming the regeneration commands. Use `Tools > Ray Tracing > Regenerate Scenes (Overwrite All)` to rebuild every generated scene after confirmation, or `Tools > Ray Tracing > Regenerate Terrain Scene` for terrain only.
+
+## Layer Weight Painting
+
+Layer weights come from declarative rules in `TerrainLayerPainter`, not hand-tuned height constants. The height generator chains fractal noise, Gaussian massifs, ridged noise, valley subtraction, and edge falloff, then min/max normalizes, so the elevation distribution is strongly bottom-weighted: on the shipped seed the median elevation is `0.108` and the 75th percentile is `0.349`, not `0.5`. Absolute thresholds written against an assumed uniform distribution therefore paint almost nothing, which is how an earlier revision shipped a terrain whose visible area was a single layer.
+
+Each `TerrainLayerPainter.LayerRule` declares an elevation band as a **percentile rank** of the actual heightmap and a slope band in **real degrees**. Rank `0.9` always means "the highest 10 percent by area" and `26` degrees always means 26 degrees, so both survive changes to the height generator, heightmap resolution, and terrain size. `Paint()` measures the real elevation and slope distributions, resolves every rank into a concrete height once, and normalizes each texel's weights to sum to one. Texels no rule claims fall back to the nearest band and are counted separately in `FallbackFraction`, so gap-filling cannot be mistaken for intentional coverage.
+
+`ValidateCoverage()` flags any layer that is genuinely dominant on less than two percent of the terrain, and flags a fallback rate above two percent. `BuildReport()` prints measured percentiles, resolved thresholds, per-layer average weight and dominance, and a 32x32 ASCII dominance map. Scene generation logs that report and raises each warning, so a starved band is visible in the console instead of requiring a visual check. To rebalance the terrain, move the ranks and degrees in `CreateSeededTerrainData`; do not reintroduce raw height constants.
+
+`Tools > Ray Tracing > Report Terrain Coverage` runs the same report against whatever is already serialized in `TerrainData`, and adds per-layer dominance restricted to an estimate of the camera's visible region. That last section matters because a healthy whole-terrain split can still render as one texture: the terrain sits at `z = -80` with the camera at `z = -0.42`, which is inside the edge-falloff band where heights are clamped, so the near field is naturally low-elevation.
+
+`TerrainScene_UsesAllElevationPaintedLayers` asserts per-layer dominance above two percent and below 85 percent in addition to average weight. Average weight alone cannot distinguish real variety from uniform mush, since a terrain blending all four layers equally everywhere passes an average-weight check while rendering as one flat colour.
+
+Terrain uses a direct heightfield upload rather than mesh triangles and therefore has no terrain BVH to bake or rebuild. Scene generation displays editor progress while it creates the heightfield, imports/assigns terrain textures, and paints layer weights. At runtime, `GameManager` presents a startup status notice for one frame before synchronous ray-tracing buffer construction; its normal startup profile log identifies the time spent in baked mesh-BVH loading, mesh/BVH construction, texture arrays, top-level BVHs, uploads, and the first dispatch. The first import of the four 2K terrain textures can still take longer while Unity builds its platform-specific texture cache.
+
+Only one `RayTracingTerrain` can be active under a `GameManager`.
