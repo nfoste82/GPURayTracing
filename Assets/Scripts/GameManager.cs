@@ -485,6 +485,15 @@ public class GameManager : MonoBehaviour
     private int _causticFrameIndex;
     private bool _previousCausticsEnabled;
     private int _causticDispatchCount;
+    private bool _causticMetadataReadbackInFlight;
+    private int _causticMetadataReadbackGeneration;
+
+    // Acceleration structures only need rebuilding when object bounds, membership, or their
+    // activation thresholds change. Material-only edits keep the existing bounds valid.
+    private bool _topLevelBvhDirty;
+    private bool _shadowBvhDirty;
+    private int _lastTopLevelBvhMinObjectCount = int.MinValue;
+    private int _lastShadowBvhMinObjectCount = int.MinValue;
 
     // Tracks whether any shadow-casting blocker (regular sphere or mesh triangle) is transparent
     // (opacity < 1). When false, shadow rays in the shader take a cheaper pure-occlusion path that
@@ -1105,10 +1114,34 @@ public class GameManager : MonoBehaviour
 
         _denoiserPingTexture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
         _denoiserPongTexture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
-        _denoiserIteration1Texture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
-        _denoiserIteration2Texture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
-        _denoiserIteration3Texture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
         _causticPreservationMaskTexture = CreateFeatureTexture(RenderTextureFormat.RHalf);
+    }
+
+    private RenderTexture GetDenoiserIterationTexture(int iteration)
+    {
+        switch (iteration)
+        {
+            case 1:
+                if (_denoiserIteration1Texture == null)
+                {
+                    _denoiserIteration1Texture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
+                }
+                return _denoiserIteration1Texture;
+            case 2:
+                if (_denoiserIteration2Texture == null)
+                {
+                    _denoiserIteration2Texture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
+                }
+                return _denoiserIteration2Texture;
+            case 3:
+                if (_denoiserIteration3Texture == null)
+                {
+                    _denoiserIteration3Texture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
+                }
+                return _denoiserIteration3Texture;
+            default:
+                return null;
+        }
     }
 
     private void ReleaseSpatialDenoiserResources()
@@ -1471,6 +1504,7 @@ public class GameManager : MonoBehaviour
             _focusReadbackRequest.WaitForCompletion();
         }
         _focusQueryGeneration++;
+        _causticMetadataReadbackGeneration++;
         _focusQueryBuffer?.Release();
         _focusQueryBuffer = null;
         ReleaseCausticResources();
@@ -1601,6 +1635,11 @@ public class GameManager : MonoBehaviour
             : debugRenderMode == DebugRenderMode.AtrousIteration2 ? 2
             : 1;
         int iterations = Mathf.Clamp(Mathf.Max(spatialDenoiserIterations, requiredDebugIterations), 1, 5);
+        bool captureDebugIteration = debugRenderMode == DebugRenderMode.AtrousIteration1
+            || debugRenderMode == DebugRenderMode.AtrousIteration2
+            || debugRenderMode == DebugRenderMode.AtrousIteration3;
+        RenderTexture debugIterationTexture = captureDebugIteration
+            ? GetDenoiserIterationTexture(requiredDebugIterations) : null;
         int threadGroupsX = Mathf.CeilToInt(_textureSize.x / 8.0f);
         int threadGroupsY = Mathf.CeilToInt(_textureSize.y / 8.0f);
         if (enableCaustics)
@@ -1614,17 +1653,9 @@ public class GameManager : MonoBehaviour
             _spatialDenoiserShader.SetInt("_StepWidth", 1 << iteration);
             _spatialDenoiserShader.Dispatch(atrousKernel, threadGroupsX, threadGroupsY, 1);
 
-            if (iteration == 0)
+            if (captureDebugIteration && iteration == requiredDebugIterations - 1)
             {
-                Graphics.CopyTexture(output, _denoiserIteration1Texture);
-            }
-            else if (iteration == 1)
-            {
-                Graphics.CopyTexture(output, _denoiserIteration2Texture);
-            }
-            else if (iteration == 2)
-            {
-                Graphics.CopyTexture(output, _denoiserIteration3Texture);
+                Graphics.CopyTexture(output, debugIterationTexture);
             }
 
             input = output;
@@ -1632,17 +1663,9 @@ public class GameManager : MonoBehaviour
         }
 
         RenderTexture presentationInput = input;
-        if (debugRenderMode == DebugRenderMode.AtrousIteration1)
+        if (captureDebugIteration)
         {
-            presentationInput = _denoiserIteration1Texture;
-        }
-        else if (debugRenderMode == DebugRenderMode.AtrousIteration2 && iterations >= 2)
-        {
-            presentationInput = _denoiserIteration2Texture;
-        }
-        else if (debugRenderMode == DebugRenderMode.AtrousIteration3 && iterations >= 3)
-        {
-            presentationInput = _denoiserIteration3Texture;
+            presentationInput = debugIterationTexture;
         }
 
         int presentKernel = _spatialDenoiserShader.FindKernel("CSPresent");
@@ -2174,6 +2197,8 @@ public class GameManager : MonoBehaviour
 
     private void ReleaseCausticResources()
     {
+        _causticMetadataReadbackGeneration++;
+        _causticMetadataReadbackInFlight = false;
         _causticPhotonBuffer?.Release();
         _causticPhotonMetadataBuffer?.Release();
         _causticGridCellHeadBuffer?.Release();
@@ -2247,16 +2272,48 @@ public class GameManager : MonoBehaviour
         shader.Dispatch(traceKernel, Mathf.CeilToInt(Mathf.Max(1, causticPhotonCount) / (float)CausticTraceThreadCount), 1, 1);
         shader.Dispatch(clearGridKernel, Mathf.CeilToInt(_causticGridCellCount / (float)CausticTraceThreadCount), 1, 1);
         shader.Dispatch(buildGridKernel, Mathf.CeilToInt(Mathf.Max(1, causticPhotonCount) / (float)CausticTraceThreadCount), 1, 1);
-        var metadata = new uint[CausticMetadataCount];
-        _causticPhotonMetadataBuffer.GetData(metadata);
-        _causticGridOutOfBoundsCount = (int)metadata[4];
-        _causticGridPhotonCount = (int)metadata[5];
+        RequestCausticMetadataReadback();
         _causticDispatchCount++;
         if (ShouldUseFrameAccumulation())
         {
             _causticFrameIndex = _causticFrameIndex == int.MaxValue ? 0 : _causticFrameIndex + 1;
         }
         _previousCausticsEnabled = true;
+    }
+
+    private void RequestCausticMetadataReadback()
+    {
+        if (_causticMetadataReadbackInFlight || _causticPhotonMetadataBuffer == null)
+        {
+            return;
+        }
+
+        _causticMetadataReadbackInFlight = true;
+        int generation = _causticMetadataReadbackGeneration;
+        AsyncGPUReadback.Request(_causticPhotonMetadataBuffer,
+            request => CompleteCausticMetadataReadback(request, generation));
+    }
+
+    private void CompleteCausticMetadataReadback(AsyncGPUReadbackRequest request, int generation)
+    {
+        if (generation != _causticMetadataReadbackGeneration)
+        {
+            return;
+        }
+
+        _causticMetadataReadbackInFlight = false;
+        if (request.hasError)
+        {
+            Debug.LogWarning("Caustic metadata GPU readback failed.", this);
+            return;
+        }
+
+        var metadata = request.GetData<uint>();
+        if (metadata.Length >= CausticMetadataCount)
+        {
+            _causticGridOutOfBoundsCount = (int)metadata[4];
+            _causticGridPhotonCount = (int)metadata[5];
+        }
     }
 
     private void SetPhotonTraceSceneParameters(int traceKernel)
@@ -2616,7 +2673,8 @@ public class GameManager : MonoBehaviour
         {
             PresentCausticPreservationMask();
         }
-        if (!useDedicatedCausticsDebugKernel && ShouldRunSpatialDenoiser() && !IsTemporalDebugMode())
+        if (!useDedicatedCausticsDebugKernel && ShouldRunSpatialDenoiser() && !IsTemporalDebugMode()
+            && !ShouldUseTemporalAccumulation())
         {
             RunSpatialDenoiser();
         }
@@ -3105,9 +3163,12 @@ public class GameManager : MonoBehaviour
     private void UpdateSpheres()
     {
         _hasTransparentSphereBlockers = false;
+        bool spheresChanged = false;
+        bool lightsChanged = false;
         for (int i = 0; i < _spheres.Count; ++i)
         {
             var sphere = _spheres[i];
+            Sphere previousSphere = sphere;
             var sphereObject = _sphereObjects[i];
 
             Vector3 position = sphereObject.transform.TransformPoint(sphereObject.collider.center);
@@ -3124,6 +3185,7 @@ public class GameManager : MonoBehaviour
             sphere.specular = material.Specular;
             sphere.transmission = material.Transmission;
             sphere.materialType = (int)material.Type;
+            spheresChanged |= !sphere.Equals(previousSphere);
 
             if (sphere.opacity < ShadowBlockerOpaqueThreshold)
             {
@@ -3141,6 +3203,7 @@ public class GameManager : MonoBehaviour
             }
 
             var lightData = _lights[i];
+            Light previousLightData = lightData;
             var lightObject = _lightObjects[i];
 
             Vector3 position = lightObject.transform.TransformPoint(lightObject.collider.center);
@@ -3153,6 +3216,7 @@ public class GameManager : MonoBehaviour
 
             var light = lightObject.light;
             lightData.emission = light.Color.ToVector3() * Mathf.Max(0.0f, light.Intensity);
+            lightsChanged |= !lightData.Equals(previousLightData);
             
             _lights[i] = lightData;
         }
@@ -3169,14 +3233,21 @@ public class GameManager : MonoBehaviour
 
             Light first = default;
             UpdateVirtualSunTriangles(directionalLight, ref first, out Light second);
-            _temporalDynamicSceneChanged |= !first.Equals(_lights[lightIndex]) || !second.Equals(_lights[lightIndex + 1]);
+            bool directionalChanged = !first.Equals(_lights[lightIndex]) || !second.Equals(_lights[lightIndex + 1]);
+            _temporalDynamicSceneChanged |= directionalChanged;
+            lightsChanged |= directionalChanged;
             _lights[lightIndex] = first;
             _lights[lightIndex + 1] = second;
         }
 
-        if (_sphereBuffer != null && _spheres.Count > 0)
+        if (spheresChanged)
         {
-            _sphereBuffer.SetData(_spheres);
+            _topLevelBvhDirty = true;
+            _shadowBvhDirty = true;
+            if (_sphereBuffer != null && _spheres.Count > 0)
+            {
+                _sphereBuffer.SetData(_spheres);
+            }
         }
 
         int requiredLightBufferCount = Mathf.Max(1, _lights.Count);
@@ -3185,9 +3256,14 @@ public class GameManager : MonoBehaviour
             _lightBuffer?.Release();
             _lightBuffer = CreateComputeBuffer(_lights, LightStride);
         }
-        else if (_lights.Count > 0)
+        else if (lightsChanged && _lights.Count > 0)
         {
             _lightBuffer.SetData(_lights);
+        }
+
+        if (lightsChanged)
+        {
+            _topLevelBvhDirty = true;
         }
     }
 
@@ -3209,6 +3285,8 @@ public class GameManager : MonoBehaviour
         if (geometryChanged)
         {
             RebuildTriangleData();
+            _topLevelBvhDirty = true;
+            _shadowBvhDirty = true;
         }
         else
         {
@@ -3230,21 +3308,25 @@ public class GameManager : MonoBehaviour
             _bvhNodeBuffer.SetData(_bvhNodes);
         }
 
-        int requiredLightBufferCount = Mathf.Max(1, _lights.Count);
-        if (_lightBuffer == null || _lightBuffer.count < requiredLightBufferCount)
-        {
-            _lightBuffer?.Release();
-            _lightBuffer = CreateComputeBuffer(_lights, LightStride);
-        }
-        else if (_lights.Count > 0)
+        // Mesh emitters share the light buffer with sphere and directional lights. Refresh it
+        // after a mesh material edit, which may have changed mesh-light emission.
+        if ((geometryChanged || materialChanged) && _lightBuffer != null && _lights.Count > 0)
         {
             _lightBuffer.SetData(_lights);
         }
+
     }
 
     private void UpdateTopLevelBvh()
     {
+        if (!_topLevelBvhDirty && _lastTopLevelBvhMinObjectCount == topLevelBvhMinObjectCount)
+        {
+            return;
+        }
+
         RebuildTopLevelBvh();
+        _topLevelBvhDirty = false;
+        _lastTopLevelBvhMinObjectCount = topLevelBvhMinObjectCount;
 
         int requiredBufferCount = Mathf.Max(1, _topLevelBvhNodes.Count);
         if (_topLevelBvhNodeBuffer == null || _topLevelBvhNodeBuffer.count < requiredBufferCount)
@@ -3260,7 +3342,14 @@ public class GameManager : MonoBehaviour
 
     private void UpdateShadowBvh()
     {
+        if (!_shadowBvhDirty && _lastShadowBvhMinObjectCount == shadowBvhMinObjectCount)
+        {
+            return;
+        }
+
         RebuildShadowBvh();
+        _shadowBvhDirty = false;
+        _lastShadowBvhMinObjectCount = shadowBvhMinObjectCount;
 
         int requiredBufferCount = Mathf.Max(1, _shadowBvhNodes.Count);
         if (_shadowBvhNodeBuffer == null || _shadowBvhNodeBuffer.count < requiredBufferCount)
@@ -4686,6 +4775,8 @@ public class GameManager : MonoBehaviour
 
         phaseStart = Stopwatch.GetTimestamp();
         RebuildTopLevelBvh();
+        _topLevelBvhDirty = false;
+        _lastTopLevelBvhMinObjectCount = topLevelBvhMinObjectCount;
         if (startupProfile)
         {
             AddStartupProfilePhase($"top-level BVH ({_topLevelBvhNodes.Count:N0} nodes)", phaseStart);
@@ -4693,6 +4784,8 @@ public class GameManager : MonoBehaviour
 
         phaseStart = Stopwatch.GetTimestamp();
         RebuildShadowBvh();
+        _shadowBvhDirty = false;
+        _lastShadowBvhMinObjectCount = shadowBvhMinObjectCount;
         if (startupProfile)
         {
             AddStartupProfilePhase($"shadow BVH ({_shadowBvhNodes.Count:N0} nodes)", phaseStart);

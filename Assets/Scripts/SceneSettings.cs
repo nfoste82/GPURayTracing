@@ -17,6 +17,10 @@ public sealed class SceneSettings
     public GameManager.LightSamplingStrategy LightSamplingStrategy = GameManager.LightSamplingStrategy.ImportanceSampled;
     public int LightSampleCount = 1;
 
+    public bool EnableSpatialDenoising = true;
+    public float DenoiserLuminanceSigma = 0.05f;
+    public int DenoiserIterations = 1;
+
     public bool EnableCaustics = false;
     public int CausticPhotonCount = 65536;
     public float CausticGatherRadius = 0.025f;

@@ -225,6 +225,10 @@ public static class RayTracingSceneGenerator
         manager.renderTextureCamera = camera;
         manager.InitSceneSettings(settings);
         manager.skyboxTexture = AssetDatabase.LoadAssetAtPath<Texture>(SkyboxPath);
+        
+        manager.enableSpatialDenoising = settings.EnableSpatialDenoising;
+        manager.spatialDenoiserIterations = settings.DenoiserIterations;
+        manager.spatialDenoiserLuminanceSigma = settings.DenoiserLuminanceSigma;
 
         var renderer = cameraObject.AddComponent<RayTracingCameraRenderer>();
         renderer.GameManager = manager;
@@ -883,6 +887,9 @@ public static class RayTracingSceneGenerator
             EnableCaustics = true, 
             CausticGatherRadius = 0.01f, 
             CausticIntensity = 1.3f,
+            EnableSpatialDenoising = true,
+            DenoiserIterations = 1,
+            DenoiserLuminanceSigma = 0.04f,
             TopLevelBvhMinObjectCount = 1024, 
             ShadowBvhMinObjectCount = 1024,
             LightSamplingStrategy = GameManager.LightSamplingStrategy.ImportanceSampled, 

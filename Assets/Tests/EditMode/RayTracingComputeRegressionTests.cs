@@ -5,6 +5,7 @@ using NUnit.Framework;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.Rendering;
 using UnityEngine.SceneManagement;
 
 namespace GPURayTracing.Tests
@@ -663,6 +664,7 @@ namespace GPURayTracing.Tests
 
                 managerType.GetMethod("UpdateCausticPhotonMap", BindingFlags.Instance | BindingFlags.NonPublic)
                     .Invoke(manager, null);
+                AsyncGPUReadback.WaitAllRequests();
                 PropertyInfo photonCountProperty = managerType.GetProperty("CausticGridPhotonCount");
                 int indexedPhotonCount = (int)photonCountProperty.GetValue(manager);
                 TestContext.WriteLine($"Production indexed photon count: {indexedPhotonCount}");
