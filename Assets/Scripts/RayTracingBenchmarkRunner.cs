@@ -61,7 +61,6 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
     private IEnumerator RunBenchmark()
     {
         bool originalCausticsEnabled = gameManager.enableCaustics;
-        bool originalDynamicQuality = gameManager.enableDynamicQuality;
         int originalPhotonCount = gameManager.causticPhotonCount;
         int originalTargetFrameRate = Application.targetFrameRate;
         int originalVSyncCount = QualitySettings.vSyncCount;
@@ -69,10 +68,9 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
         _results.Clear();
         _summaries.Clear();
         _lastCsvPath = null;
-        gameManager.enableDynamicQuality = false;
         Application.targetFrameRate = -1;
         QualitySettings.vSyncCount = 0;
-        _benchmarkMetadata = BuildMetadata(originalDynamicQuality);
+        _benchmarkMetadata = BuildMetadata();
 
         try
         {
@@ -100,7 +98,6 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
         {
             gameManager.enableCaustics = originalCausticsEnabled;
             gameManager.causticPhotonCount = originalPhotonCount;
-            gameManager.enableDynamicQuality = originalDynamicQuality;
             Application.targetFrameRate = originalTargetFrameRate;
             QualitySettings.vSyncCount = originalVSyncCount;
             _benchmarkCoroutine = null;
@@ -206,7 +203,7 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
         return path;
     }
 
-    private string BuildMetadata(bool originalDynamicQuality)
+    private string BuildMetadata()
     {
         var builder = new StringBuilder(1024);
         builder.AppendLine("setting,value");
@@ -220,9 +217,6 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
         AppendSetting(builder, "num_bounces", gameManager.numBounces);
         AppendSetting(builder, "shadow_quality", gameManager.shadowQuality);
         AppendSetting(builder, "shadow_randomness", gameManager.shadowRandomness);
-        AppendSetting(builder, "dynamic_quality_during_benchmark", gameManager.enableDynamicQuality);
-        AppendSetting(builder, "dynamic_quality_before_benchmark", originalDynamicQuality);
-        AppendSetting(builder, "dynamic_quality_target_fps", gameManager.dynamicQualityTargetFrameRate);
         AppendSetting(builder, "light_sampling_strategy", gameManager.lightSamplingStrategy);
         AppendSetting(builder, "light_sample_count", gameManager.lightSampleCount);
         AppendSetting(builder, "max_light_samples", gameManager.maxLightSamples);

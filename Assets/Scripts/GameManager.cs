@@ -37,6 +37,10 @@ public class GameManager : MonoBehaviour
         cameraAutoFocus = settings.CameraAutoFocus;
         cameraFocalDistance = settings.CameraFocalDistance;
         cameraApertureMode = settings.CameraApertureMode;
+        cameraApertureRadius = settings.CameraApertureRadius;
+        cameraApertureBladeCount = settings.CameraApertureBladeCount;
+        cameraApertureBladeRotation = settings.CameraApertureBladeRotation;
+        cameraAnamorphicRatio = settings.CameraAnamorphicRatio;
         cameraMovementSpeed = settings.CameraMovementSpeed;
         lightFalloffScale = settings.LightFalloffScale;
         exposure = settings.Exposure;
@@ -51,7 +55,6 @@ public class GameManager : MonoBehaviour
     [SerializeField, HideInInspector]
     private bool bakeBvhUponExit = true;
 
-    [Header("Diagnostics")]
     [Tooltip("Logs phase timings for initial scene buffer construction and the first compute dispatch.")]
     public bool profileStartup = true;
 
@@ -147,6 +150,7 @@ public class GameManager : MonoBehaviour
     [Range(0, 1024)]
     public int shadowBvhMinObjectCount = 1024;
 
+    [Header("Sampling and Accumulation")]
     [Range(0f, 1.5f)]
     public float shadowRandomness = 0.3f;
 
@@ -172,7 +176,6 @@ public class GameManager : MonoBehaviour
     [Range(1, 64)]
     public int lightSampleCount = 1;
 
-    [Header("Caustics prototype")]
     [Tooltip("Builds a photon map for sphere and triangle-light caustics through glass, closed meshes, and the registered water volume. Disabled by default.")]
     public bool enableCaustics = false;
 
@@ -183,12 +186,12 @@ public class GameManager : MonoBehaviour
     [Range(0.01f, 2.0f)]
     public float causticGatherRadius = 0.025f;
 
+    [HideInInspector]
     public int causticSeed = 1;
 
     [Range(0.0f, 10.0f)]
     public float causticIntensity = 4.0f;
 
-    [Header("Volumetric fog")]
     [Tooltip("Globally enables the registered FogVolume without disabling its component or changing shader resources.")]
     public bool enableVolumetricFog = true;
 
@@ -207,22 +210,6 @@ public class GameManager : MonoBehaviour
     [Tooltip("Allows paths to scatter repeatedly in fog. More physical, but slower, noisier, and more likely to wash out high-contrast light shafts.")]
     public bool enableFogMultipleScattering = false;
     
-    [Header("Dynamic quality")]
-    [Tooltip("Dynamically adjusts passes, light sampling, shadow quality, and bounces to approach the target frame rate. BVH thresholds are never changed.")]
-    public bool enableDynamicQuality = false;
-
-    [Tooltip("Target frame rate used as the dynamic-quality frame-time budget.")]
-    [Range(15, 240)]
-    public int dynamicQualityTargetFrameRate = 60;
-
-    [Tooltip("Allowed over-budget frame-time error before dynamic quality reduces a setting.")]
-    [Range(0.05f, 0.5f)]
-    public float dynamicQualityTolerance = 0.15f;
-
-    [Tooltip("Required under-budget headroom before dynamic quality increases a setting. Larger values reduce oscillation.")]
-    [Range(0.1f, 0.75f)]
-    public float dynamicQualityIncreaseHeadroom = 0.25f;
-
     // Must match MaxImportanceLights in RayTracingCompute.compute. Lights beyond this count
     // are ignored by the ImportanceSampled strategy.
     private const int MaxImportanceLights = 128;
@@ -263,15 +250,12 @@ public class GameManager : MonoBehaviour
         TerrainCells = 30
     }
 
-    [Header("Debug render modes")]
     public DebugRenderMode debugRenderMode = DebugRenderMode.FinalColor;
 
-    [Header("Camera controls")]
     [Tooltip("Camera movement speed in world units per second.")]
     [Min(0.01f)]
     public float cameraMovementSpeed = 3.0f;
-
-    [Header("Camera focus and lens")]
+    
     [Tooltip("Continuously focuses the center of the image. A successful click-to-focus selection disables this so the selected distance remains active.")]
     public bool cameraAutoFocus = true;
 
@@ -322,8 +306,6 @@ public class GameManager : MonoBehaviour
     [Range(0.25f, 4.0f)]
     public float cameraAnamorphicRatio = 1.0f;
 
-    [Header("Misc settings")]
-
     [Tooltip("Higher values make direct light fall off faster with distance.")]
     [Range(0.001f, 1.0f)]
     public float lightFalloffScale = 0.16f;
@@ -345,21 +327,23 @@ public class GameManager : MonoBehaviour
 
     public Texture skyboxTexture;
 
-    [Tooltip("Fallback texture used when no mesh albedo textures are active. Created automatically at runtime if unset.")]
+    [HideInInspector]
     public Texture2D defaultMeshAlbedoTexture;
 
-    [Tooltip("Fallback texture used when no mesh metallic/roughness textures are active.")]
+    [HideInInspector]
     public Texture2D defaultMeshMetallicRoughnessTexture;
 
-    [Tooltip("Fallback texture used when no mesh normal textures are active.")]
+    [HideInInspector]
     public Texture2D defaultMeshNormalTexture;
 
-    [Header("Scene preview")]
+    [HideInInspector]
     public bool syncUnitySkyboxToRayTracedSkybox = true;
 
+    [HideInInspector]
     [Range(0.0f, 8.0f)]
     public float unitySkyboxExposure = 1.0f;
 
+    [HideInInspector]
     [Range(0.0f, 360.0f)]
     public float unitySkyboxRotation = 0.0f;
 
@@ -421,9 +405,6 @@ public class GameManager : MonoBehaviour
     private long _renderedFrameCount;
     private int _accumulationStateHash;
     private bool _hasAccumulationStateHash;
-    private float _dynamicQualityAverageFrameMs;
-    private float _dynamicQualityTimeSinceAdjustment;
-    private bool _previousDynamicQualityEnabled;
 
     private List<Sphere> _spheres = new List<Sphere>();
     private readonly List<RayTracedSphere> _sphereObjects = new List<RayTracedSphere>();
@@ -507,11 +488,9 @@ public class GameManager : MonoBehaviour
     // build does not allocate per node.
     private float[] _sahSuffixArea = new float[0];
     
-    [Header("Render single frame")]
     [Tooltip("Freezes simulation time and progressively refines the current view. Camera and scene changes reset accumulation and render the updated view.")]
     public bool _singleFrame = false;
 
-    [Header("Video capture")]
     [Tooltip("Total path-tracing samples per pixel accumulated for each output frame.")]
     [Min(1)]
     public int videoSamplesPerFrame = 128;
@@ -545,7 +524,6 @@ public class GameManager : MonoBehaviour
     private float _videoPreviousSingleFrameRenderTime;
     private bool _videoPreviousFrameAccumulation;
     private bool _videoPreviousTemporalDenoising;
-    private bool _videoPreviousDynamicQuality;
     private int _videoPreviousNumberOfPasses;
     private int _videoPreviousTargetFrameRate;
     private int _videoPreviousVSyncCount;
@@ -583,7 +561,6 @@ public class GameManager : MonoBehaviour
     public bool IsShadowBvhActive => _shadowBvhNodes.Count > 0;
     public Vector2Int TextureSize => _textureSize;
     public int AccumulatedFrameCount => _accumulatedFrameCount;
-    public float DynamicQualityAverageFrameMs => _dynamicQualityAverageFrameMs;
     public bool IsVideoCaptureActive => _videoCaptureActive;
     public int VideoCaptureCompletedFrameCount => _videoCaptureFrameIndex;
     public int VideoCaptureFrameCount => _videoCaptureActive ? _videoCaptureFrameCount : CalculateVideoFrameCount(videoDuration, videoFrameTimeStep);
@@ -628,17 +605,7 @@ public class GameManager : MonoBehaviour
 
     private const int SphereStride = 64;
     private const int LightStride = 72;
-    private const int MinNumberOfPasses = 1;
     private const int MaxNumberOfPasses = 32;
-    private const int MinNumBounces = 1;
-    private const int MaxNumBounces = 16;
-    private const int MinShadowQuality = 0;
-    private const int MaxShadowQuality = 5;
-    private const int MinDynamicLightSampleCount = 1;
-    private const int MaxDynamicLightSampleCount = 64;
-    private const int DynamicLightSampleDivisor = 10;
-    private const float DynamicQualitySmoothing = 0.08f;
-    private const float DynamicQualityAdjustmentInterval = 0.75f;
     private const int TriangleStride = 232;
     private const int MeshInfoStride = 48;
     private const int BvhNodeStride = 48;
@@ -954,6 +921,11 @@ public class GameManager : MonoBehaviour
 
     private void Start()
     {
+        if (!_singleFrame && Time.timeScale == 0.0f)
+        {
+            Time.timeScale = 1.0f;
+        }
+
         _startupRegistrationMilliseconds = _startupStopwatch.Elapsed.TotalMilliseconds;
         _startupProfilePending = profileStartup;
         EnsureBenchmarkComponents();
@@ -1287,14 +1259,6 @@ public class GameManager : MonoBehaviour
         {
             SetSingleFrameMode(_singleFrame);
         }
-
-        if (enableDynamicQuality != _previousDynamicQualityEnabled)
-        {
-            ResetDynamicQualityState();
-            _previousDynamicQualityEnabled = enableDynamicQuality;
-        }
-
-        UpdateDynamicQuality();
 
         if (_videoCaptureActive)
         {
@@ -2344,196 +2308,6 @@ public class GameManager : MonoBehaviour
         return _singleFrame ? _singleFrameRenderTime : Time.time;
     }
 
-    private void ResetDynamicQualityState()
-    {
-        _dynamicQualityAverageFrameMs = Time.unscaledDeltaTime > 0.0f
-            ? Time.unscaledDeltaTime * 1000.0f
-            : GetDynamicQualityTargetFrameMs();
-        _dynamicQualityTimeSinceAdjustment = 0.0f;
-    }
-
-    private void UpdateDynamicQuality()
-    {
-        if (!enableDynamicQuality || _singleFrame)
-        {
-            return;
-        }
-
-        float frameMs = Time.unscaledDeltaTime * 1000.0f;
-        if (frameMs <= 0.0f)
-        {
-            return;
-        }
-
-        if (_dynamicQualityAverageFrameMs <= 0.0f)
-        {
-            _dynamicQualityAverageFrameMs = frameMs;
-        }
-        else
-        {
-            _dynamicQualityAverageFrameMs = Mathf.Lerp(
-                _dynamicQualityAverageFrameMs,
-                frameMs,
-                DynamicQualitySmoothing);
-        }
-
-        _dynamicQualityTimeSinceAdjustment += Time.unscaledDeltaTime;
-        if (_dynamicQualityTimeSinceAdjustment < DynamicQualityAdjustmentInterval)
-        {
-            return;
-        }
-
-        float targetFrameMs = GetDynamicQualityTargetFrameMs();
-        float tolerance = Mathf.Clamp(dynamicQualityTolerance, 0.01f, 1.0f);
-        float increaseHeadroom = Mathf.Clamp(dynamicQualityIncreaseHeadroom, tolerance, 0.95f);
-        float slowThresholdMs = targetFrameMs * (1.0f + tolerance);
-        float fastThresholdMs = targetFrameMs * (1.0f - increaseHeadroom);
-        bool changed = false;
-
-        if (_dynamicQualityAverageFrameMs > slowThresholdMs)
-        {
-            changed = DecreaseDynamicQuality(_dynamicQualityAverageFrameMs / targetFrameMs);
-        }
-        else if (_dynamicQualityAverageFrameMs < fastThresholdMs)
-        {
-            changed = IncreaseDynamicQuality();
-        }
-
-        if (changed)
-        {
-            ResetFrameAccumulation();
-            _dynamicQualityTimeSinceAdjustment = 0.0f;
-        }
-    }
-
-    private float GetDynamicQualityTargetFrameMs()
-    {
-        return 1000.0f / Mathf.Max(1, dynamicQualityTargetFrameRate);
-    }
-
-    private bool DecreaseDynamicQuality(float costRatio)
-    {
-        if (numberOfPasses > MinNumberOfPasses)
-        {
-            int targetPasses = Mathf.Max(
-                MinNumberOfPasses,
-                Mathf.FloorToInt(numberOfPasses / Mathf.Max(1.0f, costRatio)));
-            numberOfPasses = Mathf.Min(numberOfPasses - 1, targetPasses);
-            return true;
-        }
-
-        if (TryDecreaseDynamicLightSampling())
-        {
-            return true;
-        }
-
-        if (shadowQuality > MinShadowQuality)
-        {
-            shadowQuality--;
-            return true;
-        }
-
-        if (numBounces > MinNumBounces)
-        {
-            numBounces--;
-            return true;
-        }
-
-        return false;
-    }
-
-    private bool TryDecreaseDynamicLightSampling()
-    {
-        if (_lights.Count <= 1)
-        {
-            return false;
-        }
-
-        int targetLightSamples = GetDynamicInitialLightSampleCount();
-        if (lightSamplingStrategy == LightSamplingStrategy.AllLights)
-        {
-            lightSamplingStrategy = LightSamplingStrategy.ImportanceSampled;
-            lightSampleCount = targetLightSamples;
-            return true;
-        }
-
-        if (lightSamplingStrategy == LightSamplingStrategy.ImportanceSampled && lightSampleCount > MinDynamicLightSampleCount)
-        {
-            lightSampleCount--;
-            return true;
-        }
-
-        if (lightSamplingStrategy == LightSamplingStrategy.UniformRandom && lightSampleCount > MinDynamicLightSampleCount)
-        {
-            lightSampleCount--;
-            return true;
-        }
-
-        return false;
-    }
-
-    private bool IncreaseDynamicQuality()
-    {
-        if (numberOfPasses < MaxNumberOfPasses)
-        {
-            numberOfPasses++;
-            return true;
-        }
-
-        if (TryIncreaseDynamicLightSampling())
-        {
-            return true;
-        }
-
-        if (shadowQuality < MaxShadowQuality)
-        {
-            shadowQuality++;
-            return true;
-        }
-
-        if (numBounces < MaxNumBounces)
-        {
-            numBounces++;
-            return true;
-        }
-
-        return false;
-    }
-
-    private bool TryIncreaseDynamicLightSampling()
-    {
-        if (_lights.Count <= 1 || lightSamplingStrategy == LightSamplingStrategy.AllLights)
-        {
-            return false;
-        }
-
-        int targetLightSamples = GetDynamicInitialLightSampleCount();
-        int activeLightCount = GetActiveLightCountForSampling();
-        if (lightSampleCount < targetLightSamples)
-        {
-            lightSampleCount++;
-            return true;
-        }
-
-        if (lightSampleCount < activeLightCount)
-        {
-            lightSampleCount++;
-            return true;
-        }
-
-        lightSamplingStrategy = LightSamplingStrategy.AllLights;
-        lightSampleCount = Mathf.Max(MinDynamicLightSampleCount, targetLightSamples);
-        return true;
-    }
-
-    private int GetDynamicInitialLightSampleCount()
-    {
-        return Mathf.Clamp(
-            Mathf.CeilToInt(GetActiveLightCountForSampling() / (float)DynamicLightSampleDivisor),
-            MinDynamicLightSampleCount,
-            MaxDynamicLightSampleCount);
-    }
-
     private int GetActiveLightCountForSampling()
     {
         int activeLightCount = _lights.Count;
@@ -2837,7 +2611,6 @@ public class GameManager : MonoBehaviour
         _videoPreviousSingleFrameRenderTime = _singleFrameRenderTime;
         _videoPreviousFrameAccumulation = enableFrameAccumulation;
         _videoPreviousTemporalDenoising = enableTemporalDenoising;
-        _videoPreviousDynamicQuality = enableDynamicQuality;
         _videoPreviousNumberOfPasses = numberOfPasses;
         _videoPreviousTargetFrameRate = Application.targetFrameRate;
         _videoPreviousVSyncCount = QualitySettings.vSyncCount;
@@ -2854,7 +2627,6 @@ public class GameManager : MonoBehaviour
         _singleFrameRenderTime = Time.time;
         enableFrameAccumulation = true;
         enableTemporalDenoising = false;
-        enableDynamicQuality = false;
         numberOfPasses = samplesPerDispatch;
         EnableSingleFrameSettings();
         Application.targetFrameRate = 1000;
@@ -2950,7 +2722,6 @@ public class GameManager : MonoBehaviour
         _singleFrameRenderTime = _videoPreviousSingleFrameRenderTime;
         enableFrameAccumulation = _videoPreviousFrameAccumulation;
         enableTemporalDenoising = _videoPreviousTemporalDenoising;
-        enableDynamicQuality = _videoPreviousDynamicQuality;
         numberOfPasses = _videoPreviousNumberOfPasses;
         Application.targetFrameRate = _videoPreviousTargetFrameRate;
         QualitySettings.vSyncCount = _videoPreviousVSyncCount;
@@ -5174,7 +4945,7 @@ public class GameManager : MonoBehaviour
     {
         shader.SetInt("_CausticPhotonCapacity", Mathf.Max(1, causticPhotonCount));
         shader.SetInt("_CausticPhotonAttemptCount", Mathf.Max(1, causticPhotonCount));
-        shader.SetInt("_CausticMaxBounces", Mathf.Clamp(numBounces, MinNumBounces, MaxNumBounces));
+        shader.SetInt("_CausticMaxBounces", Mathf.Clamp(numBounces, 1, 16));
         shader.SetInt("_CausticSeed", causticSeed);
         shader.SetInt("_CausticFrameIndex", _causticFrameIndex);
         shader.SetFloat("_CausticGatherRadius", Mathf.Max(0.001f, causticGatherRadius));

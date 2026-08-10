@@ -10,7 +10,7 @@ Realtime 3D path-tracer running in a GPU compute shader in Unity. Full disclosur
 * Optional animated procedural water with reflection, refraction, and underwater RGB absorption
 * Hard and soft shadows
 * Depth of field, variable camera aperture, different aperture types, ability to focus on a point in the scene even while camera is in motion
-* Frame accumulation, dynamic quality, debug views, and benchmark scenes
+* Frame accumulation, debug views, and benchmark scenes
 * Volumetric fog (homogeneous fog)
 * Spatial denoising (basic hand-rolled, not machine-learned denoising)
 

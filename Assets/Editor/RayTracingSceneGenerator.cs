@@ -94,6 +94,7 @@ public static class RayTracingSceneGenerator
             CreateDragonCornellBoxScene();
             CreateWolfensteinScene();
             CreateVolumetricFogScene();
+            CreateApertureBokehScene();
             CreateTerrainScene();
             CreateTeapotMaterialScene();
 
@@ -312,6 +313,64 @@ public static class RayTracingSceneGenerator
         fogObject.transform.localScale = new Vector3(14.0f, 30.0f, 22.0f);
 
         Save(context.Scene, sceneName);
+    }
+
+    [MenuItem("Tools/Ray Tracing/Regenerate Aperture Bokeh Scene")]
+    public static void RegenerateApertureBokehScene()
+    {
+        GenerateScenes(new[] { GetScenePath("ApertureBokeh") }, true);
+    }
+
+    private static void CreateApertureBokehScene()
+    {
+        const string sceneName = "Benchmark_ApertureBokeh";
+        Directory.CreateDirectory(GeneratedSceneFolder);
+        if (ShouldSkipExistingScene(sceneName))
+        {
+            return;
+        }
+
+        // Tiny emissive spheres behave as point highlights. Their deliberately large circle of
+        // confusion makes the sampled aperture silhouette visible without changing the camera.
+        var context = CreateBaseScene(new SceneSettings
+        {
+            SceneName = sceneName,
+            CameraPosition = new Vector3(0.0f, 1.5f, -4.0f),
+            CameraEuler = Vector3.zero,
+            FieldOfView = 25.0f,
+            NumberOfPasses = 4,
+            NumBounces = 2,
+            EnableSpatialDenoising = false,
+            CameraFocalDistance = 2.0f,
+            CameraApertureMode = GameManager.CameraApertureMode.LensRadius,
+            CameraApertureRadius = 0.1f,
+            CameraApertureBladeCount = 3,
+            CameraAnamorphicRatio = 1.0f,
+            DirectionalLightIntensity = 0.0f,
+            SkyboxLightColor = new Color32(0, 0, 0, 255),
+            FireflyClamp = 0.0f,
+            TopLevelBvhMinObjectCount = 0,
+            ShadowBvhMinObjectCount = 0
+        });
+
+        AddPrimitiveMesh(context.Root, "Dark Backdrop", RayMeshPrimitive.PrimitiveType.Cube,
+            new Vector3(0.0f, 3.0f, 17.0f), Vector3.zero, new Vector3(14.0f, 8.0f, 0.04f),
+            new Color32(4, 4, 4, 255), RayMaterial.MaterialType.Diffuse, 0.0f, 1.0f);
+
+        // The near target sits on the focus plane, making it easy to confirm the focal distance.
+        AddSphere(context.Root, "Focused Reference", new Vector3(0.0f, 1.5f, -2.0f), 0.18f,
+            new Color32(180, 180, 180, 255), RayMaterial.MaterialType.Diffuse, 0.15f);
+
+        float[] xPositions = { -4.0f, -2.0f, 0.0f, 2.0f, 4.0f };
+        for (int i = 0; i < xPositions.Length; i++)
+        {
+            AddLight(context.Root, $"Defocused Point Light {i + 1}", new Vector3(xPositions[i], 2.5f, 14.0f),
+                0.025f, Color.white, 10.0f);
+        }
+
+        Save(context.Scene, sceneName);
+        AssetDatabase.SaveAssets();
+        AssetDatabase.Refresh();
     }
 
     private static void CreateManySpheresScene()

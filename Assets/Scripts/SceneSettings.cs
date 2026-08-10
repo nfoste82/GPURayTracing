@@ -35,6 +35,10 @@ public sealed class SceneSettings
     public bool CameraAutoFocus = false;
     public float CameraFocalDistance = 18.0f;
     public GameManager.CameraApertureMode CameraApertureMode = GameManager.CameraApertureMode.LensRadius;
+    public float CameraApertureRadius = 0.005f;
+    public int CameraApertureBladeCount = 0;
+    public float CameraApertureBladeRotation = 0.0f;
+    public float CameraAnamorphicRatio = 1.0f;
     public float CameraMovementSpeed = 3.0f;
     public float LightFalloffScale = 0.08f;
     public float Exposure = 1.0f;

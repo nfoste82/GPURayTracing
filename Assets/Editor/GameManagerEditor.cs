@@ -10,6 +10,8 @@ using UnityEngine;
 [CustomEditor(typeof(GameManager))]
 public sealed class GameManagerEditor : Editor
 {
+    private const string FoldoutPrefix = "GPURayTracing.GameManagerInspector";
+
     private enum BakeStatus
     {
         NotBaked,
@@ -33,6 +35,63 @@ public sealed class GameManagerEditor : Editor
     {
         serializedObject.Update();
         var manager = (GameManager)target;
+
+        DrawSection(manager, "Render Quality", true, () =>
+        {
+            DrawProperty("numberOfPasses");
+            DrawProperty("numBounces");
+            DrawProperty("shadowQuality");
+            DrawProperty("shadowRandomness", "Local Light Shadow Randomness");
+            DrawProperty("subpixelJitterScale");
+            DrawProperty("enableFrameAccumulation");
+            DrawProperty("_singleFrame", "Render Paused View");
+            DrawProperty("fireflyClamp");
+            DrawProperty("randomNoise");
+        });
+        DrawSection(manager, "Lighting", true, () =>
+        {
+            DrawProperty("lightSamplingStrategy");
+            if (serializedObject.FindProperty("lightSamplingStrategy").enumValueIndex != (int)GameManager.LightSamplingStrategy.AllLights)
+            {
+                DrawProperty("lightSampleCount");
+            }
+            DrawProperty("lightFalloffScale", "Local Light Falloff Scale");
+            DrawDirectionalLighting(manager);
+        });
+        DrawSection(manager, "Image and Environment", true, () =>
+        {
+            DrawProperty("exposure");
+            DrawProperty("_skyboxLightColor", "Skybox Light Color");
+            DrawProperty("skyboxTexture");
+        });
+        DrawSection(manager, "Camera", true, () => DrawCameraSettings(manager));
+        DrawSection(manager, "Denoising", false, DrawDenoising);
+        DrawSection(manager, "Volumetric Fog", false, DrawVolumetricFog);
+        DrawSection(manager, "Caustics", false, DrawCaustics);
+        DrawSection(manager, "Acceleration Structures", false, () =>
+        {
+            DrawProperty("topLevelBvhMinObjectCount");
+            DrawProperty("shadowBvhMinObjectCount");
+        });
+        DrawSection(manager, "BVH Baking", false, () => DrawBvhBaking(manager));
+        DrawSection(manager, "Video Capture", false, () => DrawVideoCaptureSettings(manager));
+        DrawSection(manager, "Diagnostics", false, () =>
+        {
+            DrawProperty("profileStartup");
+            DrawProperty("debugRenderMode");
+            DrawProperty("maxLightSamples");
+        });
+        DrawSection(manager, "Setup", true, () =>
+        {
+            DrawProperty("shader");
+            DrawProperty("renderTextureCamera");
+        });
+
+        serializedObject.ApplyModifiedProperties();
+    }
+
+    private void DrawBvhBaking(GameManager manager)
+    {
         List<RayTracingBvhBakeAsset.MeshEntry> entries = RayTracingBvhBakeUtility.GetMeshEntries(manager);
         string signature = RayTracingBvhBakeUtility.CalculateSignature(entries);
         BakeStatus status = GetBakeStatus(manager.EditorBvhBake, signature);
@@ -41,38 +100,180 @@ public sealed class GameManagerEditor : Editor
         {
             using (new EditorGUILayout.HorizontalScope())
             {
-                if (GUILayout.Button("Bake BVH"))
+                if (GUILayout.Button("Bake BVH", GUILayout.Width(200.0f)))
                 {
                     serializedObject.ApplyModifiedProperties();
                     RayTracingBvhBakeUtility.Bake(manager, entries, signature);
                     serializedObject.Update();
                 }
 
-                GUILayout.Label(GetStatusLabel(status), EditorStyles.boldLabel, GUILayout.Width(130.0f));
+                GUILayout.Label($"Status: {GetStatusLabel(status)}", EditorStyles.boldLabel, GUILayout.Width(180.0f));
             }
         }
 
-        EditorGUILayout.PropertyField(serializedObject.FindProperty("bakeBvhUponExit"), new GUIContent("Bake upon exit"));
+        DrawProperty("bakeBvhUponExit", "Bake upon exit");
+    }
+
+    private void DrawCameraSettings(GameManager manager)
+    {
+        EditorGUILayout.LabelField("Camera Controls", EditorStyles.boldLabel);
+        DrawProperty("cameraMovementSpeed");
+        if (manager.renderTextureCamera != null)
+        {
+            var cameraObject = new SerializedObject(manager.renderTextureCamera);
+            cameraObject.Update();
+            EditorGUILayout.PropertyField(cameraObject.FindProperty("field of view"), new GUIContent("Field Of View"));
+            cameraObject.ApplyModifiedProperties();
+        }
+        else
+        {
+            EditorGUILayout.HelpBox("Assign a render texture camera to edit its field of view here.", MessageType.Info);
+        }
+
         EditorGUILayout.Space();
-        DrawPropertiesExcluding(
-            serializedObject,
-            "m_Script",
-            "bvhBake",
-            "bakeBvhUponExit",
-            "videoSamplesPerFrame",
-            "videoFrameTimeStep",
-            "videoDuration",
-            "videoOutputFolder",
-            "videoEncodeMp4",
-            "videoFfmpegPath");
-        DrawVideoCaptureSettings(manager);
-        serializedObject.ApplyModifiedProperties();
+        EditorGUILayout.LabelField("Focus and Lens", EditorStyles.boldLabel);
+        DrawProperty("cameraAutoFocus");
+        DrawProperty("enableClickToFocus");
+        using (new EditorGUI.DisabledScope(!serializedObject.FindProperty("enableClickToFocus").boolValue))
+        {
+            DrawProperty("trackClickedFocusPoint");
+        }
+        DrawProperty("autoFocusTransparentOpacityThreshold");
+        DrawProperty("cameraFocalDistance");
+        DrawProperty("cameraApertureMode");
+
+        GameManager.CameraApertureMode apertureMode = (GameManager.CameraApertureMode)serializedObject
+            .FindProperty("cameraApertureMode").enumValueIndex;
+        if (apertureMode == GameManager.CameraApertureMode.LensRadius)
+        {
+            DrawProperty("cameraApertureRadius");
+        }
+        else if (apertureMode == GameManager.CameraApertureMode.FStop)
+        {
+            DrawProperty("cameraFStop");
+            DrawProperty("cameraApertureScale");
+        }
+
+        DrawProperty("cameraApertureBladeCount");
+        if (serializedObject.FindProperty("cameraApertureBladeCount").intValue >= 3)
+        {
+            DrawProperty("cameraApertureBladeRotation");
+        }
+        DrawProperty("cameraAnamorphicRatio");
+    }
+
+    private static void DrawDirectionalLighting(GameManager manager)
+    {
+        RayDirectionalLight[] directionalLights = manager.GetComponentsInChildren<RayDirectionalLight>(true);
+        EditorGUILayout.Space();
+        EditorGUILayout.LabelField("Directional Lighting", EditorStyles.boldLabel);
+        if (directionalLights.Length == 0)
+        {
+            EditorGUILayout.HelpBox("No RayDirectionalLight component is present beneath this GameManager.", MessageType.Info);
+            return;
+        }
+
+        for (int i = 0; i < directionalLights.Length; i++)
+        {
+            RayDirectionalLight directionalLight = directionalLights[i];
+            var lightObject = new SerializedObject(directionalLight);
+            lightObject.Update();
+            if (directionalLights.Length > 1)
+            {
+                EditorGUILayout.LabelField(directionalLight.name, EditorStyles.miniBoldLabel);
+            }
+            EditorGUILayout.PropertyField(lightObject.FindProperty("Intensity"));
+            EditorGUILayout.PropertyField(lightObject.FindProperty("AngularRadius"));
+            lightObject.ApplyModifiedProperties();
+        }
+    }
+
+    private void DrawDenoising()
+    {
+        DrawProperty("enableSpatialDenoising");
+        using (new EditorGUI.DisabledScope(!serializedObject.FindProperty("enableSpatialDenoising").boolValue))
+        {
+            DrawProperty("spatialDenoiserIterations");
+            DrawProperty("spatialDenoiserDepthSigma");
+            DrawProperty("spatialDenoiserNormalPower");
+            DrawProperty("spatialDenoiserAlbedoSigma");
+            DrawProperty("spatialDenoiserLuminanceSigma");
+        }
+
+        EditorGUILayout.Space();
+        DrawProperty("enableTemporalDenoising");
+        using (new EditorGUI.DisabledScope(!serializedObject.FindProperty("enableTemporalDenoising").boolValue))
+        {
+            DrawProperty("temporalMaxHistoryLength");
+            DrawProperty("temporalMotionDistance");
+            DrawProperty("temporalMotionAngle");
+            DrawProperty("temporalDepthThreshold");
+            DrawProperty("temporalNormalThreshold");
+            DrawProperty("temporalCameraCutDistance");
+            DrawProperty("temporalCameraCutAngle");
+            DrawProperty("temporalVarianceGuidedFiltering");
+        }
+
+        if (serializedObject.FindProperty("enableSpatialDenoising").boolValue
+            || serializedObject.FindProperty("enableTemporalDenoising").boolValue)
+        {
+            EditorGUILayout.Space();
+            DrawProperty("causticPreservationThreshold");
+        }
+    }
+
+    private void DrawVolumetricFog()
+    {
+        DrawProperty("enableVolumetricFog");
+        using (new EditorGUI.DisabledScope(!serializedObject.FindProperty("enableVolumetricFog").boolValue))
+        {
+            DrawProperty("fogDensityScale");
+            DrawProperty("fogScatteringScale");
+            DrawProperty("fogInScatteringIntensity");
+            DrawProperty("enableFogMultipleScattering");
+        }
+    }
+
+    private void DrawCaustics()
+    {
+            DrawProperty("enableCaustics");
+            using (new EditorGUI.DisabledScope(!serializedObject.FindProperty("enableCaustics").boolValue))
+            {
+                DrawProperty("causticPhotonCount");
+                DrawProperty("causticGatherRadius");
+                DrawProperty("causticIntensity");
+            }
+    }
+
+    private void DrawSection(GameManager manager, string title, bool defaultExpanded, Action content)
+    {
+        string key = $"{FoldoutPrefix}.{GetManagerIdentifier(manager)}.{title}";
+        bool expanded = EditorPrefs.GetBool(key, defaultExpanded);
+        expanded = EditorGUILayout.BeginFoldoutHeaderGroup(expanded, title);
+        EditorPrefs.SetBool(key, expanded);
+        if (expanded)
+        {
+            EditorGUI.indentLevel++;
+            content();
+            EditorGUI.indentLevel--;
+            EditorGUILayout.Space(2.0f);
+        }
+        EditorGUILayout.EndFoldoutHeaderGroup();
+    }
+
+    private void DrawProperty(string propertyPath, string label = null)
+    {
+        SerializedProperty property = serializedObject.FindProperty(propertyPath);
+        EditorGUILayout.PropertyField(property, label == null ? null : new GUIContent(label));
+    }
+
+    private static string GetManagerIdentifier(GameManager manager)
+    {
+        return GlobalObjectId.GetGlobalObjectIdSlow(manager).ToString();
     }
 
     private void DrawVideoCaptureSettings(GameManager manager)
     {
-        EditorGUILayout.Space();
-        EditorGUILayout.LabelField("Video Capture", EditorStyles.boldLabel);
         EditorGUILayout.PropertyField(
             serializedObject.FindProperty("videoSamplesPerFrame"),
             new GUIContent("Quality Samples Per Output Frame"));

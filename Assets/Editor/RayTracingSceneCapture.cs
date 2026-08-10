@@ -83,7 +83,6 @@ public static class RayTracingSceneCapture
 
                 manager.randomNoise = false;
                 manager.enableFrameAccumulation = true;
-                manager.enableDynamicQuality = false;
                 manager.enableTemporalDenoising = false;
                 manager.debugRenderMode = debugRenderMode;
                 manager.numberOfPasses = 1;
@@ -308,7 +307,6 @@ public static class RayTracingSceneCapture
     {
         manager.randomNoise = false;
         manager.enableFrameAccumulation = true;
-        manager.enableDynamicQuality = false;
         manager.enableTemporalDenoising = false;
         manager.debugRenderMode = GameManager.DebugRenderMode.FinalColor;
         manager.numberOfPasses = 1;

@@ -75,9 +75,6 @@ public class RayTracingBenchmarkOverlay : MonoBehaviour
         _builder.Append("Passes: ").Append(gameManager.numberOfPasses).Append("  Bounces: ").Append(gameManager.numBounces).Append("  Shadow quality: ").AppendLine(gameManager.shadowQuality.ToString());
         _builder.Append("Light sampling: ").Append(gameManager.lightSamplingStrategy)
             .Append("  Samples: ").AppendLine(gameManager.lightSampleCount.ToString());
-        _builder.Append("Dynamic quality: ").Append(gameManager.enableDynamicQuality ? "on" : "off")
-            .Append("  Target: ").Append(gameManager.dynamicQualityTargetFrameRate).Append(" FPS")
-            .Append("  Avg: ").Append(gameManager.DynamicQualityAverageFrameMs.ToString("0.00")).AppendLine(" ms");
         _builder.Append("Accumulation: ").Append(gameManager.enableFrameAccumulation ? "on" : "off")
             .Append("  Frames: ").AppendLine(gameManager.AccumulatedFrameCount.ToString());
         _builder.Append("Caustics: ").Append(gameManager.enableCaustics ? "on" : "off");
