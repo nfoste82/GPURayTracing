@@ -37,7 +37,7 @@ public static class RaySceneObjectMenu
         FinishCreate(gameObject, "Create Ray Traced Light");
     }
 
-    [MenuItem("GameObject/Ray Tracing/Fog Volume", false, 3)]
+    [MenuItem("GameObject/Ray Tracing/Fog Volume", false, 4)]
     private static void CreateFogVolume(MenuCommand command)
     {
         var gameObject = CreateBaseObject(command, "Fog Volume");
@@ -46,7 +46,16 @@ public static class RaySceneObjectMenu
         FinishCreate(gameObject, "Create Fog Volume");
     }
 
-    [MenuItem("GameObject/Ray Tracing/Water Volume", false, 4)]
+    [MenuItem("GameObject/Ray Tracing/Directional Light", false, 3)]
+    private static void CreateDirectionalLight(MenuCommand command)
+    {
+        var gameObject = CreateBaseObject(command, "Ray Traced Directional Light");
+        gameObject.transform.rotation = Quaternion.Euler(50.0f, -30.0f, 0.0f);
+        gameObject.AddComponent<RayDirectionalLight>();
+        FinishCreate(gameObject, "Create Ray Traced Directional Light");
+    }
+
+    [MenuItem("GameObject/Ray Tracing/Water Volume", false, 5)]
     private static void CreateWaterVolume(MenuCommand command)
     {
         var gameObject = CreateBaseObject(command, "Water Volume");

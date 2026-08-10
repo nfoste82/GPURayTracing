@@ -275,8 +275,12 @@ Milestones 1 and 2 are implemented as the initial prototype. Milestone 3 correct
   underwater receivers remain visible from above the surface. Water target validation accepts the
   bounded ray-march intersection rather than comparing it to the exact sampled wave point, avoiding
   structured photon gaps caused by march/refinement position error. The water surface's two sample
-  coordinates use independently hashed dimensions rather than paired affine bit-reversal sequences,
-  which otherwise project into visible line and grid correlations after refraction.
+   coordinates use independently hashed dimensions rather than paired affine bit-reversal sequences,
+   which otherwise project into visible line and grid correlations after refraction.
+- Implemented: directional lights launch photons from a sampled projected wavefront around the
+  selected refractor, then use a parallel direction sampled from the configured solar cone. The
+  launch distribution does not aim rays at the refractor center, so glass/water Snell transport,
+  rather than emitter targeting, determines focal position and IOR-dependent caustic shape.
 
 ## Prototype Acceptance Criteria
 

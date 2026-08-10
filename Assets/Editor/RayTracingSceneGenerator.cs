@@ -15,9 +15,8 @@ public static class RayTracingSceneGenerator
     private const string SkyboxPath = "Assets/Textures/Skyboxes/skyboxOcean.jpg";
     private const string StanfordDragonModelPath = "Assets/Models/Dragon/stanford-dragon-pbr.fbx";
     private const string WolfensteinTextureAtlasPath = "Assets/wolf3d_textures.png";
-    private const string TeapotLidModelPath = "Assets/Models/Teapot/Mesh000.obj";
+    private const string TeapotBaseModelPath = "Assets/Models/Teapot/Mesh000.obj";
     private const string TeapotBodyModelPath = "Assets/Models/Teapot/Mesh001.obj";
-    private const string CheckerboardTexturePath = "Assets/checkerboard.png";
     private const string DefaultCheckerGrayTexturePath = "Default-Checker-Gray.png";
     private const string RenderManTextureFolder = "Assets/Textures/RenderManSwatch";
     private const string TerrainPreviewMaterialPath = GeneratedAssetFolder + "/TerrainPreview.mat";
@@ -79,13 +78,11 @@ public static class RayTracingSceneGenerator
             CreateManySpheresScene();
             CreateShadowBlockersScene();
             CreateManyLightsScene();
-            CreateDenseMeshScene();
             CreateManyMeshesScene();
             CreateGlassScene();
             CreateGlassTransmissionScene();
             CreateCausticsScene();
             CreateTriangleLightCausticsScene();
-            CreateSparseScene();
             CreateDynamicScene();
             CreateWaterScene();
             CreateGlassOfWaterPencilScene();
@@ -121,13 +118,13 @@ public static class RayTracingSceneGenerator
             return;
         }
 
-        EnsureReadableModel(TeapotLidModelPath);
+        EnsureReadableModel(TeapotBaseModelPath);
         EnsureReadableModel(TeapotBodyModelPath);
-        EnsureReadableTexture(CheckerboardTexturePath);
-        Mesh lidMesh = LoadFirstMeshFromAsset(TeapotLidModelPath);
-        Mesh bodyMesh = LoadFirstMeshFromAsset(TeapotBodyModelPath);
-        Texture2D checkerboard = AssetDatabase.LoadAssetAtPath<Texture2D>(CheckerboardTexturePath);
-        if (lidMesh == null || bodyMesh == null || checkerboard == null)
+        
+        var baseMesh = LoadFirstMeshFromAsset(TeapotBaseModelPath);
+        var bodyMesh = LoadFirstMeshFromAsset(TeapotBodyModelPath);
+        
+        if (baseMesh == null || bodyMesh == null)
         {
             Debug.LogError("Teapot material scene requires both Assets/Models/Teapot OBJ files and Assets/checkerboard.png.");
             return;
@@ -171,20 +168,35 @@ public static class RayTracingSceneGenerator
             SkyboxLightColor = new Color32(18, 18, 18, 255),
             TopLevelBvhMinObjectCount = 0,
             ShadowBvhMinObjectCount = 0,
-            FieldOfView = 10.7f
+            FieldOfView = 10.7f,
+            DirectionalLightIntensity = 0.4f,
+            DirectionalLightAngularRadius = 8.43f,
         });
+        
+        var defaultCheckerGray = AssetDatabase.GetBuiltinExtraResource<Texture2D>(DefaultCheckerGrayTexturePath);
 
-        AddRayMesh(context.Root, "Checkerboard Floor", CreateHorizontalQuadMesh("Teapot Checkerboard Floor", 22.0f, 20.0f, 6.0f, 6.0f), new Vector3(0f, 0f, 3.35f), Vector3.zero, new Vector3(1f, 1f, 1.5f), Color.white, RayMaterial.MaterialType.Diffuse, 0.2f, 1.0f, 1.0f, checkerboard);
+        AddRayMesh(context.Root, "Checkerboard Floor", 
+            CreateHorizontalQuadMesh("Teapot Checkerboard Floor", 22.0f, 20.0f, 6.0f, 6.0f), 
+            new Vector3(0f, 0f, 3.35f), Vector3.zero, new Vector3(1f, 1f, 1.5f), 
+            Color.white, RayMaterial.MaterialType.Diffuse, 
+            0.2f, 1.0f, 1.0f, albedoTexture: defaultCheckerGray);
+        
+        AddRayMesh(context.Root, "Checkerboard Back Wall", 
+            CreateHorizontalQuadMesh("Teapot Checkerboard Floor", 22.0f, 20.0f, 6.0f, 6.0f), 
+            new Vector3(0f, 0f, 30f), new Vector3(90.0f, 0.0f, 0.0f), new Vector3(5.0f, 5.0f, 5.0f), 
+            Color.white, RayMaterial.MaterialType.Diffuse, 
+            0.2f, 1.0f, 1.0f, albedoTexture: defaultCheckerGray);
+        
         AddLight(context.Root, "Front Left Fill", new Vector3(-23.25f, 17.2f, -8.7f), 3f, new Color32(225, 247, 255, 255), 2f);
         AddLight(context.Root, "Back Light", new Vector3(0.73f, 3.47f, 23.4f), 1.5f, new Color32(255, 250, 235, 255), 2f);
         AddLight(context.Root, "Front Right Fill", new Vector3(12.75f, 10f, -14.54f), 2.5f, new Color32(220, 234, 235, 255), 1.5f);
 
-        AddTeapot(context.Root, "Blue Tiles", bodyMesh, lidMesh, new Vector3(-4.2f, 0.02f, 4.8f), Color.white, RayMaterial.MaterialType.Diffuse, 0.0f, 1.0f, tilesAlbedo, tilesMetalRough, tilesNormal);
-        AddTeapot(context.Root, "Marble", bodyMesh, lidMesh, new Vector3(0.0f, 0.02f, 4.8f), Color.white, RayMaterial.MaterialType.Diffuse, 0.0f, 1.0f, marbleAlbedo, marbleMetalRough);
-        AddTeapot(context.Root, "Blue Scratched", bodyMesh, lidMesh, new Vector3(4.2f, 0.02f, 4.8f), Color.white, RayMaterial.MaterialType.Diffuse, 0.0f, 1.0f, scratchesAlbedo, scratchesMetalRough, scratchesNormal);
-        AddTeapot(context.Root, "Striped Chrome", bodyMesh, lidMesh, new Vector3(-4.2f, 0.02f, -3.63f), Color.white, RayMaterial.MaterialType.Metal, 0.0f, 1.0f, stripedAlbedo, stripedMetalRough, stripedNormal);
-        AddTeapot(context.Root, "Teal Glass", bodyMesh, lidMesh, new Vector3(0.0f, 0.02f, -3.63f), new Color32(0, 221, 159, 255), RayMaterial.MaterialType.Glass, 0.88f, 0.0f, null, null, null, 0.25f, 1.5f);
-        AddTeapot(context.Root, "Gold Circles", bodyMesh, lidMesh, new Vector3(4.2f, 0.02f, -3.63f), new Color32(209, 136, 3, 255), RayMaterial.MaterialType.Diffuse, 0.5f, 1.0f, goldAlbedo, goldMetalRough, goldNormal);
+        AddTeapot(context.Root, "Blue Tiles", bodyMesh, baseMesh, new Vector3(-4.2f, 0.02f, 4.8f), Color.white, RayMaterial.MaterialType.Diffuse, 0.0f, 1.0f, tilesAlbedo, tilesMetalRough, tilesNormal);
+        AddTeapot(context.Root, "Marble", bodyMesh, baseMesh, new Vector3(0.0f, 0.02f, 4.8f), Color.white, RayMaterial.MaterialType.Diffuse, 0.0f, 1.0f, marbleAlbedo, marbleMetalRough);
+        AddTeapot(context.Root, "Blue Scratched", bodyMesh, baseMesh, new Vector3(4.2f, 0.02f, 4.8f), Color.white, RayMaterial.MaterialType.Diffuse, 0.0f, 1.0f, scratchesAlbedo, scratchesMetalRough, scratchesNormal);
+        AddTeapot(context.Root, "Striped Chrome", bodyMesh, baseMesh, new Vector3(-4.2f, 0.02f, -3.63f), Color.white, RayMaterial.MaterialType.Metal, 0.0f, 1.0f, stripedAlbedo, stripedMetalRough, stripedNormal);
+        AddTeapot(context.Root, "Teal Glass", bodyMesh, baseMesh, new Vector3(0.0f, 0.02f, -3.63f), new Color32(0, 221, 159, 255), RayMaterial.MaterialType.Glass, 0.854f, 0.0f, null, null, null, 0.25f, 1.5f);
+        AddTeapot(context.Root, "Gold Circles", bodyMesh, baseMesh, new Vector3(4.2f, 0.02f, -3.63f), new Color32(209, 136, 3, 255), RayMaterial.MaterialType.Diffuse, 0.5f, 1.0f, goldAlbedo, goldMetalRough, goldNormal);
 
         Save(context.Scene, sceneName);
         AssetDatabase.SaveAssets();
@@ -216,6 +228,8 @@ public static class RayTracingSceneGenerator
 
         var renderer = cameraObject.AddComponent<RayTracingCameraRenderer>();
         renderer.GameManager = manager;
+
+        AddDirectionalLight(managerObject.transform, "Directional Light", settings.DirectionalLightRotation, new Color32(255, 244, 222, 255), settings.DirectionalLightIntensity, settings.DirectionalLightAngularRadius);
 
         return new BenchmarkContext(scene, managerObject.transform);
     }
@@ -345,31 +359,32 @@ public static class RayTracingSceneGenerator
             CameraPosition = new Vector3(0.0f, 13.3f, -0.42f),
             CameraEuler = new Vector3(10.85f, 0.0f, 0.0f),
             NumBounces = 5,
-            ShadowQuality = 1,
+            ShadowQuality = 0,
             LightFalloffScale = 0.02f,
-            Exposure = 1.05f,
+            Exposure = 1.0f,
             TopLevelBvhMinObjectCount = 0,
             ShadowBvhMinObjectCount = 0,
             CameraMovementSpeed = 3.0f,
             SkyboxLightColor = new Color32(220, 225, 235, 255)
         });
 
-        GameObject terrainObject = Terrain.CreateTerrainGameObject(terrainData);
+        var terrainObject = Terrain.CreateTerrainGameObject(terrainData);
         terrainObject.name = "Seeded Ray Tracing Terrain";
         terrainObject.transform.SetParent(context.Root, false);
         terrainObject.transform.localPosition = new Vector3(-500.0f, 0.0f, -80.0f);
-        Terrain terrain = terrainObject.GetComponent<Terrain>();
+        
+        var terrain = terrainObject.GetComponent<Terrain>();
         terrain.drawHeightmap = true;
         terrain.materialTemplate = GetOrCreateTerrainPreviewMaterial();
         terrain.GetComponent<TerrainCollider>().enabled = false;
-        RayTracingTerrain rayTracingTerrain = terrainObject.AddComponent<RayTracingTerrain>();
+        
+        var rayTracingTerrain = terrainObject.AddComponent<RayTracingTerrain>();
         rayTracingTerrain.Terrain = terrain;
         rayTracingTerrain.Seed = seed;
         rayTracingTerrain.AccelerationResolution = 32;
         rayTracingTerrain.MarchSteps = 12;
         rayTracingTerrain.RefinementSteps = 5;
-
-        AddLight(context.Root, "Sun", new Vector3(-280.0f, 520.0f, -180.0f), 18.0f, new Color32(255, 229, 184, 255), 2.0f);
+        
         Save(context.Scene, sceneName);
     }
 
@@ -690,8 +705,12 @@ public static class RayTracingSceneGenerator
 
         var context = CreateBaseScene(new SceneSettings
         {
-            SceneName = "Benchmark_ManyLights", CameraPosition = new Vector3(0.0f, 6.5f, -20.0f), CameraEuler = new Vector3(15.0f, 0.0f, 0.0f),
-            ShadowBvhMinObjectCount = 1024, LightFalloffScale = 0.12f
+            SceneName = "Benchmark_ManyLights", 
+            CameraPosition = new Vector3(-0.474f, 11.4f, -18.97f), CameraEuler = new Vector3(25.0f, 0.0f, 0.0f),
+            ShadowBvhMinObjectCount = 1024, 
+            LightFalloffScale = 0.12f,
+            DirectionalLightIntensity = 0.0f,
+            FieldOfView = 24.5f
         });
         AddFloor(context.Root, new Vector2(0.0f, 5.0f), new Vector2(24.0f, 24.0f), 0.955f);
 
@@ -710,22 +729,6 @@ public static class RayTracingSceneGenerator
         }
 
         Save(context.Scene, "Benchmark_ManyLights");
-    }
-
-    private static void CreateDenseMeshScene()
-    {
-        if (ShouldSkipExistingScene("Benchmark_DenseMesh"))
-        {
-            return;
-        }
-
-        var context = CreateBaseScene(new SceneSettings
-        {
-            SceneName = "Benchmark_DenseMesh", CameraPosition = new Vector3(0.0f, 7.0f, -18.0f), CameraEuler = new Vector3(16.0f, 0.0f, 0.0f)
-        });
-        AddLight(context.Root, "Key Light", new Vector3(-3.0f, 12.0f, -5.0f), 1.7f, new Color32(255, 238, 218, 255));
-        AddRayMesh(context.Root, "Dense Terrain Mesh", CreateGridMesh("Dense Terrain", 180, 180, 0.11f), new Vector3(-9.9f, 0.15f, -2.0f), Vector3.zero, Vector3.one, new Color32(170, 185, 160, 255), RayMaterial.MaterialType.Diffuse, 0.35f);
-        Save(context.Scene, "Benchmark_DenseMesh");
     }
 
     private static void CreateManyMeshesScene()
@@ -797,38 +800,49 @@ public static class RayTracingSceneGenerator
 
         var context = CreateBaseScene(new SceneSettings
         {
-            SceneName = sceneName, CameraPosition = new Vector3(-6.65f, 4.86f, -1.99f), CameraEuler = new Vector3(22.67f, 47.46f, 0.0f),
-            NumBounces = 10, ShadowQuality = 1,
-            LightFalloffScale = 0.015f, SkyboxLightColor = new Color32(18, 18, 22, 255),
-            TopLevelBvhMinObjectCount = 1024, ShadowBvhMinObjectCount = 0
+            SceneName = sceneName, CameraPosition = new Vector3(-6.65f, 4.86f, -1.99f), CameraEuler = new Vector3(37.42f, 54.6f, 0.0f),
+            NumBounces = 16, 
+            ShadowQuality = 0,
+            LightFalloffScale = 0.015f, 
+            Exposure = 1.29f,
+            SkyboxLightColor = new Color32(18, 18, 22, 255),
+            TopLevelBvhMinObjectCount = 1024, 
+            ShadowBvhMinObjectCount = 1024,
+            DirectionalLightAngularRadius = 1.61f,
+            EnableCaustics = true,
+            CausticIntensity = 0.16f,
         });
 
-        AddLight(context.Root, "White Transmission Light", new Vector3(0.0f, 3.5f, -4.9f), 0.65f, Color.white);
-        //AddLight(context.Root, "Warm Side Reference Light", new Vector3(-5.6f, 4.8f, -2.2f), 0.38f, new Color32(255, 206, 145, 255));
-        //AddLight(context.Root, "Blue Side Reference Light", new Vector3(5.6f, 4.8f, -2.2f), 0.38f, new Color32(95, 145, 255, 255));
 
         AddPrimitiveMesh(context.Root, "Receiver Back Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 2.0f, 5.2f), Vector3.zero, new Vector3(13.0f, 4.0f, 0.08f), new Color32(230, 230, 225, 255), RayMaterial.MaterialType.Diffuse, 0.05f, 1.0f);
         AddPrimitiveMesh(context.Root, "Receiver Floor", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 0.02f, 1.6f), Vector3.zero, new Vector3(13.0f, 0.04f, 11.0f), new Color32(215, 213, 205, 255), RayMaterial.MaterialType.Diffuse, 0.08f, 1.0f);
 
-        AddTransmissionFilterStack(context.Root, "Clear Reference", -5.4f, Array.Empty<Color32>(), 0.35f, 1.0f);
-        AddTransmissionFilterStack(context.Root, "Blue Single Layer", -3.6f, new[] { new Color32(55, 105, 255, 255) }, 0.35f, 1.0f);
-        AddTransmissionFilterStack(context.Root, "Yellow Single Layer", -1.8f, new[] { new Color32(255, 235, 50, 255) }, 0.35f, 1.0f);
-        AddTransmissionFilterStack(context.Root, "Blue Then Yellow", 0.0f, new[] { new Color32(55, 105, 255, 255), new Color32(255, 235, 50, 255) }, 0.35f, 1.0f);
-        AddTransmissionFilterStack(context.Root, "Yellow Then Blue", 1.8f, new[] { new Color32(255, 235, 50, 255), new Color32(55, 105, 255, 255) }, 0.35f, 1.0f);
-        AddTransmissionFilterStack(context.Root, "Red Green Blue Stack", 3.6f, new[] { new Color32(255, 60, 45, 255), new Color32(55, 220, 75, 255), new Color32(55, 105, 255, 255) }, 0.35f, 1.0f);
+        AddTransmissionFilterStack(context.Root, "Clear Reference", -5.4f, Array.Empty<Color32>());
+        AddTransmissionFilterStack(context.Root, "Blue Single Layer", -3.6f, new[] { new Color32(55, 105, 255, 255) });
+        AddTransmissionFilterStack(context.Root, "Yellow Single Layer", -1.8f, new[] { new Color32(255, 235, 50, 255) });
+        AddTransmissionFilterStack(context.Root, "Blue Then Yellow", 0.0f, new[] { new Color32(55, 105, 255, 255), new Color32(255, 235, 50, 255) });
+        AddTransmissionFilterStack(context.Root, "Yellow Then Blue", 1.8f, new[] { new Color32(255, 235, 50, 255), new Color32(55, 105, 255, 255) });
+        AddTransmissionFilterStack(context.Root, "Red Green Blue Stack", 3.6f, new[] { new Color32(255, 60, 45, 255), new Color32(55, 220, 75, 255), new Color32(55, 105, 255, 255) });
 
         // Keep these side by side so their receiver-wall shadows directly expose distance-based
         // mesh absorption instead of overlapping along the light direction.
-        AddPrimitiveMesh(context.Root, "Thick Blue Glass Block", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(4.75f, 2.0f, -0.3f), Vector3.zero, new Vector3(0.8f, 2.6f, 1.35f), new Color32(55, 105, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.28f, 1.5f);
-        AddPrimitiveMesh(context.Root, "Thin Blue Glass Plate", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(5.75f, 2.0f, -0.3f), Vector3.zero, new Vector3(0.8f, 2.6f, 0.14f), new Color32(55, 105, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.28f, 1.5f);
+        AddPrimitiveMesh(context.Root, "Thick Blue Glass Block", RayMeshPrimitive.PrimitiveType.Cube, 
+            new Vector3(4.75f, 2.0f, -0.3f), Vector3.zero, new Vector3(0.8f, 2.6f, 1.35f),
+            new Color32(55, 105, 255, 255), RayMaterial.MaterialType.Glass, 
+            1.0f, 0.521f, 1.5f, 0.068f, 0.876f);
+        
+        AddPrimitiveMesh(context.Root, "Thin Blue Glass Plate", RayMeshPrimitive.PrimitiveType.Cube, 
+            new Vector3(5.75f, 2.0f, -0.3f), Vector3.zero, new Vector3(0.8f, 2.6f, 0.14f),
+            new Color32(55, 105, 255, 255), RayMaterial.MaterialType.Glass, 
+            1.0f, 0.521f, 1.5f, 0.068f, 0.876f);
 
-        AddSphere(context.Root, "Cyan Glass Sphere Shadow Test", new Vector3(-3.85f, 1.05f, 2.15f), 0.75f, new Color32(45, 255, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.32f, 1.5f);
-        AddSphere(context.Root, "Yellow Glass Sphere Shadow Test", new Vector3(-2.9f, 1.05f, 2.15f), 0.75f, new Color32(255, 255, 55, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.25f, 1.5f);
+        AddSphere(context.Root, "Blue Glass Sphere", new Vector3(-3.82f, 1.51f, 3.34f), 0.75f, new Color32(0, 73, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.32f, 1.5f, 0.0f, 0.83f);
+        AddSphere(context.Root, "Yellow Glass Sphere", new Vector3(-3.27f, 2.57f, 1.8f), 0.75f, new Color32(255, 255, 55, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.25f, 1.5f, 0.0f, 0.83f);
 
         Save(context.Scene, sceneName);
     }
 
-    private static void AddTransmissionFilterStack(Transform parent, string name, float x, Color32[] colors, float opacity, float refraction)
+    private static void AddTransmissionFilterStack(Transform parent, string name, float x, Color32[] colors, float opacity = 0.477f, float refraction = 1.5f, float specular = 0.0f, float transmission = 0.82f)
     {
         if (colors.Length == 0)
         {
@@ -861,31 +875,40 @@ public static class RayTracingSceneGenerator
 
         var context = CreateBaseScene(new SceneSettings
         {
-            SceneName = sceneName, CameraPosition = new Vector3(-5.42f, 3.78f, 3.93f), CameraEuler = new Vector3(36f, 124.5f, 0.0f),
-            NumBounces = 10, ShadowQuality = 0,
-            CameraFocalDistance = 12.0f, LightFalloffScale = 0.002f, Exposure = 2.5f, FireflyClamp = 0.0f,
-            EnableCaustics = true, CausticGatherRadius = 0.01f, CausticIntensity = 3.0f,
-            TopLevelBvhMinObjectCount = 1024, ShadowBvhMinObjectCount = 1024,
-            LightSamplingStrategy = GameManager.LightSamplingStrategy.AllLights, SkyboxLightColor = new Color32(40, 40, 40, 255)
+            SceneName = sceneName, CameraPosition = new Vector3(-12.6f, 8.0f, 1.8f), CameraEuler = new Vector3(32.2f, 90.0f, 0.0f),
+            NumBounces = 16, 
+            ShadowQuality = 0,
+            CameraFocalDistance = 12.0f, 
+            FireflyClamp = 0.0f,
+            EnableCaustics = true, 
+            CausticGatherRadius = 0.01f, 
+            CausticIntensity = 1.3f,
+            TopLevelBvhMinObjectCount = 1024, 
+            ShadowBvhMinObjectCount = 1024,
+            LightSamplingStrategy = GameManager.LightSamplingStrategy.ImportanceSampled, 
+            SkyboxLightColor = new Color32(111, 109, 98, 255),
+            FieldOfView = 29.6f
         });
 
-        Mesh texturedPlane = RayMeshAssetGenerator.GetOrCreateTexturedPlaneMesh();
-        Texture2D defaultCheckerGray = AssetDatabase.GetBuiltinExtraResource<Texture2D>(DefaultCheckerGrayTexturePath);
-        AddRayMesh(context.Root, "Caustic Receiver", texturedPlane, new Vector3(0.0f, 0.02f, 2.2f), Vector3.zero, new Vector3(10.0f, 0.4f, 9.0f), Color.white, RayMaterial.MaterialType.Diffuse, 0.5f, 1.0f, 1.0f, defaultCheckerGray);
+        var texturedPlane = RayMeshAssetGenerator.GetOrCreateTexturedPlaneMesh();
+        var defaultCheckerGray = AssetDatabase.GetBuiltinExtraResource<Texture2D>(DefaultCheckerGrayTexturePath);
+        
+        AddRayMesh(context.Root, "Caustic Receiver", texturedPlane, 
+            new Vector3(0.0f, 0.02f, 2.2f), Vector3.zero, new Vector3(10.0f, 0.4f, 9.0f), 
+            Color.white, RayMaterial.MaterialType.Diffuse,
+            0.5f, 1.0f, 1.0f, albedoTexture: defaultCheckerGray);
 
-        //AddLight(context.Root, "Sphere Caustic Light", new Vector3(-1.9f, 6.8f, 2.5f), 0.24f, new Color32(255, 244, 218, 255)).SetActive(false);
-        //AddSphere(context.Root, "Clear Glass Sphere", new Vector3(-1.9f, 1.32f, 2.5f), 1.3f, new Color32(238, 248, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.04f, 1.52f).SetActive(false);
+        AddPrimitiveMesh(context.Root, "Glass Dodecahedron", RayMeshPrimitive.PrimitiveType.Dodecahedron, 
+            new Vector3(0.3f, 1.13f, 3.55f), Vector3.zero, Vector3.one, 
+            new Color32(57, 255, 83, 255), RayMaterial.MaterialType.Glass, 
+            1.0f, 0.816f, 1.5f, 0.1f, 0.7f);
 
-        //AddLight(context.Root, "Multi-Event Sphere Caustic Light", new Vector3(1.1f, 7.4f, 1.1f), 0.18f, new Color32(218, 235, 255, 255)).SetActive(false);
-        //AddSphere(context.Root, "Multi-Event Upper Glass Sphere", new Vector3(1.1f, 4.35f, 1.1f), 0.9f, new Color32(232, 245, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.03f, 1.52f).SetActive(false);
-        //AddSphere(context.Root, "Multi-Event Lower Glass Sphere", new Vector3(1.1f, 2.25f, 1.1f), 0.9f, new Color32(232, 245, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.03f, 1.52f).SetActive(false);
-
-        AddLight(context.Root, "Caustic Light", new Vector3(1.81f, 2.35f, -0.72f), 0.2f, new Color32(255, 255, 255, 255));
-        //AddPrimitiveMesh(context.Root, "Glass Dodecahedron", RayMeshPrimitive.PrimitiveType.Dodecahedron, new Vector3(3.5f, 1.35f, 3.0f), new Vector3(12.0f, 32.0f, 8.0f), new Vector3(2.2f, 2.5f, 2.2f), new Color32(220, 240, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.05f, 1.62f).SetActive(false);
-
-        AddSphere(context.Root, "Diffuse Scale Reference", new Vector3(0.0f, 0.5f, 3.4f), 0.45f, new Color32(185, 78, 52, 255), RayMaterial.MaterialType.Diffuse, 0.08f);
-        var dragon = AddRayMesh(context.Root, "Stanford Dragon", dragonMesh, Vector3.zero, new Vector3(0.0f, 148.0f, 0.0f), Vector3.one * 3.0f, new Color32(0, 118, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.121f, 1.391f);
+        var dragon = AddRayMesh(context.Root, "Stanford Dragon", dragonMesh, 
+            Vector3.zero, new Vector3(0.0f, 148.0f, 0.0f), Vector3.one * 3.0f,
+            new Color32(0, 65, 255, 255), RayMaterial.MaterialType.Glass,
+            1.0f, 0.62f, 1.5f, 0.1f, 0.7f);
         dragon.GetComponent<RayMaterial>().InterpolateNormals = true;
+        
         Save(context.Scene, sceneName);
     }
 
@@ -912,23 +935,6 @@ public static class RayTracingSceneGenerator
         AddSphere(context.Root, "Clear Glass Sphere", new Vector3(0.0f, 1.32f, 2.5f), 1.3f, new Color32(238, 248, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.04f, 1.52f);
         AddSphere(context.Root, "Diffuse Scale Reference", new Vector3(2.6f, 0.45f, 6.2f), 0.45f, new Color32(185, 78, 52, 255), RayMaterial.MaterialType.Diffuse, 0.08f);
         Save(context.Scene, sceneName);
-    }
-
-    private static void CreateSparseScene()
-    {
-        if (ShouldSkipExistingScene("Benchmark_Sparse"))
-        {
-            return;
-        }
-
-        var context = CreateBaseScene(new SceneSettings
-        {
-            SceneName = "Benchmark_Sparse", CameraPosition = new Vector3(0.0f, 4.0f, -12.0f), CameraEuler = new Vector3(10.0f, 0.0f, 0.0f)
-        });
-        AddFloor(context.Root, new Vector2(0.0f, 3.0f), new Vector2(8.0f, 8.0f), 0.5f);
-        AddLight(context.Root, "Key Light", new Vector3(-2.0f, 8.0f, -2.0f), 1.0f, new Color32(255, 240, 220, 255));
-        AddSphere(context.Root, "Single Sphere", new Vector3(0.0f, 1.0f, 3.0f), 1.0f, new Color32(210, 80, 75, 255), RayMaterial.MaterialType.Metal, 0.9f);
-        Save(context.Scene, "Benchmark_Sparse");
     }
 
     private static void CreateDynamicScene()
@@ -971,10 +977,15 @@ public static class RayTracingSceneGenerator
 
         var context = CreateBaseScene(new SceneSettings
         {
-            SceneName = sceneName, CameraPosition = new Vector3(13.72f, 5.395f, 24.27f), CameraEuler = new Vector3(12.1f, -141.2f, 0.0f),
-            NumBounces = 8, ShadowQuality = 0,
-            LightFalloffScale = 0.021f, Exposure = 1.15f,
-            TopLevelBvhMinObjectCount = 0, ShadowBvhMinObjectCount = 0, SkyboxLightColor = Color.white
+            SceneName = sceneName, CameraPosition = new Vector3(-8.8f, 7.75f, 12.37f), CameraEuler = new Vector3(36.35f, 81.9f, 0.0f),
+            NumBounces = 8, 
+            ShadowQuality = 0,
+            LightFalloffScale = 0.021f, 
+            Exposure = 1.6f,
+            DirectionalLightIntensity = 1.5f, DirectionalLightAngularRadius = 2.74f, DirectionalLightRotation = new Vector3(90.0f, -30.0f, 0.0f),
+            TopLevelBvhMinObjectCount = 0, 
+            ShadowBvhMinObjectCount = 0, 
+            SkyboxLightColor = new Color32(221, 221, 221, 255),
         });
         
         var waterObject = new GameObject("Water Volume");
@@ -1089,9 +1100,14 @@ public static class RayTracingSceneGenerator
         var context = CreateBaseScene(new SceneSettings
         {
             SceneName = sceneName, CameraPosition = new Vector3(0.0f, 2.05f, -4.85f), CameraEuler = new Vector3(0.0f, 0.0f, 0.0f),
-            NumBounces = 9, ShadowQuality = 1,
-            CameraFocalDistance = 9.5f, LightFalloffScale = 0.075f,
-            TopLevelBvhMinObjectCount = 0, ShadowBvhMinObjectCount = 0, SkyboxLightColor = new Color32(0, 0, 0, 255)
+            NumBounces = 14, 
+            ShadowQuality = 0,
+            CameraFocalDistance = 9.5f, 
+            LightFalloffScale = 0.075f,
+            TopLevelBvhMinObjectCount = 0, 
+            ShadowBvhMinObjectCount = 0, 
+            SkyboxLightColor = new Color32(0, 0, 0, 255),
+            DirectionalLightIntensity = 0.0f
         });
 
         const float roomWidth = 6.0f;
@@ -1108,12 +1124,21 @@ public static class RayTracingSceneGenerator
         AddPrimitiveMesh(context.Root, "Far Mirror Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, roomHeight * 0.5f, backZ), Vector3.zero, new Vector3(roomWidth, roomHeight, 0.04f), Color.white, RayMaterial.MaterialType.Metal, 1.0f, 1.0f);
         AddPrimitiveMesh(context.Root, "Camera-Side Mirror Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, roomHeight * 0.5f, frontZ), Vector3.zero, new Vector3(roomWidth, roomHeight, 0.04f), Color.white, RayMaterial.MaterialType.Metal, 1.0f, 1.0f);
         
-        AddMeshLight(context.Root, "Middle Rectangular Ceiling Light", CreateHorizontalQuadMesh("Middle Rectangular Ceiling Light", 1.35f, 0.46f, 1.0f, 1.0f), new Vector3(0.0f, roomHeight - 0.035f, 0.65f), Vector3.zero, new Vector3(2.0f, 1.0f, 1.0f), new Color32(255, 248, 220, 255));
+        AddMeshLight(context.Root, "Middle Rectangular Ceiling Light", CreateHorizontalQuadMesh("Middle Rectangular Ceiling Light", 1.35f, 0.46f, 1.0f, 1.0f), new Vector3(0.0f, roomHeight - 0.04f, 0.65f), Vector3.zero, new Vector3(2.0f, 1.0f, 1.0f), new Color32(255, 248, 220, 255));
 
         AddPrimitiveMesh(context.Root, "Near Left Block", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-1.85f, 0.82f, -1.85f), Vector3.zero, new Vector3(1.45f, 1.6f, 1.15f), new Color32(218, 212, 196, 255), RayMaterial.MaterialType.Diffuse, 0.15f, 1.0f);
         AddPrimitiveMesh(context.Root, "Tall Center Block", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-0.55f, 1.55f, 0.8f), Vector3.zero, new Vector3(1.0f, 3.1f, 1.0f), new Color32(220, 216, 202, 255), RayMaterial.MaterialType.Diffuse, 0.12f, 1.0f);
-        AddPrimitiveMesh(context.Root, "Glass Box", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(1.45f, 0.81f, 1.9f), new Vector3(0.0f, -8.0f, 0.0f), new Vector3(1.2f, 1.48f, 1.0f), new Color32(232, 232, 226, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.32f, 1.85f);
-        AddPrimitiveMesh(context.Root, "Glass Pyramid", RayMeshPrimitive.PrimitiveType.Pyramid, new Vector3(0.0f, 1.05f, -0.7f), new Vector3(0.0f, 22.0f, 0.0f), Vector3.one * 1.8f, new Color32(210, 235, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.32f, 1.85f);
+        
+        AddPrimitiveMesh(context.Root, "Glass Box", RayMeshPrimitive.PrimitiveType.Cube,
+            new Vector3(1.45f, 0.81f, 1.9f), new Vector3(0.0f, -8.0f, 0.0f), new Vector3(1.2f, 1.48f, 1.0f),
+            new Color32(232, 232, 226, 255), RayMaterial.MaterialType.Glass, 
+            1.0f, 0.32f, 1.85f, 0.086f, 0.85f);
+        
+        AddPrimitiveMesh(context.Root, "Glass Pyramid", RayMeshPrimitive.PrimitiveType.Pyramid, 
+            new Vector3(0.0f, 1.05f, -0.7f), new Vector3(0.0f, 22.0f, 0.0f), Vector3.one * 1.8f,
+            new Color32(210, 235, 255, 255), RayMaterial.MaterialType.Glass,
+            1.0f, 0.32f, 1.85f, 0.086f, 0.85f);
+        
         AddSphere(context.Root, "Chrome Sphere", new Vector3(2.05f, 0.82f, -2.25f), 0.82f, new Color32(236, 233, 226, 255), RayMaterial.MaterialType.Metal, 1.0f);
 
         Save(context.Scene, sceneName);
@@ -1242,6 +1267,7 @@ public static class RayTracingSceneGenerator
         }
 
         var context = CreateDemofoxOrbGradientTestScene(sceneName);
+        
         const int sphereCount = 7;
         var absorption = new []{0f, 0.23f, 0.42f, 0.6f, 0.75f, 0.83f, 1f };
         for (var i = 0; i < sphereCount; i++)
@@ -1284,6 +1310,7 @@ public static class RayTracingSceneGenerator
             SkyboxLightColor = new Color32(255, 245, 223, 255), 
             CameraApertureMode = GameManager.CameraApertureMode.Pinhole,
             FieldOfView = 33.6f,
+            DirectionalLightIntensity = 0.0f,
         });
 
         const float stageWidth = 19.0f;
@@ -1338,9 +1365,14 @@ public static class RayTracingSceneGenerator
         var context = CreateBaseScene(new SceneSettings
         {
             SceneName = sceneName, CameraPosition = new Vector3(0.0f, 2.2f, -5.2f), CameraEuler = new Vector3(2.0f, 0.0f, 0.0f),
-            NumBounces = 5, ShadowQuality = 0,
-            CameraFocalDistance = 6.5f, LightFalloffScale = 0.02f,
-            TopLevelBvhMinObjectCount = 0, ShadowBvhMinObjectCount = 0, SkyboxLightColor = new Color32(0, 0, 0, 255)
+            NumBounces = 5, 
+            ShadowQuality = 0,
+            CameraFocalDistance = 6.5f, 
+            LightFalloffScale = 0.02f,
+            TopLevelBvhMinObjectCount = 0, 
+            ShadowBvhMinObjectCount = 0, 
+            SkyboxLightColor = new Color32(0, 0, 0, 255),
+            DirectionalLightIntensity = 0.0f,
         });
 
         const float roomWidth = 5.6f;
@@ -1382,9 +1414,9 @@ public static class RayTracingSceneGenerator
             TopLevelBvhMinObjectCount = 1024, ShadowBvhMinObjectCount = 1024
         });
 
-        AddRayMesh(context.Root, "Back Stone Wall", CreateQuadMesh("Back Stone Wall", 12.0f, 3.0f, 6.0f, 1.5f), new Vector3(0.0f, 1.5f, 7.0f), Vector3.zero, Vector3.one, Color.white, RayMaterial.MaterialType.Diffuse, 0.18f, 1.0f, 1.0f, wallTexture);
-        AddRayMesh(context.Root, "Left Stone Wall", CreateQuadMesh("Left Stone Wall", 12.0f, 3.0f, 6.0f, 1.5f), new Vector3(-6.0f, 1.5f, 1.0f), new Vector3(0.0f, 90.0f, 0.0f), Vector3.one, Color.white, RayMaterial.MaterialType.Diffuse, 0.18f, 1.0f, 1.0f, wallTexture);
-        AddRayMesh(context.Root, "Right Stone Wall", CreateQuadMesh("Right Stone Wall", 12.0f, 3.0f, 6.0f, 1.5f), new Vector3(6.0f, 1.5f, 1.0f), new Vector3(0.0f, -90.0f, 0.0f), Vector3.one, Color.white, RayMaterial.MaterialType.Diffuse, 0.18f, 1.0f, 1.0f, wallTexture);
+        AddRayMesh(context.Root, "Back Stone Wall", CreateQuadMesh("Back Stone Wall", 12.0f, 3.0f, 6.0f, 1.5f), new Vector3(0.0f, 1.5f, 7.0f), Vector3.zero, Vector3.one, Color.white, RayMaterial.MaterialType.Diffuse, 0.18f, 1.0f, 1.0f, albedoTexture: wallTexture);
+        AddRayMesh(context.Root, "Left Stone Wall", CreateQuadMesh("Left Stone Wall", 12.0f, 3.0f, 6.0f, 1.5f), new Vector3(-6.0f, 1.5f, 1.0f), new Vector3(0.0f, 90.0f, 0.0f), Vector3.one, Color.white, RayMaterial.MaterialType.Diffuse, 0.18f, 1.0f, 1.0f, albedoTexture: wallTexture);
+        AddRayMesh(context.Root, "Right Stone Wall", CreateQuadMesh("Right Stone Wall", 12.0f, 3.0f, 6.0f, 1.5f), new Vector3(6.0f, 1.5f, 1.0f), new Vector3(0.0f, -90.0f, 0.0f), Vector3.one, Color.white, RayMaterial.MaterialType.Diffuse, 0.18f, 1.0f, 1.0f, albedoTexture: wallTexture);
         AddRayMesh(context.Root, "Floor", CreateHorizontalQuadMesh("Floor", 12.0f, 12.0f, 3.0f, 3.0f), new Vector3(0.0f, 0.002f, 1.0f), Vector3.zero, Vector3.one, new Color32(78, 68, 48, 255), RayMaterial.MaterialType.Diffuse, 0.28f);
         AddRayMesh(context.Root, "Ceiling", CreateHorizontalQuadMesh("Ceiling", 12.0f, 12.0f, 3.0f, 3.0f), new Vector3(0.0f, 2.0f, 1.0f), new Vector3(180.0f, 0.0f, 0.0f), Vector3.one, new Color32(92, 78, 54, 255), RayMaterial.MaterialType.Diffuse, 0.2f);
 
@@ -1462,6 +1494,21 @@ public static class RayTracingSceneGenerator
         return obj;
     }
 
+    private static GameObject AddDirectionalLight(Transform parent, string name, Vector3 euler, Color color, float intensity, float angularRadius)
+    {
+        var obj = new GameObject(name);
+        obj.transform.SetParent(parent, false);
+        obj.transform.localPosition = Vector3.zero;
+        obj.transform.localEulerAngles = euler;
+        obj.transform.localScale = Vector3.one;
+
+        var light = obj.AddComponent<RayDirectionalLight>();
+        light.Color = color;
+        light.Intensity = intensity;
+        light.AngularRadius = angularRadius;
+        return obj;
+    }
+
     private static GameObject AddMeshLight(Transform parent, string name, Mesh mesh, Vector3 position, Vector3 euler, Vector3 scale, Color color, float intensity = 1.0f)
     {
         var obj = new GameObject(name);
@@ -1480,7 +1527,15 @@ public static class RayTracingSceneGenerator
         return obj;
     }
 
-    private static GameObject AddPrimitiveMesh(Transform parent, string name, RayMeshPrimitive.PrimitiveType primitiveType, Vector3 position, Vector3 euler, Vector3 scale, Color color, RayMaterial.MaterialType type, float smoothness, float opacity, float refraction = 1.0f)
+    private static GameObject AddPrimitiveMesh(
+        Transform parent, string name, RayMeshPrimitive.PrimitiveType primitiveType, 
+        Vector3 position, Vector3 euler, Vector3 scale, 
+        Color color, RayMaterial.MaterialType type, 
+        float smoothness, 
+        float opacity, 
+        float refraction = 1.0f, 
+        float specular = 0.0f, 
+        float transmission = 1.0f)
     {
         var obj = new GameObject(name);
         obj.transform.SetParent(parent, false);
@@ -1503,13 +1558,25 @@ public static class RayTracingSceneGenerator
         material.Smoothness = smoothness;
         material.Opacity = opacity;
         material.RefractionIndex = refraction;
+        material.Specular = specular;
+        material.Transmission = transmission;
 
         primitive.Type = primitiveType;
         primitive.EnsureMesh();
         return obj;
     }
 
-    private static GameObject AddRayMesh(Transform parent, string name, Mesh mesh, Vector3 position, Vector3 euler, Vector3 scale, Color color, RayMaterial.MaterialType type, float smoothness, float opacity = 1.0f, float refraction = 1.0f, Texture2D albedoTexture = null)
+    private static GameObject AddRayMesh(
+        Transform parent, string name, Mesh mesh, 
+        Vector3 position, Vector3 euler, Vector3 scale, 
+        Color color, 
+        RayMaterial.MaterialType type, 
+        float smoothness, 
+        float opacity = 1.0f,
+        float refraction = 1.0f, 
+        float specular = 0.0f,
+        float transmission = 1.0f,
+        Texture2D albedoTexture = null)
     {
         var obj = new GameObject(name);
         obj.transform.SetParent(parent, false);
@@ -1524,6 +1591,8 @@ public static class RayTracingSceneGenerator
         material.Smoothness = smoothness;
         material.Opacity = opacity;
         material.RefractionIndex = refraction;
+        material.Specular = specular;
+        material.Transmission = transmission;
 
         obj.AddComponent<MeshFilter>().sharedMesh = mesh;
         obj.AddComponent<MeshRenderer>();
@@ -1535,7 +1604,7 @@ public static class RayTracingSceneGenerator
         Transform parent,
         string name,
         Mesh bodyMesh,
-        Mesh lidMesh,
+        Mesh baseMesh,
         Vector3 position,
         Color color,
         RayMaterial.MaterialType type,
@@ -1553,16 +1622,18 @@ public static class RayTracingSceneGenerator
         root.transform.localEulerAngles = new Vector3(0.0f, -91.05f, 0.0f);
         root.transform.localScale = Vector3.one * 25.0f;
 
-        ConfigureTeapotPart(AddRayMesh(root.transform, "Body", bodyMesh, Vector3.zero, Vector3.zero, Vector3.one, color, type, smoothness, opacity, refraction, albedoTexture), metallic, metallicRoughnessTexture, normalTexture);
+        ConfigureTeapotPart(
+            AddRayMesh(root.transform, "Body", bodyMesh, Vector3.zero, Vector3.zero, Vector3.one, color, type, smoothness, opacity, refraction, albedoTexture: albedoTexture)
+            , metallic, metallicRoughnessTexture, normalTexture);
         
         ConfigureTeapotPart(
-            AddRayMesh(root.transform, "Base", lidMesh, Vector3.zero, Vector3.zero, Vector3.one, 
+            AddRayMesh(root.transform, "Base", baseMesh, Vector3.zero, Vector3.zero, Vector3.one, 
                 new Color32(25, 25, 25, 255), 
                 RayMaterial.MaterialType.Diffuse, 
                 0.4f, 
                 1.0f, 
                 0.0f, 
-                albedoTexture), 
+                albedoTexture: albedoTexture), 
             0.0f, 
             metallicRoughnessTexture, 
             normalTexture);

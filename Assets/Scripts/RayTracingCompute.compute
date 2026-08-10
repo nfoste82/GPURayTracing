@@ -201,6 +201,8 @@ static const int TopLevelObjectTypeLight = 1;
 static const int TopLevelObjectTypeMesh = 2;
 static const int LightTypeSphere = 0;
 static const int LightTypeTriangle = 1;
+static const int LightTypeDirectional = 2;
+static const int LightTypeSunTriangle = 3;
 
 static const int LightSamplingAllLights = 0;
 static const int LightSamplingUniformRandom = 1;
@@ -2198,6 +2200,22 @@ float2 SampleDisk(inout uint rngState)
     return float2(cos(angle), sin(angle)) * radius;
 }
 
+float3 SampleCone(float3 axis, float angularRadius, inout uint rngState)
+{
+    if (angularRadius <= 1e-6f)
+    {
+        return axis;
+    }
+
+    float cosTheta = lerp(1.0f, cos(angularRadius), rand(rngState));
+    float sinTheta = sqrt(max(0.0f, 1.0f - cosTheta * cosTheta));
+    float phi = 2.0f * PI * rand(rngState);
+    float3 tangent;
+    float3 bitangent;
+    CreateBasisFromNormal(axis, tangent, bitangent);
+    return normalize(axis * cosTheta + tangent * (cos(phi) * sinTheta) + bitangent * (sin(phi) * sinTheta));
+}
+
 float GetDirectLightFalloff(float distanceToLight, float lightRadius)
 {
     float areaScale = max(1.0f, lightRadius * lightRadius);
@@ -2567,6 +2585,11 @@ float PowerHeuristic(float firstPdf, float secondPdf)
 // samples share paths that both techniques can discover.
 float GetLightShapePdf(Light light, float3 shadingPosition, float3 lightPosition)
 {
+    if (light.type == LightTypeDirectional)
+    {
+        return 0.0f;
+    }
+
     float3 toLight = lightPosition - shadingPosition;
     float distanceSquared = dot(toLight, toLight);
     if (distanceSquared <= 1e-8f)
@@ -2575,7 +2598,7 @@ float GetLightShapePdf(Light light, float3 shadingPosition, float3 lightPosition
     }
 
     float3 directionToLight = toLight * rsqrt(distanceSquared);
-    if (light.type == LightTypeTriangle)
+    if (light.type == LightTypeTriangle || light.type == LightTypeSunTriangle)
     {
         float lightFacing = saturate(dot(light.normal, -directionToLight));
         return lightFacing > 1e-6f && light.area > 1e-6f
@@ -2652,8 +2675,9 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
 {
     float3 lightTotal = float3(0.0f, 0.0f, 0.0f);
     Light light = _Lights[lightIndex];
+    bool isDirectional = light.type == LightTypeDirectional;
     float3 lightPos = light.position;
-    float3 ptToLight = normalize(lightPos - hit.position);
+    float3 ptToLight = isDirectional ? -normalize(light.position) : normalize(lightPos - hit.position);
     float3 tangent;
     float3 bitangent;
     CreateBasisFromNormal(ptToLight, tangent, bitangent);
@@ -2663,7 +2687,11 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
     for (sampleIndex = 0; sampleIndex < sampleCount; sampleIndex++)
     {
         float3 offsetPt;
-        if (light.type == LightTypeTriangle)
+        if (isDirectional)
+        {
+            offsetPt = hit.position + SampleCone(ptToLight, light.radius, rngState);
+        }
+        else if (light.type == LightTypeTriangle || light.type == LightTypeSunTriangle)
         {
             float r1 = rand(rngState);
             float r2 = rand(rngState);
@@ -2680,8 +2708,10 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
             offsetPt = lightPos + tangent * diskSample.x + bitangent * diskSample.y;
         }
 
-        float3 ptToOffset = offsetPt - hit.position;
-        float distanceToLight = length(ptToOffset);
+        float3 ptToOffset = isDirectional
+            ? normalize(offsetPt - hit.position)
+            : offsetPt - hit.position;
+        float distanceToLight = isDirectional ? RayMaxDistance : length(ptToOffset);
         ptToOffset = normalize(ptToOffset);
         float shadowOffsetSign = dot(ptToOffset, hit.geometricNormal) >= 0.0f ? 1.0f : -1.0f;
         float3 shadowOrigin = hit.position + hit.geometricNormal * (0.001f * shadowOffsetSign);
@@ -2711,9 +2741,28 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
             continue;
         }
 
-        shadowTransmittance *= GetWaterAbsorptionTransmittance(EstimateWaterDistanceAlongSegment(hit.position, offsetPt));
+        if (isDirectional)
+        {
+            shadowTransmittance *= GetWaterAbsorptionTransmittance(GetWaterDistanceAlongRay(rayToLight, RayMaxDistance));
+        }
+        else
+        {
+            shadowTransmittance *= GetWaterAbsorptionTransmittance(EstimateWaterDistanceAlongSegment(hit.position, offsetPt));
+        }
 #if defined(FOG_ENABLED)
-        shadowTransmittance *= GetFogTransmittanceAlongSegment(hit.position, offsetPt);
+        if (isDirectional)
+        {
+            float fogEntryDistance;
+            float fogExitDistance;
+            if (GetFogInterval(rayToLight, RayMaxDistance, fogEntryDistance, fogExitDistance))
+            {
+                shadowTransmittance *= exp(-max(0.0f, _FogDensity) * (fogExitDistance - fogEntryDistance));
+            }
+        }
+        else
+        {
+            shadowTransmittance *= GetFogTransmittanceAlongSegment(hit.position, offsetPt);
+        }
 #endif
         if (max(shadowTransmittance.x, max(shadowTransmittance.y, shadowTransmittance.z)) <= 0.001f)
         {
@@ -2733,14 +2782,26 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
         // Sphere lights retain the renderer's historical falloff-scaled direct-light model,
         // which is not the same estimator as an emissive sphere hit. Applying complementary
         // MIS weights between them removes energy from the center of reflected sphere lights.
-        if (light.type == LightTypeTriangle && lightShapePdf > 0.0f)
+        if ((light.type == LightTypeTriangle || light.type == LightTypeSunTriangle) && lightShapePdf > 0.0f)
         {
             float lightPdf = lightSelectionPdf * lightShapePdf;
             float misWeight = PowerHeuristic(lightTechniqueSampleCount * lightPdf, materialPdf);
             float distanceScale = max(1.0f, distanceToLight * distanceToLight * max(0.001f, _LightFalloffScale));
             float lightStrength = saturate(dot(light.normal, -ptToOffset)) * light.area / distanceScale;
+            if (light.type == LightTypeSunTriangle)
+            {
+                // The virtual sun is represented by two triangle-light entries. Each entry
+                // contributes half of the analytic directional radiance.
+                lightStrength = 0.5f;
+            }
             lightTotal += light.emission * lightStrength * shadowTransmittance * materialResponse
                 * rayNormalDot * misWeight;
+        }
+        else if (isDirectional)
+        {
+            // Directional lights are delta lights at zero radius and are deliberately outside
+            // area-light/BRDF MIS. Finite-radius cones remain direct-light-only for now.
+            lightTotal += light.emission * shadowTransmittance * materialResponse * rayNormalDot;
         }
         else
         {
@@ -2796,16 +2857,26 @@ float GetLightSelectionPdf(int lightIndex, int lightCount, bool sampleAllLights,
 float LightImportanceWeight(int lightIndex, float3 shadingPosition)
 {
     Light light = _Lights[lightIndex];
+    float3 emission = light.emission;
+    float luminance = max(emission.x, max(emission.y, emission.z));
+    if (light.type == LightTypeDirectional)
+    {
+        return max(1e-6f, luminance);
+    }
+    if (light.type == LightTypeSunTriangle)
+    {
+        // A directional light is represented by two virtual triangles, whose combined
+        // importance should equal one analytic source rather than two independent lights.
+        return max(1e-6f, luminance * 0.5f);
+    }
     float3 toLight = light.position - shadingPosition;
     float distSq = dot(toLight, toLight);
 
     float lightRadius = light.radius;
-    float areaScale = max(1.0f, light.type == LightTypeTriangle ? light.area : lightRadius * lightRadius);
+    float areaScale = max(1.0f, (light.type == LightTypeTriangle || light.type == LightTypeSunTriangle) ? light.area : lightRadius * lightRadius);
     float distanceScale = max(1.0f, distSq * max(0.001f, _LightFalloffScale));
     float falloff = saturate(areaScale / distanceScale);
 
-    float3 emission = light.emission;
-    float luminance = max(emission.x, max(emission.y, emission.z));
     // Keep a small floor so every light retains a nonzero pick probability (required for
     // the estimator to stay unbiased).
     return max(1e-6f, luminance * falloff);
@@ -4192,9 +4263,10 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
         refractorPosition.y = GetWaterWaveHeight(refractorPosition.xz);
     }
 
+    bool isDirectionalSun = light.type == LightTypeSunTriangle;
     float3 emissionPosition = light.position;
     float emissionAreaScale = 1.0f;
-    if (light.type == LightTypeTriangle)
+    if (light.type == LightTypeTriangle || light.type == LightTypeSunTriangle)
     {
         float r1 = CausticSequenceSample(id.x, 3u);
         float r2 = CausticSequenceSample(id.x, 4u);
@@ -4205,6 +4277,39 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
         }
         emissionPosition += light.u * r1 + light.v * r2;
         emissionAreaScale = light.area;
+    }
+
+    // A virtual sun triangle is only an interface to the regular light buffer. Do not aim a
+    // finite-emitter cone at the refractor: that pre-converges photons and masks IOR-dependent
+    // focusing. Instead, sample an incident wavefront over the target's projected footprint.
+    float3 directionalPhotonDirection = float3(0.0f, 0.0f, 0.0f);
+    float directionalLaunchArea = 0.0f;
+    if (isDirectionalSun)
+    {
+        float3 sunDirection = normalize(light.normal);
+        float angularRadius = atan(sqrt(max(0.0f, light.area * 0.5f)) / max(1.0f, light.radius));
+        directionalPhotonDirection = SampleCone(sunDirection, angularRadius, rngState);
+        float3 launchTangent;
+        float3 launchBitangent;
+        CreateBasisFromNormal(directionalPhotonDirection, launchTangent, launchBitangent);
+
+        float launchRadius = max(refractorRadius, 0.01f);
+        if (refractorMeshIndex >= 0)
+        {
+            MeshInfo mesh = _Meshes[refractorMeshIndex];
+            launchRadius = max(launchRadius, length(mesh.boundsMax - mesh.boundsMin) * 0.5f);
+        }
+        else if (targetPair.refractorType == 2)
+        {
+            launchRadius = max(launchRadius, length(_WaterSize) * 0.5f);
+        }
+
+        float2 launchSample = SampleDisk(rngState) * launchRadius;
+        float3 launchCenter = refractorPosition + launchTangent * launchSample.x + launchBitangent * launchSample.y;
+        // This only separates the wavefront from the target. It does not affect direction,
+        // focus, or energy because the sun branch has no distance falloff.
+        emissionPosition = launchCenter - directionalPhotonDirection * max(10.0f, launchRadius * 2.0f);
+        directionalLaunchArea = PI * launchRadius * launchRadius;
     }
 
     float meshTargetInversePdf = 0.0f;
@@ -4279,15 +4384,22 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
     float3 tangent;
     float3 bitangent;
     CreateBasisFromNormal(coneAxis, tangent, bitangent);
-    float3 photonDirection = normalize(coneAxis * cosTheta + tangent * (cos(phi) * sinTheta) + bitangent * (sin(phi) * sinTheta));
-    float emitterCosine = light.type == LightTypeTriangle ? dot(light.normal, photonDirection) : 1.0f;
+    float3 photonDirection = isDirectionalSun
+        ? directionalPhotonDirection
+        : normalize(coneAxis * cosTheta + tangent * (cos(phi) * sinTheta) + bitangent * (sin(phi) * sinTheta));
+    float emitterCosine = (light.type == LightTypeTriangle || light.type == LightTypeSunTriangle)
+        ? dot(light.normal, photonDirection) : 1.0f;
     if (emitterCosine <= 0.0f)
     {
         return;
     }
     Ray photonRay = CreateRay(emissionPosition + photonDirection * max(0.001f, emitterRadius), photonDirection);
     RayHit refractorHit = CreateRayHit();
-    if (refractorIndex >= 0)
+    if (isDirectionalSun)
+    {
+        refractorHit = GetNearestIntersection(photonRay);
+    }
+    else if (refractorIndex >= 0)
     {
         IntersectSphere(photonRay, refractorHit, _Spheres[refractorIndex], refractorIndex);
     }
@@ -4320,6 +4432,15 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
     float inverseDirectionalPdf = refractorMeshIndex >= 0 ? meshTargetInversePdf
         : targetPair.refractorType == 2 ? waterTargetInversePdf
         : coneSolidAngle;
+    if (light.type == LightTypeSunTriangle)
+    {
+        // The two virtual triangles represent one analytic emitter, not two independent
+        // area emitters whose total power grows with their arbitrary placement distance.
+        // The targeted cone PDF shrinks with distance squared; multiply by the stored virtual
+        // disc distance squared so caustic flux matches the no-falloff direct-light model.
+        emissionAreaScale = 0.5f * directionalLaunchArea;
+        inverseDirectionalPdf = 1.0f;
+    }
     float selectionScale = inverseDirectionalPdf * emissionAreaScale * emitterCosine
         / max(1e-8f, targetPair.selectionProbability);
     // Targeting only chooses an efficient emission direction. When water is a target, start at the

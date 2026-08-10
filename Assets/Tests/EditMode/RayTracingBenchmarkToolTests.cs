@@ -208,7 +208,7 @@ public class RayTracingBenchmarkToolTests
             managerType.GetMethod("RegisterObject").Invoke(manager, new object[] { rayTracingObject });
 
             Assert.That(GetCollectionCount(manager, "_lightObjects"), Is.EqualTo(1));
-            Assert.That(GetCollectionCount(manager, "_lights"), Is.EqualTo(1));
+            Assert.That(GetCollectionCount(manager, "_lights"), Is.EqualTo(2));
             Assert.That(GetCollectionCount(manager, "_meshObjects"), Is.Zero);
         }
         finally
@@ -216,6 +216,34 @@ public class RayTracingBenchmarkToolTests
             UnityEngine.Object.DestroyImmediate(lightObject);
             UnityEngine.Object.DestroyImmediate(root);
             UnityEngine.Object.DestroyImmediate(previewMesh);
+        }
+    }
+
+    [Test]
+    public void GameManager_RegistersDirectionalLightWithoutSceneGeometry()
+    {
+        var root = new GameObject("Game Manager directional light registration test");
+        var lightObject = new GameObject("Directional light");
+        try
+        {
+            Type managerType = GetRuntimeType("GameManager");
+            Type directionalLightType = GetRuntimeType("RayDirectionalLight");
+            Component manager = root.AddComponent(managerType);
+            lightObject.transform.SetParent(root.transform);
+            lightObject.transform.rotation = Quaternion.Euler(45.0f, 30.0f, 0.0f);
+            Component directionalLight = lightObject.AddComponent(directionalLightType);
+
+            managerType.GetMethod("RegisterDirectionalLight").Invoke(manager, new object[] { directionalLight });
+
+            Assert.That(GetCollectionCount(manager, "_directionalLights"), Is.EqualTo(1));
+            Assert.That(GetCollectionCount(manager, "_lights"), Is.EqualTo(2));
+            Assert.That(GetCollectionCount(manager, "_lightObjects"), Is.Zero);
+            Assert.That(GetCollectionCount(manager, "_meshObjects"), Is.Zero);
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(lightObject);
+            UnityEngine.Object.DestroyImmediate(root);
         }
     }
 

@@ -24,6 +24,7 @@ If the object has `RayMeshPrimitive`, `RayTracingObject.OnEnable()` first calls 
 - If it has `RayMaterial` and `MeshFilter`, but no `SphereCollider`, it becomes a triangle mesh in `_triangles`, `_meshInfos`, `_bvhNodes`, and `_meshObjects`.
 - If it has `RayLight` and `SphereCollider`, it becomes an emissive sphere light in `_lights` and `_lightObjects`, even when `RayObjectPreview` has added a Scene-view `MeshFilter`.
 - If it has `RayLight` and `MeshFilter`, but no `SphereCollider`, it becomes an emissive mesh light: its triangles are uploaded to `_triangles`, and each triangle also contributes an entry to `_lights` for direct-light sampling.
+- `RayDirectionalLight` registers directly with `GameManager` rather than through `RayTracingObject`. It adds an analytic directional entry to `_lights`, with transform-forward direction, HDR radiance, and angular cone radius; it has no scene geometry or BVH entry.
 
 Sphere objects and sphere lights require a `SphereCollider`. The collider center is transformed to world space for the ray-traced sphere position, and the collider radius is scaled by the largest absolute axis of the object's lossy scale for the ray-traced sphere radius. Mesh objects and mesh lights require a `MeshFilter`; the shared mesh triangles are transformed to world space, sorted into a per-mesh BVH, and uploaded with mesh and BVH node metadata.
 
@@ -81,7 +82,7 @@ Graphics.Blit(_outputTexture, dest);
 - `float refraction`
 - `int materialType`
 
-The separate light buffer uses stride `72`. Its `Light` layout stores position, emission, two triangle edges, radius, area, normal, and type so the same buffer can represent sphere lights and emissive mesh triangles.
+The separate light buffer uses stride `72`. Its `Light` layout stores position, emission, two triangle edges, radius, area, normal, and type so the same buffer can represent sphere lights, emissive mesh triangles, and directional lights. Directional lights store travel direction in `position` and angular radius in `radius`; their remaining geometry fields are unused.
 
 `RebuildBuffers()` also releases and recreates triangle, mesh-info, per-mesh BVH-node, and top-level BVH-node buffers. The triangle buffer uses stride `224`, matching the HLSL `MeshTriangle` struct layout. In addition to positions, geometric and interpolated normals, UVs, and the established material data, each triangle stores three imported tangents, a continuous metallic value, independent albedo/metallic-roughness/normal texture indices, the smooth-normal flag, and its emissive light identity.
 

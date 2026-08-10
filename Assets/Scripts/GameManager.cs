@@ -431,6 +431,7 @@ public class GameManager : MonoBehaviour
 
     private List<Light> _lights = new List<Light>();
     private readonly List<RayTracedLight> _lightObjects = new List<RayTracedLight>();
+    private readonly List<RayDirectionalLight> _directionalLights = new List<RayDirectionalLight>();
     private ComputeBuffer _lightBuffer;
 
     private List<Triangle> _triangles = new List<Triangle>();
@@ -589,6 +590,7 @@ public class GameManager : MonoBehaviour
     public int CausticGridOutOfBoundsCount => _causticGridOutOfBoundsCount;
     public int CausticTargetPairCount => _causticTargetPairs.Count;
     public int SphereLightCount => _lightObjects.Count;
+    public int DirectionalLightCount => _directionalLights.Count;
     public int MeshLightCount
     {
         get
@@ -604,7 +606,7 @@ public class GameManager : MonoBehaviour
             return count;
         }
     }
-    public int TriangleLightCount => Mathf.Max(0, _lights.Count - _lightObjects.Count);
+    public int TriangleLightCount => Mathf.Max(0, _lights.Count - _lightObjects.Count - _directionalLights.Count * 2);
     public bool HasWaterVolume => _water != null;
     public bool IsVolumetricFogActive => IsFogEnabled();
     public float EffectiveFogDensity => IsFogEnabled() ? _fogVolume.Density * Mathf.Max(0.0f, fogDensityScale) : 0.0f;
@@ -655,6 +657,9 @@ public class GameManager : MonoBehaviour
     private const int TopLevelObjectTypeMesh = 2;
     private const int LightTypeSphere = 0;
     private const int LightTypeTriangle = 1;
+    private const int LightTypeDirectional = 2;
+    private const int LightTypeSunTriangle = 3;
+    private const float VirtualSunDistance = 10000.0f;
 
     private struct Sphere
     {
@@ -2056,7 +2061,7 @@ public class GameManager : MonoBehaviour
 
     private static bool IsCausticLight(Light light)
     {
-        return light.type == LightTypeSphere || (light.type == LightTypeTriangle && light.area > 1e-6f);
+        return light.type == LightTypeSphere || ((light.type == LightTypeTriangle || light.type == LightTypeSunTriangle) && light.area > 1e-6f);
     }
 
     private static bool IsCausticRefractor(Sphere sphere)
@@ -2081,14 +2086,14 @@ public class GameManager : MonoBehaviour
 
     private static float GetCausticPairWeight(Light light, Vector3 targetPosition, float targetRadius)
     {
-        Vector3 lightPosition = light.type == LightTypeTriangle
+        Vector3 lightPosition = (light.type == LightTypeTriangle || light.type == LightTypeSunTriangle)
             ? light.position + (light.u + light.v) / 3.0f
             : light.position;
         float distanceSquared = Mathf.Max(1e-6f, (targetPosition - lightPosition).sqrMagnitude);
         float projectedTarget = Mathf.Min(4.0f * Mathf.PI, Mathf.PI * targetRadius * targetRadius / distanceSquared);
         float luminance = Vector3.Dot(light.emission, new Vector3(0.2126f, 0.7152f, 0.0722f));
-        float emitterScale = light.type == LightTypeTriangle ? Mathf.Max(1e-6f, light.area) : 1.0f;
-        float facing = light.type == LightTypeTriangle
+        float emitterScale = (light.type == LightTypeTriangle || light.type == LightTypeSunTriangle) ? Mathf.Max(1e-6f, light.area) : 1.0f;
+        float facing = (light.type == LightTypeTriangle || light.type == LightTypeSunTriangle)
             ? Mathf.Max(0.0f, Vector3.Dot(light.normal, (targetPosition - lightPosition).normalized))
             : 1.0f;
         return Mathf.Max(0.0f, luminance) * emitterScale * facing * Mathf.Max(1e-8f, projectedTarget);
@@ -3152,6 +3157,23 @@ public class GameManager : MonoBehaviour
             _lights[i] = lightData;
         }
 
+        int directionalStart = _lightObjects.Count;
+        for (int i = 0; i < _directionalLights.Count; ++i)
+        {
+            RayDirectionalLight directionalLight = _directionalLights[i];
+            int lightIndex = directionalStart + i * 2;
+            if (directionalLight == null || lightIndex + 1 >= _lights.Count)
+            {
+                continue;
+            }
+
+            Light first = default;
+            UpdateVirtualSunTriangles(directionalLight, ref first, out Light second);
+            _temporalDynamicSceneChanged |= !first.Equals(_lights[lightIndex]) || !second.Equals(_lights[lightIndex + 1]);
+            _lights[lightIndex] = first;
+            _lights[lightIndex + 1] = second;
+        }
+
         if (_sphereBuffer != null && _spheres.Count > 0)
         {
             _sphereBuffer.SetData(_spheres);
@@ -3400,10 +3422,10 @@ public class GameManager : MonoBehaviour
         _meshAlbedoTextures.Clear();
         _meshMetallicRoughnessTextures.Clear();
         _meshNormalTextures.Clear();
-        int sphereLightCount = _lightObjects.Count;
-        if (_lights.Count > sphereLightCount)
+        int analyticLightCount = _lightObjects.Count + _directionalLights.Count * 2;
+        if (_lights.Count > analyticLightCount)
         {
-            _lights.RemoveRange(sphereLightCount, _lights.Count - sphereLightCount);
+            _lights.RemoveRange(analyticLightCount, _lights.Count - analyticLightCount);
         }
 
         for (int meshIndex = 0; meshIndex < _meshObjects.Count; meshIndex++)
@@ -4801,7 +4823,17 @@ public class GameManager : MonoBehaviour
                 emission = rayLight.Color.ToVector3() * Mathf.Max(0.0f, rayLight.Intensity),
                 type = LightTypeSphere
             };
-            _lights.Insert(_lightObjects.Count, lightData);
+            int insertionIndex = _lightObjects.Count;
+            _lights.Insert(insertionIndex, lightData);
+            for (int i = 0; i < _triangles.Count; i++)
+            {
+                Triangle triangle = _triangles[i];
+                if (triangle.lightIndex >= insertionIndex)
+                {
+                    triangle.lightIndex++;
+                    _triangles[i] = triangle;
+                }
+            }
             _lightObjects.Add(new RayTracedLight
             {
                 obj = obj,
@@ -4862,6 +4894,87 @@ public class GameManager : MonoBehaviour
         _water = water;
         ResetFrameAccumulation();
         return true;
+    }
+
+    public void RegisterDirectionalLight(RayDirectionalLight directionalLight)
+    {
+        if (directionalLight == null || _directionalLights.Contains(directionalLight))
+        {
+            return;
+        }
+
+        _directionalLights.Add(directionalLight);
+        int insertionIndex = _lightObjects.Count + (_directionalLights.Count - 1) * 2;
+        Light first = default;
+        UpdateVirtualSunTriangles(directionalLight, ref first, out Light second);
+        _lights.Insert(insertionIndex, first);
+        _lights.Insert(insertionIndex + 1, second);
+        for (int i = 0; i < _triangles.Count; i++)
+        {
+            Triangle triangle = _triangles[i];
+            if (triangle.lightIndex >= insertionIndex)
+            {
+                triangle.lightIndex += 2;
+                _triangles[i] = triangle;
+            }
+        }
+        _buffersNeedRebuilding = true;
+        ResetFrameAccumulation();
+    }
+
+    public void UnregisterDirectionalLight(RayDirectionalLight directionalLight)
+    {
+        int directionalIndex = _directionalLights.IndexOf(directionalLight);
+        if (directionalIndex < 0)
+        {
+            return;
+        }
+
+        int lightIndex = _lightObjects.Count + directionalIndex * 2;
+        _directionalLights.RemoveAt(directionalIndex);
+        _lights.RemoveAt(lightIndex);
+        _lights.RemoveAt(lightIndex);
+        for (int i = 0; i < _triangles.Count; i++)
+        {
+            Triangle triangle = _triangles[i];
+            if (triangle.lightIndex > lightIndex)
+            {
+                triangle.lightIndex -= 2;
+                _triangles[i] = triangle;
+            }
+        }
+        _buffersNeedRebuilding = true;
+        ResetFrameAccumulation();
+    }
+
+    private static void UpdateVirtualSunTriangles(RayDirectionalLight directionalLight, ref Light first, out Light second)
+    {
+        Vector3 lightDirection = directionalLight.transform.forward.normalized;
+        Vector3 center = -lightDirection * VirtualSunDistance;
+        float radius = VirtualSunDistance * Mathf.Tan(Mathf.Clamp(directionalLight.AngularRadius, 0.0f, 10.0f) * Mathf.Deg2Rad);
+        Vector3 tangent = Vector3.Cross(Mathf.Abs(lightDirection.y) < 0.999f ? Vector3.up : Vector3.right, lightDirection).normalized * radius;
+        Vector3 bitangent = Vector3.Cross(lightDirection, tangent).normalized * radius;
+        Vector3 emission = directionalLight.Color.ToVector3() * Mathf.Max(0.0f, directionalLight.Intensity);
+        // The emitter's front face points back toward the scene; rays travel from this virtual
+        // disc along transform.forward toward shaded points.
+        first = CreateVirtualSunTriangle(center - tangent - bitangent, tangent * 2.0f, bitangent * 2.0f, lightDirection, emission);
+        second = CreateVirtualSunTriangle(center + tangent + bitangent, -tangent * 2.0f, -bitangent * 2.0f, lightDirection, emission);
+    }
+
+    private static Light CreateVirtualSunTriangle(Vector3 position, Vector3 u, Vector3 v, Vector3 normal, Vector3 emission)
+    {
+        return new Light
+        {
+            position = position,
+            emission = emission,
+            u = u,
+            v = v,
+            // Photon transport uses this to undo the arbitrary virtual-disc placement distance.
+            radius = VirtualSunDistance,
+            area = Vector3.Cross(u, v).magnitude * 0.5f,
+            normal = normal,
+            type = LightTypeSunTriangle
+        };
     }
 
     public void UnregisterWater(Water water)
@@ -4926,6 +5039,15 @@ public class GameManager : MonoBehaviour
         {
             _lightObjects.RemoveAt(lightIndex);
             _lights.RemoveAt(lightIndex);
+            for (int i = 0; i < _triangles.Count; i++)
+            {
+                Triangle triangle = _triangles[i];
+                if (triangle.lightIndex > lightIndex)
+                {
+                    triangle.lightIndex--;
+                    _triangles[i] = triangle;
+                }
+            }
             return;
         }
 

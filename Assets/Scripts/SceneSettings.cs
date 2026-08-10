@@ -37,4 +37,8 @@ public sealed class SceneSettings
     public float FireflyClamp = 1.0f;
     public bool RandomNoise = false;
     public Color32 SkyboxLightColor = new Color32(95, 95, 105, 255);
+    
+    public float DirectionalLightIntensity = 1.0f;
+    public float DirectionalLightAngularRadius = 0.27f;
+    public Vector3 DirectionalLightRotation = new Vector3(50.0f, -30.0f, 0.0f);
 }
