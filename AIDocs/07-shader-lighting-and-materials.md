@@ -28,6 +28,8 @@ Explicit triangle-light samples and opaque BRDF continuation samples are combine
 - **UniformRandom (1)**: draws `_LightSampleCount` lights uniformly at random and applies a `lightCount / drawCount` Monte Carlo correction. Cheapest, but noisiest, because samples swing between near-black distant lights and bright nearby ones.
 - **ImportanceSampled (2)**: draws `_LightSampleCount` lights with probability proportional to a cheap `luminance(emission) * falloff(distanceSquared, radius)` weight (`LightImportanceWeight()`), then divides each contribution by its selection probability. Far less noise per sample than UniformRandom because samples concentrate on bright/nearby lights. Within the capped considered set, distant lights keep a nonzero pick probability. The weight uses squared distance directly (no `sqrt`) and mirrors `GetDirectLightFalloff()` math.
 
+The direct-light selection helper returns the selected light's PDF alongside its Monte Carlo weight, so `GetLightHittingPoint()` does not rescan the importance list after selecting a light. Complementary BRDF-hit MIS still reconstructs its PDF independently because it begins with an emissive hit rather than a direct-light selection.
+
 For the random/importance strategies, if `_LightSampleCount` would cover (nearly) every light anyway, `GetLightHittingPoint()` falls back to all-lights behavior (weight `1`, no `1/pdf` scaling) to avoid needless selection variance at the same cost.
 
 `_MaxLightSamples` is a separate diagnostic cap: when positive, it clamps how many lights any strategy considers, which was used to confirm the per-hit light loop is the dominant cost in `Benchmark_ManyLights`.

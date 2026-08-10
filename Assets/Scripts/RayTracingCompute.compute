@@ -2893,15 +2893,17 @@ float LightImportanceWeight(int lightIndex, float3 shadingPosition)
 //  drawCount   : total draws this hit (1 for AllLights-per-index, else _LightSampleCount)
 //  lightCount  : number of lights under consideration (after the diagnostic cap)
 //  outWeight   : multiplier for this draw's contribution (Monte Carlo / pdf correction)
+//  outSelectionPdf: probability of selecting the returned light for one draw
 //  returns     : the light index to sample
 int SelectLightForDraw(int iteration, int drawCount, int lightCount, float3 shadingPosition,
-                       inout uint rngState, out float outWeight)
+                       inout uint rngState, out float outWeight, out float outSelectionPdf)
 {
     if (_LightSamplingStrategy == LightSamplingUniformRandom)
     {
         // Uniform pick: each draw is sum*(lightCount/drawCount)/drawCount summed over draws,
         // i.e. per-draw weight = lightCount / drawCount.
         outWeight = (float)lightCount / drawCount;
+        outSelectionPdf = 1.0f / lightCount;
         return min(lightCount - 1, (int)(rand(rngState) * lightCount));
     }
 
@@ -2921,6 +2923,7 @@ int SelectLightForDraw(int iteration, int drawCount, int lightCount, float3 shad
         if (totalWeight <= 0.0f)
         {
             outWeight = 0.0f;
+            outSelectionPdf = 0.0f;
             return 0;
         }
 
@@ -2945,12 +2948,14 @@ int SelectLightForDraw(int iteration, int drawCount, int lightCount, float3 shad
 
         // pdf for one draw = chosenWeight / totalWeight. Average over draws => /drawCount.
         // weight = 1 / (drawCount * pdf) = totalWeight / (drawCount * chosenWeight).
-        outWeight = totalWeight / (drawCount * max(1e-6f, chosenWeight));
+        outSelectionPdf = chosenWeight / totalWeight;
+        outWeight = 1.0f / (drawCount * outSelectionPdf);
         return chosen;
     }
 
     // AllLights: one draw per light index, weight 1. The caller iterates every light.
     outWeight = 1.0f;
+    outSelectionPdf = 1.0f;
     return iteration;
 }
 
@@ -3012,15 +3017,18 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
     for (d = 0; d < drawCount; d++)
     {
         float weight;
+        float selectionPdf;
         int lightIndex;
         if (sampleAllLights)
         {
             lightIndex = d;
             weight = 1.0f;
+            selectionPdf = 1.0f;
         }
         else
         {
-            lightIndex = SelectLightForDraw(d, drawCount, lightCount, hit.position, rngState, weight);
+            lightIndex = SelectLightForDraw(
+                d, drawCount, lightCount, hit.position, rngState, weight, selectionPdf);
         }
 
         if (weight <= 0.0f)
@@ -3028,7 +3036,6 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
             continue;
         }
 
-        float selectionPdf = GetLightSelectionPdf(lightIndex, lightCount, sampleAllLights, hit.position);
         int lightTechniqueSampleCount = sampleCount * (sampleAllLights ? 1 : drawCount);
         accumulated += SampleSingleLight(lightIndex, ray, hit, sampleCount,
             selectionPdf, lightTechniqueSampleCount,
