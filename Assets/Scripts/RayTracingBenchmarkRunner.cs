@@ -212,7 +212,9 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
         AppendSetting(builder, "platform", Application.platform.ToString());
         AppendSetting(builder, "graphics_device", SystemInfo.graphicsDeviceName);
         AppendSetting(builder, "graphics_api", SystemInfo.graphicsDeviceType.ToString());
-        AppendSetting(builder, "resolution", $"{gameManager.TextureSize.x}x{gameManager.TextureSize.y}");
+        AppendSetting(builder, "internal_resolution", $"{gameManager.TextureSize.x}x{gameManager.TextureSize.y}");
+        AppendSetting(builder, "display_resolution", $"{gameManager.DisplayTextureSize.x}x{gameManager.DisplayTextureSize.y}");
+        AppendSetting(builder, "render_resolution_percent", gameManager.renderResolutionPercent);
         AppendSetting(builder, "number_of_passes", gameManager.numberOfPasses);
         AppendSetting(builder, "num_bounces", gameManager.numBounces);
         AppendSetting(builder, "shadow_quality", gameManager.shadowQuality);

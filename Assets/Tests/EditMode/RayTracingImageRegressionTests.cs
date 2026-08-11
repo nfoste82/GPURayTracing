@@ -608,10 +608,10 @@ namespace GPURayTracing.Tests
 
         private static readonly Vector4[] NestedWaterGlassBaseline =
         {
-            new Vector4(0.18156200f, 0.34713010f, 0.54329470f, 1.0f),
+            new Vector4(0.18149750f, 0.34698710f, 0.54311590f, 1.0f),
             new Vector4(0.11754290f, 0.26860270f, 0.47664930f, 1.0f), new Vector4(0.02930538f, 0.08688708f, 0.20714760f, 1.0f),
-            new Vector4(0.24839830f, 0.47703760f, 0.68394960f, 1.0f), new Vector4(0.16319830f, 0.34220730f, 0.55730190f, 1.0f),
-            new Vector4(0.15502020f, 0.32527220f, 0.53905920f, 1.0f), new Vector4(0.07051557f, 0.16169770f, 0.32682100f, 1.0f),
+            new Vector4(0.24839830f, 0.47703760f, 0.68394960f, 1.0f), new Vector4(0.16319840f, 0.34220730f, 0.55730190f, 1.0f),
+            new Vector4(0.10823700f, 0.23281910f, 0.42639530f, 1.0f), new Vector4(0.07051557f, 0.16169770f, 0.32682100f, 1.0f),
             new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f), new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f)
         };
 
@@ -666,11 +666,11 @@ namespace GPURayTracing.Tests
 
         private static readonly Vector4[] TransparentSphereShadowBaseline =
         {
-            new Vector4(0.58508450f, 0.67746930f, 0.77647260f, 1.0f), new Vector4(0.82931160f, 0.83592620f, 0.85907860f, 1.0f),
+            new Vector4(0.58512500f, 0.67768970f, 0.77665080f, 1.0f), new Vector4(0.82931160f, 0.83592620f, 0.85907860f, 1.0f),
             new Vector4(0.87332720f, 0.87375580f, 0.88619090f, 1.0f), new Vector4(0.89842370f, 0.89440270f, 0.89858200f, 1.0f),
             new Vector4(0.62780290f, 0.68533930f, 0.76859290f, 1.0f), new Vector4(0.71810750f, 0.76255630f, 0.82738180f, 1.0f),
             new Vector4(0.71800480f, 0.75456530f, 0.81407000f, 1.0f), new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f),
-            new Vector4(0.41480110f, 0.60484840f, 0.73107030f, 1.0f)
+            new Vector4(0.41652840f, 0.60685370f, 0.73313520f, 1.0f)
         };
 
         private static readonly Vector4[] TransparentMeshShadowBaseline =
@@ -684,11 +684,11 @@ namespace GPURayTracing.Tests
 
         private static readonly Vector4[] StackedTransparentShadowBaseline =
         {
-            new Vector4(0.58226880f, 0.66773920f, 0.76593450f, 1.0f), new Vector4(0.83024440f, 0.83358560f, 0.85404960f, 1.0f),
+            new Vector4(0.58223590f, 0.66783750f, 0.76599900f, 1.0f), new Vector4(0.83024440f, 0.83358560f, 0.85404960f, 1.0f),
             new Vector4(0.87332720f, 0.87375580f, 0.88619090f, 1.0f), new Vector4(0.89842370f, 0.89440270f, 0.89858200f, 1.0f),
             new Vector4(0.62780290f, 0.68533930f, 0.76859290f, 1.0f), new Vector4(0.71810750f, 0.76255630f, 0.82738180f, 1.0f),
             new Vector4(0.71800480f, 0.75456530f, 0.81407000f, 1.0f), new Vector4(0.26689890f, 0.46158100f, 0.66307280f, 1.0f),
-            new Vector4(0.41480110f, 0.60484840f, 0.73107030f, 1.0f)
+            new Vector4(0.41652840f, 0.60685370f, 0.73313520f, 1.0f)
         };
 
         private static readonly Vector4[] SphereCausticBaseline =

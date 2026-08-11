@@ -126,6 +126,10 @@ public class GameManager : MonoBehaviour
     public float causticPreservationThreshold = 4.0f;
     
     [Header("Quality settings (Higher quality -> Slower)")]
+    [Tooltip("Percentage of the camera viewport traced before bilinear reconstruction to the display resolution. Lower values reduce ray work but soften fine detail.")]
+    [Range(25.0f, 100.0f)]
+    public float renderResolutionPercent = 100.0f;
+
     [Range(1, 32)]
     public int numberOfPasses = 1;
 
@@ -137,10 +141,10 @@ public class GameManager : MonoBehaviour
     public bool enableFrameAccumulation = true;
 
     [Range(1, 16)]
-    public int numBounces = 3;
+    public int numBounces = 8;
 
     [Range(0, 5)]
-    public int shadowQuality = 2;
+    public int shadowQuality = 0;
 
     [Tooltip("Use flat object loops below this count; set above the scene object count to force flat loops.")]
     [Range(0, 1024)]
@@ -152,7 +156,7 @@ public class GameManager : MonoBehaviour
 
     [Header("Sampling and Accumulation")]
     [Range(0f, 1.5f)]
-    public float shadowRandomness = 0.3f;
+    public float shadowRandomness = 0.65f;
 
     [Tooltip("Diagnostic: cap how many lights each shading point samples. 0 = sample all lights (normal). Lower values confirm the per-hit light loop is the bottleneck.")]
     [Range(0, 256)]
@@ -320,6 +324,13 @@ public class GameManager : MonoBehaviour
 
     private float previousFocalDistance = 100f;
     private float timeSincePreviousFocusDistance = 1f;
+    private bool _hasAutoFocusState;
+    private bool _autoFocusSceneChanged;
+    private Vector3 _lastAutoFocusCameraPosition;
+    private Quaternion _lastAutoFocusCameraRotation;
+    private int _lastAutoFocusNumberOfPasses;
+    private int _lastAutoFocusWaterStateHash;
+    private float _autoFocusTargetDistance;
 
     public bool randomNoise = false;
 
@@ -401,6 +412,7 @@ public class GameManager : MonoBehaviour
     private Vector3 _lastRenderedCameraPosition;
     private Quaternion _lastRenderedCameraRotation;
     private Vector2Int _textureSize;
+    private Vector2Int _displayTextureSize;
     private int _accumulatedFrameCount;
     private long _renderedFrameCount;
     private int _accumulationStateHash;
@@ -559,7 +571,9 @@ public class GameManager : MonoBehaviour
     public int ShadowBvhObjectCount => _shadowBvhBuildItems.Count;
     public bool IsTopLevelBvhActive => _topLevelBvhNodes.Count > 0;
     public bool IsShadowBvhActive => _shadowBvhNodes.Count > 0;
+    // TextureSize is the internal ray-tracing resolution; DisplayTextureSize is the camera target size.
     public Vector2Int TextureSize => _textureSize;
+    public Vector2Int DisplayTextureSize => _displayTextureSize;
     public int AccumulatedFrameCount => _accumulatedFrameCount;
     public bool IsVideoCaptureActive => _videoCaptureActive;
     public int VideoCaptureCompletedFrameCount => _videoCaptureFrameIndex;
@@ -931,7 +945,7 @@ public class GameManager : MonoBehaviour
         EnsureBenchmarkComponents();
         SyncUnitySkyboxPreview();
         long outputTextureStart = Stopwatch.GetTimestamp();
-        CreateOutputTexture(Screen.width, Screen.height);
+        EnsureOutputTextureSize(Screen.width, Screen.height);
         AddStartupProfilePhase("output textures", outputTextureStart);
         long bakedBvhLoadStart = Stopwatch.GetTimestamp();
         TryLoadBakedMeshBvhs();
@@ -1034,7 +1048,7 @@ public class GameManager : MonoBehaviour
         _outputTexture = new RenderTexture(_textureSize.x, _textureSize.y, 24)
         {
             enableRandomWrite = true,
-            filterMode = FilterMode.Point
+            filterMode = FilterMode.Bilinear
         };
         _outputTexture.Create();
 
@@ -1507,12 +1521,24 @@ public class GameManager : MonoBehaviour
 
     private void EnsureOutputTextureSize(int width, int height)
     {
-        if (_outputTexture == null || width != _textureSize.x || height != _textureSize.y)
+        _displayTextureSize = new Vector2Int(width, height);
+        Vector2Int internalSize = CalculateInternalRenderSize(width, height, renderResolutionPercent);
+        int internalWidth = internalSize.x;
+        int internalHeight = internalSize.y;
+        if (_outputTexture == null || internalWidth != _textureSize.x || internalHeight != _textureSize.y)
         {
-            CreateOutputTexture(width, height);
+            CreateOutputTexture(internalWidth, internalHeight);
         }
 
-        renderTextureCamera.aspect = (float)_textureSize.x / _textureSize.y;
+        renderTextureCamera.aspect = (float)_displayTextureSize.x / _displayTextureSize.y;
+    }
+
+    private static Vector2Int CalculateInternalRenderSize(int displayWidth, int displayHeight, float percent)
+    {
+        float renderScale = Mathf.Clamp(percent, 25.0f, 100.0f) * 0.01f;
+        return new Vector2Int(
+            Mathf.Max(1, Mathf.RoundToInt(displayWidth * renderScale)),
+            Mathf.Max(1, Mathf.RoundToInt(displayHeight * renderScale)));
     }
 
     private void UpdateTextureFromCompute(int kernelHandle)
@@ -1870,6 +1896,7 @@ public class GameManager : MonoBehaviour
             int hash = 17;
             hash = AddHash(hash, _textureSize.x);
             hash = AddHash(hash, _textureSize.y);
+            hash = AddHash(hash, renderResolutionPercent);
             hash = AddHash(hash, numberOfPasses);
             hash = AddHash(hash, numBounces);
             hash = AddHash(hash, shadowQuality);
@@ -2363,40 +2390,13 @@ public class GameManager : MonoBehaviour
 
         long firstFramePreparationStart = _startupProfilePending ? Stopwatch.GetTimestamp() : 0;
         UpdateTrackedFocusPoint();
-        var autoFocusDistance = (cameraAutoFocus)
-            ? GetNearestIntersectionDistanceForAutoFocus(new Ray(renderTextureCamera.transform.position,
-                renderTextureCamera.transform.forward))
-            : cameraFocalDistance;
-
-        if (cameraAutoFocus && autoFocusDistance < 1.0f)
-        {
-            var modifier = Mathf.Lerp(1.75f, 1.0f, autoFocusDistance);
-            autoFocusDistance *= modifier;
-
-            autoFocusDistance = Mathf.Max(autoFocusDistance, 0.1f);
-            float targetFocusDistance = autoFocusDistance;
-
-            autoFocusDistance = Mathf.Lerp(previousFocalDistance, autoFocusDistance,
-                Mathf.SmoothStep(0.0f, 1.0f, timeSincePreviousFocusDistance));
-
-            if (Mathf.Abs(autoFocusDistance - targetFocusDistance) < 0.05f)
-            {
-                previousFocalDistance = autoFocusDistance;
-                timeSincePreviousFocusDistance = 0.0f;
-            }
-            else
-            {
-                timeSincePreviousFocusDistance += Time.unscaledDeltaTime;
-            }
-        }
-
-        cameraFocalDistance = autoFocusDistance;
-
         _temporalDynamicSceneChanged = false;
         UpdateSpheres();
         UpdateTriangles();
         UpdateTopLevelBvh();
         UpdateShadowBvh();
+        UpdateAutoFocus();
+        _autoFocusSceneChanged = false;
         UpdateCausticPhotonMap();
 
         if (ShouldRunTemporalDenoiser())
@@ -2500,19 +2500,13 @@ public class GameManager : MonoBehaviour
             Directory.CreateDirectory(directory);
         }
 
-        RenderTexture previous = RenderTexture.active;
-        var texture = new Texture2D(_textureSize.x, _textureSize.y, TextureFormat.RGB24, false);
         try
         {
-            RenderTexture.active = _outputTexture;
-            texture.ReadPixels(new Rect(0, 0, _textureSize.x, _textureSize.y), 0, 0, false);
-            texture.Apply(false, false);
-            File.WriteAllBytes(path, texture.EncodeToPNG());
+            File.WriteAllBytes(path, EncodeCurrentOutputPng());
         }
-        finally
+        catch (Exception exception)
         {
-            RenderTexture.active = previous;
-            DestroyRuntimeObject(texture);
+            throw new InvalidOperationException($"Could not export the current render to '{path}'.", exception);
         }
     }
 
@@ -2669,14 +2663,9 @@ public class GameManager : MonoBehaviour
     private void SaveVideoFrameAndAdvance()
     {
         string path = Path.Combine(_videoCaptureDirectory, $"frame_{_videoCaptureFrameIndex:D6}.png");
-        RenderTexture previous = RenderTexture.active;
-        var texture = new Texture2D(_textureSize.x, _textureSize.y, TextureFormat.RGB24, false);
         try
         {
-            RenderTexture.active = _outputTexture;
-            texture.ReadPixels(new Rect(0, 0, _textureSize.x, _textureSize.y), 0, 0, false);
-            texture.Apply(false, false);
-            File.WriteAllBytes(path, texture.EncodeToPNG());
+            File.WriteAllBytes(path, EncodeCurrentOutputPng());
         }
         catch (Exception exception)
         {
@@ -2684,12 +2673,6 @@ public class GameManager : MonoBehaviour
             FinishVideoCapture(false);
             return;
         }
-        finally
-        {
-            RenderTexture.active = previous;
-            DestroyRuntimeObject(texture);
-        }
-
         _videoCaptureFrameIndex++;
         if (_videoCaptureFrameIndex >= _videoCaptureFrameCount)
         {
@@ -2711,6 +2694,29 @@ public class GameManager : MonoBehaviour
         _videoCaptureAwaitingSimulationStep = true;
         Time.captureDeltaTime = Mathf.Max(0.000001f, videoFrameTimeStep);
         Time.timeScale = 1.0f;
+    }
+
+    private byte[] EncodeCurrentOutputPng()
+    {
+        int width = Mathf.Max(1, _displayTextureSize.x);
+        int height = Mathf.Max(1, _displayTextureSize.y);
+        RenderTexture presentation = RenderTexture.GetTemporary(width, height, 0, RenderTextureFormat.ARGB32);
+        RenderTexture previous = RenderTexture.active;
+        var texture = new Texture2D(width, height, TextureFormat.RGB24, false);
+        try
+        {
+            Graphics.Blit(_outputTexture, presentation);
+            RenderTexture.active = presentation;
+            texture.ReadPixels(new Rect(0, 0, width, height), 0, 0, false);
+            texture.Apply(false, false);
+            return texture.EncodeToPNG();
+        }
+        finally
+        {
+            RenderTexture.active = previous;
+            RenderTexture.ReleaseTemporary(presentation);
+            DestroyRuntimeObject(texture);
+        }
     }
 
     private void FinishVideoCapture(bool completed)
@@ -3036,6 +3042,8 @@ public class GameManager : MonoBehaviour
         {
             _topLevelBvhDirty = true;
         }
+
+        _autoFocusSceneChanged |= spheresChanged || lightsChanged;
     }
 
     private void UpdateTriangles()
@@ -3048,6 +3056,7 @@ public class GameManager : MonoBehaviour
 
         UpdateMeshChangeCache(out bool geometryChanged, out bool materialChanged);
         _temporalDynamicSceneChanged |= geometryChanged || materialChanged;
+        _autoFocusSceneChanged |= geometryChanged || materialChanged;
         if (!geometryChanged && !materialChanged)
         {
             return;
@@ -4642,6 +4651,7 @@ public class GameManager : MonoBehaviour
 
         _rayTracingObjects.Add(obj);
         _buffersNeedRebuilding = true;
+        _autoFocusSceneChanged = true;
         ResetFrameAccumulation();
 
         var material = obj.GetComponent<RayMaterial>();
@@ -4756,6 +4766,7 @@ public class GameManager : MonoBehaviour
         }
 
         _water = water;
+        _autoFocusSceneChanged = true;
         ResetFrameAccumulation();
         return true;
     }
@@ -4783,6 +4794,7 @@ public class GameManager : MonoBehaviour
             }
         }
         _buffersNeedRebuilding = true;
+        _autoFocusSceneChanged = true;
         ResetFrameAccumulation();
     }
 
@@ -4808,6 +4820,7 @@ public class GameManager : MonoBehaviour
             }
         }
         _buffersNeedRebuilding = true;
+        _autoFocusSceneChanged = true;
         ResetFrameAccumulation();
     }
 
@@ -4849,6 +4862,7 @@ public class GameManager : MonoBehaviour
         }
 
         _water = null;
+        _autoFocusSceneChanged = true;
         ResetFrameAccumulation();
     }
 
@@ -4888,6 +4902,7 @@ public class GameManager : MonoBehaviour
     {
         _rayTracingObjects.Remove(obj);
         _buffersNeedRebuilding = true;
+        _autoFocusSceneChanged = true;
         ResetFrameAccumulation();
 
         var sphereIndex = _sphereObjects.FindIndex(sphere => sphere.obj == obj);
@@ -4968,6 +4983,72 @@ public class GameManager : MonoBehaviour
         var scale = sphereTransform.lossyScale;
         float largestAxisScale = Mathf.Max(Mathf.Abs(scale.x), Mathf.Abs(scale.y), Mathf.Abs(scale.z));
         return sphereCollider.radius * largestAxisScale;
+    }
+
+    private void UpdateAutoFocus()
+    {
+        if (!cameraAutoFocus)
+        {
+            _hasAutoFocusState = false;
+            return;
+        }
+
+        int waterStateHash = CalculateAutoFocusWaterStateHash();
+        Transform cameraTransform = renderTextureCamera.transform;
+        bool inputsChanged = !_hasAutoFocusState
+            || _autoFocusSceneChanged
+            || _lastAutoFocusCameraPosition != cameraTransform.position
+            || _lastAutoFocusCameraRotation != cameraTransform.rotation
+            || _lastAutoFocusNumberOfPasses != numberOfPasses
+            || _lastAutoFocusWaterStateHash != waterStateHash;
+
+        if (inputsChanged)
+        {
+            _autoFocusTargetDistance = GetNearestIntersectionDistanceForAutoFocus(
+                new Ray(cameraTransform.position, cameraTransform.forward));
+            if (_autoFocusTargetDistance < 1.0f)
+            {
+                float modifier = Mathf.Lerp(1.75f, 1.0f, _autoFocusTargetDistance);
+                _autoFocusTargetDistance = Mathf.Max(_autoFocusTargetDistance * modifier, 0.1f);
+            }
+
+            _lastAutoFocusCameraPosition = cameraTransform.position;
+            _lastAutoFocusCameraRotation = cameraTransform.rotation;
+            _lastAutoFocusNumberOfPasses = numberOfPasses;
+            _lastAutoFocusWaterStateHash = waterStateHash;
+            _hasAutoFocusState = true;
+        }
+
+        cameraFocalDistance = Mathf.Lerp(
+            previousFocalDistance,
+            _autoFocusTargetDistance,
+            Mathf.SmoothStep(0.0f, 1.0f, timeSincePreviousFocusDistance));
+
+        if (Mathf.Abs(cameraFocalDistance - _autoFocusTargetDistance) < 0.05f)
+        {
+            previousFocalDistance = cameraFocalDistance;
+            timeSincePreviousFocusDistance = 0.0f;
+        }
+        else
+        {
+            timeSincePreviousFocusDistance += Time.unscaledDeltaTime;
+        }
+    }
+
+    private int CalculateAutoFocusWaterStateHash()
+    {
+        unchecked
+        {
+            int hash = _water != null ? _water.GetInstanceID() : 0;
+            if (_water != null)
+            {
+                hash = AddHash(hash, _water.TopCenter);
+                hash = AddHash(hash, _water.Size);
+                hash = AddHash(hash, _water.Opacity);
+            }
+
+            return hash;
+        }
     }
     
     private float GetNearestIntersectionDistanceForAutoFocus(Ray ray)

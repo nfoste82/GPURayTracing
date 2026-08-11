@@ -1,8 +1,8 @@
 # Denoising And Upscaling
 
-This document records the renderer work required to add path-tracing denoising and image reconstruction, including the implications of upgrading from Unity `2022.3.72f1` to Unity `6.3 LTS`. It is architectural guidance for a future implementation, not a claim that the current renderer supports DLSS, FSR, MetalFX, or Unity STP.
+This document records the renderer work required to add path-tracing denoising and image reconstruction, including the implications of upgrading from Unity `2022.3.72f1` to Unity `6.3 LTS`. It is architectural guidance for future work, not a claim that the current renderer supports DLSS, FSR, MetalFX, or Unity STP.
 
-Milestone 1 has established reconstruction-neutral full-resolution outputs: linear HDR beauty, unjittered primary-hit normal, albedo, hit distance, identity, and validity. They are persistent GPU textures and inspectable through `GameManager.DebugRenderMode`; presentation still uses the existing tone-mapped output, and no denoiser consumes these textures yet.
+The initial internal-resolution baseline is implemented: `GameManager.renderResolutionPercent` sizes the tracing and feature textures to `25-100%` of the display target, preserves display aspect for ray generation, and bilinearly reconstructs the tone-mapped output to the camera target. It resets accumulation/history when the internal size changes. Milestone 1 has established reconstruction-neutral feature outputs: linear HDR beauty, unjittered primary-hit normal, albedo, hit distance, identity, and validity. They are persistent GPU textures and inspectable through `GameManager.DebugRenderMode`.
 
 ## Executive Summary
 
@@ -37,7 +37,7 @@ Temporal upscaling can hide modest noise, but severe stochastic noise commonly b
 The current frame pipeline is approximately:
 
 ```text
-Full-resolution path trace
+Configurable internal-resolution path trace
     -> optional progressive running average
     -> exposure and ACES tone map
     -> Graphics.Blit to camera destination
@@ -45,14 +45,14 @@ Full-resolution path trace
 
 Important implementation details:
 
-- `GameManager.CreateOutputTexture()` creates `_outputTexture` and `_accumulationTexture` at the camera source dimensions.
-- `GameManager.EnsureOutputTextureSize()` keeps those textures at display resolution and updates the camera aspect ratio.
+- `GameManager.CreateOutputTexture()` creates `_outputTexture` and `_accumulationTexture` at the internal tracing dimensions.
+- `GameManager.EnsureOutputTextureSize()` derives those dimensions from the display target and `renderResolutionPercent`, while retaining display aspect for the camera.
 - `RayTracingCompute.compute` exposes only `Result` and `AccumulationResult` as image outputs.
 - `CSMain` uses independent stochastic subpixel positions for every path sample.
 - Final-color accumulation is a simple running average and is reset when camera, scene, or quality state changes.
 - Frame accumulation is disabled for animated water because the current history model cannot reproject motion.
 - Exposure and ACES tone mapping occur inside `CSMain` before `Result` is presented.
-- `RayTracingCameraRenderer.OnRenderImage()` invokes `GameManager.RenderImage()`, and presentation ends with `Graphics.Blit(_outputTexture, dest)`.
+- `RayTracingCameraRenderer.OnRenderImage()` invokes `GameManager.RenderImage()`, and presentation bilinearly upscales `_outputTexture` to the full-size destination with `Graphics.Blit`.
 - Existing normal and albedo debug modes contain useful first-hit logic, but diagnostic display output is not a stable denoiser feature-buffer interface.
 
 The intended future pipeline is approximately:

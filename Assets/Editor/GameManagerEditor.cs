@@ -38,6 +38,7 @@ public sealed class GameManagerEditor : Editor
 
         DrawSection(manager, "Render Quality", true, () =>
         {
+            DrawProperty("renderResolutionPercent", "Render Resolution (%)");
             DrawProperty("numberOfPasses");
             DrawProperty("numBounces");
             DrawProperty("shadowQuality");

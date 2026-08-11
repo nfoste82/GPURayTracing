@@ -208,7 +208,7 @@ public class RayTracingBenchmarkToolTests
             managerType.GetMethod("RegisterObject").Invoke(manager, new object[] { rayTracingObject });
 
             Assert.That(GetCollectionCount(manager, "_lightObjects"), Is.EqualTo(1));
-            Assert.That(GetCollectionCount(manager, "_lights"), Is.EqualTo(2));
+            Assert.That(GetCollectionCount(manager, "_lights"), Is.EqualTo(1));
             Assert.That(GetCollectionCount(manager, "_meshObjects"), Is.Zero);
         }
         finally

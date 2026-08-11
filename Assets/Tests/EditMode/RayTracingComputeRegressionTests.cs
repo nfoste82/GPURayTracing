@@ -232,6 +232,25 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void GameManager_InternalRenderSize_ScalesAndClampsViewportPercentage()
+        {
+            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+            Assert.That(managerType, Is.Not.Null, "Could not load GameManager from Assembly-CSharp");
+
+            MethodInfo sizeMethod = managerType.GetMethod(
+                "CalculateInternalRenderSize",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(sizeMethod, Is.Not.Null);
+
+            Assert.That((Vector2Int)sizeMethod.Invoke(null, new object[] { 1920, 1080, 50.0f }),
+                Is.EqualTo(new Vector2Int(960, 540)));
+            Assert.That((Vector2Int)sizeMethod.Invoke(null, new object[] { 13, 7, 58.0f }),
+                Is.EqualTo(new Vector2Int(8, 4)));
+            Assert.That((Vector2Int)sizeMethod.Invoke(null, new object[] { 1, 1, 0.0f }),
+                Is.EqualTo(Vector2Int.one));
+        }
+
+        [Test]
         public void GameManager_DefaultCameraLens_PreservesPreviousBlurScale()
         {
             Type managerType = Type.GetType("GameManager, Assembly-CSharp");
@@ -579,6 +598,14 @@ namespace GPURayTracing.Tests
                     rayTracingObjectType, FindObjectsSortMode.None))
                 {
                     registerMethod.Invoke(manager, new[] { rayTracingObject });
+                }
+                Type directionalLightType = Type.GetType("RayDirectionalLight, Assembly-CSharp");
+                MethodInfo registerDirectionalLightMethod = managerType.GetMethod(
+                    "RegisterDirectionalLight", BindingFlags.Instance | BindingFlags.Public);
+                foreach (UnityEngine.Object directionalLight in UnityEngine.Object.FindObjectsByType(
+                    directionalLightType, FindObjectsSortMode.None))
+                {
+                    registerDirectionalLightMethod.Invoke(manager, new[] { directionalLight });
                 }
                 managerType.GetMethod("RebuildBuffers", BindingFlags.Instance | BindingFlags.Public)
                     .Invoke(manager, new object[] { false });
