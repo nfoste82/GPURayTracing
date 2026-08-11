@@ -6,7 +6,7 @@ The renderer lives in `Assets/Scripts/RayTracingCompute.compute`. Its main image
 
 Important shader globals:
 
-- `Result`: writable output texture.
+- `Result`: writable internal-resolution linear HDR trace output. It remains available for debug visualizations; final color is presented through the separate reconstruction pass.
 - `AccumulationResult`: writable HDR accumulation texture used to progressively average final-color frames before exposure/tone mapping.
 - `_CameraToWorld`: camera transform matrix.
 - `_CameraInverseProjection`: inverse projection matrix for camera ray generation.
@@ -120,7 +120,7 @@ The scene also uploads a top-level BVH over ray-traced spheres, emissive light s
 
 Each final-color path sample is optionally luminance-clamped before averaging. After all passes are averaged, `CSMain` optionally blends final-color HDR radiance into `AccumulationResult` using `_AccumulatedFrameCount`. This happens before exposure/tone mapping, so exposure changes can remap the accumulated HDR result without changing the stored radiance. Debug visualizations skip both the clamp and accumulation and are written with their raw diagnostic values.
 
-`CSMain` applies exposure and tone mapping **only when `_DebugRenderMode == DebugFinalColor`**. The final color is computed as `ACESFilmicToneMap(color * _Exposure)`, where `ACESFilmicToneMap()` is the Narkowicz 2015 ACES filmic approximation. This maps open-ended HDR radiance into `[0, 1]` so bright values roll off smoothly instead of clipping hard to white. `_Exposure` comes from `GameManager.exposure`.
+`CSMain` leaves final-color radiance linear HDR. `RayTracingSpatialDenoiser.compute` then uses `CSPresent` to reconstruct it at display resolution with Catmull-Rom filtering and applies `ACESFilmicToneMap(color * _Exposure)`, the Narkowicz 2015 ACES filmic approximation. This maps open-ended HDR radiance into `[0, 1]` so bright values roll off smoothly instead of clipping hard to white. `_Exposure` comes from `GameManager.exposure`.
 
 ## Depth Of Field
 

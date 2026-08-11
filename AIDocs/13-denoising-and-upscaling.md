@@ -2,11 +2,11 @@
 
 This document records the renderer work required to add path-tracing denoising and image reconstruction, including the implications of upgrading from Unity `2022.3.72f1` to Unity `6.3 LTS`. It is architectural guidance for future work, not a claim that the current renderer supports DLSS, FSR, MetalFX, or Unity STP.
 
-The initial internal-resolution baseline is implemented: `GameManager.renderResolutionPercent` sizes the tracing and feature textures to `25-100%` of the display target, preserves display aspect for ray generation, and bilinearly reconstructs the tone-mapped output to the camera target. It resets accumulation/history when the internal size changes. Milestone 1 has established reconstruction-neutral feature outputs: linear HDR beauty, unjittered primary-hit normal, albedo, hit distance, identity, and validity. They are persistent GPU textures and inspectable through `GameManager.DebugRenderMode`.
+The initial internal-resolution baseline is implemented: `GameManager.renderResolutionPercent` sizes the tracing and feature textures to `25-100%` of the display target, preserves display aspect for ray generation, and reconstructs linear HDR output to the camera target with Catmull-Rom filtering. Exposure and ACES tone mapping occur after reconstruction. It resets accumulation/history when the internal size changes. Milestone 1 has established reconstruction-neutral feature outputs: linear HDR beauty, unjittered primary-hit normal, albedo, hit distance, identity, and validity. They are persistent GPU textures and inspectable through `GameManager.DebugRenderMode`.
 
 ## Executive Summary
 
-The project can benefit substantially from rendering fewer camera pixels and reconstructing a native-resolution image, but its current output contract is not suitable for modern spatial or temporal reconstruction. The renderer currently produces one full-resolution, tone-mapped color texture and does not expose stable depth, motion, material, or history-validity data.
+The project can benefit substantially from rendering fewer camera pixels and reconstructing a native-resolution image. It now produces linear HDR at a configurable internal resolution and uses Catmull-Rom spatial reconstruction, but it still lacks the motion/history contract required for modern temporal reconstruction.
 
 The common renderer foundation is more important than selecting a vendor SDK:
 
@@ -39,6 +39,7 @@ The current frame pipeline is approximately:
 ```text
 Configurable internal-resolution path trace
     -> optional progressive running average
+    -> Catmull-Rom reconstruction to display resolution
     -> exposure and ACES tone map
     -> Graphics.Blit to camera destination
 ```
@@ -51,8 +52,8 @@ Important implementation details:
 - `CSMain` uses independent stochastic subpixel positions for every path sample.
 - Final-color accumulation is a simple running average and is reset when camera, scene, or quality state changes.
 - Frame accumulation is disabled for animated water because the current history model cannot reproject motion.
-- Exposure and ACES tone mapping occur inside `CSMain` before `Result` is presented.
-- `RayTracingCameraRenderer.OnRenderImage()` invokes `GameManager.RenderImage()`, and presentation bilinearly upscales `_outputTexture` to the full-size destination with `Graphics.Blit`.
+- Exposure and ACES tone mapping occur in the post-trace `CSPresent` pass after Catmull-Rom reconstruction.
+- `RayTracingCameraRenderer.OnRenderImage()` invokes `GameManager.RenderImage()`, and presentation blits the already reconstructed full-size output to the destination.
 - Existing normal and albedo debug modes contain useful first-hit logic, but diagnostic display output is not a stable denoiser feature-buffer interface.
 
 The intended future pipeline is approximately:
@@ -100,7 +101,7 @@ Prefer formats such as half precision where their range and precision are suffic
 
 ### Linear HDR Separation
 
-Move exposure and `ACESFilmicToneMap()` out of `CSMain` and into a final presentation pass. Denoisers and temporal reconstruction generally expect linear or documented pre-exposed HDR data, not the current tone-mapped `Result`.
+Exposure and `ACESFilmicToneMap()` are now outside `CSMain` in the final presentation pass. Denoisers and temporal reconstruction therefore receive linear HDR data rather than tone-mapped `Result` values.
 
 Retain an inspectable raw beauty output and an undenoised presentation option. The disabled reconstruction path must preserve current final-color behavior within reviewed regression tolerance and should not allocate unnecessary reconstruction resources.
 

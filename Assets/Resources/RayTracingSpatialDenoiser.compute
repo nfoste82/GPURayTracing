@@ -119,6 +119,41 @@ float3 ACESFilmicToneMap(float3 color)
     return saturate((color * (a * color + b)) / (color * (c * color + d) + e));
 }
 
+float4 SampleCatmullRom(Texture2D<float4> source, float2 uv)
+{
+    uint width, height;
+    source.GetDimensions(width, height);
+    float2 samplePosition = uv * float2(width, height) - 0.5f;
+    float2 basePosition = floor(samplePosition);
+    float2 fraction = samplePosition - basePosition;
+    float2 weights0 = fraction * (-0.5f + fraction * (1.0f - 0.5f * fraction));
+    float2 weights1 = 1.0f + fraction * fraction * (-2.5f + 1.5f * fraction);
+    float2 weights2 = fraction * (0.5f + fraction * (2.0f - 1.5f * fraction));
+    float2 weights3 = fraction * fraction * (-0.5f + 0.5f * fraction);
+    int2 offsets0 = int2(basePosition) - 1;
+    int2 offsets1 = int2(basePosition);
+    int2 offsets2 = int2(basePosition) + 1;
+    int2 offsets3 = int2(basePosition) + 2;
+    int2 maximumPixel = int2(width - 1, height - 1);
+    float4 row0 = source.Load(int3(clamp(int2(offsets0.x, offsets0.y), int2(0, 0), maximumPixel), 0)) * weights0.x
+        + source.Load(int3(clamp(int2(offsets1.x, offsets0.y), int2(0, 0), maximumPixel), 0)) * weights1.x
+        + source.Load(int3(clamp(int2(offsets2.x, offsets0.y), int2(0, 0), maximumPixel), 0)) * weights2.x
+        + source.Load(int3(clamp(int2(offsets3.x, offsets0.y), int2(0, 0), maximumPixel), 0)) * weights3.x;
+    float4 row1 = source.Load(int3(clamp(int2(offsets0.x, offsets1.y), int2(0, 0), maximumPixel), 0)) * weights0.x
+        + source.Load(int3(clamp(int2(offsets1.x, offsets1.y), int2(0, 0), maximumPixel), 0)) * weights1.x
+        + source.Load(int3(clamp(int2(offsets2.x, offsets1.y), int2(0, 0), maximumPixel), 0)) * weights2.x
+        + source.Load(int3(clamp(int2(offsets3.x, offsets1.y), int2(0, 0), maximumPixel), 0)) * weights3.x;
+    float4 row2 = source.Load(int3(clamp(int2(offsets0.x, offsets2.y), int2(0, 0), maximumPixel), 0)) * weights0.x
+        + source.Load(int3(clamp(int2(offsets1.x, offsets2.y), int2(0, 0), maximumPixel), 0)) * weights1.x
+        + source.Load(int3(clamp(int2(offsets2.x, offsets2.y), int2(0, 0), maximumPixel), 0)) * weights2.x
+        + source.Load(int3(clamp(int2(offsets3.x, offsets2.y), int2(0, 0), maximumPixel), 0)) * weights3.x;
+    float4 row3 = source.Load(int3(clamp(int2(offsets0.x, offsets3.y), int2(0, 0), maximumPixel), 0)) * weights0.x
+        + source.Load(int3(clamp(int2(offsets1.x, offsets3.y), int2(0, 0), maximumPixel), 0)) * weights1.x
+        + source.Load(int3(clamp(int2(offsets2.x, offsets3.y), int2(0, 0), maximumPixel), 0)) * weights2.x
+        + source.Load(int3(clamp(int2(offsets3.x, offsets3.y), int2(0, 0), maximumPixel), 0)) * weights3.x;
+    return row0 * weights0.y + row1 * weights1.y + row2 * weights2.y + row3 * weights3.y;
+}
+
 [numthreads(8, 8, 1)]
 void CSAtrous(uint3 id : SV_DispatchThreadID)
 {
@@ -249,7 +284,8 @@ void CSPresent(uint3 id : SV_DispatchThreadID)
         return;
     }
 
-    PresentationResult[id.xy] = float4(ACESFilmicToneMap(InputBeauty[id.xy].rgb * _Exposure), 1.0f);
+    float2 uv = (float2(id.xy) + 0.5f) / float2(width, height);
+    PresentationResult[id.xy] = float4(ACESFilmicToneMap(max(0.0f, SampleCatmullRom(InputBeauty, uv).rgb) * _Exposure), 1.0f);
 }
 
 float2 ClipToUv(float4 clip)

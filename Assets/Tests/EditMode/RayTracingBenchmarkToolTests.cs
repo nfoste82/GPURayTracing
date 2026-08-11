@@ -337,6 +337,38 @@ public class RayTracingBenchmarkToolTests
         }
     }
 
+    [Test]
+    public void GameManager_LightRadianceEdit_DoesNotInvalidateTopLevelBvh()
+    {
+        var root = new GameObject("Game Manager light BVH invalidation test");
+        var lightObject = new GameObject("Sphere light");
+        try
+        {
+            Type managerType = GetRuntimeType("GameManager");
+            Type lightType = GetRuntimeType("RayLight");
+            Type rayTracingObjectType = GetRuntimeType("RayTracingObject");
+            Component manager = root.AddComponent(managerType);
+            lightObject.transform.SetParent(root.transform);
+            lightObject.AddComponent<SphereCollider>();
+            Component light = lightObject.AddComponent(lightType);
+            Component rayTracingObject = lightObject.AddComponent(rayTracingObjectType);
+            managerType.GetMethod("RegisterObject").Invoke(manager, new object[] { rayTracingObject });
+
+            SetField(manager, "_topLevelBvhDirty", false);
+            lightType.GetField("Intensity").SetValue(light, 2.0f);
+
+            InvokePrivate(manager, "UpdateSpheres");
+
+            Assert.That(GetField<bool>(manager, "_topLevelBvhDirty"), Is.False,
+                "Changing light radiance must update the light buffer without rebuilding the TLAS.");
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(lightObject);
+            UnityEngine.Object.DestroyImmediate(root);
+        }
+    }
+
     private static Type GetRuntimeType(string typeName)
     {
         Type type = Type.GetType($"{typeName}, Assembly-CSharp");
@@ -349,6 +381,15 @@ public class RayTracingBenchmarkToolTests
         FieldInfo field = component.GetType().GetField(fieldName);
         Assert.That(field, Is.Not.Null, $"Could not find {component.GetType().Name}.{fieldName}");
         return (T)field.GetValue(component);
+    }
+
+    private static void SetField(Component component, string fieldName, object value)
+    {
+        FieldInfo field = component.GetType().GetField(
+            fieldName,
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.That(field, Is.Not.Null, $"Could not find {component.GetType().Name}.{fieldName}");
+        field.SetValue(component, value);
     }
 
     private static int GetCollectionCount(Component component, string fieldName)

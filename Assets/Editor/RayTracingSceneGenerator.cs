@@ -938,7 +938,7 @@ public static class RayTracingSceneGenerator
 
         var context = CreateBaseScene(new SceneSettings
         {
-            SceneName = sceneName, CameraPosition = new Vector3(-12.6f, 8.0f, 1.8f), CameraEuler = new Vector3(32.2f, 90.0f, 0.0f),
+            SceneName = sceneName, CameraPosition = new Vector3(-8.01f, 5.35f, 1.74f), CameraEuler = new Vector3(31.175f, 90.0f, 0.0f),
             NumBounces = 16, 
             ShadowQuality = 0,
             CameraFocalDistance = 12.0f, 

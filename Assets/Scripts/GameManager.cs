@@ -362,6 +362,7 @@ public class GameManager : MonoBehaviour
     private Material _unitySkyboxMaterial;
 
     private RenderTexture _outputTexture;
+    private RenderTexture _presentationTexture;
     private RenderTexture _accumulationTexture;
     // Reconstruction-neutral, linear feature outputs. They are allocated now but do not change
     // presentation until a denoiser consumes them in a later milestone.
@@ -417,29 +418,30 @@ public class GameManager : MonoBehaviour
     private long _renderedFrameCount;
     private int _accumulationStateHash;
     private bool _hasAccumulationStateHash;
+    private RenderTexture _presentationSource;
 
-    private List<Sphere> _spheres = new List<Sphere>();
-    private readonly List<RayTracedSphere> _sphereObjects = new List<RayTracedSphere>();
+    private List<Sphere> _spheres = new ();
+    private readonly List<RayTracedSphere> _sphereObjects = new ();
     private ComputeBuffer _sphereBuffer;
 
-    private List<Light> _lights = new List<Light>();
-    private readonly List<RayTracedLight> _lightObjects = new List<RayTracedLight>();
-    private readonly List<RayDirectionalLight> _directionalLights = new List<RayDirectionalLight>();
+    private List<Light> _lights = new ();
+    private readonly List<RayTracedLight> _lightObjects = new ();
+    private readonly List<RayDirectionalLight> _directionalLights = new();
     private ComputeBuffer _lightBuffer;
 
-    private List<Triangle> _triangles = new List<Triangle>();
-    private readonly List<MeshInfo> _meshInfos = new List<MeshInfo>();
-    private readonly List<BvhNode> _bvhNodes = new List<BvhNode>();
-    private readonly List<TopLevelBvhNode> _topLevelBvhNodes = new List<TopLevelBvhNode>();
-    private readonly List<TopLevelBvhNode> _shadowBvhNodes = new List<TopLevelBvhNode>();
-    private readonly List<TopLevelBvhBuildItem> _topLevelBvhBuildItems = new List<TopLevelBvhBuildItem>();
-    private readonly List<TopLevelBvhBuildItem> _shadowBvhBuildItems = new List<TopLevelBvhBuildItem>();
-    private readonly TopLevelBvhBuildItemComparer _topLevelBvhBuildItemComparer = new TopLevelBvhBuildItemComparer();
-    private readonly List<RayTracedMesh> _meshObjects = new List<RayTracedMesh>();
-    private readonly Dictionary<long, MeshBvhTemplate> _meshBvhTemplates = new Dictionary<long, MeshBvhTemplate>();
-    private readonly List<Texture2D> _meshAlbedoTextures = new List<Texture2D>();
-    private readonly List<Texture2D> _meshMetallicRoughnessTextures = new List<Texture2D>();
-    private readonly List<Texture2D> _meshNormalTextures = new List<Texture2D>();
+    private List<Triangle> _triangles = new ();
+    private readonly List<MeshInfo> _meshInfos = new ();
+    private readonly List<BvhNode> _bvhNodes = new ();
+    private readonly List<TopLevelBvhNode> _topLevelBvhNodes = new ();
+    private readonly List<TopLevelBvhNode> _shadowBvhNodes = new ();
+    private readonly List<TopLevelBvhBuildItem> _topLevelBvhBuildItems = new ();
+    private readonly List<TopLevelBvhBuildItem> _shadowBvhBuildItems = new();
+    private readonly TopLevelBvhBuildItemComparer _topLevelBvhBuildItemComparer = new ();
+    private readonly List<RayTracedMesh> _meshObjects = new ();
+    private readonly Dictionary<long, MeshBvhTemplate> _meshBvhTemplates = new ();
+    private readonly List<Texture2D> _meshAlbedoTextures = new ();
+    private readonly List<Texture2D> _meshMetallicRoughnessTextures = new ();
+    private readonly List<Texture2D> _meshNormalTextures = new ();
     private Texture2DArray _meshAlbedoTextureArray;
     private Texture2DArray _meshMetallicRoughnessTextureArray;
     private Texture2DArray _meshNormalTextureArray;
@@ -465,8 +467,8 @@ public class GameManager : MonoBehaviour
     private ComputeBuffer _causticPhotonNextBuffer;
     private ComputeBuffer _causticTargetPairBuffer;
     private ComputeBuffer _causticTargetTriangleBuffer;
-    private readonly List<CausticTargetPair> _causticTargetPairs = new List<CausticTargetPair>();
-    private readonly List<CausticTargetTriangle> _causticTargetTriangles = new List<CausticTargetTriangle>();
+    private readonly List<CausticTargetPair> _causticTargetPairs = new ();
+    private readonly List<CausticTargetTriangle> _causticTargetTriangles = new ();
     private Vector3 _causticGridMin;
     private Vector3Int _causticGridDimensions;
     private float _causticGridCellSize;
@@ -498,7 +500,7 @@ public class GameManager : MonoBehaviour
 
     // Reusable suffix surface-area scratch for the SAH BVH split sweep, grown on demand so each
     // build does not allocate per node.
-    private float[] _sahSuffixArea = new float[0];
+    private float[] _sahSuffixArea = Array.Empty<float>();
     
     [Tooltip("Freezes simulation time and progressively refines the current view. Camera and scene changes reset accumulation and render the updated view.")]
     public bool _singleFrame = false;
@@ -508,11 +510,11 @@ public class GameManager : MonoBehaviour
     public int videoSamplesPerFrame = 128;
 
     [Tooltip("Simulation time advanced between output frames, in seconds.")]
-    [Min(0.000001f)]
+    [Min(0.001f)]
     public float videoFrameTimeStep = 1.0f / 30.0f;
 
     [Tooltip("Total simulated duration to capture, in seconds.")]
-    [Min(0.000001f)]
+    [Min(0.1f)]
     public float videoDuration = 5.0f;
 
     [Tooltip("Absolute output folder, or a folder relative to Application.persistentDataPath.")]
@@ -550,7 +552,7 @@ public class GameManager : MonoBehaviour
     // track which debug variants have already been dispatched, and when a new one is requested we
     // show an on-screen overlay for one frame BEFORE running the stalling dispatch, so the user
     // sees a "compiling" message instead of an apparently locked-up app.
-    private readonly HashSet<int> _warmedShaderVariants = new HashSet<int>();
+    private readonly HashSet<int> _warmedShaderVariants = new ();
     private DebugRenderMode _appliedDebugRenderMode = DebugRenderMode.FinalColor;
     private bool _appliedCausticsEnabled;
     private bool _appliedFogEnabled;
@@ -1035,6 +1037,7 @@ public class GameManager : MonoBehaviour
     private void CreateOutputTexture(int width, int height)
     {
         _outputTexture?.Release();
+        _presentationTexture?.Release();
         _accumulationTexture?.Release();
         _beautyTexture?.Release();
         _featureNormalTexture?.Release();
@@ -1045,12 +1048,19 @@ public class GameManager : MonoBehaviour
         ReleaseSpatialDenoiserResources();
         ReleaseTemporalDenoiserResources();
         _textureSize = new Vector2Int(width, height);
-        _outputTexture = new RenderTexture(_textureSize.x, _textureSize.y, 24)
+        _outputTexture = new RenderTexture(_textureSize.x, _textureSize.y, 0, RenderTextureFormat.ARGBFloat)
+        {
+            enableRandomWrite = true,
+            filterMode = FilterMode.Point
+        };
+        _outputTexture.Create();
+
+        _presentationTexture = new RenderTexture(_displayTextureSize.x, _displayTextureSize.y, 0, RenderTextureFormat.ARGB32)
         {
             enableRandomWrite = true,
             filterMode = FilterMode.Bilinear
         };
-        _outputTexture.Create();
+        _presentationTexture.Create();
 
         _accumulationTexture = new RenderTexture(_textureSize.x, _textureSize.y, 0, RenderTextureFormat.ARGBFloat)
         {
@@ -1082,16 +1092,8 @@ public class GameManager : MonoBehaviour
 
     private void EnsureSpatialDenoiserResources()
     {
-        if (_spatialDenoiserShader == null)
-        {
-            _spatialDenoiserShader = Resources.Load<ComputeShader>("RayTracingSpatialDenoiser");
-        }
-
-        if (_spatialDenoiserShader == null)
-        {
-            Debug.LogError("Spatial denoiser shader was not found at Resources/RayTracingSpatialDenoiser.", this);
-            return;
-        }
+        EnsureSpatialDenoiserShader();
+        if (_spatialDenoiserShader == null) return;
 
         if (_denoiserPingTexture != null)
         {
@@ -1101,6 +1103,19 @@ public class GameManager : MonoBehaviour
         _denoiserPingTexture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
         _denoiserPongTexture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
         _causticPreservationMaskTexture = CreateFeatureTexture(RenderTextureFormat.RHalf);
+    }
+
+    private void EnsureSpatialDenoiserShader()
+    {
+        if (_spatialDenoiserShader == null)
+        {
+            _spatialDenoiserShader = Resources.Load<ComputeShader>("RayTracingSpatialDenoiser");
+        }
+
+        if (_spatialDenoiserShader == null)
+        {
+            Debug.LogError("Spatial denoiser shader was not found at Resources/RayTracingSpatialDenoiser.", this);
+        }
     }
 
     private RenderTexture GetDenoiserIterationTexture(int iteration)
@@ -1455,6 +1470,7 @@ public class GameManager : MonoBehaviour
         _videoEncodingProcess?.Dispose();
         _videoEncodingProcess = null;
         _outputTexture?.Release();
+        _presentationTexture?.Release();
         _accumulationTexture?.Release();
         _beautyTexture?.Release();
         _featureNormalTexture?.Release();
@@ -1525,7 +1541,9 @@ public class GameManager : MonoBehaviour
         Vector2Int internalSize = CalculateInternalRenderSize(width, height, renderResolutionPercent);
         int internalWidth = internalSize.x;
         int internalHeight = internalSize.y;
-        if (_outputTexture == null || internalWidth != _textureSize.x || internalHeight != _textureSize.y)
+        if (_outputTexture == null || _presentationTexture == null
+            || internalWidth != _textureSize.x || internalHeight != _textureSize.y
+            || width != _presentationTexture.width || height != _presentationTexture.height)
         {
             CreateOutputTexture(internalWidth, internalHeight);
         }
@@ -1549,6 +1567,28 @@ public class GameManager : MonoBehaviour
         int threadGroupsX = Mathf.CeilToInt(_textureSize.x / (float)RenderThreadCountX);
         int threadGroupsY = Mathf.CeilToInt(_textureSize.y / (float)RenderThreadCountY);
         shader.Dispatch(kernelHandle, threadGroupsX, threadGroupsY, 1);
+    }
+
+    private void PresentFinalColor()
+    {
+        EnsureSpatialDenoiserShader();
+        if (_spatialDenoiserShader == null || _presentationTexture == null)
+        {
+            return;
+        }
+
+        PresentLinearTexture(_presentationSource ?? _beautyTexture, _presentationTexture);
+    }
+
+    private void PresentLinearTexture(RenderTexture source, RenderTexture destination)
+    {
+        int kernel = _spatialDenoiserShader.FindKernel("CSPresent");
+        _spatialDenoiserShader.SetTexture(kernel, "InputBeauty", source);
+        _spatialDenoiserShader.SetTexture(kernel, "PresentationResult", destination);
+        _spatialDenoiserShader.SetFloat("_Exposure", exposure);
+        _spatialDenoiserShader.Dispatch(kernel,
+            Mathf.CeilToInt(destination.width / 8.0f),
+            Mathf.CeilToInt(destination.height / 8.0f), 1);
     }
 
     private void UpdateFeaturesFromCompute()
@@ -1658,11 +1698,11 @@ public class GameManager : MonoBehaviour
             presentationInput = debugIterationTexture;
         }
 
-        int presentKernel = _spatialDenoiserShader.FindKernel("CSPresent");
-        _spatialDenoiserShader.SetTexture(presentKernel, "InputBeauty", presentationInput);
-        _spatialDenoiserShader.SetTexture(presentKernel, "PresentationResult", _outputTexture);
-        _spatialDenoiserShader.SetFloat("_Exposure", exposure);
-        _spatialDenoiserShader.Dispatch(presentKernel, threadGroupsX, threadGroupsY, 1);
+        _presentationSource = presentationInput;
+        if (debugRenderMode == DebugRenderMode.SpatialDenoised || captureDebugIteration)
+        {
+            PresentLinearTexture(presentationInput, _outputTexture);
+        }
     }
 
     private void RunTemporalDenoiser()
@@ -2384,7 +2424,7 @@ public class GameManager : MonoBehaviour
             && !_warmedShaderVariants.Contains(requestedVariant))
         {
             _pendingVariantWarmup = true;
-            Graphics.Blit(_outputTexture, dest);
+            Graphics.Blit(_presentationTexture != null ? _presentationTexture : _outputTexture, dest);
             return;
         }
 
@@ -2430,6 +2470,7 @@ public class GameManager : MonoBehaviour
         }
         long dispatchStart = _startupProfilePending ? Stopwatch.GetTimestamp() : 0;
         UpdateTextureFromCompute(kernelHandle);
+        _presentationSource = _beautyTexture;
         if (!useDedicatedCausticsDebugKernel && (ShouldRunSpatialDenoiser() || ShouldRunTemporalDenoiser() || IsFeatureDebugMode() || IsCausticPreservationDebugMode()))
         {
             UpdateFeaturesFromCompute();
@@ -2451,6 +2492,10 @@ public class GameManager : MonoBehaviour
             && !ShouldUseTemporalAccumulation())
         {
             RunSpatialDenoiser();
+        }
+        if (!useDedicatedCausticsDebugKernel && debugRenderMode == DebugRenderMode.FinalColor)
+        {
+            PresentFinalColor();
         }
         if (_startupProfilePending)
         {
@@ -2480,7 +2525,8 @@ public class GameManager : MonoBehaviour
             SaveVideoFrameAndAdvance();
         }
 
-        Graphics.Blit(_outputTexture, dest);
+        Graphics.Blit(debugRenderMode == DebugRenderMode.FinalColor && !useDedicatedCausticsDebugKernel
+            ? _presentationTexture : _outputTexture, dest);
     }
 
     public void ExportCurrentRenderPng(string path)
@@ -2705,7 +2751,7 @@ public class GameManager : MonoBehaviour
         var texture = new Texture2D(width, height, TextureFormat.RGB24, false);
         try
         {
-            Graphics.Blit(_outputTexture, presentation);
+            Graphics.Blit(_presentationTexture ?? _outputTexture, presentation);
             RenderTexture.active = presentation;
             texture.ReadPixels(new Rect(0, 0, width, height), 0, 0, false);
             texture.Apply(false, false);
@@ -2941,7 +2987,9 @@ public class GameManager : MonoBehaviour
     {
         _hasTransparentSphereBlockers = false;
         bool spheresChanged = false;
+        bool sphereBoundsChanged = false;
         bool lightsChanged = false;
+        bool lightBoundsChanged = false;
         for (int i = 0; i < _spheres.Count; ++i)
         {
             var sphere = _spheres[i];
@@ -2950,7 +2998,9 @@ public class GameManager : MonoBehaviour
 
             Vector3 position = sphereObject.transform.TransformPoint(sphereObject.collider.center);
             float radius = GetWorldSphereRadius(sphereObject.collider, sphereObject.transform);
-            _temporalDynamicSceneChanged |= sphere.position != position || !Mathf.Approximately(sphere.radius, radius);
+            bool boundsChanged = sphere.position != position || !Mathf.Approximately(sphere.radius, radius);
+            _temporalDynamicSceneChanged |= boundsChanged;
+            sphereBoundsChanged |= boundsChanged;
             sphere.position = position;
             sphere.radius = radius;
 
@@ -2985,7 +3035,9 @@ public class GameManager : MonoBehaviour
 
             Vector3 position = lightObject.transform.TransformPoint(lightObject.collider.center);
             float radius = GetWorldSphereRadius(lightObject.collider, lightObject.transform);
-            _temporalDynamicSceneChanged |= lightData.position != position || !Mathf.Approximately(lightData.radius, radius);
+            bool boundsChanged = lightData.position != position || !Mathf.Approximately(lightData.radius, radius);
+            _temporalDynamicSceneChanged |= boundsChanged;
+            lightBoundsChanged |= boundsChanged;
             lightData.position = position;
             lightData.radius = radius;
             lightData.area = Mathf.PI * lightData.radius * lightData.radius;
@@ -3011,16 +3063,23 @@ public class GameManager : MonoBehaviour
             Light first = default;
             UpdateVirtualSunTriangles(directionalLight, ref first, out Light second);
             bool directionalChanged = !first.Equals(_lights[lightIndex]) || !second.Equals(_lights[lightIndex + 1]);
+            bool directionalBoundsChanged = LightBoundsChanged(first, _lights[lightIndex])
+                || LightBoundsChanged(second, _lights[lightIndex + 1]);
             _temporalDynamicSceneChanged |= directionalChanged;
             lightsChanged |= directionalChanged;
+            lightBoundsChanged |= directionalBoundsChanged;
             _lights[lightIndex] = first;
             _lights[lightIndex + 1] = second;
         }
 
-        if (spheresChanged)
+        if (sphereBoundsChanged)
         {
             _topLevelBvhDirty = true;
             _shadowBvhDirty = true;
+        }
+
+        if (spheresChanged)
+        {
             if (_sphereBuffer != null && _spheres.Count > 0)
             {
                 _sphereBuffer.SetData(_spheres);
@@ -3038,12 +3097,27 @@ public class GameManager : MonoBehaviour
             _lightBuffer.SetData(_lights);
         }
 
-        if (lightsChanged)
+        if (lightBoundsChanged)
         {
             _topLevelBvhDirty = true;
         }
 
         _autoFocusSceneChanged |= spheresChanged || lightsChanged;
+    }
+
+    private static bool LightBoundsChanged(Light current, Light previous)
+    {
+        if (current.type == LightTypeSphere && previous.type == LightTypeSphere)
+        {
+            return current.position != previous.position || !Mathf.Approximately(current.radius, previous.radius);
+        }
+
+        // Directional lights use two finite virtual triangles in the top-level BVH. Their
+        // bounds depend on the triangle basis as well as the origin, but not radiance/normal.
+        return current.type != previous.type
+            || current.position != previous.position
+            || current.u != previous.u
+            || current.v != previous.v;
     }
 
     private void UpdateTriangles()

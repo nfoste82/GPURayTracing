@@ -4900,12 +4900,5 @@ void CSMain (uint3 id : SV_DispatchThreadID)
         return;
     }
 
-    // Only tone map the final path-traced color. Debug visualizations are written
-    // as-is so their values stay readable/diagnostic.
-    if (_DebugRenderMode == DebugFinalColor)
-    {
-        color = ACESFilmicToneMap(color * _Exposure);
-    }
-
     Result[id.xy] = float4(color, 1);
 }

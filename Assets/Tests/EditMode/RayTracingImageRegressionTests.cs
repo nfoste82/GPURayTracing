@@ -9,6 +9,7 @@ namespace GPURayTracing.Tests
     public class RayTracingImageRegressionTests
     {
         private const string ComputeShaderPath = "Assets/Scripts/RayTracingCompute.compute";
+        private const string DenoiserShaderPath = "Assets/Resources/RayTracingSpatialDenoiser.compute";
         private const int ImageSize = 32;
         private const float SignatureTolerance = 0.002f;
 
@@ -873,6 +874,16 @@ namespace GPURayTracing.Tests
                 shader.DisableKeyword("FOG_ENABLED");
 
                 shader.Dispatch(kernel, Mathf.CeilToInt(width / 4.0f), Mathf.CeilToInt(height / 4.0f), 1);
+                if (caustics == null)
+                {
+                    ComputeShader denoiser = AssetDatabase.LoadAssetAtPath<ComputeShader>(DenoiserShaderPath);
+                    Assert.That(denoiser, Is.Not.Null);
+                    int presentKernel = denoiser.FindKernel("CSPresent");
+                    denoiser.SetTexture(presentKernel, "InputBeauty", beauty);
+                    denoiser.SetTexture(presentKernel, "PresentationResult", result);
+                    denoiser.SetFloat("_Exposure", 1.0f);
+                    denoiser.Dispatch(presentKernel, Mathf.CeilToInt(width / 8.0f), Mathf.CeilToInt(height / 8.0f), 1);
+                }
                 return ReadSignature(result, width, height, probes, includePeak);
             }
             finally
