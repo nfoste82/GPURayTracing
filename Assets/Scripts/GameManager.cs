@@ -158,6 +158,11 @@ public class GameManager : MonoBehaviour
     [Range(0f, 1.5f)]
     public float shadowRandomness = 0.65f;
 
+    [Header("Parallax Mapping")]
+    [Range(0f, 90f)]
+    [Tooltip("View angle from the surface normal where parallax uses its maximum strength. It interpolates each material's parallax strength at this angle or higher, down toward the material's parallax minimum strength at 0 degrees.")]
+    public float parallaxMaximumStrengthAngle = 20f;
+
     [Tooltip("Diagnostic: cap how many lights each shading point samples. 0 = sample all lights (normal). Lower values confirm the per-hit light loop is the bottleneck.")]
     [Range(0, 256)]
     public int maxLightSamples = 0;
@@ -443,9 +448,11 @@ public class GameManager : MonoBehaviour
     private readonly List<Texture2D> _meshAlbedoTextures = new ();
     private readonly List<Texture2D> _meshMetallicRoughnessTextures = new ();
     private readonly List<Texture2D> _meshNormalTextures = new ();
+    private readonly List<Texture2D> _meshParallaxTextures = new ();
     private Texture2DArray _meshAlbedoTextureArray;
     private Texture2DArray _meshMetallicRoughnessTextureArray;
     private Texture2DArray _meshNormalTextureArray;
+    private Texture2DArray _meshParallaxTextureArray;
     private ComputeBuffer _triangleBuffer;
     private ComputeBuffer _meshBuffer;
     private ComputeBuffer _bvhNodeBuffer;
@@ -638,7 +645,7 @@ public class GameManager : MonoBehaviour
     private const int SphereStride = 64;
     private const int LightStride = 88;
     private const int MaxNumberOfPasses = 32;
-    private const int TriangleStride = 232;
+    private const int TriangleStride = 244;
     private const int MeshInfoStride = 48;
     private const int BvhNodeStride = 48;
     private const int TopLevelBvhNodeStride = 48;
@@ -798,6 +805,9 @@ public class GameManager : MonoBehaviour
         public int textureIndex;
         public int metallicRoughnessTextureIndex;
         public int normalTextureIndex;
+        public int parallaxTextureIndex;
+        public float parallaxStrength;
+        public float minimumParallaxStrength;
         public int interpolateNormals;
         public int lightIndex;
 
@@ -929,6 +939,9 @@ public class GameManager : MonoBehaviour
         public Texture2D previousAlbedoTexture;
         public Texture2D previousMetallicRoughnessTexture;
         public Texture2D previousNormalTexture;
+        public Texture2D previousParallaxTexture;
+        public float previousParallaxStrength;
+        public float previousMinimumParallaxStrength;
         public bool previousInterpolateNormals;
     }
 
@@ -1533,9 +1546,11 @@ public class GameManager : MonoBehaviour
         DestroyRuntimeTextureArray(_meshAlbedoTextureArray);
         DestroyRuntimeTextureArray(_meshMetallicRoughnessTextureArray);
         DestroyRuntimeTextureArray(_meshNormalTextureArray);
+        DestroyRuntimeTextureArray(_meshParallaxTextureArray);
         _meshAlbedoTextureArray = null;
         _meshMetallicRoughnessTextureArray = null;
         _meshNormalTextureArray = null;
+        _meshParallaxTextureArray = null;
     }
 
     private static void DestroyRuntimeTextureArray(Texture2DArray textureArray)
@@ -2376,6 +2391,7 @@ public class GameManager : MonoBehaviour
         shader.SetTexture(traceKernel, "_MeshAlbedoTextures", _meshAlbedoTextureArray);
         shader.SetTexture(traceKernel, "_MeshMetallicRoughnessTextures", _meshMetallicRoughnessTextureArray);
         shader.SetTexture(traceKernel, "_MeshNormalTextures", _meshNormalTextureArray);
+        shader.SetTexture(traceKernel, "_MeshParallaxTextures", _meshParallaxTextureArray);
         shader.SetInt("_NumSpheres", _spheres.Count);
         shader.SetInt("_NumLights", _lights.Count);
         shader.SetInt("_NumTriangles", _triangles.Count);
@@ -3273,6 +3289,9 @@ public class GameManager : MonoBehaviour
             var albedoTexture = material != null ? material.AlbedoTexture : null;
             var metallicRoughnessTexture = material != null ? material.MetallicRoughnessTexture : null;
             var normalTexture = material != null ? material.NormalTexture : null;
+            var parallaxTexture = material != null ? material.ParallaxTexture : null;
+            float parallaxStrength = material != null ? material.ParallaxStrength : 0.0f;
+            float minimumParallaxStrength = material != null ? Mathf.Min(material.MinimumParallaxStrength, parallaxStrength) : 0.0f;
             bool interpolateNormals = material != null && material.InterpolateNormals;
 
             if (opacity < ShadowBlockerOpaqueThreshold)
@@ -3293,7 +3312,10 @@ public class GameManager : MonoBehaviour
                 || meshObject.previousMaterialType != materialType
                 || meshObject.previousAlbedoTexture != albedoTexture
                 || meshObject.previousMetallicRoughnessTexture != metallicRoughnessTexture
-                || meshObject.previousNormalTexture != normalTexture;
+                || meshObject.previousNormalTexture != normalTexture
+                || meshObject.previousParallaxTexture != parallaxTexture
+                || !Mathf.Approximately(meshObject.previousParallaxStrength, parallaxStrength)
+                || !Mathf.Approximately(meshObject.previousMinimumParallaxStrength, minimumParallaxStrength);
 
             geometryChanged |= meshGeometryChanged;
             materialChanged |= meshMaterialChanged;
@@ -3316,6 +3338,9 @@ public class GameManager : MonoBehaviour
             meshObject.previousAlbedoTexture = albedoTexture;
             meshObject.previousMetallicRoughnessTexture = metallicRoughnessTexture;
             meshObject.previousNormalTexture = normalTexture;
+            meshObject.previousParallaxTexture = parallaxTexture;
+            meshObject.previousParallaxStrength = parallaxStrength;
+            meshObject.previousMinimumParallaxStrength = minimumParallaxStrength;
             meshObject.previousInterpolateNormals = interpolateNormals;
             _meshObjects[i] = meshObject;
         }
@@ -3326,6 +3351,7 @@ public class GameManager : MonoBehaviour
         _meshAlbedoTextures.Clear();
         _meshMetallicRoughnessTextures.Clear();
         _meshNormalTextures.Clear();
+        _meshParallaxTextures.Clear();
 
         for (int meshIndex = 0; meshIndex < _meshObjects.Count; meshIndex++)
         {
@@ -3345,6 +3371,7 @@ public class GameManager : MonoBehaviour
             int textureIndex = material != null ? GetMeshAlbedoTextureIndex(material.AlbedoTexture) : -1;
             int metallicRoughnessTextureIndex = material != null ? GetMeshTextureIndex(material.MetallicRoughnessTexture, _meshMetallicRoughnessTextures) : -1;
             int normalTextureIndex = material != null ? GetMeshTextureIndex(material.NormalTexture, _meshNormalTextures) : -1;
+            int parallaxTextureIndex = material != null ? GetMeshTextureIndex(material.ParallaxTexture, _meshParallaxTextures) : -1;
 
             int triangleStart = 0;
             int triangleEnd = 0;
@@ -3377,6 +3404,9 @@ public class GameManager : MonoBehaviour
                 triangle.textureIndex = textureIndex;
                 triangle.metallicRoughnessTextureIndex = metallicRoughnessTextureIndex;
                 triangle.normalTextureIndex = normalTextureIndex;
+                triangle.parallaxTextureIndex = parallaxTextureIndex;
+                triangle.parallaxStrength = material != null ? material.ParallaxStrength : 0.0f;
+                triangle.minimumParallaxStrength = material != null ? Mathf.Min(material.MinimumParallaxStrength, material.ParallaxStrength) : 0.0f;
                 _triangles[triangleIndex] = triangle;
 
             }
@@ -3400,6 +3430,7 @@ public class GameManager : MonoBehaviour
         _meshAlbedoTextures.Clear();
         _meshMetallicRoughnessTextures.Clear();
         _meshNormalTextures.Clear();
+        _meshParallaxTextures.Clear();
         int analyticLightCount = _lightObjects.Count + _directionalLights.Count * 2;
         if (_lights.Count > analyticLightCount)
         {
@@ -3432,6 +3463,7 @@ public class GameManager : MonoBehaviour
             int textureIndex = material != null ? GetMeshAlbedoTextureIndex(material.AlbedoTexture) : -1;
             int metallicRoughnessTextureIndex = material != null ? GetMeshTextureIndex(material.MetallicRoughnessTexture, _meshMetallicRoughnessTextures) : -1;
             int normalTextureIndex = material != null ? GetMeshTextureIndex(material.NormalTexture, _meshNormalTextures) : -1;
+            int parallaxTextureIndex = material != null ? GetMeshTextureIndex(material.ParallaxTexture, _meshParallaxTextures) : -1;
             bool interpolateNormals = material != null && material.InterpolateNormals;
             MeshBvhTemplate template = GetOrBuildMeshBvhTemplate(mesh, interpolateNormals);
             int triangleStart = _triangles.Count;
@@ -3456,6 +3488,9 @@ public class GameManager : MonoBehaviour
                 triangle.textureIndex = textureIndex;
                 triangle.metallicRoughnessTextureIndex = metallicRoughnessTextureIndex;
                 triangle.normalTextureIndex = normalTextureIndex;
+                triangle.parallaxTextureIndex = parallaxTextureIndex;
+                triangle.parallaxStrength = material != null ? material.ParallaxStrength : 0.0f;
+                triangle.minimumParallaxStrength = material != null ? Mathf.Min(material.MinimumParallaxStrength, material.ParallaxStrength) : 0.0f;
                 triangle.interpolateNormals = interpolateNormals ? 1 : 0;
                 triangle.lightIndex = lightIndex;
                 _triangles.Add(triangle);
@@ -4096,6 +4131,7 @@ public class GameManager : MonoBehaviour
         _meshAlbedoTextureArray = BuildMeshTextureArray(_meshAlbedoTextures, defaultMeshAlbedoTexture, "Ray Tracing Mesh Albedo Texture Array", Color.white, false);
         _meshMetallicRoughnessTextureArray = BuildMeshTextureArray(_meshMetallicRoughnessTextures, defaultMeshMetallicRoughnessTexture, "Ray Tracing Mesh Metallic Roughness Texture Array", Color.white, true);
         _meshNormalTextureArray = BuildMeshTextureArray(_meshNormalTextures, defaultMeshNormalTexture, "Ray Tracing Mesh Normal Texture Array", new Color(0.5f, 0.5f, 1.0f, 1.0f), true);
+        _meshParallaxTextureArray = BuildMeshTextureArray(_meshParallaxTextures, null, "Ray Tracing Mesh Parallax Texture Array", Color.black, true);
         _profileTextureArrayTicks += Stopwatch.GetTimestamp() - start;
     }
 
@@ -5285,6 +5321,7 @@ public class GameManager : MonoBehaviour
         shader.SetTexture(kernelHandle, "_MeshAlbedoTextures", _meshAlbedoTextureArray);
         shader.SetTexture(kernelHandle, "_MeshMetallicRoughnessTextures", _meshMetallicRoughnessTextureArray);
         shader.SetTexture(kernelHandle, "_MeshNormalTextures", _meshNormalTextureArray);
+        shader.SetTexture(kernelHandle, "_MeshParallaxTextures", _meshParallaxTextureArray);
 
         shader.SetMatrix("_CameraToWorld", renderTextureCamera.cameraToWorldMatrix);
         shader.SetMatrix("_CameraInverseProjection", renderTextureCamera.projectionMatrix.inverse);
@@ -5368,6 +5405,7 @@ public class GameManager : MonoBehaviour
         }
         shader.SetInt("_ShadowQuality", shadowQuality);
         shader.SetFloat("_ShadowRandomness", shadowRandomness);
+        shader.SetFloat("_ParallaxMaximumStrengthCosine", Mathf.Cos(Mathf.Clamp(parallaxMaximumStrengthAngle, 0.0f, 90.0f) * Mathf.Deg2Rad));
         shader.SetFloat("_LightFalloffScale", lightFalloffScale);
         shader.SetFloat("_FocalDistance", cameraFocalDistance);
         shader.SetFloat("_ApertureRadius", GetCameraApertureRadius());
@@ -5567,7 +5605,8 @@ public class GameManager : MonoBehaviour
     {
         if (_meshAlbedoTextureArray == null
             || _meshMetallicRoughnessTextureArray == null
-            || _meshNormalTextureArray == null)
+            || _meshNormalTextureArray == null
+            || _meshParallaxTextureArray == null)
         {
             RebuildMeshTextureArrays();
         }
@@ -5622,6 +5661,7 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, (int)lightSamplingStrategy);
             hash = AddHash(hash, lightSampleCount);
             hash = AddHash(hash, shadowRandomness);
+            hash = AddHash(hash, parallaxMaximumStrengthAngle);
             hash = AddHash(hash, lightFalloffScale);
             hash = AddHash(hash, cameraFocalDistance);
             hash = AddHash(hash, (int)cameraApertureMode);
@@ -5830,6 +5870,9 @@ public class GameManager : MonoBehaviour
         hash = AddHash(hash, value.previousAlbedoTexture != null ? value.previousAlbedoTexture.GetInstanceID() : 0);
         hash = AddHash(hash, value.previousMetallicRoughnessTexture != null ? value.previousMetallicRoughnessTexture.GetInstanceID() : 0);
         hash = AddHash(hash, value.previousNormalTexture != null ? value.previousNormalTexture.GetInstanceID() : 0);
+        hash = AddHash(hash, value.previousParallaxTexture != null ? value.previousParallaxTexture.GetInstanceID() : 0);
+        hash = AddHash(hash, value.previousParallaxStrength);
+        hash = AddHash(hash, value.previousMinimumParallaxStrength);
         return AddHash(hash, value.previousInterpolateNormals ? 1 : 0);
     }
 }

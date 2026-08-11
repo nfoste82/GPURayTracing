@@ -48,6 +48,7 @@ public sealed class GameManagerEditor : Editor
             DrawProperty("_singleFrame", "Render Paused View");
             DrawProperty("fireflyClamp");
             DrawProperty("randomNoise");
+            DrawProperty("parallaxMaximumStrengthAngle");
         });
         DrawSection(manager, "Lighting", true, () =>
         {

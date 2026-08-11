@@ -19,6 +19,7 @@ public static class RayTracingSceneGenerator
     private const string TeapotBodyModelPath = "Assets/Models/Teapot/Mesh001.obj";
     private const string DefaultCheckerGrayTexturePath = "Default-Checker-Gray.png";
     private const string RenderManTextureFolder = "Assets/Textures/RenderManSwatch";
+    private const string MetalPlateTextureFolder = "Assets/Textures";
     private const string TerrainPreviewMaterialPath = GeneratedAssetFolder + "/TerrainPreview.mat";
     private static readonly string[] TerrainTexturePaths =
     {
@@ -98,6 +99,7 @@ public static class RayTracingSceneGenerator
             CreateApertureBokehScene();
             CreateTerrainScene();
             CreateTeapotMaterialScene();
+            CreateParallaxMappingScene();
 
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
@@ -107,6 +109,87 @@ public static class RayTracingSceneGenerator
             _requestedScenePaths = null;
             _overwriteExistingScenes = false;
         }
+    }
+
+    private static void CreateParallaxMappingScene()
+    {
+        const string sceneName = "ParallaxMapping";
+        
+        if (ShouldSkipExistingScene(sceneName)) return;
+
+        var metalAlbedo = AssetDatabase.LoadAssetAtPath<Texture2D>(MetalPlateTextureFolder + "/metal_plate_diff_2k.jpg");
+        var metalNormal = AssetDatabase.LoadAssetAtPath<Texture2D>(MetalPlateTextureFolder + "/metal_plate_nor_gl_2k.jpg");
+        var metalArm = AssetDatabase.LoadAssetAtPath<Texture2D>(MetalPlateTextureFolder + "/metal_plate_arm_2k.jpg");
+        var metalHeight = AssetDatabase.LoadAssetAtPath<Texture2D>(MetalPlateTextureFolder + "/metal_plate_disp_2k.png");
+        var brickAlbedo = AssetDatabase.LoadAssetAtPath<Texture2D>(MetalPlateTextureFolder + "/brick_wall_006_diff_2k.jpg");
+        var brickNormal = AssetDatabase.LoadAssetAtPath<Texture2D>(MetalPlateTextureFolder + "/brick_wall_006_nor_gl_2k.jpg");
+        var brickArm = AssetDatabase.LoadAssetAtPath<Texture2D>(MetalPlateTextureFolder + "/brick_wall_006_arm_2k.jpg");
+        var brickHeight = AssetDatabase.LoadAssetAtPath<Texture2D>(MetalPlateTextureFolder + "/brick_wall_006_disp_2k.png");
+        var pineBarkAlbedo = AssetDatabase.LoadAssetAtPath<Texture2D>(MetalPlateTextureFolder + "/pine_bark_diff_2k.jpg");
+        var pineBarkNormal = AssetDatabase.LoadAssetAtPath<Texture2D>(MetalPlateTextureFolder + "/pine_bark_nor_gl_2k.jpg");
+        var pineBarkArm = AssetDatabase.LoadAssetAtPath<Texture2D>(MetalPlateTextureFolder + "/pine_bark_arm_2k.jpg");
+        var pineBarkHeight = AssetDatabase.LoadAssetAtPath<Texture2D>(MetalPlateTextureFolder + "/pine_bark_disp_2k.png");
+        
+        var context = CreateBaseScene(new SceneSettings
+        {
+            SceneName = sceneName, 
+            CameraPosition = new Vector3(0.0f, 2.63f, -5.16f), CameraEuler = new Vector3(12.0f, 0.0f, 0.0f),
+            FieldOfView = 35.0f, 
+            NumBounces = 8, 
+            Exposure = 1.2f, 
+            DirectionalLightIntensity = 0.25f,
+            TopLevelBvhMinObjectCount = 1024, 
+            ShadowBvhMinObjectCount = 1024,
+            LightFalloffScale = 0.525f,
+            CameraApertureRadius = 0.002f,
+            SkyboxLightColor = new Color32(18, 18, 18, 255),
+        });
+        
+        AddFloor(context.Root, new Vector2(0.0f, 5.0f), new Vector2(18.0f, 24.0f), 0.32f, "Display Floor");
+        
+        RayMeshPrimitive.PrimitiveType[] shapes = { RayMeshPrimitive.PrimitiveType.Cube, RayMeshPrimitive.PrimitiveType.Pyramid, RayMeshPrimitive.PrimitiveType.Dodecahedron };
+        var parallexStrengths = new[] { 0.0193f, 0.0138f, 0.041f };
+        var smoothnesses = new[] { 0.173f, 0.28f, 0.26f };
+        
+        for (var i = 0; i < shapes.Length; i++)
+        {
+            var z = i * 2.25f + 1.0f;
+            var albedo = i == 0 ? metalAlbedo : i == 1 ? brickAlbedo : pineBarkAlbedo;
+            var normal = i == 0 ? metalNormal : i == 1 ? brickNormal : pineBarkNormal;
+            var arm = i == 0 ? metalArm : i == 1 ? brickArm : pineBarkArm;
+            var height = i == 0 ? metalHeight : i == 1 ? brickHeight : pineBarkHeight;
+            
+            var normalMapped = AddPrimitiveMesh(context.Root, "Normal Mapping " + shapes[i], shapes[i], new Vector3(-2.5f, 1.0f, z), new Vector3(0.0f, 0.0f, 0.0f), Vector3.one * 1.65f, Color.white, RayMaterial.MaterialType.Diffuse, smoothnesses[i], 1.0f);
+            ConfigureSurfaceMaps(normalMapped, albedo, normal, null, arm, 0.0f);
+            
+            var parallaxMapped = AddPrimitiveMesh(context.Root, "Parallax Mapping " + shapes[i], shapes[i], new Vector3(2.5f, 1.0f, z), new Vector3(0.0f, 0.0f, 0.0f), Vector3.one * 1.65f, Color.white, RayMaterial.MaterialType.Diffuse, smoothnesses[i], 1.0f);
+            ConfigureSurfaceMaps(parallaxMapped, albedo, normal, height, arm, parallexStrengths[i]);
+        }
+        
+        // Add lights above the pyramids
+        AddLight(context.Root, "Parallax-Mapped Pyramid Light", new Vector3(2.5f, 2.03f, 3.25f), 0.2f, new Color32(255, 235, 205, 255), 2.75f);
+        AddLight(context.Root, "Normal-Mapped Pyramid Light", new Vector3(-2.5f, 2.03f, 3.25f), 0.2f, new Color32(255, 235, 205, 255), 2.75f);
+        
+        // Add lights in front of cubes
+        AddLight(context.Root, "Parallax-Mapped Cube Light", new Vector3(2.5f, 1.9f, -0.1f), 0.1f, new Color32(255, 235, 205, 255), 4.0f);
+        AddLight(context.Root, "Normal-Mapped Cube Light", new Vector3(-2.5f, 1.9f, -0.1f), 0.1f, new Color32(255, 235, 205, 255), 4.0f);
+        
+        // Add lights for dodecahedrons
+        AddLight(context.Root, "Parallax-Mapped Dodecahedron Light", new Vector3(3.25f, 1.78f, 6.42f), 0.2f, new Color32(255, 235, 205, 255), 2.75f);
+        AddLight(context.Root, "Normal-Mapped Dodecahedron Light", new Vector3(-3.25f, 1.78f, 6.42f), 0.2f, new Color32(255, 235, 205, 255), 2.75f);
+        
+        Save(context.Scene, sceneName);
+    }
+
+    private static void ConfigureSurfaceMaps(GameObject obj, Texture2D albedo, Texture2D normal, Texture2D height, Texture2D roughness, float parallaxStrength)
+    {
+        var material = obj.GetComponent<RayMaterial>();
+        material.AlbedoTexture = albedo;
+        material.NormalTexture = normal;
+        material.ParallaxTexture = height;
+        material.MetallicRoughnessTexture = roughness;
+        material.Metallic = 0.35f;
+        material.ParallaxStrength = parallaxStrength;
     }
 
     [MenuItem("Tools/Ray Tracing/Generate Teapot Material Scene")]

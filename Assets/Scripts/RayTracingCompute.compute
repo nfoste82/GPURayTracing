@@ -52,6 +52,8 @@ Texture2DArray<float4> _MeshMetallicRoughnessTextures;
 SamplerState sampler_MeshMetallicRoughnessTextures;
 Texture2DArray<float4> _MeshNormalTextures;
 SamplerState sampler_MeshNormalTextures;
+Texture2DArray<float4> _MeshParallaxTextures;
+SamplerState sampler_MeshParallaxTextures;
 
 float4 _SkyboxLight;
 
@@ -67,6 +69,7 @@ int _UseFrameAccumulation;
 int _AccumulatedFrameCount;
 float _ShadowRandomness;
 float _LightFalloffScale;
+float _ParallaxMaximumStrengthCosine;
 float _FocalDistance;
 float _ApertureRadius;
 int _ApertureBladeCount;
@@ -332,6 +335,9 @@ struct MeshTriangle
     int textureIndex;
     int metallicRoughnessTextureIndex;
     int normalTextureIndex;
+    int parallaxTextureIndex;
+    float parallaxStrength;
+    float minimumParallaxStrength;
     int interpolateNormals;
     int lightIndex;
 };
@@ -1683,6 +1689,36 @@ float3 GetTriangleOpticalNormal(MeshTriangle meshTriangle, float3 geometricNorma
     return dot(mappedNormal, geometricNormal) < 0.0f ? -mappedNormal : mappedNormal;
 }
 
+float2 ApplySimpleParallax(MeshTriangle meshTriangle, float3 normal, float2 barycentric, float2 uv, float3 viewDirection)
+{
+    if (meshTriangle.parallaxTextureIndex < 0 || meshTriangle.parallaxStrength <= 0.0f)
+    {
+        return uv;
+    }
+
+    float4 tangentData = meshTriangle.tangent0 * (1.0f - barycentric.x - barycentric.y)
+        + meshTriangle.tangent1 * barycentric.x + meshTriangle.tangent2 * barycentric.y;
+    float3 tangent = tangentData.xyz - normal * dot(tangentData.xyz, normal);
+    if (dot(tangent, tangent) <= 1e-8f)
+    {
+        float3 helper = abs(normal.y) < 0.999f ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f);
+        tangent = normalize(cross(helper, normal));
+        tangentData.w = 1.0f;
+    }
+    else
+    {
+        tangent = normalize(tangent);
+    }
+    float3 bitangent = normalize(cross(normal, tangent)) * (tangentData.w < 0.0f ? -1.0f : 1.0f);
+    float3 viewTangent = normalize(float3(dot(viewDirection, tangent), dot(viewDirection, bitangent), dot(viewDirection, normal)));
+    float height = _MeshParallaxTextures.SampleLevel(sampler_MeshParallaxTextures, float3(frac(uv), meshTriangle.parallaxTextureIndex), 0).r;
+    // Simple parallax has no self-occlusion; fade it out before the grazing-angle offset becomes misleading.
+    float grazingFade = smoothstep(0.0f, max(_ParallaxMaximumStrengthCosine, 0.0001f), abs(viewTangent.z));
+    float parallaxStrength = lerp(meshTriangle.minimumParallaxStrength, meshTriangle.parallaxStrength, grazingFade);
+    float offsetScale = parallaxStrength * (height - 0.5f) / max(abs(viewTangent.z), 0.15f);
+    return uv + viewTangent.xy * offsetScale;
+}
+
 RayHit IntersectTriangle(Ray ray, RayHit currentHit, MeshTriangle meshTriangle, int triangleIndex)
 {
     RayHit bestHit = currentHit;
@@ -1696,6 +1732,8 @@ RayHit IntersectTriangle(Ray ray, RayHit currentHit, MeshTriangle meshTriangle, 
         float2 uv = meshTriangle.uv0 * (1.0f - barycentric.x - barycentric.y)
             + meshTriangle.uv1 * barycentric.x
             + meshTriangle.uv2 * barycentric.y;
+        float3 viewDirection = normalize(-ray.direction);
+        uv = ApplySimpleParallax(meshTriangle, geometricNormal, barycentric, uv, viewDirection);
         normal = GetTriangleOpticalNormal(meshTriangle, geometricNormal, barycentric, uv);
 
         if (dot(normal, ray.direction) > 0.0f)
@@ -4767,6 +4805,9 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     smoothTriangle.textureIndex = -1;
     smoothTriangle.metallicRoughnessTextureIndex = -1;
     smoothTriangle.normalTextureIndex = -1;
+    smoothTriangle.parallaxTextureIndex = -1;
+    smoothTriangle.parallaxStrength = 0.0f;
+    smoothTriangle.minimumParallaxStrength = 0.0f;
     smoothTriangle.interpolateNormals = 1;
     smoothTriangle.lightIndex = -1;
     RayHit smoothHit = CreateRayHit();

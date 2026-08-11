@@ -26,6 +26,22 @@ public class RayMaterial : MonoBehaviour
     [Tooltip("Optional tangent-space mesh normal texture. Imported mesh tangents are used when available.")]
     public Texture2D NormalTexture;
 
+    [Tooltip("Optional linear height map for simple parallax mapping. The red channel is sampled in tangent space.")]
+    public Texture2D ParallaxTexture;
+
+    [Range(0f, 0.2f)]
+    [Tooltip("Simple parallax UV displacement scale. This is not parallax occlusion mapping.")]
+    public float ParallaxStrength;
+
+    [Range(0f, 0.2f)]
+    [Tooltip("Parallax UV displacement scale retained at grazing angles. It is clamped to Parallax Strength.")]
+    public float MinimumParallaxStrength;
+
+    private void OnValidate()
+    {
+        MinimumParallaxStrength = Mathf.Min(MinimumParallaxStrength, ParallaxStrength);
+    }
+
     [Tooltip("Interpolate imported mesh vertex normals for smooth shading, refraction, and caustic photon optics. Intersections still use the triangle geometry.")]
     public bool InterpolateNormals;
 

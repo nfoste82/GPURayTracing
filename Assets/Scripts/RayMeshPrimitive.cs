@@ -265,11 +265,34 @@ public class RayMeshPrimitive : MonoBehaviour
 
     private static Mesh CreateMesh(string meshName, Vector3[] vertices, List<int> triangles)
     {
+        var expandedVertices = new Vector3[triangles.Count];
+        var uvs = new Vector2[triangles.Count];
+        var expandedTriangles = new int[triangles.Count];
+        for (int i = 0; i < triangles.Count; i += 3)
+        {
+            Vector3 a = vertices[triangles[i]];
+            Vector3 b = vertices[triangles[i + 1]];
+            Vector3 c = vertices[triangles[i + 2]];
+            Vector3 normal = Vector3.Cross(b - a, c - a).normalized;
+            Vector3 axisU = Vector3.Cross(Mathf.Abs(normal.y) > 0.9f ? Vector3.forward : Vector3.up, normal).normalized;
+            Vector3 axisV = Vector3.Cross(normal, axisU).normalized;
+            for (int corner = 0; corner < 3; corner++)
+            {
+                int target = i + corner;
+                Vector3 position = vertices[triangles[i + corner]];
+                expandedVertices[target] = position;
+                uvs[target] = new Vector2(
+                    Vector3.Dot(position, axisU),
+                    Vector3.Dot(position, axisV));
+                expandedTriangles[target] = target;
+            }
+        }
         var mesh = new Mesh
         {
             name = meshName,
-            vertices = vertices,
-            triangles = triangles.ToArray()
+            vertices = expandedVertices,
+            uv = uvs,
+            triangles = expandedTriangles
         };
         mesh.RecalculateNormals();
         mesh.RecalculateBounds();
