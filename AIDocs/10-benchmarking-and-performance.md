@@ -30,6 +30,7 @@ When the benchmark overlay is visible, press `B` to disable vSync temporarily, w
 - `DemofoxRoughRefraction`: seven otherwise matching low-IOR glass spheres progressing from smooth to frosted, in front of a black-and-white stripe backdrop. It is modeled after [Demofox's rough-refraction fixture](https://www.shadertoy.com/view/ttfyzN) and makes refraction blur and the broadening of floor patterns directly comparable.
 - `DemofoxAbsorption`: the same layout with smooth glass spheres progressing from clear to dark reddish-brown distance-based absorption. It validates the existing RGB Beer-Lambert glass absorption used by transmission paths and transparent shadows.
 - `Benchmark_DragonCornellBox`: a Cornell-box-style imported-model benchmark using `Assets/Models/stanford-dragon-pbr.fbx`, displayed as 30% opaque blue glass with refraction index 1.5. The generator forces the model importer's read/write setting on before loading the mesh, because the ray tracer extracts CPU-side vertices and indices when building triangle buffers and per-mesh BVHs.
+- `Benchmark_EmissiveDragon`: a high-triangle emissive Stanford Dragon above diffuse receivers. It verifies that an emissive mesh remains one global light-selection entry while its area-weighted triangle CDF samples its surface.
 - `Wolfenstein`: a low-ceiling stone-room scene with textured mesh walls, multiple sphere lights, and colored spheres.
 
 Existing generated scene files are skipped rather than overwritten by the menu command, so saved local tweaks in `Assets/Scenes/Generated/` are preserved.

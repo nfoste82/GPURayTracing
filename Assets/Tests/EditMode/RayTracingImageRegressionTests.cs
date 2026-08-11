@@ -39,6 +39,10 @@ namespace GPURayTracing.Tests
             public float area;
             public Vector3 normal;
             public int type;
+            public int triangleStart;
+            public int triangleCount;
+            public float totalArea;
+            public float padding;
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -787,12 +791,13 @@ namespace GPURayTracing.Tests
             var meshDataTextures = CreateMeshTextureArray();
             var meshNormalTextures = CreateNormalTextureArray();
             ComputeBuffer sphereBuffer = CreateBuffer(spheres, 64);
-            ComputeBuffer lightBuffer = CreateBuffer(lights, 72);
+            ComputeBuffer lightBuffer = CreateBuffer(lights, 88);
             ComputeBuffer triangleBuffer = CreateBuffer(triangles, 232);
             ComputeBuffer meshBuffer = CreateBuffer(meshes, 48);
             ComputeBuffer bvhBuffer = CreateBuffer(bvhNodes, 48);
             ComputeBuffer topLevelBuffer = CreateDummyBuffer(48);
             ComputeBuffer shadowBuffer = CreateDummyBuffer(48);
+            ComputeBuffer meshLightCdfBuffer = CreateDummyBuffer(4);
             CausticMap causticMap = null;
 
             try
@@ -827,6 +832,7 @@ namespace GPURayTracing.Tests
                 shader.SetBuffer(kernel, "_BvhNodes", bvhBuffer);
                 shader.SetBuffer(kernel, "_TopLevelBvhNodes", topLevelBuffer);
                 shader.SetBuffer(kernel, "_ShadowBvhNodes", shadowBuffer);
+                shader.SetBuffer(kernel, "_MeshLightTriangleCdf", meshLightCdfBuffer);
 
                 // Unity view-space camera rays point down -Z; cameraToWorld includes that handedness
                 // conversion, unlike Transform.localToWorldMatrix.
@@ -899,6 +905,7 @@ namespace GPURayTracing.Tests
                 bvhBuffer.Release();
                 topLevelBuffer.Release();
                 shadowBuffer.Release();
+                meshLightCdfBuffer.Release();
                 result.Release();
                 accumulation.Release();
                 beauty.Release();
@@ -991,7 +998,7 @@ namespace GPURayTracing.Tests
             }
 
             ComputeBuffer sphereBuffer = CreateBuffer(spheres, 64);
-            ComputeBuffer lightBuffer = CreateBuffer(lights, 72);
+            ComputeBuffer lightBuffer = CreateBuffer(lights, 88);
             ComputeBuffer triangleBuffer = CreateBuffer(triangles, 232);
             ComputeBuffer meshBuffer = CreateBuffer(meshes, 48);
             ComputeBuffer bvhBuffer = CreateBuffer(bvhNodes, 48);
@@ -1071,6 +1078,8 @@ namespace GPURayTracing.Tests
             shader.SetBuffer(traceKernel, "_BvhNodes", bvhBuffer);
             shader.SetBuffer(traceKernel, "_TopLevelBvhNodes", topLevelBuffer);
             shader.SetBuffer(traceKernel, "_ShadowBvhNodes", shadowBuffer);
+            ComputeBuffer meshLightCdfBuffer = CreateDummyBuffer(4);
+            shader.SetBuffer(traceKernel, "_MeshLightTriangleCdf", meshLightCdfBuffer);
             shader.SetBuffer(traceKernel, "_CausticTargetPairs", map.targetPairs);
             shader.SetBuffer(traceKernel, "_CausticTargetTriangles", map.targetTriangles);
             shader.SetTexture(traceKernel, "_MeshMetallicRoughnessTextures", meshDataTextures);
@@ -1079,6 +1088,7 @@ namespace GPURayTracing.Tests
             shader.Dispatch(traceKernel, Mathf.CeilToInt(options.photonCount / 32.0f), 1, 1);
             shader.Dispatch(clearGridKernel, 1024, 1, 1);
             shader.Dispatch(buildGridKernel, Mathf.CeilToInt(options.photonCount / 32.0f), 1, 1);
+            meshLightCdfBuffer.Release();
             UnityEngine.Object.DestroyImmediate(meshDataTextures);
             UnityEngine.Object.DestroyImmediate(meshNormalTextures);
             return map;

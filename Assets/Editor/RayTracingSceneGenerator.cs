@@ -92,6 +92,7 @@ public static class RayTracingSceneGenerator
             CreateDemofoxRoughRefractionScene();
             CreateDemofoxAbsorptionScene();
             CreateDragonCornellBoxScene();
+            CreateEmissiveDragonScene();
             CreateWolfensteinScene();
             CreateVolumetricFogScene();
             CreateApertureBokehScene();
@@ -196,7 +197,7 @@ public static class RayTracingSceneGenerator
         AddTeapot(context.Root, "Marble", bodyMesh, baseMesh, new Vector3(0.0f, 0.02f, 4.8f), Color.white, RayMaterial.MaterialType.Diffuse, 0.0f, 1.0f, marbleAlbedo, marbleMetalRough);
         AddTeapot(context.Root, "Blue Scratched", bodyMesh, baseMesh, new Vector3(4.2f, 0.02f, 4.8f), Color.white, RayMaterial.MaterialType.Diffuse, 0.0f, 1.0f, scratchesAlbedo, scratchesMetalRough, scratchesNormal);
         AddTeapot(context.Root, "Striped Chrome", bodyMesh, baseMesh, new Vector3(-4.2f, 0.02f, -3.63f), Color.white, RayMaterial.MaterialType.Metal, 0.0f, 1.0f, stripedAlbedo, stripedMetalRough, stripedNormal);
-        AddTeapot(context.Root, "Teal Glass", bodyMesh, baseMesh, new Vector3(0.0f, 0.02f, -3.63f), new Color32(0, 221, 159, 255), RayMaterial.MaterialType.Glass, 0.854f, 0.0f, null, null, null, 0.25f, 1.5f);
+        AddTeapot(context.Root, "Teal Glass", bodyMesh, baseMesh, new Vector3(0.0f, 0.02f, -3.63f), new Color32(0, 221, 159, 255), RayMaterial.MaterialType.Glass, 0.82f, 0.0f, null, null, null, 0.25f, 1.5f);
         AddTeapot(context.Root, "Gold Circles", bodyMesh, baseMesh, new Vector3(4.2f, 0.02f, -3.63f), new Color32(209, 136, 3, 255), RayMaterial.MaterialType.Diffuse, 0.5f, 1.0f, goldAlbedo, goldMetalRough, goldNormal);
 
         Save(context.Scene, sceneName);
@@ -1458,6 +1459,52 @@ public static class RayTracingSceneGenerator
         var dragon = AddRayMesh(context.Root, "Stanford Dragon", dragonMesh, new Vector3(0.0f, 0.0f, 0.0f), new Vector3(0.0f, 148.0f, 0.0f), new Vector3(3.0f, 3.0f, 3.0f), Color.white, RayMaterial.MaterialType.Diffuse, 0.75f, 1.0f, 1.0f);
         dragon.GetComponent<RayMaterial>().InterpolateNormals = true;
         //FitObjectToBox(dragon.transform, dragonMesh.bounds, new Vector3(0.0f, 0.04f, 0.15f), new Vector3(2.45f, 2.35f, 2.45f));
+
+        Save(context.Scene, sceneName);
+    }
+
+    private static void CreateEmissiveDragonScene()
+    {
+        const string sceneName = "Benchmark_EmissiveDragon";
+        EnsureReadableModel(StanfordDragonModelPath);
+        if (ShouldSkipExistingScene(sceneName))
+        {
+            return;
+        }
+
+        Mesh dragonMesh = LoadFirstMeshFromAsset(StanfordDragonModelPath);
+        if (dragonMesh == null)
+        {
+            Debug.LogWarning($"Skipping {sceneName}: no mesh found at {StanfordDragonModelPath}.");
+            return;
+        }
+
+        var context = CreateBaseScene(new SceneSettings
+        {
+            SceneName = sceneName,
+            CameraPosition = new Vector3(0.0f, 2.8f, -8.0f),
+            CameraEuler = new Vector3(4.0f, 0.0f, 0.0f),
+            NumberOfPasses = 1,
+            NumBounces = 4,
+            ShadowQuality = 0,
+            LightFalloffScale = 0.03f,
+            SkyboxLightColor = Color.black,
+            DirectionalLightIntensity = 0.0f,
+            TopLevelBvhMinObjectCount = 0,
+            ShadowBvhMinObjectCount = 0
+        });
+
+        AddFloor(context.Root, Vector2.zero, new Vector2(14.0f, 14.0f), 0.25f, "Diffuse Receiver");
+        AddPrimitiveMesh(context.Root, "Receiver Sphere Stand", RayMeshPrimitive.PrimitiveType.Cube,
+            new Vector3(2.6f, 0.35f, 1.4f), Vector3.zero, new Vector3(1.4f, 0.7f, 1.4f),
+            new Color32(88, 105, 125, 255), RayMaterial.MaterialType.Diffuse, 0.35f, 1.0f);
+        AddSphere(context.Root, "Receiver Sphere", new Vector3(2.6f, 1.35f, 1.4f), 0.95f,
+            new Color32(190, 210, 225, 255), RayMaterial.MaterialType.Diffuse, 0.35f, 1.0f);
+
+        GameObject dragon = AddMeshLight(context.Root, "Emissive Stanford Dragon", dragonMesh,
+            new Vector3(-0.4f, 2.1f, 1.2f), new Vector3(0.0f, 148.0f, 0.0f),
+            new Vector3(2.8f, 2.8f, 2.8f), new Color32(255, 180, 105, 255), 3.5f);
+        dragon.GetComponent<MeshRenderer>().enabled = false;
 
         Save(context.Scene, sceneName);
     }

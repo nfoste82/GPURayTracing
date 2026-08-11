@@ -436,6 +436,7 @@ public class GameManager : MonoBehaviour
     private readonly List<TopLevelBvhNode> _shadowBvhNodes = new ();
     private readonly List<TopLevelBvhBuildItem> _topLevelBvhBuildItems = new ();
     private readonly List<TopLevelBvhBuildItem> _shadowBvhBuildItems = new();
+    private readonly List<float> _meshLightTriangleCdf = new();
     private readonly TopLevelBvhBuildItemComparer _topLevelBvhBuildItemComparer = new ();
     private readonly List<RayTracedMesh> _meshObjects = new ();
     private readonly Dictionary<long, MeshBvhTemplate> _meshBvhTemplates = new ();
@@ -450,6 +451,7 @@ public class GameManager : MonoBehaviour
     private ComputeBuffer _bvhNodeBuffer;
     private ComputeBuffer _topLevelBvhNodeBuffer;
     private ComputeBuffer _shadowBvhNodeBuffer;
+    private ComputeBuffer _meshLightTriangleCdfBuffer;
     private ComputeBuffer _focusQueryBuffer;
     private bool _focusQueryPending;
     private bool _focusQueryInFlight;
@@ -608,7 +610,21 @@ public class GameManager : MonoBehaviour
             return count;
         }
     }
-    public int TriangleLightCount => Mathf.Max(0, _lights.Count - _lightObjects.Count - _directionalLights.Count * 2);
+    public int TriangleLightCount
+    {
+        get
+        {
+            int count = 0;
+            for (int i = 0; i < _triangles.Count; i++)
+            {
+                if (_triangles[i].lightIndex >= 0)
+                {
+                    count++;
+                }
+            }
+            return count;
+        }
+    }
     public bool HasWaterVolume => _water != null;
     public bool IsVolumetricFogActive => IsFogEnabled();
     public float EffectiveFogDensity => IsFogEnabled() ? _fogVolume.Density * Mathf.Max(0.0f, fogDensityScale) : 0.0f;
@@ -620,12 +636,13 @@ public class GameManager : MonoBehaviour
     private static readonly List<RayTracingObject> _rayTracingObjects = new List<RayTracingObject>();
 
     private const int SphereStride = 64;
-    private const int LightStride = 72;
+    private const int LightStride = 88;
     private const int MaxNumberOfPasses = 32;
     private const int TriangleStride = 232;
     private const int MeshInfoStride = 48;
     private const int BvhNodeStride = 48;
     private const int TopLevelBvhNodeStride = 48;
+    private const int MeshLightTriangleCdfStride = 4;
     private const int CausticPhotonStride = 36;
     private const int CausticTargetPairStride = 32;
     private const int CausticTargetTriangleStride = 12;
@@ -651,6 +668,7 @@ public class GameManager : MonoBehaviour
     private const int LightTypeTriangle = 1;
     private const int LightTypeDirectional = 2;
     private const int LightTypeSunTriangle = 3;
+    private const int LightTypeMesh = 4;
     private const float VirtualSunDistance = 10000.0f;
 
     private struct Sphere
@@ -726,6 +744,10 @@ public class GameManager : MonoBehaviour
         public float area;
         public Vector3 normal;
         public int type;
+        public int triangleStart;
+        public int triangleCount;
+        public float totalArea;
+        public float padding;
 
         public float Intersect(Vector3 origin, Vector3 direction)
         {
@@ -823,7 +845,7 @@ public class GameManager : MonoBehaviour
         public int triangleCount;
         public int meshIndex;
         public int isLight;
-        public int padding1;
+        public int lightIndex;
     }
 
     private struct CausticTargetPair
@@ -1487,6 +1509,7 @@ public class GameManager : MonoBehaviour
         _bvhNodeBuffer?.Release();
         _topLevelBvhNodeBuffer?.Release();
         _shadowBvhNodeBuffer?.Release();
+        _meshLightTriangleCdfBuffer?.Release();
         _terrainCellBuffer?.Release();
         _terrainHeightBuffer?.Release();
         if (_terrainAlphamapTexture != null)
@@ -2751,7 +2774,10 @@ public class GameManager : MonoBehaviour
         var texture = new Texture2D(width, height, TextureFormat.RGB24, false);
         try
         {
-            Graphics.Blit(_presentationTexture ?? _outputTexture, presentation);
+            RenderTexture currentOutput = debugRenderMode == DebugRenderMode.FinalColor
+                ? _presentationTexture ?? _outputTexture
+                : _outputTexture;
+            Graphics.Blit(currentOutput, presentation);
             RenderTexture.active = presentation;
             texture.ReadPixels(new Rect(0, 0, width, height), 0, 0, false);
             texture.Apply(false, false);
@@ -3168,6 +3194,12 @@ public class GameManager : MonoBehaviour
         {
             _lightBuffer.SetData(_lights);
         }
+        if (geometryChanged && _meshLightTriangleCdfBuffer != null)
+        {
+            _meshLightTriangleCdfBuffer.SetData(_meshLightTriangleCdf.Count > 0
+                ? _meshLightTriangleCdf
+                : new List<float> { 0.0f });
+        }
 
     }
 
@@ -3316,6 +3348,7 @@ public class GameManager : MonoBehaviour
 
             int triangleStart = 0;
             int triangleEnd = 0;
+            int lightIndex = -1;
             for (int infoIndex = 0; infoIndex < _meshInfos.Count; infoIndex++)
             {
                 if (_meshInfos[infoIndex].meshIndex != meshIndex)
@@ -3325,6 +3358,7 @@ public class GameManager : MonoBehaviour
 
                 triangleStart = _meshInfos[infoIndex].triangleStart;
                 triangleEnd = triangleStart + _meshInfos[infoIndex].triangleCount;
+                lightIndex = _meshInfos[infoIndex].lightIndex;
                 break;
             }
 
@@ -3345,12 +3379,13 @@ public class GameManager : MonoBehaviour
                 triangle.normalTextureIndex = normalTextureIndex;
                 _triangles[triangleIndex] = triangle;
 
-                if (isLight && triangle.lightIndex >= 0 && triangle.lightIndex < _lights.Count)
-                {
-                    var triangleLight = _lights[triangle.lightIndex];
-                    triangleLight.emission = emission;
-                    _lights[triangle.lightIndex] = triangleLight;
-                }
+            }
+
+            if (isLight && lightIndex >= 0 && lightIndex < _lights.Count)
+            {
+                var meshLight = _lights[lightIndex];
+                meshLight.emission = emission;
+                _lights[lightIndex] = meshLight;
             }
         }
 
@@ -3401,11 +3436,13 @@ public class GameManager : MonoBehaviour
             MeshBvhTemplate template = GetOrBuildMeshBvhTemplate(mesh, interpolateNormals);
             int triangleStart = _triangles.Count;
             int nodeStart = _bvhNodes.Count;
+            int lightIndex = -1;
+            float totalLightArea = 0.0f;
+            Vector3 areaWeightedLightPosition = Vector3.zero;
 
             for (int i = 0; i < template.triangles.Count; i++)
             {
                 Triangle triangle = TransformTemplateTriangle(template.triangles[i], localToWorld, normalToWorld);
-                int lightIndex = isLight ? _lights.Count : -1;
                 triangle.color = color;
                 triangle.emission = emission;
                 triangle.smoothness = smoothness;
@@ -3425,7 +3462,9 @@ public class GameManager : MonoBehaviour
 
                 if (isLight)
                 {
-                    AddTriangleLight(triangle.vertex0, triangle.vertex1, triangle.vertex2, triangle.normal, emission);
+                    float area = GetTriangleArea(triangle.vertex0, triangle.vertex1, triangle.vertex2);
+                    totalLightArea += area;
+                    areaWeightedLightPosition += (triangle.vertex0 + triangle.vertex1 + triangle.vertex2) * (area / 3.0f);
                 }
             }
 
@@ -3445,6 +3484,18 @@ public class GameManager : MonoBehaviour
             }
 
             int rootNodeIndex = nodeStart;
+            bool hasMeshLight = isLight && totalLightArea > 0.000001f;
+            if (hasMeshLight)
+            {
+                lightIndex = _lights.Count;
+            }
+            for (int triangleIndex = triangleStart; triangleIndex < _triangles.Count; triangleIndex++)
+            {
+                Triangle triangle = _triangles[triangleIndex];
+                triangle.lightIndex = hasMeshLight ? lightIndex : -1;
+                _triangles[triangleIndex] = triangle;
+            }
+
             _meshInfos.Add(new MeshInfo
             {
                 boundsMin = _bvhNodes[rootNodeIndex].boundsMin,
@@ -3453,11 +3504,63 @@ public class GameManager : MonoBehaviour
                 triangleStart = triangleStart,
                 triangleCount = _triangles.Count - triangleStart,
                 meshIndex = meshIndex,
-                isLight = isLight ? 1 : 0
+                isLight = hasMeshLight ? 1 : 0,
+                lightIndex = hasMeshLight ? lightIndex : -1
             });
+
+            if (hasMeshLight)
+            {
+                _lights.Add(new Light
+                {
+                    position = areaWeightedLightPosition / totalLightArea,
+                    emission = emission,
+                    type = LightTypeMesh,
+                    triangleStart = triangleStart,
+                    triangleCount = _triangles.Count - triangleStart,
+                    totalArea = totalLightArea
+                });
+            }
         }
 
+        RebuildMeshLightTriangleCdf();
         RebuildMeshTextureArrays();
+    }
+
+    private void RebuildMeshLightTriangleCdf()
+    {
+        _meshLightTriangleCdf.Clear();
+        for (int i = 0; i < _triangles.Count; i++)
+        {
+            _meshLightTriangleCdf.Add(0.0f);
+        }
+
+        for (int meshIndex = 0; meshIndex < _meshInfos.Count; meshIndex++)
+        {
+            MeshInfo mesh = _meshInfos[meshIndex];
+            if (mesh.lightIndex < 0 || mesh.lightIndex >= _lights.Count)
+            {
+                continue;
+            }
+
+            float cumulativeArea = 0.0f;
+            for (int triangleIndex = mesh.triangleStart; triangleIndex < mesh.triangleStart + mesh.triangleCount; triangleIndex++)
+            {
+                Triangle triangle = _triangles[triangleIndex];
+                cumulativeArea += GetTriangleArea(triangle.vertex0, triangle.vertex1, triangle.vertex2);
+                _meshLightTriangleCdf[triangleIndex] = cumulativeArea;
+            }
+
+            if (cumulativeArea <= 0.000001f)
+            {
+                continue;
+            }
+
+            for (int triangleIndex = mesh.triangleStart; triangleIndex < mesh.triangleStart + mesh.triangleCount; triangleIndex++)
+            {
+                _meshLightTriangleCdf[triangleIndex] /= cumulativeArea;
+            }
+            _meshLightTriangleCdf[mesh.triangleStart + mesh.triangleCount - 1] = 1.0f;
+        }
     }
 
     private MeshBvhTemplate GetOrBuildMeshBvhTemplate(Mesh mesh, bool interpolateNormals)
@@ -3975,27 +4078,9 @@ public class GameManager : MonoBehaviour
         return new Vector4(direction.x, direction.y, direction.z, tangent.w);
     }
 
-    private void AddTriangleLight(Vector3 vertex0, Vector3 vertex1, Vector3 vertex2, Vector3 normal, Vector3 emission)
+    private static float GetTriangleArea(Vector3 vertex0, Vector3 vertex1, Vector3 vertex2)
     {
-        var u = vertex1 - vertex0;
-        var v = vertex2 - vertex0;
-        float area = Vector3.Cross(u, v).magnitude * 0.5f;
-        if (area <= 0.000001f)
-        {
-            return;
-        }
-
-        _lights.Add(new Light
-        {
-            position = vertex0,
-            emission = emission,
-            u = u,
-            v = v,
-            normal = normal,
-            area = area,
-            radius = Mathf.Sqrt(area / Mathf.PI),
-            type = LightTypeTriangle
-        });
+        return Vector3.Cross(vertex1 - vertex0, vertex2 - vertex0).magnitude * 0.5f;
     }
 
     private static Vector2 GetMeshUv(Vector2[] uvs, int vertexIndex)
@@ -4606,6 +4691,7 @@ public class GameManager : MonoBehaviour
         _bvhNodeBuffer?.Release();
         _topLevelBvhNodeBuffer?.Release();
         _shadowBvhNodeBuffer?.Release();
+        _meshLightTriangleCdfBuffer?.Release();
         _sphereBuffer = null;
         _lightBuffer = null;
         _triangleBuffer = null;
@@ -4613,6 +4699,7 @@ public class GameManager : MonoBehaviour
         _bvhNodeBuffer = null;
         _topLevelBvhNodeBuffer = null;
         _shadowBvhNodeBuffer = null;
+        _meshLightTriangleCdfBuffer = null;
 
         long phaseStart = Stopwatch.GetTimestamp();
         RebuildTriangleData();
@@ -4660,6 +4747,7 @@ public class GameManager : MonoBehaviour
         _bvhNodeBuffer = CreateComputeBuffer(_bvhNodes, BvhNodeStride);
         _topLevelBvhNodeBuffer = CreateComputeBuffer(_topLevelBvhNodes, TopLevelBvhNodeStride);
         _shadowBvhNodeBuffer = CreateComputeBuffer(_shadowBvhNodes, TopLevelBvhNodeStride);
+        _meshLightTriangleCdfBuffer = CreateComputeBuffer(_meshLightTriangleCdf, MeshLightTriangleCdfStride);
         if (startupProfile)
         {
             AddStartupProfilePhase("compute buffer creation/upload", phaseStart);
@@ -5028,6 +5116,7 @@ public class GameManager : MonoBehaviour
         SetComputeBuffer("_BvhNodes", _bvhNodeBuffer, kernelHandle);
         SetComputeBuffer("_TopLevelBvhNodes", _topLevelBvhNodeBuffer, kernelHandle);
         SetComputeBuffer("_ShadowBvhNodes", _shadowBvhNodeBuffer, kernelHandle);
+        SetComputeBuffer("_MeshLightTriangleCdf", _meshLightTriangleCdfBuffer, kernelHandle);
     }
 
     private void SetCausticShaderParameters(int kernelHandle)

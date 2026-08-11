@@ -203,6 +203,7 @@ static const int LightTypeSphere = 0;
 static const int LightTypeTriangle = 1;
 static const int LightTypeDirectional = 2;
 static const int LightTypeSunTriangle = 3;
+static const int LightTypeMesh = 4;
 
 static const int LightSamplingAllLights = 0;
 static const int LightSamplingUniformRandom = 1;
@@ -294,9 +295,14 @@ struct Light
     float area;
     float3 normal;
     int type;
+    int triangleStart;
+    int triangleCount;
+    float totalArea;
+    float padding;
 };
 
 StructuredBuffer<Light> _Lights;
+StructuredBuffer<float> _MeshLightTriangleCdf;
 
 struct MeshTriangle
 {
@@ -548,6 +554,7 @@ struct RayHit
     int metallicRoughnessTextureIndex;
     int normalTextureIndex;
     int lightIndex;
+    int triangleIndex;
 };
 
 // Medium identity is separate from material type: two glass objects can have the same material
@@ -917,6 +924,7 @@ RayHit CreateRayHit()
     hit.metallicRoughnessTextureIndex = -1;
     hit.normalTextureIndex = -1;
     hit.lightIndex = -1;
+    hit.triangleIndex = -1;
 
     return hit;
 }
@@ -1675,7 +1683,7 @@ float3 GetTriangleOpticalNormal(MeshTriangle meshTriangle, float3 geometricNorma
     return dot(mappedNormal, geometricNormal) < 0.0f ? -mappedNormal : mappedNormal;
 }
 
-RayHit IntersectTriangle(Ray ray, RayHit currentHit, MeshTriangle meshTriangle)
+RayHit IntersectTriangle(Ray ray, RayHit currentHit, MeshTriangle meshTriangle, int triangleIndex)
 {
     RayHit bestHit = currentHit;
     float hitDistance;
@@ -1721,6 +1729,7 @@ RayHit IntersectTriangle(Ray ray, RayHit currentHit, MeshTriangle meshTriangle)
         bestHit.metallicRoughnessTextureIndex = meshTriangle.metallicRoughnessTextureIndex;
         bestHit.normalTextureIndex = meshTriangle.normalTextureIndex;
         bestHit.lightIndex = meshTriangle.lightIndex;
+        bestHit.triangleIndex = triangleIndex;
     }
 
     return bestHit;
@@ -1839,7 +1848,8 @@ void IntersectMeshBvh(Ray ray, inout RayHit bestHit, MeshInfo meshInfo)
             [loop]
             for (int i = 0; i < node.triangleCount; i++)
             {
-                bestHit = IntersectTriangle(ray, bestHit, _Triangles[node.triangleStart + i]);
+                int triangleIndex = node.triangleStart + i;
+                bestHit = IntersectTriangle(ray, bestHit, _Triangles[triangleIndex], triangleIndex);
             }
             continue;
         }
@@ -2623,6 +2633,40 @@ float GetLightShapePdf(Light light, float3 shadingPosition, float3 lightPosition
         : 0.0f;
 }
 
+float GetTriangleArea(MeshTriangle meshTriangle)
+{
+    return 0.5f * length(cross(
+        meshTriangle.vertex1 - meshTriangle.vertex0,
+        meshTriangle.vertex2 - meshTriangle.vertex0));
+}
+
+int SelectMeshLightTriangle(Light light, inout uint rngState, out float triangleProbability)
+{
+    triangleProbability = 0.0f;
+    if (light.triangleCount <= 0 || light.totalArea <= 1e-8f)
+    {
+        return -1;
+    }
+
+    float target = rand(rngState);
+    int lastIndex = light.triangleStart + light.triangleCount - 1;
+    int triangleIndex = lastIndex;
+    int i;
+    [loop]
+    for (i = light.triangleStart; i <= lastIndex; i++)
+    {
+        if (target <= _MeshLightTriangleCdf[i])
+        {
+            triangleIndex = i;
+            break;
+        }
+    }
+
+    MeshTriangle meshTriangle = _Triangles[triangleIndex];
+    triangleProbability = GetTriangleArea(meshTriangle) / light.totalArea;
+    return triangleProbability > 0.0f ? triangleIndex : -1;
+}
+
 float3 EvaluateMaterialBrdf(Ray ray, RayHit hit, float3 lightDirection, out float pdf)
 {
     float3 normal = hit.normal;
@@ -2675,8 +2719,28 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
 {
     float3 lightTotal = float3(0.0f, 0.0f, 0.0f);
     Light light = _Lights[lightIndex];
+    float triangleSelectionProbability = 1.0f;
+    bool isMeshLight = light.type == LightTypeMesh;
+    if (light.type == LightTypeMesh)
+    {
+        int triangleIndex = SelectMeshLightTriangle(light, rngState, triangleSelectionProbability);
+        if (triangleIndex < 0)
+        {
+            return lightTotal;
+        }
+
+        MeshTriangle meshTriangle = _Triangles[triangleIndex];
+        light.position = meshTriangle.vertex0;
+        light.u = meshTriangle.vertex1 - meshTriangle.vertex0;
+        light.v = meshTriangle.vertex2 - meshTriangle.vertex0;
+        light.normal = meshTriangle.normal;
+        light.area = GetTriangleArea(meshTriangle);
+        light.type = LightTypeTriangle;
+    }
     bool isDirectional = light.type == LightTypeDirectional;
-    float3 lightPos = light.position;
+    float3 lightPos = light.type == LightTypeTriangle || light.type == LightTypeSunTriangle
+        ? light.position + (light.u + light.v) / 3.0f
+        : light.position;
     float3 ptToLight = isDirectional ? -normalize(light.position) : normalize(lightPos - hit.position);
     float3 tangent;
     float3 bitangent;
@@ -2784,7 +2848,7 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
         // MIS weights between them removes energy from the center of reflected sphere lights.
         if ((light.type == LightTypeTriangle || light.type == LightTypeSunTriangle) && lightShapePdf > 0.0f)
         {
-            float lightPdf = lightSelectionPdf * lightShapePdf;
+            float lightPdf = lightSelectionPdf * triangleSelectionProbability * lightShapePdf;
             float misWeight = PowerHeuristic(lightTechniqueSampleCount * lightPdf, materialPdf);
             float distanceScale = max(1.0f, distanceToLight * distanceToLight * max(0.001f, _LightFalloffScale));
             float lightStrength = saturate(dot(light.normal, -ptToOffset)) * light.area / distanceScale;
@@ -2795,7 +2859,7 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
                 lightStrength = 0.5f;
             }
             lightTotal += light.emission * lightStrength * shadowTransmittance * materialResponse
-                * rayNormalDot * misWeight;
+                * rayNormalDot * misWeight * (isMeshLight ? 1.0f / triangleSelectionProbability : 1.0f);
         }
         else if (isDirectional)
         {
@@ -2873,7 +2937,8 @@ float LightImportanceWeight(int lightIndex, float3 shadingPosition)
     float distSq = dot(toLight, toLight);
 
     float lightRadius = light.radius;
-    float areaScale = max(1.0f, (light.type == LightTypeTriangle || light.type == LightTypeSunTriangle) ? light.area : lightRadius * lightRadius);
+    float areaScale = max(1.0f, (light.type == LightTypeTriangle || light.type == LightTypeSunTriangle) ? light.area
+        : light.type == LightTypeMesh ? light.totalArea : lightRadius * lightRadius);
     float distanceScale = max(1.0f, distSq * max(0.001f, _LightFalloffScale));
     float falloff = saturate(areaScale / distanceScale);
 
@@ -3081,7 +3146,27 @@ float GetLightPdfForHit(float3 shadingPosition, RayHit lightHit, bool softShadow
     int samplesPerLight = softShadows ? max(1, _ShadowQuality + 1) : 1;
     sampleCount = samplesPerLight * (sampleAllLights ? 1 : drawCount);
     float selectionPdf = GetLightSelectionPdf(lightHit.lightIndex, lightCount, sampleAllLights, shadingPosition);
-    return selectionPdf * GetLightShapePdf(_Lights[lightHit.lightIndex], shadingPosition, lightHit.position);
+    Light light = _Lights[lightHit.lightIndex];
+    if (light.type == LightTypeMesh)
+    {
+        if (lightHit.triangleIndex < light.triangleStart
+            || lightHit.triangleIndex >= light.triangleStart + light.triangleCount)
+        {
+            return 0.0f;
+        }
+
+        MeshTriangle meshTriangle = _Triangles[lightHit.triangleIndex];
+        float triangleProbability = GetTriangleArea(meshTriangle) / max(light.totalArea, 1e-8f);
+        Light triangleLight = light;
+        triangleLight.position = meshTriangle.vertex0;
+        triangleLight.u = meshTriangle.vertex1 - meshTriangle.vertex0;
+        triangleLight.v = meshTriangle.vertex2 - meshTriangle.vertex0;
+        triangleLight.normal = meshTriangle.normal;
+        triangleLight.area = GetTriangleArea(meshTriangle);
+        triangleLight.type = LightTypeTriangle;
+        return selectionPdf * triangleProbability * GetLightShapePdf(triangleLight, shadingPosition, lightHit.position);
+    }
+    return selectionPdf * GetLightShapePdf(light, shadingPosition, lightHit.position);
 }
 
 float3 GetSkyboxColor(float3 direction)
@@ -4685,7 +4770,7 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     smoothTriangle.interpolateNormals = 1;
     smoothTriangle.lightIndex = -1;
     RayHit smoothHit = CreateRayHit();
-    smoothHit = IntersectTriangle(CreateRay(float3(0.0f, 0.0f, 1.0f), float3(0.0f, 0.0f, -1.0f)), smoothHit, smoothTriangle);
+    smoothHit = IntersectTriangle(CreateRay(float3(0.0f, 0.0f, 1.0f), float3(0.0f, 0.0f, -1.0f)), smoothHit, smoothTriangle, 0);
     RegressionResults[30] = float4(smoothHit.normal, dot(smoothHit.geometricNormal, float3(0.0f, 0.0f, 1.0f)));
     RegressionResults[34] = float4(GetCausticOpticalNormal(smoothHit), 1.0f);
     smoothHit.materialType = MaterialGlass;

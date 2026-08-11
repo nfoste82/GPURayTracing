@@ -369,6 +369,46 @@ public class RayTracingBenchmarkToolTests
         }
     }
 
+    [Test]
+    public void GameManager_EmissiveMesh_UsesOneGlobalLightAndAreaCdf()
+    {
+        var root = new GameObject("Game Manager mesh light test");
+        var lightObject = new GameObject("Emissive mesh");
+        Mesh mesh = null;
+        try
+        {
+            Type managerType = GetRuntimeType("GameManager");
+            Type lightType = GetRuntimeType("RayLight");
+            Type rayTracingObjectType = GetRuntimeType("RayTracingObject");
+            Component manager = root.AddComponent(managerType);
+            lightObject.transform.SetParent(root.transform);
+            mesh = CreateTwoTriangleMesh();
+            lightObject.AddComponent<MeshFilter>().sharedMesh = mesh;
+            lightObject.AddComponent(lightType);
+            Component rayTracingObject = lightObject.AddComponent(rayTracingObjectType);
+            managerType.GetMethod("RegisterObject").Invoke(manager, new object[] { rayTracingObject });
+
+            InvokePrivate(manager, "RebuildTriangleData");
+
+            Assert.That(GetCollectionCount(manager, "_lights"), Is.EqualTo(1),
+                "A mesh light must occupy one global light slot regardless of triangle count.");
+            ICollection cdf = GetCollection(manager, "_meshLightTriangleCdf");
+            Assert.That(cdf.Count, Is.EqualTo(mesh.triangles.Length / 3));
+            float lastCdf = 0.0f;
+            foreach (object value in cdf)
+            {
+                lastCdf = (float)value;
+            }
+            Assert.That(lastCdf, Is.EqualTo(1.0f));
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(lightObject);
+            UnityEngine.Object.DestroyImmediate(root);
+            UnityEngine.Object.DestroyImmediate(mesh);
+        }
+    }
+
     private static Type GetRuntimeType(string typeName)
     {
         Type type = Type.GetType($"{typeName}, Assembly-CSharp");
@@ -378,7 +418,9 @@ public class RayTracingBenchmarkToolTests
 
     private static T GetField<T>(Component component, string fieldName)
     {
-        FieldInfo field = component.GetType().GetField(fieldName);
+        FieldInfo field = component.GetType().GetField(
+            fieldName,
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         Assert.That(field, Is.Not.Null, $"Could not find {component.GetType().Name}.{fieldName}");
         return (T)field.GetValue(component);
     }
@@ -394,11 +436,16 @@ public class RayTracingBenchmarkToolTests
 
     private static int GetCollectionCount(Component component, string fieldName)
     {
+        return GetCollection(component, fieldName).Count;
+    }
+
+    private static ICollection GetCollection(Component component, string fieldName)
+    {
         FieldInfo field = component.GetType().GetField(
             fieldName,
             BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.That(field, Is.Not.Null, $"Could not find {component.GetType().Name}.{fieldName}");
-        return ((ICollection)field.GetValue(component)).Count;
+        return (ICollection)field.GetValue(component);
     }
 
     private static Mesh CreateTwoTriangleMesh()

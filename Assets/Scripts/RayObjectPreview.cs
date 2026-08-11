@@ -41,12 +41,11 @@ public class RayObjectPreview : MonoBehaviour
 
     private void OnDestroy()
     {
-        if (_sphereMesh == null)
+        if (_sphereMesh != null)
         {
-            return;
+            DestroyPreviewObject(_sphereMesh);
         }
 
-        DestroyPreviewObject(_sphereMesh);
     }
 
     private void SyncPreview()
@@ -146,6 +145,12 @@ public class RayObjectPreview : MonoBehaviour
         {
             color.a = Mathf.Clamp01(_rayMaterial.Opacity);
         }
+
+        bool isTransparent = color.a < 0.999f;
+        material.SetFloat("_ZWrite", isTransparent ? 0.0f : 1.0f);
+        material.renderQueue = isTransparent
+            ? (int)UnityEngine.Rendering.RenderQueue.Transparent
+            : (int)UnityEngine.Rendering.RenderQueue.Geometry;
 
         SetColor(material, "_BaseColor", color);
         SetColor(material, "_Color", color);

@@ -76,6 +76,7 @@ public sealed class GameManagerEditor : Editor
         });
         DrawSection(manager, "BVH Baking", false, () => DrawBvhBaking(manager));
         DrawSection(manager, "Video Capture", false, () => DrawVideoCaptureSettings(manager));
+        DrawSection(manager, "Image Export", true, () => DrawImageExport(manager));
         DrawSection(manager, "Diagnostics", false, () =>
         {
             DrawProperty("profileStartup");
@@ -341,6 +342,37 @@ public sealed class GameManagerEditor : Editor
                     manager.StartVideoCapture();
                 }
             }
+        }
+    }
+
+    private static void DrawImageExport(GameManager manager)
+    {
+        using (new EditorGUI.DisabledScope(!EditorApplication.isPlaying))
+        {
+            if (GUILayout.Button("Save Image"))
+            {
+                string path = EditorUtility.SaveFilePanel("Save Ray-Traced Image", string.Empty, "ray-traced-image", "png");
+                if (string.IsNullOrEmpty(path))
+                {
+                    return;
+                }
+
+                try
+                {
+                    manager.ExportCurrentRenderPng(path);
+                    Debug.Log($"Saved ray-traced image to '{path}'.", manager);
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogException(exception, manager);
+                    EditorUtility.DisplayDialog("Save Image Failed", exception.Message, "OK");
+                }
+            }
+        }
+
+        if (!EditorApplication.isPlaying)
+        {
+            EditorGUILayout.HelpBox("Enter Play mode to save the current ray-traced render.", MessageType.Info);
         }
     }
 

@@ -4,16 +4,17 @@ Shader "Hidden/RayTracing/ScenePreview"
     {
         _Color ("Color", Color) = (1, 1, 1, 1)
         _MainTex ("Albedo", 2D) = "white" {}
+        [HideInInspector] _ZWrite ("ZWrite", Float) = 1
         _PreviewAmbientColor ("Ambient Color", Color) = (0.4, 0.4, 0.4, 1)
         _PreviewKeyLightDirection ("Key Light Direction", Vector) = (0.35, 0.8, 0.45, 0)
     }
 
     SubShader
     {
-        Tags { "Queue" = "Transparent" "RenderType" = "Transparent" }
-        Cull Off
+        Tags { "Queue" = "Geometry" "RenderType" = "Opaque" }
+        Cull Back
         Blend SrcAlpha OneMinusSrcAlpha
-        ZWrite Off
+        ZWrite [_ZWrite]
 
         Pass
         {

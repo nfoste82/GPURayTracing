@@ -80,7 +80,7 @@ Graphics.Blit(_outputTexture, dest);
 - `float refraction`
 - `int materialType`
 
-The separate light buffer uses stride `72`. Its `Light` layout stores position, emission, two triangle edges, radius, area, normal, and type so the same buffer can represent sphere lights, emissive mesh triangles, and directional lights. Directional lights store travel direction in `position` and angular radius in `radius`; their remaining geometry fields are unused.
+The separate light buffer uses stride `88`. Its `Light` layout stores position, emission, two triangle edges, radius, area, normal, type, and optional mesh-light triangle range/total area. Sphere lights and directional lights leave mesh fields unused. An emissive mesh contributes one global light record whose triangle range indexes a parallel area CDF; directional lights store travel direction in `position` and angular radius in `radius`.
 
 `RebuildBuffers()` also releases and recreates triangle, mesh-info, per-mesh BVH-node, and top-level BVH-node buffers. The triangle buffer uses stride `224`, matching the HLSL `MeshTriangle` struct layout. In addition to positions, geometric and interpolated normals, UVs, and the established material data, each triangle stores three imported tangents, a continuous metallic value, independent albedo/metallic-roughness/normal texture indices, the smooth-normal flag, and its emissive light identity.
 
@@ -115,7 +115,7 @@ On `Start()`, `GameManager` ensures that the generic benchmark runner and live p
 
 `RayTracingObject.OnDrawGizmos()` draws sphere/light-sphere gizmos using the world-space collider center and scaled radius. Sphere gizmo alpha follows `RayMaterial.Opacity`; light-sphere gizmos use full opacity because `RayLight` has no opacity field.
 
-`RayTracingObject` executes in Edit mode so it can automatically attach `RayObjectPreview` to existing scene objects without regenerating scenes; registration with `GameManager` remains Play-mode-only. The preview supplies raster sphere geometry when the object is collider-defined, synchronizes ray-material color and albedo texture through the project-owned `Hidden/RayTracing/ScenePreview` shader, and adds an optional point-light preview to ray lights. Its `MeshRenderer` is visible outside Play mode and hidden during Play mode by default, so the Game view remains compute-rendered.
+`RayTracingObject` executes in Edit mode so it can automatically attach `RayObjectPreview` to existing scene objects without regenerating scenes; registration with `GameManager` remains Play-mode-only. The preview supplies raster sphere geometry when the object is collider-defined, synchronizes ray-material color and albedo texture through the project-owned `Hidden/RayTracing/ScenePreview` shader, and adds an optional point-light preview to ray lights. It uses the source mesh winding with standard back-face culling. Opaque preview materials render in the geometry queue and write depth, while transparent ray materials stay in the transparent queue without depth writes. Its `MeshRenderer` is visible outside Play mode and hidden during Play mode by default, so the Game view remains compute-rendered.
 
 ## Shader Parameters
 
@@ -171,6 +171,7 @@ Alongside `_DebugRenderMode`, `SetShaderParameters()` toggles the `DEBUG_RENDER`
 - `Space` resumes real-time rendering.
 - `debugRenderMode` is exposed in the `GameManager` inspector and selects final color or one of the shader debug visualizations.
 - The `GameManager` inspector's Video Capture section configures quality samples accumulated into each output frame, simulation/output timestep, total simulated duration, and the output folder. Output frame count is `ceil(duration / timestep)` and is independent of quality samples. In Play mode it reports the resulting frame count and an estimated render duration derived from the benchmark overlay's average frame time and current `numberOfPasses`.
+- The `GameManager` inspector's Image Export section provides a `Save Image` button in Play mode. It opens Unity's native save-file dialog and writes the current display-ready ray-traced output as a PNG; this includes final tone mapping, reconstruction, denoising, or the active debug visualization.
 
 Single-frame mode is exposed in the inspector through the serialized public field `_singleFrame` (under the "Render single frame" header). It freezes simulation time but keeps dispatching at a reduced presentation rate, allowing final-color frame accumulation to progressively refine the view. Camera controls use unscaled delta time, and camera or manually edited scene-object changes reset accumulation and immediately begin refining the updated view. `EnableSingleFrameSettings()` sets `Application.targetFrameRate = 10`, disables vSync, and sets `Time.timeScale = 0`; toggling it off in the inspector, pressing `T`, or pressing `Space` resumes real-time rendering and currently restores hard-coded real-time settings (`targetFrameRate = 60`, `vSyncCount = 2`, and `timeScale = 1`). Preserving and restoring the caller's previous global settings is recommended in `09-roadmap-and-improvements.md`.
 

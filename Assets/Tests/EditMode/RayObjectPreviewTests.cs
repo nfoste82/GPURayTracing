@@ -27,6 +27,7 @@ namespace GPURayTracing.Tests
                 Assert.That(previewMaterial.shader.name, Is.EqualTo("Hidden/RayTracing/ScenePreview"));
                 Assert.That(previewMaterial.GetColor("_Color").a, Is.EqualTo(0.25f).Within(0.0001f));
                 Assert.That(previewMaterial.renderQueue, Is.EqualTo((int)UnityEngine.Rendering.RenderQueue.Transparent));
+                Assert.That(previewMaterial.GetFloat("_ZWrite"), Is.EqualTo(0.0f));
             }
             finally
             {
