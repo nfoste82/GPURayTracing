@@ -21,6 +21,7 @@ Fields:
 - `Type`: selects `Diffuse`, `Metal`, or `Glass` scattering in the compute shader. Defaults to `Metal`. (Mesh primitives created via `RayMeshPrimitive` override this to `Glass` in `Reset()`.)
 - `Color`: uploaded as normalized RGB and used as albedo/tint. For transmitted glass, it also acts as the RGB absorption/filter color, so stacked colored glass compounds per channel.
 - `AlbedoTexture`: optional mesh-only albedo texture. Mesh triangle UVs are uploaded and sampled from a fixed-size texture array; the sampled texture color multiplies `Color`. Sphere materials ignore this field.
+- `TextureUvScale`: shared mesh/sphere UV scale applied to all assigned material textures, including albedo, metallic-roughness, normal, and parallax maps. Values above `1` repeat the textures more often; the default is `(1, 1)`.
 - `Metallic`: continuous mesh metallic response. `0` is dielectric and `1` is metal; existing `Metal` materials with the default zero value retain their historical fully metallic behavior.
 - `MetallicRoughnessTexture`: optional mesh-only linear data map using glTF channels (green roughness, blue metallic). Both channels multiply the material scalar values.
 - `NormalTexture`: optional mesh-only tangent-space normal map. Imported tangents are transformed with the mesh when available; meshes without tangents use a stable fallback basis. Mapped normals affect shading and optics while geometric normals remain authoritative for boundaries and ray offsets.

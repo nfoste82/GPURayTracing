@@ -158,6 +158,10 @@ public class RayObjectPreview : MonoBehaviour
         SetVector(material, "_PreviewKeyLightDirection", PreviewKeyLightDirection);
         SetTexture(material, "_BaseMap", _rayMaterial != null ? _rayMaterial.AlbedoTexture : null);
         SetTexture(material, "_MainTex", _rayMaterial != null ? _rayMaterial.AlbedoTexture : null);
+        if (_rayMaterial != null)
+        {
+            material.SetTextureScale("_MainTex", _rayMaterial.TextureUvScale);
+        }
 
         if (_rayMaterial != null)
         {

@@ -6,13 +6,21 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using DefaultNamespace;
+using PathTracing.AccelerationStructures;
+using PathTracing.Camera;
+using PathTracing.Caustics;
+using PathTracing.Lighting;
+using PathTracing.PathTracedTypes;
+using PathTracing.Shapes;
 using UnityEngine;
 using UnityEngine.Rendering;
 using Debug = UnityEngine.Debug;
+using Light = PathTracing.Lighting.Light;
 
 public class GameManager : MonoBehaviour
 {
     private const float MaxCameraPitch = 89.0f;
+    private const float DefaultCameraOrbitZoom = 2.0f;
 
     public void InitSceneSettings(SceneSettings settings)
     {
@@ -42,11 +50,19 @@ public class GameManager : MonoBehaviour
         cameraApertureBladeRotation = settings.CameraApertureBladeRotation;
         cameraAnamorphicRatio = settings.CameraAnamorphicRatio;
         cameraMovementSpeed = settings.CameraMovementSpeed;
+        cameraBehavior = settings.CameraBehavior;
+        cameraFocusPosition = settings.CameraFocusPosition;
+        if (cameraBehavior == CameraBehavior.OrbitFocusPoint && renderTextureCamera != null)
+        {
+            InitializeOrbitCameraFromSceneSettings(settings);
+        }
         lightFalloffScale = settings.LightFalloffScale;
         exposure = settings.Exposure;
         fireflyClamp = settings.FireflyClamp;
         randomNoise = settings.RandomNoise;
         _skyboxLightColor = settings.SkyboxLightColor;
+        _activeCameraBehavior = cameraBehavior;
+        _hasActiveCameraBehavior = renderTextureCamera != null;
     }
 
     [SerializeField, HideInInspector]
@@ -166,18 +182,7 @@ public class GameManager : MonoBehaviour
     [Tooltip("Diagnostic: cap how many lights each shading point samples. 0 = sample all lights (normal). Lower values confirm the per-hit light loop is the bottleneck.")]
     [Range(0, 256)]
     public int maxLightSamples = 0;
-
-    public enum LightSamplingStrategy
-    {
-        // Sample every light at each shading point. Most accurate per frame, cost scales with light count.
-        AllLights = 0,
-        // Pick one light at random per shading point, weighted by light count. O(1) lights per hit, noisier per frame.
-        UniformRandom = 1,
-        // Pick lights weighted by a cheap power/distance estimate, then divide by selection probability.
-        // Unbiased like UniformRandom but concentrates samples on lights that matter, so much less noise per sample.
-        ImportanceSampled = 2
-    }
-
+    
     [Tooltip("How direct lighting samples scene lights. AllLights is accurate but scales with light count; UniformRandom is much faster in many-light scenes but noisy; ImportanceSampled favors bright/nearby lights for much less noise per sample.")]
     public LightSamplingStrategy lightSamplingStrategy = LightSamplingStrategy.ImportanceSampled;
 
@@ -264,6 +269,18 @@ public class GameManager : MonoBehaviour
     [Tooltip("Camera movement speed in world units per second.")]
     [Min(0.01f)]
     public float cameraMovementSpeed = 3.0f;
+
+    
+
+    [Tooltip("Selects how keyboard input controls the camera.")]
+    public CameraBehavior cameraBehavior = CameraBehavior.Free;
+
+    [Tooltip("The world-space point used by the orbit camera.")]
+    public Vector3 cameraFocusPosition;
+
+    [Tooltip("Distance from the orbit focus point. Keyboard zoom starts at 2 units when orbit mode is entered.")]
+    [Min(0.1f)]
+    public float cameraOrbitZoom = DefaultCameraOrbitZoom;
     
     [Tooltip("Continuously focuses the center of the image. A successful click-to-focus selection disables this so the selected distance remains active.")]
     public bool cameraAutoFocus = true;
@@ -280,13 +297,6 @@ public class GameManager : MonoBehaviour
     
     [Min(0.1f)]
     public float cameraFocalDistance = 100f;
-
-    public enum CameraApertureMode
-    {
-        Pinhole = 0,
-        LensRadius = 1,
-        FStop = 2
-    }
 
     [Tooltip("Pinhole disables depth-of-field blur. Lens Radius gives direct artistic control. F-Stop derives aperture size from the Unity camera focal length.")]
     public CameraApertureMode cameraApertureMode = CameraApertureMode.LensRadius;
@@ -336,6 +346,11 @@ public class GameManager : MonoBehaviour
     private int _lastAutoFocusNumberOfPasses;
     private int _lastAutoFocusWaterStateHash;
     private float _autoFocusTargetDistance;
+    private CameraBehavior _activeCameraBehavior;
+    private bool _hasActiveCameraBehavior;
+    private float _orbitYaw;
+    private float _orbitPitch;
+    private float _orbitDistance = DefaultCameraOrbitZoom;
 
     public bool randomNoise = false;
 
@@ -426,11 +441,11 @@ public class GameManager : MonoBehaviour
     private RenderTexture _presentationSource;
 
     private List<Sphere> _spheres = new ();
-    private readonly List<RayTracedSphere> _sphereObjects = new ();
+    private readonly List<PathTracedSphere> _sphereObjects = new ();
     private ComputeBuffer _sphereBuffer;
 
     private List<Light> _lights = new ();
-    private readonly List<RayTracedLight> _lightObjects = new ();
+    private readonly List<PathTracedLight> _lightObjects = new ();
     private readonly List<RayDirectionalLight> _directionalLights = new();
     private ComputeBuffer _lightBuffer;
 
@@ -443,7 +458,7 @@ public class GameManager : MonoBehaviour
     private readonly List<TopLevelBvhBuildItem> _shadowBvhBuildItems = new();
     private readonly List<float> _meshLightTriangleCdf = new();
     private readonly TopLevelBvhBuildItemComparer _topLevelBvhBuildItemComparer = new ();
-    private readonly List<RayTracedMesh> _meshObjects = new ();
+    private readonly List<PathTracedMesh> _meshObjects = new ();
     private readonly Dictionary<long, MeshBvhTemplate> _meshBvhTemplates = new ();
     private readonly List<Texture2D> _meshAlbedoTextures = new ();
     private readonly List<Texture2D> _meshMetallicRoughnessTextures = new ();
@@ -453,12 +468,15 @@ public class GameManager : MonoBehaviour
     private Texture2DArray _meshMetallicRoughnessTextureArray;
     private Texture2DArray _meshNormalTextureArray;
     private Texture2DArray _meshParallaxTextureArray;
+    
     private ComputeBuffer _triangleBuffer;
     private ComputeBuffer _meshBuffer;
     private ComputeBuffer _bvhNodeBuffer;
     private ComputeBuffer _topLevelBvhNodeBuffer;
     private ComputeBuffer _shadowBvhNodeBuffer;
     private ComputeBuffer _meshLightTriangleCdfBuffer;
+    
+    // Camera focus
     private ComputeBuffer _focusQueryBuffer;
     private bool _focusQueryPending;
     private bool _focusQueryInFlight;
@@ -470,6 +488,8 @@ public class GameManager : MonoBehaviour
     private bool _clickedFocusPointInFrustum;
     private int _focusQueryGeneration;
     private AsyncGPUReadbackRequest _focusReadbackRequest;
+    
+    // Caustics data
     private ComputeBuffer _causticPhotonBuffer;
     private ComputeBuffer _causticPhotonMetadataBuffer;
     private ComputeBuffer _causticGridCellHeadBuffer;
@@ -513,7 +533,8 @@ public class GameManager : MonoBehaviour
     
     [Tooltip("Freezes simulation time and progressively refines the current view. Camera and scene changes reset accumulation and render the updated view.")]
     public bool _singleFrame = false;
-
+    
+    // Video capture data
     [Tooltip("Total path-tracing samples per pixel accumulated for each output frame.")]
     [Min(1)]
     public int videoSamplesPerFrame = 128;
@@ -602,6 +623,7 @@ public class GameManager : MonoBehaviour
     public int CausticTargetPairCount => _causticTargetPairs.Count;
     public int SphereLightCount => _lightObjects.Count;
     public int DirectionalLightCount => _directionalLights.Count;
+    
     public int MeshLightCount
     {
         get
@@ -617,6 +639,7 @@ public class GameManager : MonoBehaviour
             return count;
         }
     }
+    
     public int TriangleLightCount
     {
         get
@@ -640,12 +663,12 @@ public class GameManager : MonoBehaviour
         : Color.black;
 
     private static bool _buffersNeedRebuilding = false;
-    private static readonly List<RayTracingObject> _rayTracingObjects = new List<RayTracingObject>();
+    private static readonly List<PathTracingObject> _rayTracingObjects = new List<PathTracingObject>();
 
-    private const int SphereStride = 84;
+    private const int SphereStride = 92;
     private const int LightStride = 88;
     private const int MaxNumberOfPasses = 32;
-    private const int TriangleStride = 244;
+    private const int TriangleStride = 252;
     private const int MeshInfoStride = 48;
     private const int BvhNodeStride = 48;
     private const int TopLevelBvhNodeStride = 48;
@@ -671,290 +694,9 @@ public class GameManager : MonoBehaviour
     private const int TopLevelObjectTypeSphere = 0;
     private const int TopLevelObjectTypeLight = 1;
     private const int TopLevelObjectTypeMesh = 2;
-    private const int LightTypeSphere = 0;
-    private const int LightTypeTriangle = 1;
-    private const int LightTypeDirectional = 2;
-    private const int LightTypeSunTriangle = 3;
-    private const int LightTypeMesh = 4;
+    
     private const float VirtualSunDistance = 10000.0f;
-
-    private struct Sphere
-    {
-        public Vector3 position;
-        public Vector3 color;
-        public Vector3 emission;
-        public float radius;
-        public float smoothness;
-        public float opacity;
-        public float refraction;
-        public float specular;
-        public float transmission;
-        public int materialType;
-        public int textureIndex;
-        public int normalTextureIndex;
-        public int parallaxTextureIndex;
-        public float parallaxStrength;
-        public float minimumParallaxStrength;
-        
-        public float Intersect(Vector3 origin, Vector3 direction)
-        {
-            var diffToSphere = position - origin;
-            var b = Vector3.Dot(diffToSphere, direction);
-
-            // ray is pointing away from sphere (b < 0)
-            if (b < 0f)
-            {
-                return -1.0f;
-            }
-            
-            var c = diffToSphere.sqrMagnitude - radius * radius;
-
-            var discriminant = (b * b) - c; 
-
-            // A negative discriminant corresponds to ray missing sphere 
-            if (discriminant < 0.0f)
-            {
-                return -1.0f;
-            } 
-
-            // Ray now found to intersect sphere, compute smallest t value of intersection
-            var hitDistance = b - Mathf.Sqrt(discriminant) - 0.001f;
-
-            // If hit distance is negative, ray started inside sphere so clamp it to zero
-            if (hitDistance < 0.0f)
-            {
-                hitDistance = 0.0f;
-            }
-
-            return hitDistance;
-        }
-    }
-
-    private struct RayTracedSphere
-    {
-        public RayTracingObject obj;
-        public Transform transform;
-        public RayMaterial material;
-        public SphereCollider collider;
-    }
-
-    private struct RayTracedLight
-    {
-        public RayTracingObject obj;
-        public Transform transform;
-        public RayLight light;
-        public SphereCollider collider;
-    }
-
-    private struct Light
-    {
-        public Vector3 position;
-        public Vector3 emission;
-        public Vector3 u;
-        public float radius;
-        public Vector3 v;
-        public float area;
-        public Vector3 normal;
-        public int type;
-        public int triangleStart;
-        public int triangleCount;
-        public float totalArea;
-        public float padding;
-
-        public float Intersect(Vector3 origin, Vector3 direction)
-        {
-            var diffToSphere = position - origin;
-            var b = Vector3.Dot(diffToSphere, direction);
-            if (b < 0f)
-            {
-                return -1.0f;
-            }
-
-            var c = diffToSphere.sqrMagnitude - radius * radius;
-            var discriminant = (b * b) - c;
-            if (discriminant < 0.0f)
-            {
-                return -1.0f;
-            }
-
-            var hitDistance = b - Mathf.Sqrt(discriminant) - 0.001f;
-            return hitDistance < 0.0f ? 0.0f : hitDistance;
-        }
-    }
-
-    private struct Triangle
-    {
-        public Vector3 vertex0;
-        public Vector3 vertex1;
-        public Vector3 vertex2;
-        public Vector3 normal;
-        public Vector3 normal0;
-        public Vector3 normal1;
-        public Vector3 normal2;
-        public Vector4 tangent0;
-        public Vector4 tangent1;
-        public Vector4 tangent2;
-        public Vector3 color;
-        public float smoothness;
-        public float metallic;
-        public Vector2 uv0;
-        public Vector2 uv1;
-        public Vector2 uv2;
-        public float opacity;
-        public Vector3 emission;
-        public float refraction;
-        public float specular;
-        public float transmission;
-        public int materialType;
-        public int meshIndex;
-        public int textureIndex;
-        public int metallicRoughnessTextureIndex;
-        public int normalTextureIndex;
-        public int parallaxTextureIndex;
-        public float parallaxStrength;
-        public float minimumParallaxStrength;
-        public int interpolateNormals;
-        public int lightIndex;
-
-        public float Intersect(Vector3 origin, Vector3 direction)
-        {
-            var edge1 = vertex1 - vertex0;
-            var edge2 = vertex2 - vertex0;
-            var p = Vector3.Cross(direction, edge2);
-            var determinant = Vector3.Dot(edge1, p);
-            var determinantScale = edge1.magnitude * p.magnitude;
-
-            if (determinantScale <= 0.0f || Mathf.Abs(determinant) <= 0.000001f * determinantScale)
-            {
-                return -1.0f;
-            }
-
-            var inverseDeterminant = 1.0f / determinant;
-            var t = origin - vertex0;
-            var u = Vector3.Dot(t, p) * inverseDeterminant;
-
-            if (u < 0.0f || u > 1.0f)
-            {
-                return -1.0f;
-            }
-
-            var q = Vector3.Cross(t, edge1);
-            var v = Vector3.Dot(direction, q) * inverseDeterminant;
-
-            if (v < 0.0f || u + v > 1.0f)
-            {
-                return -1.0f;
-            }
-
-            var hitDistance = Vector3.Dot(edge2, q) * inverseDeterminant;
-            return hitDistance > 0.001f ? hitDistance : -1.0f;
-        }
-    }
-
-    private struct MeshInfo
-    {
-        public Vector3 boundsMin;
-        public int rootNodeIndex;
-        public Vector3 boundsMax;
-        public int triangleStart;
-        public int triangleCount;
-        public int meshIndex;
-        public int isLight;
-        public int lightIndex;
-    }
-
-    private struct CausticTargetPair
-    {
-        public int lightIndex;
-        public int refractorType;
-        public int refractorIndex;
-        public int triangleStart;
-        public int triangleCount;
-        public float cumulativeProbability;
-        public float selectionProbability;
-        public float padding;
-    }
-
-    private struct CausticTargetTriangle
-    {
-        public int triangleIndex;
-        public float cumulativeProbability;
-        public float selectionProbability;
-    }
-
-    private struct BvhNode
-    {
-        public Vector3 boundsMin;
-        public int leftChildIndex;
-        public Vector3 boundsMax;
-        public int rightChildIndex;
-        public int triangleStart;
-        public int triangleCount;
-        public int padding0;
-        public int padding1;
-    }
-
-    private struct TopLevelBvhNode
-    {
-        public Vector3 boundsMin;
-        public int leftChildIndex;
-        public Vector3 boundsMax;
-        public int rightChildIndex;
-        public int objectType;
-        public int objectIndex;
-        public int padding0;
-        public int padding1;
-    }
-
-    private struct TopLevelBvhBuildItem
-    {
-        public Vector3 boundsMin;
-        public Vector3 boundsMax;
-        public int objectType;
-        public int objectIndex;
-    }
-
-    private class TopLevelBvhBuildItemComparer : IComparer<TopLevelBvhBuildItem>
-    {
-        public int axis;
-
-        public int Compare(TopLevelBvhBuildItem x, TopLevelBvhBuildItem y)
-        {
-            return GetTopLevelBvhItemCentroid(x)[axis].CompareTo(GetTopLevelBvhItemCentroid(y)[axis]);
-        }
-    }
-
-    private struct RayTracedMesh
-    {
-        public RayTracingObject obj;
-        public Transform transform;
-        public RayMaterial material;
-        public RayLight light;
-        public Mesh mesh;
-        public Matrix4x4 previousLocalToWorld;
-        public Vector3 previousColor;
-        public Vector3 previousEmission;
-        public float previousSmoothness;
-        public float previousMetallic;
-        public float previousOpacity;
-        public float previousRefraction;
-        public float previousSpecular;
-        public float previousTransmission;
-        public int previousMaterialType;
-        public Texture2D previousAlbedoTexture;
-        public Texture2D previousMetallicRoughnessTexture;
-        public Texture2D previousNormalTexture;
-        public Texture2D previousParallaxTexture;
-        public float previousParallaxStrength;
-        public float previousMinimumParallaxStrength;
-        public bool previousInterpolateNormals;
-    }
-
-    private sealed class MeshBvhTemplate
-    {
-        public readonly List<Triangle> triangles = new List<Triangle>();
-        public readonly List<BvhNode> nodes = new List<BvhNode>();
-    }
+    
 
     private Water _water;
     private FogVolume _fogVolume;
@@ -964,7 +706,7 @@ public class GameManager : MonoBehaviour
     private Texture2D _terrainAlphamapTexture;
     private int _terrainDataInstanceId;
     private readonly Stopwatch _startupStopwatch = Stopwatch.StartNew();
-    private readonly List<string> _startupProfilePhases = new List<string>();
+    private readonly List<string> _startupProfilePhases = new ();
     private double _startupRegistrationMilliseconds;
     private bool _startupProfilePending;
     private bool _startupInitializationPending;
@@ -1036,6 +778,7 @@ public class GameManager : MonoBehaviour
         temporalCameraCutDistance = Mathf.Max(0.01f, temporalCameraCutDistance);
         temporalCameraCutAngle = Mathf.Clamp(temporalCameraCutAngle, 1.0f, 180.0f);
         temporalMaxHistoryLength = Mathf.Clamp(temporalMaxHistoryLength, 1, 64);
+        cameraOrbitZoom = Mathf.Max(0.1f, cameraOrbitZoom);
         temporalMotionDistance = Mathf.Max(0.00001f, temporalMotionDistance);
         temporalMotionAngle = Mathf.Max(0.0001f, temporalMotionAngle);
         causticPreservationThreshold = Mathf.Clamp(causticPreservationThreshold, 1.5f, 32.0f);
@@ -1433,6 +1176,22 @@ public class GameManager : MonoBehaviour
     
     private void HandleInputForCamera(Camera camera)
     {
+        if (camera == null)
+        {
+            return;
+        }
+
+        if (!_hasActiveCameraBehavior || _activeCameraBehavior != cameraBehavior)
+        {
+            SwitchCameraBehavior(camera);
+        }
+
+        if (cameraBehavior == CameraBehavior.OrbitFocusPoint)
+        {
+            HandleOrbitCameraInput(camera);
+            return;
+        }
+
         float movementDelta = Time.unscaledDeltaTime;
 
         if (Input.GetKey(KeyCode.W))
@@ -1477,6 +1236,129 @@ public class GameManager : MonoBehaviour
         {
             RotateCamera(camera.transform, yawDelta, pitchDelta);
         }
+    }
+
+    private void SwitchCameraBehavior(Camera camera)
+    {
+        Vector3 previousPosition = camera.transform.position;
+        Quaternion previousRotation = camera.transform.rotation;
+        float previousFocalDistanceValue = cameraFocalDistance;
+        _activeCameraBehavior = cameraBehavior;
+        _hasActiveCameraBehavior = true;
+        if (cameraBehavior == CameraBehavior.OrbitFocusPoint)
+        {
+            cameraFocusPosition = camera.transform.position + camera.transform.forward * DefaultCameraOrbitZoom;
+            cameraOrbitZoom = DefaultCameraOrbitZoom;
+            cameraFocalDistance = DefaultCameraOrbitZoom;
+            previousFocalDistance = cameraFocalDistance;
+            InitializeOrbitCamera(camera, false);
+        }
+
+        // Changing the input scheme alone does not change the rendered camera state. Keep the
+        // progressive result valid when the orbit transition leaves the camera pose unchanged.
+        if (camera.transform.position == previousPosition
+            && camera.transform.rotation == previousRotation
+            && Mathf.Approximately(cameraFocalDistance, previousFocalDistanceValue)
+            && _hasAccumulationStateHash)
+        {
+            _accumulationStateHash = CalculateAccumulationStateHash();
+        }
+    }
+
+    private void InitializeOrbitCameraFromSceneSettings(SceneSettings settings)
+    {
+        bool hasConfiguredPosition = settings.CameraPosition != Vector3.zero;
+        bool hasConfiguredZoom = settings.CameraOrbitZoom > 0.0f;
+        if (hasConfiguredPosition)
+        {
+            renderTextureCamera.transform.position = settings.CameraPosition;
+        }
+
+        if (hasConfiguredPosition)
+        {
+            Vector3 forward = cameraFocusPosition - settings.CameraPosition;
+            if (forward.sqrMagnitude > 0.0001f)
+            {
+                renderTextureCamera.transform.rotation = Quaternion.LookRotation(forward.normalized, Vector3.up);
+            }
+
+            cameraOrbitZoom = hasConfiguredZoom
+                ? settings.CameraOrbitZoom
+                : Vector3.Distance(settings.CameraPosition, cameraFocusPosition);
+            _orbitDistance = Mathf.Max(0.1f, cameraOrbitZoom);
+            if (hasConfiguredZoom)
+            {
+                renderTextureCamera.transform.position = cameraFocusPosition - renderTextureCamera.transform.forward * _orbitDistance;
+            }
+            renderTextureCamera.transform.LookAt(cameraFocusPosition);
+        }
+        else if (hasConfiguredZoom)
+        {
+            cameraOrbitZoom = settings.CameraOrbitZoom;
+            _orbitDistance = Mathf.Max(0.1f, cameraOrbitZoom);
+            renderTextureCamera.transform.position = cameraFocusPosition - renderTextureCamera.transform.forward * _orbitDistance;
+            renderTextureCamera.transform.LookAt(cameraFocusPosition);
+        }
+        else
+        {
+            cameraOrbitZoom = DefaultCameraOrbitZoom;
+            _orbitDistance = cameraOrbitZoom;
+            InitializeOrbitCamera(renderTextureCamera);
+        }
+
+        cameraFocalDistance = _orbitDistance;
+        previousFocalDistance = cameraFocalDistance;
+    }
+
+    private void InitializeOrbitCamera(Camera camera, bool applyTransform = true)
+    {
+        Vector3 offset = camera.transform.position - cameraFocusPosition;
+        if (offset.sqrMagnitude < 0.0001f)
+        {
+            offset = -camera.transform.forward * DefaultCameraOrbitZoom;
+        }
+
+        _orbitDistance = Mathf.Max(0.1f, cameraOrbitZoom);
+        _orbitYaw = Mathf.Atan2(offset.x, offset.z) * Mathf.Rad2Deg;
+        _orbitPitch = Mathf.Clamp(Mathf.Asin(Mathf.Clamp(offset.y / offset.magnitude, -1.0f, 1.0f)) * Mathf.Rad2Deg, -MaxCameraPitch, MaxCameraPitch);
+        if (applyTransform)
+        {
+            ApplyOrbitCameraTransform(camera);
+        }
+    }
+
+    private void HandleOrbitCameraInput(Camera camera)
+    {
+        var movementDelta = Time.unscaledDeltaTime;
+        var movementScale = Mathf.Max(0.0f, cameraMovementSpeed);
+        var orbitAngle = movementDelta * 20.0f * movementScale;
+        
+        if (Input.GetKey(KeyCode.A)) _orbitYaw -= orbitAngle;
+        if (Input.GetKey(KeyCode.D)) _orbitYaw += orbitAngle;
+        if (Input.GetKey(KeyCode.W)) _orbitPitch += orbitAngle;
+        if (Input.GetKey(KeyCode.S)) _orbitPitch -= orbitAngle;
+        
+        _orbitPitch = Mathf.Clamp(_orbitPitch, -MaxCameraPitch, MaxCameraPitch);
+        
+        if (Input.GetKey(KeyCode.UpArrow) || Input.GetKey(KeyCode.E))
+        {
+            _orbitDistance = Mathf.Max(0.1f, _orbitDistance - movementDelta * movementScale);
+        }
+        if (Input.GetKey(KeyCode.DownArrow) || Input.GetKey(KeyCode.Q))
+        {
+            _orbitDistance += movementDelta * movementScale;
+        }
+        cameraOrbitZoom = _orbitDistance;
+        ApplyOrbitCameraTransform(camera);
+    }
+
+    private void ApplyOrbitCameraTransform(Camera camera)
+    {
+        float yaw = _orbitYaw * Mathf.Deg2Rad;
+        float pitch = _orbitPitch * Mathf.Deg2Rad;
+        Vector3 offset = new Vector3(Mathf.Sin(yaw) * Mathf.Cos(pitch), Mathf.Sin(pitch), Mathf.Cos(yaw) * Mathf.Cos(pitch)) * _orbitDistance;
+        camera.transform.position = cameraFocusPosition + offset;
+        camera.transform.LookAt(cameraFocusPosition);
     }
 
     private static void RotateCamera(Transform cameraTransform, float yawDelta, float pitchDelta)
@@ -2037,19 +1919,19 @@ public class GameManager : MonoBehaviour
         _causticTargetTriangles.Clear();
         var meshTriangleRanges = new Dictionary<int, Vector2Int>();
 
-        for (int meshIndex = 0; meshIndex < _meshInfos.Count; meshIndex++)
+        for (var meshIndex = 0; meshIndex < _meshInfos.Count; meshIndex++)
         {
-            MeshInfo mesh = _meshInfos[meshIndex];
-            if (!IsCausticRefractor(mesh))
+            var mesh = _meshInfos[meshIndex];
+            if (!CausticsLogic.IsCausticRefractor(mesh, _triangles))
             {
                 continue;
             }
 
-            int triangleStart = _causticTargetTriangles.Count;
-            float totalArea = 0.0f;
-            for (int triangleOffset = 0; triangleOffset < mesh.triangleCount; triangleOffset++)
+            var triangleStart = _causticTargetTriangles.Count;
+            var totalArea = 0.0f;
+            for (var triangleOffset = 0; triangleOffset < mesh.triangleCount; triangleOffset++)
             {
-                Triangle triangle = _triangles[mesh.triangleStart + triangleOffset];
+                var triangle = _triangles[mesh.triangleStart + triangleOffset];
                 totalArea += 0.5f * Vector3.Cross(
                     triangle.vertex1 - triangle.vertex0,
                     triangle.vertex2 - triangle.vertex0).magnitude;
@@ -2071,15 +1953,17 @@ public class GameManager : MonoBehaviour
             // previous element back out of the list here would divide it by totalArea a second time
             // (it was normalized on the prior iteration), which corrupts every per-triangle
             // probability and therefore every photon's power.
-            int lastTriangleIndex = _causticTargetTriangles.Count - 1;
-            float previousCdf = 0.0f;
-            for (int triangleIndex = triangleStart; triangleIndex < _causticTargetTriangles.Count; triangleIndex++)
+            var lastTriangleIndex = _causticTargetTriangles.Count - 1;
+            var previousCdf = 0.0f;
+            for (var triangleIndex = triangleStart; triangleIndex < _causticTargetTriangles.Count; triangleIndex++)
             {
-                CausticTargetTriangle target = _causticTargetTriangles[triangleIndex];
-                float normalizedCdf = target.cumulativeProbability / totalArea;
+                var target = _causticTargetTriangles[triangleIndex];
+                var normalizedCdf = target.cumulativeProbability / totalArea;
                 target.selectionProbability = normalizedCdf - previousCdf;
+                
                 // Guard the last entry against float rounding leaving the CDF just below any sample.
                 target.cumulativeProbability = triangleIndex == lastTriangleIndex ? 1.0f : normalizedCdf;
+                
                 previousCdf = normalizedCdf;
                 _causticTargetTriangles[triangleIndex] = target;
             }
@@ -2087,22 +1971,22 @@ public class GameManager : MonoBehaviour
         }
 
         var pairWeights = new List<float>();
-        float maximumWeight = 0.0f;
-        for (int lightIndex = 0; lightIndex < _lights.Count; lightIndex++)
+        var maximumWeight = 0.0f;
+        for (var lightIndex = 0; lightIndex < _lights.Count; lightIndex++)
         {
-            Light light = _lights[lightIndex];
-            if (!IsCausticLight(light))
+            var light = _lights[lightIndex];
+            if (!CausticsLogic.IsCausticLight(light))
             {
                 continue;
             }
 
-            for (int sphereIndex = 0; sphereIndex < _spheres.Count; sphereIndex++)
+            for (var sphereIndex = 0; sphereIndex < _spheres.Count; sphereIndex++)
             {
                 Sphere sphere = _spheres[sphereIndex];
-                if (IsCausticRefractor(sphere))
+                if (CausticsLogic.IsCausticRefractor(sphere))
                 {
                     AddCausticTargetPair(lightIndex, 0, sphereIndex, 0, 0,
-                        GetCausticPairWeight(light, sphere.position, sphere.radius), pairWeights, ref maximumWeight);
+                        CausticsLogic.GetCausticPairWeight(light, sphere.position, sphere.radius), pairWeights, ref maximumWeight);
                 }
             }
 
@@ -2110,16 +1994,16 @@ public class GameManager : MonoBehaviour
             {
                 MeshInfo mesh = _meshInfos[meshRange.Key];
                 AddCausticTargetPair(lightIndex, 1, meshRange.Key, meshRange.Value.x, meshRange.Value.y,
-                    GetCausticPairWeight(light, (mesh.boundsMin + mesh.boundsMax) * 0.5f,
+                    CausticsLogic.GetCausticPairWeight(light, (mesh.boundsMin + mesh.boundsMax) * 0.5f,
                         (mesh.boundsMax - mesh.boundsMin).magnitude * 0.5f),
                     pairWeights, ref maximumWeight);
             }
 
-            if (IsCausticRefractor(_water))
+            if (CausticsLogic.IsCausticRefractor(_water))
             {
-                Vector2 waterSize = _water.Size;
+                var waterSize = _water.Size;
                 AddCausticTargetPair(lightIndex, 2, -1, 0, 0,
-                    GetCausticPairWeight(light, _water.TopCenter,
+                    CausticsLogic.GetCausticPairWeight(light, _water.TopCenter,
                         new Vector3(waterSize.x, 0.0f, waterSize.y).magnitude * 0.5f),
                     pairWeights, ref maximumWeight);
             }
@@ -2130,18 +2014,18 @@ public class GameManager : MonoBehaviour
             return;
         }
 
-        float totalWeight = 0.0f;
-        float minimumWeight = Mathf.Max(1e-8f, maximumWeight * 1e-4f);
-        for (int i = 0; i < pairWeights.Count; i++)
+        var totalWeight = 0.0f;
+        var minimumWeight = Mathf.Max(1e-8f, maximumWeight * 1e-4f);
+        for (var i = 0; i < pairWeights.Count; i++)
         {
             pairWeights[i] = Mathf.Max(minimumWeight, pairWeights[i]);
             totalWeight += pairWeights[i];
         }
 
-        float cumulativeProbability = 0.0f;
-        for (int i = 0; i < _causticTargetPairs.Count; i++)
+        var cumulativeProbability = 0.0f;
+        for (var i = 0; i < _causticTargetPairs.Count; i++)
         {
-            CausticTargetPair pair = _causticTargetPairs[i];
+            var pair = _causticTargetPairs[i];
             pair.selectionProbability = pairWeights[i] / totalWeight;
             cumulativeProbability += pair.selectionProbability;
             pair.cumulativeProbability = i == _causticTargetPairs.Count - 1 ? 1.0f : cumulativeProbability;
@@ -2164,68 +2048,31 @@ public class GameManager : MonoBehaviour
         maximumWeight = Mathf.Max(maximumWeight, weight);
     }
 
-    private static bool IsCausticLight(Light light)
-    {
-        return light.type == LightTypeSphere || ((light.type == LightTypeTriangle || light.type == LightTypeSunTriangle) && light.area > 1e-6f);
-    }
-
-    private static bool IsCausticRefractor(Sphere sphere)
-    {
-        return (sphere.materialType == 2 || sphere.opacity < 1.0f) && sphere.opacity < 1.0f;
-    }
-
-    private bool IsCausticRefractor(MeshInfo mesh)
-    {
-        if (mesh.isLight != 0 || mesh.triangleCount <= 0)
-        {
-            return false;
-        }
-        Triangle material = _triangles[mesh.triangleStart];
-        return (material.materialType == 2 || material.opacity < 1.0f) && material.opacity < 1.0f;
-    }
-
-    private static bool IsCausticRefractor(Water water)
-    {
-        return water != null && water.Opacity < 1.0f;
-    }
-
-    private static float GetCausticPairWeight(Light light, Vector3 targetPosition, float targetRadius)
-    {
-        Vector3 lightPosition = (light.type == LightTypeTriangle || light.type == LightTypeSunTriangle)
-            ? light.position + (light.u + light.v) / 3.0f
-            : light.position;
-        float distanceSquared = Mathf.Max(1e-6f, (targetPosition - lightPosition).sqrMagnitude);
-        float projectedTarget = Mathf.Min(4.0f * Mathf.PI, Mathf.PI * targetRadius * targetRadius / distanceSquared);
-        float luminance = Vector3.Dot(light.emission, new Vector3(0.2126f, 0.7152f, 0.0722f));
-        float emitterScale = (light.type == LightTypeTriangle || light.type == LightTypeSunTriangle) ? Mathf.Max(1e-6f, light.area) : 1.0f;
-        float facing = (light.type == LightTypeTriangle || light.type == LightTypeSunTriangle)
-            ? Mathf.Max(0.0f, Vector3.Dot(light.normal, (targetPosition - lightPosition).normalized))
-            : 1.0f;
-        return Mathf.Max(0.0f, luminance) * emitterScale * facing * Mathf.Max(1e-8f, projectedTarget);
-    }
-
     private void CalculateCausticGridLayout()
     {
-        bool hasBounds = false;
-        Vector3 boundsMin = Vector3.zero;
-        Vector3 boundsMax = Vector3.zero;
-        for (int i = 0; i < _spheres.Count; i++)
+        var hasBounds = false;
+        var boundsMin = Vector3.zero;
+        var boundsMax = Vector3.zero;
+        
+        for (var i = 0; i < _spheres.Count; i++)
         {
-            Vector3 radius = Vector3.one * _spheres[i].radius;
-            EncapsulateCausticBounds(_spheres[i].position - radius, _spheres[i].position + radius,
+            var radius = Vector3.one * _spheres[i].radius;
+            CausticsLogic.EncapsulateCausticBounds(_spheres[i].position - radius, _spheres[i].position + radius,
                 ref hasBounds, ref boundsMin, ref boundsMax);
         }
-        for (int i = 0; i < _meshInfos.Count; i++)
+        
+        for (var i = 0; i < _meshInfos.Count; i++)
         {
-            EncapsulateCausticBounds(_meshInfos[i].boundsMin, _meshInfos[i].boundsMax,
+            CausticsLogic.EncapsulateCausticBounds(_meshInfos[i].boundsMin, _meshInfos[i].boundsMax,
                 ref hasBounds, ref boundsMin, ref boundsMax);
         }
+        
         if (_water != null)
         {
-            Vector2 waterSize = _water.Size;
-            float waveHeight = Mathf.Max(0.001f, _water.WaveAmplitude);
-            Vector3 halfSize = new Vector3(waterSize.x * 0.5f, 0.0f, waterSize.y * 0.5f);
-            EncapsulateCausticBounds(
+            var waterSize = _water.Size;
+            var waveHeight = Mathf.Max(0.001f, _water.WaveAmplitude);
+            var halfSize = new Vector3(waterSize.x * 0.5f, 0.0f, waterSize.y * 0.5f);
+            CausticsLogic.EncapsulateCausticBounds(
                 _water.TopCenter - halfSize + Vector3.down * (_water.Depth + waveHeight),
                 _water.TopCenter + halfSize + Vector3.up * waveHeight,
                 ref hasBounds, ref boundsMin, ref boundsMax);
@@ -2237,16 +2084,18 @@ public class GameManager : MonoBehaviour
             boundsMax = new Vector3(10.0f, 10.0f, 10.0f);
         }
 
-        float padding = Mathf.Max(0.01f, causticGatherRadius);
+        var padding = Mathf.Max(0.01f, causticGatherRadius);
         boundsMin -= Vector3.one * padding;
         boundsMax += Vector3.one * padding;
-        Vector3 size = Vector3.Max(boundsMax - boundsMin, Vector3.one * padding);
-        float cellSize = padding;
-        Vector3Int dimensions = CalculateCausticGridDimensions(size, cellSize);
+        
+        var size = Vector3.Max(boundsMax - boundsMin, Vector3.one * padding);
+        var cellSize = padding;
+        var dimensions = CausticsLogic.CalculateCausticGridDimensions(size, cellSize);
+        
         while ((long)dimensions.x * dimensions.y * dimensions.z > MaxCausticGridCells)
         {
             cellSize *= 1.25f;
-            dimensions = CalculateCausticGridDimensions(size, cellSize);
+            dimensions = CausticsLogic.CalculateCausticGridDimensions(size, cellSize);
         }
 
         _causticGridMin = boundsMin;
@@ -2254,28 +2103,7 @@ public class GameManager : MonoBehaviour
         _causticGridDimensions = dimensions;
         _causticGridCellCount = dimensions.x * dimensions.y * dimensions.z;
     }
-
-    private static Vector3Int CalculateCausticGridDimensions(Vector3 size, float cellSize)
-    {
-        return new Vector3Int(
-            Mathf.Max(1, Mathf.CeilToInt(size.x / cellSize)),
-            Mathf.Max(1, Mathf.CeilToInt(size.y / cellSize)),
-            Mathf.Max(1, Mathf.CeilToInt(size.z / cellSize)));
-    }
-
-    private static void EncapsulateCausticBounds(Vector3 min, Vector3 max, ref bool hasBounds, ref Vector3 boundsMin, ref Vector3 boundsMax)
-    {
-        if (!hasBounds)
-        {
-            boundsMin = min;
-            boundsMax = max;
-            hasBounds = true;
-            return;
-        }
-
-        boundsMin = Vector3.Min(boundsMin, min);
-        boundsMax = Vector3.Max(boundsMax, max);
-    }
+    
 
     private void ReleaseCausticResources()
     {
@@ -3004,7 +2832,15 @@ public class GameManager : MonoBehaviour
         }
 
         cameraAutoFocus = false;
-        cameraFocalDistance = Mathf.Max(0.1f, focusDistance);
+        if (cameraBehavior == CameraBehavior.OrbitFocusPoint)
+        {
+            cameraFocusPosition = hitPosition;
+            _orbitDistance = DefaultCameraOrbitZoom;
+            InitializeOrbitCamera(renderTextureCamera);
+        }
+        cameraFocalDistance = cameraBehavior == CameraBehavior.OrbitFocusPoint
+            ? DefaultCameraOrbitZoom
+            : Mathf.Max(0.1f, focusDistance);
         previousFocalDistance = cameraFocalDistance;
         _clickedFocusPoint = hitPosition;
         _hasClickedFocusPoint = enableClickToFocus && trackClickedFocusPoint;
@@ -3029,6 +2865,12 @@ public class GameManager : MonoBehaviour
 
         if (_clickedFocusPointInFrustum)
         {
+            if (cameraBehavior == CameraBehavior.OrbitFocusPoint)
+            {
+                cameraFocalDistance = DefaultCameraOrbitZoom;
+                previousFocalDistance = cameraFocalDistance;
+                return;
+            }
             cameraFocalDistance = Mathf.Max(
                 0.1f,
                 Vector3.Dot(
@@ -3041,29 +2883,30 @@ public class GameManager : MonoBehaviour
     private void UpdateSpheres()
     {
         _hasTransparentSphereBlockers = false;
-        bool spheresChanged = false;
-        bool sphereBoundsChanged = false;
-        bool sphereTexturesChanged = false;
-        bool lightsChanged = false;
-        bool lightBoundsChanged = false;
-        for (int i = 0; i < _spheres.Count; ++i)
+        var spheresChanged = false;
+        var sphereBoundsChanged = false;
+        var sphereTexturesChanged = false;
+        var lightsChanged = false;
+        var lightBoundsChanged = false;
+        for (var i = 0; i < _spheres.Count; ++i)
         {
             var sphere = _spheres[i];
-            Sphere previousSphere = sphere;
+            var previousSphere = sphere;
             var sphereObject = _sphereObjects[i];
 
-            Vector3 position = sphereObject.transform.TransformPoint(sphereObject.collider.center);
-            float radius = GetWorldSphereRadius(sphereObject.collider, sphereObject.transform);
-            bool boundsChanged = sphere.position != position || !Mathf.Approximately(sphere.radius, radius);
+            var position = sphereObject.transform.TransformPoint(sphereObject.collider.center);
+            var radius = GetWorldSphereRadius(sphereObject.collider, sphereObject.transform);
+            var boundsChanged = sphere.position != position || !Mathf.Approximately(sphere.radius, radius);
             _temporalDynamicSceneChanged |= boundsChanged;
             sphereBoundsChanged |= boundsChanged;
             sphere.position = position;
             sphere.radius = radius;
 
             var material = sphereObject.material;
-            int previousTextureIndex = sphere.textureIndex;
-            int previousNormalTextureIndex = sphere.normalTextureIndex;
-            int previousParallaxTextureIndex = sphere.parallaxTextureIndex;
+            var previousTextureIndex = sphere.textureIndex;
+            var previousNormalTextureIndex = sphere.normalTextureIndex;
+            var previousParallaxTextureIndex = sphere.parallaxTextureIndex;
+            
             sphere.color = material.Color.ToVector3();
             sphere.refraction = material.RefractionIndex;
             sphere.opacity = material.Opacity;
@@ -3074,6 +2917,7 @@ public class GameManager : MonoBehaviour
             sphere.textureIndex = GetMeshTextureIndex(material.AlbedoTexture, _meshAlbedoTextures);
             sphere.normalTextureIndex = GetMeshTextureIndex(material.NormalTexture, _meshNormalTextures);
             sphere.parallaxTextureIndex = GetMeshTextureIndex(material.ParallaxTexture, _meshParallaxTextures);
+            sphere.textureUvScale = material.TextureUvScale;
             sphere.parallaxStrength = material.ParallaxStrength;
             sphere.minimumParallaxStrength = Mathf.Min(material.MinimumParallaxStrength, material.ParallaxStrength);
             sphereTexturesChanged |= previousTextureIndex != sphere.textureIndex
@@ -3089,7 +2933,7 @@ public class GameManager : MonoBehaviour
             _spheres[i] = sphere;
         }
         
-        for (int i = 0; i < _lights.Count; ++i)
+        for (var i = 0; i < _lights.Count; ++i)
         {
             if (i >= _lightObjects.Count)
             {
@@ -3097,18 +2941,18 @@ public class GameManager : MonoBehaviour
             }
 
             var lightData = _lights[i];
-            Light previousLightData = lightData;
+            var previousLightData = lightData;
             var lightObject = _lightObjects[i];
 
-            Vector3 position = lightObject.transform.TransformPoint(lightObject.collider.center);
-            float radius = GetWorldSphereRadius(lightObject.collider, lightObject.transform);
-            bool boundsChanged = lightData.position != position || !Mathf.Approximately(lightData.radius, radius);
+            var position = lightObject.transform.TransformPoint(lightObject.collider.center);
+            var radius = GetWorldSphereRadius(lightObject.collider, lightObject.transform);
+            var boundsChanged = lightData.position != position || !Mathf.Approximately(lightData.radius, radius);
             _temporalDynamicSceneChanged |= boundsChanged;
             lightBoundsChanged |= boundsChanged;
             lightData.position = position;
             lightData.radius = radius;
             lightData.area = Mathf.PI * lightData.radius * lightData.radius;
-            lightData.type = LightTypeSphere;
+            lightData.type = (int)PathTracedLightType.Sphere;
 
             var light = lightObject.light;
             lightData.emission = light.Color.ToVector3() * Mathf.Max(0.0f, light.Intensity);
@@ -3117,11 +2961,11 @@ public class GameManager : MonoBehaviour
             _lights[i] = lightData;
         }
 
-        int directionalStart = _lightObjects.Count;
-        for (int i = 0; i < _directionalLights.Count; ++i)
+        var directionalStart = _lightObjects.Count;
+        for (var i = 0; i < _directionalLights.Count; ++i)
         {
-            RayDirectionalLight directionalLight = _directionalLights[i];
-            int lightIndex = directionalStart + i * 2;
+            var directionalLight = _directionalLights[i];
+            var lightIndex = directionalStart + i * 2;
             if (directionalLight == null || lightIndex + 1 >= _lights.Count)
             {
                 continue;
@@ -3129,9 +2973,9 @@ public class GameManager : MonoBehaviour
 
             Light first = default;
             UpdateVirtualSunTriangles(directionalLight, ref first, out Light second);
-            bool directionalChanged = !first.Equals(_lights[lightIndex]) || !second.Equals(_lights[lightIndex + 1]);
-            bool directionalBoundsChanged = LightBoundsChanged(first, _lights[lightIndex])
-                || LightBoundsChanged(second, _lights[lightIndex + 1]);
+            var directionalChanged = !first.Equals(_lights[lightIndex]) || !second.Equals(_lights[lightIndex + 1]);
+            var directionalBoundsChanged = LightBoundsChanged(first, _lights[lightIndex])
+                                           || LightBoundsChanged(second, _lights[lightIndex + 1]);
             _temporalDynamicSceneChanged |= directionalChanged;
             lightsChanged |= directionalChanged;
             lightBoundsChanged |= directionalBoundsChanged;
@@ -3158,7 +3002,7 @@ public class GameManager : MonoBehaviour
             RebuildMeshTextureArrays();
         }
 
-        int requiredLightBufferCount = Mathf.Max(1, _lights.Count);
+        var requiredLightBufferCount = Mathf.Max(1, _lights.Count);
         if (_lightBuffer == null || _lightBuffer.count < requiredLightBufferCount)
         {
             _lightBuffer?.Release();
@@ -3179,7 +3023,7 @@ public class GameManager : MonoBehaviour
 
     private static bool LightBoundsChanged(Light current, Light previous)
     {
-        if (current.type == LightTypeSphere && previous.type == LightTypeSphere)
+        if (current.type == (int)PathTracedLightType.Sphere && previous.type == (int)PathTracedLightType.Sphere)
         {
             return current.position != previous.position || !Mathf.Approximately(current.radius, previous.radius);
         }
@@ -3320,6 +3164,7 @@ public class GameManager : MonoBehaviour
             var metallicRoughnessTexture = material != null ? material.MetallicRoughnessTexture : null;
             var normalTexture = material != null ? material.NormalTexture : null;
             var parallaxTexture = material != null ? material.ParallaxTexture : null;
+            var textureUvScale = material != null ? material.TextureUvScale : Vector2.one;
             float parallaxStrength = material != null ? material.ParallaxStrength : 0.0f;
             float minimumParallaxStrength = material != null ? Mathf.Min(material.MinimumParallaxStrength, parallaxStrength) : 0.0f;
             bool interpolateNormals = material != null && material.InterpolateNormals;
@@ -3344,6 +3189,7 @@ public class GameManager : MonoBehaviour
                 || meshObject.previousMetallicRoughnessTexture != metallicRoughnessTexture
                 || meshObject.previousNormalTexture != normalTexture
                 || meshObject.previousParallaxTexture != parallaxTexture
+                || meshObject.previousTextureUvScale != textureUvScale
                 || !Mathf.Approximately(meshObject.previousParallaxStrength, parallaxStrength)
                 || !Mathf.Approximately(meshObject.previousMinimumParallaxStrength, minimumParallaxStrength);
 
@@ -3369,6 +3215,7 @@ public class GameManager : MonoBehaviour
             meshObject.previousMetallicRoughnessTexture = metallicRoughnessTexture;
             meshObject.previousNormalTexture = normalTexture;
             meshObject.previousParallaxTexture = parallaxTexture;
+            meshObject.previousTextureUvScale = textureUvScale;
             meshObject.previousParallaxStrength = parallaxStrength;
             meshObject.previousMinimumParallaxStrength = minimumParallaxStrength;
             meshObject.previousInterpolateNormals = interpolateNormals;
@@ -3435,6 +3282,7 @@ public class GameManager : MonoBehaviour
                 triangle.metallicRoughnessTextureIndex = metallicRoughnessTextureIndex;
                 triangle.normalTextureIndex = normalTextureIndex;
                 triangle.parallaxTextureIndex = parallaxTextureIndex;
+                triangle.textureUvScale = material != null ? material.TextureUvScale : Vector2.one;
                 triangle.parallaxStrength = material != null ? material.ParallaxStrength : 0.0f;
                 triangle.minimumParallaxStrength = material != null ? Mathf.Min(material.MinimumParallaxStrength, material.ParallaxStrength) : 0.0f;
                 _triangles[triangleIndex] = triangle;
@@ -3474,6 +3322,7 @@ public class GameManager : MonoBehaviour
             sphere.parallaxTextureIndex = sphereMaterial != null
                 ? GetMeshTextureIndex(sphereMaterial.ParallaxTexture, _meshParallaxTextures)
                 : -1;
+            sphere.textureUvScale = sphereMaterial != null ? sphereMaterial.TextureUvScale : Vector2.one;
             _spheres[sphereIndex] = sphere;
         }
         int analyticLightCount = _lightObjects.Count + _directionalLights.Count * 2;
@@ -3534,6 +3383,7 @@ public class GameManager : MonoBehaviour
                 triangle.metallicRoughnessTextureIndex = metallicRoughnessTextureIndex;
                 triangle.normalTextureIndex = normalTextureIndex;
                 triangle.parallaxTextureIndex = parallaxTextureIndex;
+                triangle.textureUvScale = material != null ? material.TextureUvScale : Vector2.one;
                 triangle.parallaxStrength = material != null ? material.ParallaxStrength : 0.0f;
                 triangle.minimumParallaxStrength = material != null ? Mathf.Min(material.MinimumParallaxStrength, material.ParallaxStrength) : 0.0f;
                 triangle.interpolateNormals = interpolateNormals ? 1 : 0;
@@ -3594,7 +3444,7 @@ public class GameManager : MonoBehaviour
                 {
                     position = areaWeightedLightPosition / totalLightArea,
                     emission = emission,
-                    type = LightTypeMesh,
+                    type = (int)PathTracedLightType.Mesh,
                     triangleStart = triangleStart,
                     triangleCount = _triangles.Count - triangleStart,
                     totalArea = totalLightArea
@@ -4307,7 +4157,7 @@ public class GameManager : MonoBehaviour
 
         for (int i = 0; i < _lights.Count; i++)
         {
-            if (_lights[i].type != LightTypeSphere)
+            if (_lights[i].type != (int)PathTracedLightType.Sphere)
             {
                 continue;
             }
@@ -4439,7 +4289,7 @@ public class GameManager : MonoBehaviour
             return nodeIndex;
         }
 
-        _topLevelBvhBuildItemComparer.axis = GetLongestAxis(boundsMax - boundsMin);
+        _topLevelBvhBuildItemComparer.Axis = GetLongestAxis(boundsMax - boundsMin);
         int leftCount = ClampBvhSplitToDepth(FindTopLevelSahSplit(items, start, count), count, depth);
 
         int rightCount = count - leftCount;
@@ -4459,11 +4309,6 @@ public class GameManager : MonoBehaviour
         return nodeIndex;
     }
 
-    private static Vector3 GetTopLevelBvhItemCentroid(TopLevelBvhBuildItem item)
-    {
-        return (item.boundsMin + item.boundsMax) * 0.5f;
-    }
-
     // Scores candidate top-level splits across all three axes by SAH and leaves items sorted on
     // the winning axis so the chosen split is contiguous. Falls back to a longest-axis median
     // split if no positive-area split is found.
@@ -4477,7 +4322,7 @@ public class GameManager : MonoBehaviour
 
         for (int axis = 0; axis < 3; axis++)
         {
-            _topLevelBvhBuildItemComparer.axis = axis;
+            _topLevelBvhBuildItemComparer.Axis = axis;
             items.Sort(start, count, _topLevelBvhBuildItemComparer);
 
             var suffixMin = items[start + count - 1].boundsMin;
@@ -4515,7 +4360,7 @@ public class GameManager : MonoBehaviour
             bestSplit = count / 2;
         }
 
-        _topLevelBvhBuildItemComparer.axis = bestAxis;
+        _topLevelBvhBuildItemComparer.Axis = bestAxis;
         items.Sort(start, count, _topLevelBvhBuildItemComparer);
 
         return Mathf.Clamp(bestSplit, 1, count - 1);
@@ -4885,7 +4730,7 @@ public class GameManager : MonoBehaviour
         return buffer;
     }
 
-    public void RegisterObject(RayTracingObject obj)
+    public void RegisterObject(PathTracingObject obj)
     {
         if (_rayTracingObjects.Contains(obj))
         {
@@ -4919,7 +4764,7 @@ public class GameManager : MonoBehaviour
                 parallaxTextureIndex = -1,
             };
             _spheres.Add(sphere);
-            _sphereObjects.Add(new RayTracedSphere
+            _sphereObjects.Add(new PathTracedSphere
             {
                 obj = obj,
                 transform = obj.transform,
@@ -4941,7 +4786,7 @@ public class GameManager : MonoBehaviour
                 radius = radius,
                 area = Mathf.PI * radius * radius,
                 emission = rayLight.Color.ToVector3() * Mathf.Max(0.0f, rayLight.Intensity),
-                type = LightTypeSphere
+                type = (int)PathTracedLightType.Sphere
             };
             int insertionIndex = _lightObjects.Count;
             _lights.Insert(insertionIndex, lightData);
@@ -4954,7 +4799,7 @@ public class GameManager : MonoBehaviour
                     _triangles[i] = triangle;
                 }
             }
-            _lightObjects.Add(new RayTracedLight
+            _lightObjects.Add(new PathTracedLight
             {
                 obj = obj,
                 transform = obj.transform,
@@ -4967,7 +4812,7 @@ public class GameManager : MonoBehaviour
         var meshFilter = obj.GetComponent<MeshFilter>();
         if ((material != null || rayLight != null) && meshFilter != null && meshFilter.sharedMesh != null)
         {
-            _meshObjects.Add(new RayTracedMesh
+            _meshObjects.Add(new PathTracedMesh
             {
                 obj = obj,
                 transform = obj.transform,
@@ -5096,7 +4941,7 @@ public class GameManager : MonoBehaviour
             radius = VirtualSunDistance,
             area = Vector3.Cross(u, v).magnitude * 0.5f,
             normal = normal,
-            type = LightTypeSunTriangle
+            type = (int)PathTracedLightType.SunTriangle
         };
     }
 
@@ -5144,7 +4989,7 @@ public class GameManager : MonoBehaviour
         ResetFrameAccumulation();
     }
     
-    public void UnregisterObject(RayTracingObject obj)
+    public void UnregisterObject(PathTracingObject obj)
     {
         _rayTracingObjects.Remove(obj);
         _buffersNeedRebuilding = true;
@@ -5164,9 +5009,9 @@ public class GameManager : MonoBehaviour
         {
             _lightObjects.RemoveAt(lightIndex);
             _lights.RemoveAt(lightIndex);
-            for (int i = 0; i < _triangles.Count; i++)
+            for (var i = 0; i < _triangles.Count; i++)
             {
-                Triangle triangle = _triangles[i];
+                var triangle = _triangles[i];
                 if (triangle.lightIndex > lightIndex)
                 {
                     triangle.lightIndex--;
@@ -5323,7 +5168,7 @@ public class GameManager : MonoBehaviour
 
         foreach (var sphere in _lights)
         {
-            if (sphere.type != LightTypeSphere)
+            if (sphere.type != (int)PathTracedLightType.Sphere)
             {
                 continue;
             }
@@ -5929,6 +5774,7 @@ public class GameManager : MonoBehaviour
         hash = AddHash(hash, value.textureIndex);
         hash = AddHash(hash, value.normalTextureIndex);
         hash = AddHash(hash, value.parallaxTextureIndex);
+        hash = AddHash(hash, value.textureUvScale);
         hash = AddHash(hash, value.parallaxStrength);
         return AddHash(hash, value.minimumParallaxStrength);
     }
@@ -5945,7 +5791,7 @@ public class GameManager : MonoBehaviour
         return AddHash(hash, value.type);
     }
 
-    private static int AddHash(int hash, RayTracedMesh value)
+    private static int AddHash(int hash, PathTracedMesh value)
     {
         hash = AddHash(hash, value.transform.localToWorldMatrix);
         hash = AddHash(hash, value.previousColor);
@@ -5961,6 +5807,7 @@ public class GameManager : MonoBehaviour
         hash = AddHash(hash, value.previousMetallicRoughnessTexture != null ? value.previousMetallicRoughnessTexture.GetInstanceID() : 0);
         hash = AddHash(hash, value.previousNormalTexture != null ? value.previousNormalTexture.GetInstanceID() : 0);
         hash = AddHash(hash, value.previousParallaxTexture != null ? value.previousParallaxTexture.GetInstanceID() : 0);
+        hash = AddHash(hash, value.previousTextureUvScale);
         hash = AddHash(hash, value.previousParallaxStrength);
         hash = AddHash(hash, value.previousMinimumParallaxStrength);
         return AddHash(hash, value.previousInterpolateNormals ? 1 : 0);

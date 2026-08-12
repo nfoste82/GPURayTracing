@@ -1,7 +1,7 @@
 using UnityEngine;
 
 [ExecuteAlways]
-public class RayTracingObject : MonoBehaviour
+public class PathTracingObject : MonoBehaviour
 {
     private void OnEnable()
     {

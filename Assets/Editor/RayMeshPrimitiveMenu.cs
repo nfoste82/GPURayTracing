@@ -30,7 +30,7 @@ public static class RayMeshPrimitiveMenu
         var meshRenderer = gameObject.AddComponent<MeshRenderer>();
         var meshCollider = gameObject.AddComponent<MeshCollider>();
         var rayMaterial = gameObject.AddComponent<RayMaterial>();
-        gameObject.AddComponent<RayTracingObject>();
+        gameObject.AddComponent<PathTracingObject>();
         var rayMeshPrimitive = gameObject.AddComponent<RayMeshPrimitive>();
 
         rayMeshPrimitive.Type = type;

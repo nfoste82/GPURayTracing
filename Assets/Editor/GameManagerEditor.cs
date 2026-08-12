@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
+using PathTracing.Camera;
+using PathTracing.Lighting;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -53,7 +55,7 @@ public sealed class GameManagerEditor : Editor
         DrawSection(manager, "Lighting", true, () =>
         {
             DrawProperty("lightSamplingStrategy");
-            if (serializedObject.FindProperty("lightSamplingStrategy").enumValueIndex != (int)GameManager.LightSamplingStrategy.AllLights)
+            if (serializedObject.FindProperty("lightSamplingStrategy").enumValueIndex != (int)LightSamplingStrategy.AllLights)
             {
                 DrawProperty("lightSampleCount");
             }
@@ -120,7 +122,13 @@ public sealed class GameManagerEditor : Editor
     private void DrawCameraSettings(GameManager manager)
     {
         EditorGUILayout.LabelField("Camera Controls", EditorStyles.boldLabel);
+        DrawProperty("cameraBehavior");
         DrawProperty("cameraMovementSpeed");
+        if ((CameraBehavior)serializedObject.FindProperty("cameraBehavior").enumValueIndex == CameraBehavior.OrbitFocusPoint)
+        {
+            DrawProperty("cameraFocusPosition");
+            DrawProperty("cameraOrbitZoom");
+        }
         if (manager.renderTextureCamera != null)
         {
             var cameraObject = new SerializedObject(manager.renderTextureCamera);
@@ -145,13 +153,13 @@ public sealed class GameManagerEditor : Editor
         DrawProperty("cameraFocalDistance");
         DrawProperty("cameraApertureMode");
 
-        GameManager.CameraApertureMode apertureMode = (GameManager.CameraApertureMode)serializedObject
+        CameraApertureMode apertureMode = (CameraApertureMode)serializedObject
             .FindProperty("cameraApertureMode").enumValueIndex;
-        if (apertureMode == GameManager.CameraApertureMode.LensRadius)
+        if (apertureMode == CameraApertureMode.LensRadius)
         {
             DrawProperty("cameraApertureRadius");
         }
-        else if (apertureMode == GameManager.CameraApertureMode.FStop)
+        else if (apertureMode == CameraApertureMode.FStop)
         {
             DrawProperty("cameraFStop");
             DrawProperty("cameraApertureScale");
@@ -423,7 +431,7 @@ public static class RayTracingBvhBakeUtility
     public static List<RayTracingBvhBakeAsset.MeshEntry> GetMeshEntries(GameManager manager)
     {
         var entriesByKey = new Dictionary<string, RayTracingBvhBakeAsset.MeshEntry>();
-        foreach (RayTracingObject rayObject in manager.GetComponentsInChildren<RayTracingObject>(true))
+        foreach (PathTracingObject rayObject in manager.GetComponentsInChildren<PathTracingObject>(true))
         {
             if (!rayObject.isActiveAndEnabled)
             {

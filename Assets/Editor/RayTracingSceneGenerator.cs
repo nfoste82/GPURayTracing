@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using PathTracing.Camera;
+using PathTracing.Lighting;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -174,19 +176,19 @@ public static class RayTracingSceneGenerator
             var height = i == 0 ? metalHeight : i == 1 ? brickHeight : pineBarkHeight;
             
             var normalMapped = AddPrimitiveMesh(context.Root, "Normal Mapping " + shapes[i], shapes[i], new Vector3(-2.5f, 1.0f, z), new Vector3(0.0f, 0.0f, 0.0f), Vector3.one * 1.65f, Color.white, RayMaterial.MaterialType.Diffuse, smoothnesses[i], 1.0f);
-            ConfigureSurfaceMaps(normalMapped, albedo, normal, null, arm, 0.0f);
+            ConfigureSurfaceMaps(normalMapped, albedo, normal, null, arm, 0.0f, Vector2.one);
             
             var parallaxMapped = AddPrimitiveMesh(context.Root, "Parallax Mapping " + shapes[i], shapes[i], new Vector3(2.5f, 1.0f, z), new Vector3(0.0f, 0.0f, 0.0f), Vector3.one * 1.65f, Color.white, RayMaterial.MaterialType.Diffuse, smoothnesses[i], 1.0f);
-            ConfigureSurfaceMaps(parallaxMapped, albedo, normal, height, arm, parallexStrengths[i]);
+            ConfigureSurfaceMaps(parallaxMapped, albedo, normal, height, arm, parallexStrengths[i], Vector2.one);
         }
 
         var sphere = AddSphere(context.Root, "Normal Mapping Sphere", new Vector3(-2.5f, 0.85f, 7.75f), 0.85f,
             Color.white, RayMaterial.MaterialType.Diffuse, 0.24f);
-        ConfigureSurfaceMaps(sphere, metalAlbedo, metalNormal, null, metalArm, 0.0f);
+        ConfigureSurfaceMaps(sphere, metalAlbedo, metalNormal, null, metalArm, 0.0f, Vector2.one);
 
         var parallaxSphere = AddSphere(context.Root, "Parallax Mapping Sphere", new Vector3(2.5f, 0.85f, 7.75f), 0.85f,
             Color.white, RayMaterial.MaterialType.Diffuse, 0.24f);
-        ConfigureSurfaceMaps(parallaxSphere, metalAlbedo, metalNormal, metalHeight, metalArm, 0.0193f);
+        ConfigureSurfaceMaps(parallaxSphere, metalAlbedo, metalNormal, metalHeight, metalArm, 0.0193f, Vector2.one);
         
         // Add lights above the pyramids
         AddLight(context.Root, "Parallax-Mapped Pyramid Light", new Vector3(2.5f, 2.03f, 3.25f), 0.2f, new Color32(255, 235, 205, 255), 2.75f);
@@ -206,7 +208,7 @@ public static class RayTracingSceneGenerator
         Save(context.Scene, sceneName);
     }
 
-    private static void ConfigureSurfaceMaps(GameObject obj, Texture2D albedo, Texture2D normal, Texture2D height, Texture2D roughness, float parallaxStrength)
+    private static void ConfigureSurfaceMaps(GameObject obj, Texture2D albedo, Texture2D normal, Texture2D height, Texture2D roughness, float parallaxStrength, Vector2 uvScale)
     {
         var material = obj.GetComponent<RayMaterial>();
         material.AlbedoTexture = albedo;
@@ -215,6 +217,7 @@ public static class RayTracingSceneGenerator
         material.MetallicRoughnessTexture = roughness;
         material.Metallic = 0.35f;
         material.ParallaxStrength = parallaxStrength;
+        material.TextureUvScale = uvScale;
     }
 
     [MenuItem("Tools/Ray Tracing/Generate Teapot Material Scene")]
@@ -272,7 +275,7 @@ public static class RayTracingSceneGenerator
             CameraEuler = new Vector3(20.8f, 0.0f, 0.0f),
             NumBounces = 12,
             ShadowQuality = 0,
-            CameraApertureMode = GameManager.CameraApertureMode.Pinhole,
+            CameraApertureMode = CameraApertureMode.Pinhole,
             Exposure = 2.5f,
             LightFalloffScale = 0.03f,
             SkyboxLightColor = new Color32(18, 18, 18, 255),
@@ -359,7 +362,7 @@ public static class RayTracingSceneGenerator
         var context = CreateBaseScene(new SceneSettings
         {
             SceneName = sceneName, CameraPosition = new Vector3(0.0f, 3.17f, -11.27f), CameraEuler = new Vector3(8.23f, 0.0f, 0.0f),
-            LightSamplingStrategy = GameManager.LightSamplingStrategy.AllLights,
+            LightSamplingStrategy = LightSamplingStrategy.AllLights,
             LightFalloffScale = 0.041f, ShadowRandomness = 0.6f, Exposure = 0.75f,
             FogDensityScale = 0.74f, FogScatteringScale = 0.466f, FogInScatteringIntensity = 12.77f,
             SkyboxLightColor = new Color32(0, 0, 0, 255), CameraFocalDistance = 15.0f, FireflyClamp = 8f
@@ -451,7 +454,7 @@ public static class RayTracingSceneGenerator
             NumBounces = 2,
             EnableSpatialDenoising = false,
             CameraFocalDistance = 2.0f,
-            CameraApertureMode = GameManager.CameraApertureMode.LensRadius,
+            CameraApertureMode = CameraApertureMode.LensRadius,
             CameraApertureRadius = 0.1f,
             CameraApertureBladeCount = 3,
             CameraAnamorphicRatio = 1.0f,
@@ -978,21 +981,31 @@ public static class RayTracingSceneGenerator
         var context = CreateBaseScene(new SceneSettings
         {
             SceneName = "Benchmark_Glass", 
-            CameraPosition = new Vector3(0.0f, 4.5f, -5.11f), 
-            CameraEuler = new Vector3(36.0f, 0.0f, 0.0f),
-            NumBounces = 8, ShadowQuality = 1
+            CameraPosition = new Vector3(-2.7f, 3.377f, 12.62f), 
+            NumBounces = 16, 
+            ShadowQuality = 0,
+            CameraBehavior = CameraBehavior.OrbitFocusPoint,
+            CameraFocusPosition = new Vector3(0.0f, 2.4f, 3.0f),
+            DirectionalLightIntensity = 1.5f,
+            DirectionalLightAngularRadius = 1.5f,
+            DirectionalLightRotation = new Vector3(67.0f, -45.0f, 0.0f),
         });
         
-        AddFloor(context.Root, new Vector2(0.0f, 3.0f), new Vector2(16.0f, 16.0f), 0.5f);
-        AddLight(context.Root, "Key Light", new Vector3(-3.0f, 9.0f, -4.0f), 1.5f, new Color32(255, 235, 220, 255), 4f);
-        AddLight(context.Root, "Blue Light", new Vector3(4.0f, 5.5f, 4.0f), 0.8f, new Color32(110, 165, 255, 255), 2f);
-
-        for (int i = 0; i < 28; i++)
+        var defaultCheckerGray = AssetDatabase.GetBuiltinExtraResource<Texture2D>(DefaultCheckerGrayTexturePath);
+        
+        var checkerboardFloor = AddPrimitiveMesh(context.Root, "Checkerboard Floor", RayMeshPrimitive.PrimitiveType.Cube,
+            new Vector3(0.0f, 0.05f, 3.0f), Vector3.zero, new Vector3(16.0f, 0.1f, 16.0f),
+            Color.white, RayMaterial.MaterialType.Diffuse,
+            0.5f, 1.0f);
+        
+        ConfigureSurfaceMaps(checkerboardFloor, defaultCheckerGray, null, null, null, 0.0f, new Vector2(5f, 5f));
+        
+        for (var i = 0; i < 28; i++)
         {
-            float angle = i * Mathf.PI * 2.0f / 28.0f;
-            float radius = 4.0f + (i % 4) * 0.45f;
+            var angle = i * Mathf.PI * 2.0f / 28.0f;
+            var radius = 4.0f + (i % 4) * 0.45f;
             var color = Color.HSVToRGB(i / 28.0f, 0.32f, 1.0f);
-            AddSphere(context.Root, "Glass Sphere", new Vector3(Mathf.Cos(angle) * radius, 0.95f, Mathf.Sin(angle) * radius + 3.0f), 0.8f, color, RayMaterial.MaterialType.Glass, 1.0f, 0.78f, 1.5f, 0.15f);
+            AddSphere(context.Root, "Glass Sphere", new Vector3(Mathf.Cos(angle) * radius, 0.95f, Mathf.Sin(angle) * radius + 3.0f), 0.8f, color, RayMaterial.MaterialType.Glass, 1.0f, 0.78f, 1.5f, 0.15f, 0.86f);
         }
 
         AddPrimitiveMesh(context.Root, "Glass Pyramid", RayMeshPrimitive.PrimitiveType.Pyramid, new Vector3(0.0f, 1.4f, 3.0f), new Vector3(0.0f, 45.0f, 0.0f), Vector3.one * 2.2f, new Color32(180, 215, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.4f, 1.65f);
@@ -1009,7 +1022,8 @@ public static class RayTracingSceneGenerator
 
         var context = CreateBaseScene(new SceneSettings
         {
-            SceneName = sceneName, CameraPosition = new Vector3(-6.65f, 4.86f, -1.99f), CameraEuler = new Vector3(37.42f, 54.6f, 0.0f),
+            SceneName = sceneName, 
+            CameraPosition = new Vector3(-6.65f, 4.86f, -1.99f), CameraEuler = new Vector3(37.42f, 54.6f, 0.0f),
             NumBounces = 16, 
             ShadowQuality = 0,
             LightFalloffScale = 0.015f, 
@@ -1059,10 +1073,14 @@ public static class RayTracingSceneGenerator
             return;
         }
 
-        for (int i = 0; i < colors.Length; i++)
+        for (var i = 0; i < colors.Length; i++)
         {
-            float z = -0.55f + i * 0.42f;
-            AddPrimitiveMesh(parent, $"{name} Filter {i + 1}", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(x, 2.0f, z), Vector3.zero, new Vector3(1.05f, 2.8f, 0.12f), colors[i], RayMaterial.MaterialType.Glass, 1.0f, opacity, refraction);
+            var z = -0.55f + i * 0.42f;
+            AddPrimitiveMesh(parent, $"{name} Filter {i + 1}", 
+                RayMeshPrimitive.PrimitiveType.Cube, 
+                new Vector3(x, 2.0f, z), Vector3.zero, new Vector3(1.05f, 2.8f, 0.12f), 
+                colors[i], RayMaterial.MaterialType.Glass, 
+                1.0f, opacity, refraction);
         }
     }
 
@@ -1097,7 +1115,7 @@ public static class RayTracingSceneGenerator
             DenoiserLuminanceSigma = 0.04f,
             TopLevelBvhMinObjectCount = 1024, 
             ShadowBvhMinObjectCount = 1024,
-            LightSamplingStrategy = GameManager.LightSamplingStrategy.ImportanceSampled, 
+            LightSamplingStrategy = LightSamplingStrategy.ImportanceSampled, 
             SkyboxLightColor = new Color32(111, 109, 98, 255),
             FieldOfView = 29.6f
         });
@@ -1134,18 +1152,45 @@ public static class RayTracingSceneGenerator
 
         var context = CreateBaseScene(new SceneSettings
         {
-            SceneName = sceneName, CameraPosition = new Vector3(0.0f, 5.4f, -10.5f), CameraEuler = new Vector3(19.0f, 0.0f, 0.0f),
-            NumBounces = 10, ShadowQuality = 0,
-            CameraFocalDistance = 12.0f, LightFalloffScale = 0.012f, FireflyClamp = 0.0f,
-            EnableCaustics = true, CausticPhotonCount = 2048, CausticGatherRadius = 0.28f,
-            TopLevelBvhMinObjectCount = 1024, ShadowBvhMinObjectCount = 1024,
-            LightSamplingStrategy = GameManager.LightSamplingStrategy.AllLights, SkyboxLightColor = new Color32(2, 2, 3, 255)
+            SceneName = sceneName, 
+            CameraPosition = new Vector3(0.0f, 5.4f, -10.5f), CameraEuler = new Vector3(19.0f, 0.0f, 0.0f),
+            NumBounces = 10, 
+            ShadowQuality = 0,
+            CameraFocalDistance = 12.0f, 
+            LightFalloffScale = 0.012f, 
+            FireflyClamp = 0.0f,
+            EnableCaustics = true, 
+            CausticPhotonCount = 65536, 
+            CausticGatherRadius = 0.28f,
+            TopLevelBvhMinObjectCount = 1024, 
+            ShadowBvhMinObjectCount = 1024,
+            LightSamplingStrategy = LightSamplingStrategy.AllLights, 
+            SkyboxLightColor = new Color32(2, 2, 3, 255)
         });
 
-        AddPrimitiveMesh(context.Root, "Matte Caustic Receiver", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 0.02f, 2.2f), Vector3.zero, new Vector3(10.0f, 0.04f, 9.0f), new Color32(225, 225, 218, 255), RayMaterial.MaterialType.Diffuse, 0.02f, 1.0f);
-        AddMeshLight(context.Root, "Triangle Caustic Light", CreateHorizontalTriangleMesh("Triangle Caustic Light", 2.8f, 1.8f), new Vector3(0.0f, 6.8f, 2.5f), Vector3.zero, Vector3.one, new Color32(255, 244, 218, 255));
-        AddSphere(context.Root, "Clear Glass Sphere", new Vector3(0.0f, 1.32f, 2.5f), 1.3f, new Color32(238, 248, 255, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.04f, 1.52f);
-        AddSphere(context.Root, "Diffuse Scale Reference", new Vector3(2.6f, 0.45f, 6.2f), 0.45f, new Color32(185, 78, 52, 255), RayMaterial.MaterialType.Diffuse, 0.08f);
+        AddPrimitiveMesh(context.Root, "Matte Caustic Receiver", 
+            RayMeshPrimitive.PrimitiveType.Cube,
+            new Vector3(0.0f, 0.02f, 2.2f), Vector3.zero, new Vector3(10.0f, 0.04f, 9.0f),
+            new Color32(225, 225, 218, 255), RayMaterial.MaterialType.Diffuse,
+            0.02f, 1.0f);
+        
+        AddMeshLight(context.Root, "Triangle Caustic Light", 
+            CreateHorizontalTriangleMesh("Triangle Caustic Light", 2.8f, 1.8f), 
+            new Vector3(0.0f, 6.8f, 2.5f), Vector3.zero, Vector3.one,
+            new Color32(255, 244, 218, 255));
+        
+        AddSphere(context.Root, "Clear Glass Sphere", 
+            new Vector3(0.0f, 1.32f, 2.5f), 1.3f, 
+            new Color32(238, 248, 255, 255), 
+            RayMaterial.MaterialType.Glass, 
+            1.0f, 0.04f, 1.52f);
+        
+        AddSphere(context.Root, "Diffuse Scale Reference", 
+            new Vector3(2.6f, 0.45f, 6.2f), 0.45f, 
+            new Color32(185, 78, 52, 255), 
+            RayMaterial.MaterialType.Diffuse, 
+            0.08f);
+        
         Save(context.Scene, sceneName);
     }
 
@@ -1160,13 +1205,14 @@ public static class RayTracingSceneGenerator
         {
             SceneName = "Benchmark_Dynamic", CameraPosition = new Vector3(0.0f, 7.0f, -22.0f), CameraEuler = new Vector3(15.0f, 0.0f, 0.0f)
         });
+        
         AddFloor(context.Root, new Vector2(0.0f, 5.0f), new Vector2(22.0f, 22.0f), 0.5f);
         AddLight(context.Root, "Key Light", new Vector3(0.0f, 12.0f, -5.0f), 1.7f, new Color32(255, 238, 218, 255));
 
-        for (int i = 0; i < 96; i++)
+        for (var i = 0; i < 96; i++)
         {
-            float angle = i * Mathf.PI * 2.0f / 96.0f;
-            float ring = 4.0f + (i % 4) * 1.6f;
+            var angle = i * Mathf.PI * 2.0f / 96.0f;
+            var ring = 4.0f + (i % 4) * 1.6f;
             var sphere = AddSphere(context.Root, "Moving Sphere", new Vector3(Mathf.Cos(angle) * ring, 1.0f + (i % 5) * 0.25f, Mathf.Sin(angle) * ring + 5.0f), 0.45f, Color.HSVToRGB(i / 96.0f, 0.55f, 0.95f), RayMaterial.MaterialType.Diffuse, 0.2f);
             var mover = sphere.AddComponent<BenchmarkOrbitMover>();
             mover.center = new Vector3(0.0f, sphere.transform.position.y, 5.0f);
@@ -1217,11 +1263,24 @@ public static class RayTracingSceneGenerator
         water.RefinementSteps = 6;
 
         //AddLight(context.Root, "Low Sun Reflection Light", new Vector3(-5.0f, 4.0f, -5.5f), 1.2f, new Color32(255, 226, 188, 255));
-        AddLight(context.Root, "Cool Sky Fill", new Vector3(8.0f, 15f, 8.0f), 1.8f, new Color32(255, 253, 155, 255));
+        AddLight(context.Root, "Cool Sky Fill", 
+            new Vector3(8.0f, 15f, 8.0f), 
+            1.8f, 
+            new Color32(255, 253, 155, 255));
 
-        AddPrimitiveMesh(context.Root, "Ground Plane", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-2.0f, 0.07f, 3.0f), Vector3.zero, new Vector3(600.0f, 0.04f, 600.0f), new Color32(88, 78, 48, 255), RayMaterial.MaterialType.Diffuse, 0.38f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Ground Plane", 
+            RayMeshPrimitive.PrimitiveType.Cube, 
+            new Vector3(-2.0f, 0.07f, 3.0f), Vector3.zero, new Vector3(600.0f, 0.04f, 600.0f),
+            new Color32(88, 78, 48, 255), 
+            RayMaterial.MaterialType.Diffuse, 
+            0.38f, 1.0f);
 
-        AddPrimitiveMesh(context.Root, "Raised Bed Inside Water", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(10.0f, 0.43f, 10.0f), new Vector3(0.0f, 0.0f, 25.0f), new Vector3(15.0f, 5.0f, 40.0f), new Color32(88, 78, 48, 255), RayMaterial.MaterialType.Diffuse, 0.38f, 1.0f);
+        AddPrimitiveMesh(context.Root, "Raised Bed Inside Water", 
+            RayMeshPrimitive.PrimitiveType.Cube, 
+            new Vector3(10.0f, 0.43f, 10.0f), new Vector3(0.0f, 0.0f, 25.0f), new Vector3(15.0f, 5.0f, 40.0f), 
+            new Color32(88, 78, 48, 255), 
+            RayMaterial.MaterialType.Diffuse, 
+            0.38f, 1.0f);
 
         for (var i = 0; i < 24; i++)
         {
@@ -1326,8 +1385,8 @@ public static class RayTracingSceneGenerator
         const float roomHeight = 4.5f;
         const float roomDepth = 12.0f;
         const float roomCenterZ = 1.0f;
-        float backZ = roomCenterZ + roomDepth * 0.5f;
-        float frontZ = roomCenterZ - roomDepth * 0.5f;
+        var backZ = roomCenterZ + roomDepth * 0.5f;
+        var frontZ = roomCenterZ - roomDepth * 0.5f;
 
         AddPrimitiveMesh(context.Root, "Floor", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 0.02f, roomCenterZ), Vector3.zero, new Vector3(roomWidth, 0.04f, roomDepth), new Color32(230, 226, 212, 255), RayMaterial.MaterialType.Diffuse, 0.22f, 1.0f);
         AddPrimitiveMesh(context.Root, "Ceiling", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, roomHeight, roomCenterZ), Vector3.zero, new Vector3(roomWidth, 0.04f, roomDepth), new Color32(226, 224, 212, 255), RayMaterial.MaterialType.Diffuse, 0.18f, 1.0f);
@@ -1377,7 +1436,7 @@ public static class RayTracingSceneGenerator
             TopLevelBvhMinObjectCount = 0,
             ShadowBvhMinObjectCount = 0,
             SkyboxLightColor = new Color32(110, 110, 120, 255),
-            CameraApertureMode = GameManager.CameraApertureMode.Pinhole
+            CameraApertureMode = CameraApertureMode.Pinhole
         });
 
         const float roomWidth = 7.0f;
@@ -1421,9 +1480,9 @@ public static class RayTracingSceneGenerator
 
         var context = CreateDemofoxOrbGradientTestScene(sceneName);
         const int sphereCount = 7;
-        for (int i = 0; i < sphereCount; i++)
+        for (var i = 0; i < sphereCount; i++)
         {
-            float smoothness = 1.0f - i * (0.5f / (sphereCount - 1));
+            var smoothness = 1.0f - i * (0.5f / (sphereCount - 1));
             AddSphere(
                 context.Root,
                 $"Glass Smoothness {smoothness:0.00}",
@@ -1450,9 +1509,9 @@ public static class RayTracingSceneGenerator
 
         var context = CreateDemofoxOrbGradientTestScene(sceneName);
         const int sphereCount = 7;
-        for (int i = 0; i < sphereCount; i++)
+        for (var i = 0; i < sphereCount; i++)
         {
-            float refractionIndex = Mathf.Lerp(1.0f, 1.5f, (float)i / (sphereCount - 1));
+            var refractionIndex = Mathf.Lerp(1.0f, 1.5f, (float)i / (sphereCount - 1));
             AddSphere(
                 context.Root,
                 $"Glass IOR {refractionIndex:0.00}",
@@ -1520,13 +1579,14 @@ public static class RayTracingSceneGenerator
             TopLevelBvhMinObjectCount = 0, 
             ShadowBvhMinObjectCount = 0,
             SkyboxLightColor = new Color32(255, 245, 223, 255), 
-            CameraApertureMode = GameManager.CameraApertureMode.Pinhole,
+            CameraApertureMode = CameraApertureMode.Pinhole,
             FieldOfView = 33.6f,
             DirectionalLightIntensity = 0.0f,
         });
 
         const float stageWidth = 19.0f;
         AddPrimitiveMesh(context.Root, "White Receiver", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 0.02f, 4.8f), Vector3.zero, new Vector3(stageWidth, 0.04f, 7.0f), new Color32(140, 140, 140, 255), RayMaterial.MaterialType.Diffuse, 0.08f, 1.0f);
+        
         const float lightWidth = 4.0f;
         const float lightDepth = 2.0f;
         const float lightHeight = 7.1f;
@@ -1553,7 +1613,8 @@ public static class RayTracingSceneGenerator
     {
         const float radius = 1.1f;
         const float gap = 0.08f;
-        float spacing = radius * 2.0f + gap;
+        const float spacing = radius * 2.0f + gap;
+        
         return new Vector3((index - (sphereCount - 1) * 0.5f) * spacing, radius * 1.5f, 4.8f);
     }
 
@@ -1591,7 +1652,7 @@ public static class RayTracingSceneGenerator
         const float roomHeight = 4.2f;
         const float roomDepth = 8.2f;
         const float roomCenterZ = 0.5f;
-        float backZ = roomCenterZ + roomDepth * 0.5f;
+        var backZ = roomCenterZ + roomDepth * 0.5f;
 
         AddPrimitiveMesh(context.Root, "Floor", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 0.02f, roomCenterZ), Vector3.zero, new Vector3(roomWidth, 0.04f, roomDepth), new Color32(230, 226, 214, 255), RayMaterial.MaterialType.Diffuse, 0.5f, 1.0f);
         AddPrimitiveMesh(context.Root, "Ceiling", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, roomHeight, roomCenterZ), Vector3.zero, new Vector3(roomWidth, 0.04f, roomDepth), new Color32(226, 224, 214, 255), RayMaterial.MaterialType.Diffuse, 0.5f, 1.0f);
@@ -1617,7 +1678,7 @@ public static class RayTracingSceneGenerator
             return;
         }
 
-        Mesh dragonMesh = LoadFirstMeshFromAsset(StanfordDragonModelPath);
+        var dragonMesh = LoadFirstMeshFromAsset(StanfordDragonModelPath);
         if (dragonMesh == null)
         {
             Debug.LogWarning($"Skipping {sceneName}: no mesh found at {StanfordDragonModelPath}.");
@@ -1646,7 +1707,7 @@ public static class RayTracingSceneGenerator
         AddSphere(context.Root, "Receiver Sphere", new Vector3(2.6f, 1.35f, 1.4f), 0.95f,
             new Color32(190, 210, 225, 255), RayMaterial.MaterialType.Diffuse, 0.35f, 1.0f);
 
-        GameObject dragon = AddMeshLight(context.Root, "Emissive Stanford Dragon", dragonMesh,
+        var dragon = AddMeshLight(context.Root, "Emissive Stanford Dragon", dragonMesh,
             new Vector3(-0.4f, 2.1f, 1.2f), new Vector3(0.0f, 148.0f, 0.0f),
             new Vector3(2.8f, 2.8f, 2.8f), new Color32(255, 180, 105, 255), 3.5f);
         dragon.GetComponent<MeshRenderer>().enabled = false;
@@ -1714,7 +1775,7 @@ public static class RayTracingSceneGenerator
         material.Specular = specular;
         material.Transmission = transmission;
 
-        obj.AddComponent<RayTracingObject>();
+        obj.AddComponent<PathTracingObject>();
         return obj;
     }
 
@@ -1748,7 +1809,7 @@ public static class RayTracingSceneGenerator
         light.Color = color;
         light.Intensity = intensity;
 
-        obj.AddComponent<RayTracingObject>();
+        obj.AddComponent<PathTracingObject>();
         return obj;
     }
 
@@ -1781,7 +1842,7 @@ public static class RayTracingSceneGenerator
 
         obj.AddComponent<MeshFilter>().sharedMesh = mesh;
         obj.AddComponent<MeshRenderer>();
-        obj.AddComponent<RayTracingObject>();
+        obj.AddComponent<PathTracingObject>();
         return obj;
     }
 
@@ -1854,7 +1915,7 @@ public static class RayTracingSceneGenerator
 
         obj.AddComponent<MeshFilter>().sharedMesh = mesh;
         obj.AddComponent<MeshRenderer>();
-        obj.AddComponent<RayTracingObject>();
+        obj.AddComponent<PathTracingObject>();
         return obj;
     }
 
@@ -1937,31 +1998,6 @@ public static class RayTracingSceneGenerator
         importer.SaveAndReimport();
     }
 
-    private static void EnsureReadableTexture(string path)
-    {
-        var importer = AssetImporter.GetAtPath(path) as TextureImporter;
-        if (importer == null)
-        {
-            return;
-        }
-
-        bool changed = false;
-        if (!importer.isReadable)
-        {
-            importer.isReadable = true;
-            changed = true;
-        }
-        if (importer.wrapMode != TextureWrapMode.Repeat)
-        {
-            importer.wrapMode = TextureWrapMode.Repeat;
-            changed = true;
-        }
-        if (changed)
-        {
-            importer.SaveAndReimport();
-        }
-    }
-
     private static Texture2D LoadRenderManTexture(string fileName, bool linear)
     {
         string path = $"{RenderManTextureFolder}/{fileName}";
@@ -1998,51 +2034,6 @@ public static class RayTracingSceneGenerator
         }
 
         return AssetDatabase.LoadAssetAtPath<Texture2D>(path);
-    }
-
-    private static Mesh CreateGridMesh(string name, int xSegments, int zSegments, float spacing)
-    {
-        var vertices = new Vector3[(xSegments + 1) * (zSegments + 1)];
-        var triangles = new int[xSegments * zSegments * 6];
-
-        for (int z = 0; z <= zSegments; z++)
-        {
-            for (int x = 0; x <= xSegments; x++)
-            {
-                float height = Mathf.PerlinNoise(x * 0.07f, z * 0.07f) * 1.4f + Mathf.PerlinNoise(x * 0.17f, z * 0.13f) * 0.45f;
-                vertices[z * (xSegments + 1) + x] = new Vector3(x * spacing, height, z * spacing);
-            }
-        }
-
-        int triangleIndex = 0;
-        for (int z = 0; z < zSegments; z++)
-        {
-            for (int x = 0; x < xSegments; x++)
-            {
-                int a = z * (xSegments + 1) + x;
-                int b = a + 1;
-                int c = a + xSegments + 1;
-                int d = c + 1;
-
-                triangles[triangleIndex++] = a;
-                triangles[triangleIndex++] = c;
-                triangles[triangleIndex++] = b;
-                triangles[triangleIndex++] = b;
-                triangles[triangleIndex++] = c;
-                triangles[triangleIndex++] = d;
-            }
-        }
-
-        var mesh = new Mesh
-        {
-            name = name,
-            indexFormat = UnityEngine.Rendering.IndexFormat.UInt32,
-            vertices = vertices,
-            triangles = triangles
-        };
-        mesh.RecalculateNormals();
-        mesh.RecalculateBounds();
-        return mesh;
     }
 
     private static Mesh CreateQuadMesh(string name, float width, float height, float uScale, float vScale)
@@ -2115,63 +2106,31 @@ public static class RayTracingSceneGenerator
         return mesh;
     }
 
-    private static Mesh CreateDiscMesh(string name, int segments)
-    {
-        segments = Mathf.Max(3, segments);
-        var vertices = new Vector3[segments + 1];
-        var triangles = new int[segments * 3];
-        vertices[0] = Vector3.zero;
-
-        for (int i = 0; i < segments; i++)
-        {
-            float angle = i * Mathf.PI * 2.0f / segments;
-            vertices[i + 1] = new Vector3(Mathf.Cos(angle), 0.0f, Mathf.Sin(angle));
-        }
-
-        for (int i = 0; i < segments; i++)
-        {
-            int triangleIndex = i * 3;
-            triangles[triangleIndex] = 0;
-            triangles[triangleIndex + 1] = i + 1;
-            triangles[triangleIndex + 2] = ((i + 1) % segments) + 1;
-        }
-
-        var mesh = new Mesh
-        {
-            name = name,
-            vertices = vertices,
-            triangles = triangles
-        };
-        mesh.RecalculateNormals();
-        mesh.RecalculateBounds();
-        return mesh;
-    }
-
     private static Mesh CreateCylinderMesh(string name, int segments, float radius, float height)
     {
         segments = Mathf.Max(3, segments);
         var vertices = new Vector3[segments * 2 + 2];
         var triangles = new int[segments * 12];
-        float halfHeight = height * 0.5f;
+        var halfHeight = height * 0.5f;
 
-        for (int i = 0; i < segments; i++)
+        for (var i = 0; i < segments; i++)
         {
-            float angle = i * Mathf.PI * 2.0f / segments;
-            float x = Mathf.Cos(angle) * radius;
-            float z = Mathf.Sin(angle) * radius;
+            var angle = i * Mathf.PI * 2.0f / segments;
+            var x = Mathf.Cos(angle) * radius;
+            var z = Mathf.Sin(angle) * radius;
             vertices[i] = new Vector3(x, -halfHeight, z);
             vertices[i + segments] = new Vector3(x, halfHeight, z);
         }
 
-        int bottomCenter = segments * 2;
-        int topCenter = bottomCenter + 1;
+        var bottomCenter = segments * 2;
+        var topCenter = bottomCenter + 1;
         vertices[bottomCenter] = new Vector3(0.0f, -halfHeight, 0.0f);
         vertices[topCenter] = new Vector3(0.0f, halfHeight, 0.0f);
 
-        int triangleIndex = 0;
-        for (int i = 0; i < segments; i++)
+        var triangleIndex = 0;
+        for (var i = 0; i < segments; i++)
         {
-            int next = (i + 1) % segments;
+            var next = (i + 1) % segments;
             triangles[triangleIndex++] = i;
             triangles[triangleIndex++] = i + segments;
             triangles[triangleIndex++] = next;
@@ -2196,26 +2155,26 @@ public static class RayTracingSceneGenerator
         segments = Mathf.Max(3, segments);
         var vertices = new Vector3[segments * 2 + 2];
         var triangles = new int[segments * 12];
-        float halfLength = length * 0.5f;
+        var halfLength = length * 0.5f;
 
-        for (int i = 0; i < segments; i++)
+        for (var i = 0; i < segments; i++)
         {
-            float angle = i * Mathf.PI * 2.0f / segments;
-            float y = Mathf.Cos(angle) * radius;
-            float z = Mathf.Sin(angle) * radius;
+            var angle = i * Mathf.PI * 2.0f / segments;
+            var y = Mathf.Cos(angle) * radius;
+            var z = Mathf.Sin(angle) * radius;
             vertices[i] = new Vector3(-halfLength, y, z);
             vertices[i + segments] = new Vector3(halfLength, y, z);
         }
 
-        int leftCenter = segments * 2;
-        int rightCenter = leftCenter + 1;
+        var leftCenter = segments * 2;
+        var rightCenter = leftCenter + 1;
         vertices[leftCenter] = new Vector3(-halfLength, 0.0f, 0.0f);
         vertices[rightCenter] = new Vector3(halfLength, 0.0f, 0.0f);
 
-        int triangleIndex = 0;
-        for (int i = 0; i < segments; i++)
+        var triangleIndex = 0;
+        for (var i = 0; i < segments; i++)
         {
-            int next = (i + 1) % segments;
+            var next = (i + 1) % segments;
             triangles[triangleIndex++] = i;
             triangles[triangleIndex++] = i + segments;
             triangles[triangleIndex++] = next;
@@ -2238,14 +2197,14 @@ public static class RayTracingSceneGenerator
     private static Mesh CreateOpenCylinderMesh(string name, int segments, float radius, float height, float thickness)
     {
         segments = Mathf.Max(3, segments);
-        float innerRadius = Mathf.Max(0.01f, radius - Mathf.Max(0.001f, thickness));
-        float halfHeight = height * 0.5f;
+        var innerRadius = Mathf.Max(0.01f, radius - Mathf.Max(0.001f, thickness));
+        var halfHeight = height * 0.5f;
         var vertices = new Vector3[segments * 4];
         var triangles = new int[segments * 12];
 
-        for (int i = 0; i < segments; i++)
+        for (var i = 0; i < segments; i++)
         {
-            float angle = i * Mathf.PI * 2.0f / segments;
+            var angle = i * Mathf.PI * 2.0f / segments;
             var outer = new Vector3(Mathf.Cos(angle) * radius, 0.0f, Mathf.Sin(angle) * radius);
             var inner = new Vector3(Mathf.Cos(angle) * innerRadius, 0.0f, Mathf.Sin(angle) * innerRadius);
             vertices[i] = new Vector3(outer.x, -halfHeight, outer.z);
@@ -2254,18 +2213,18 @@ public static class RayTracingSceneGenerator
             vertices[i + segments * 3] = new Vector3(inner.x, halfHeight, inner.z);
         }
 
-        int triangleIndex = 0;
-        for (int i = 0; i < segments; i++)
+        var triangleIndex = 0;
+        for (var i = 0; i < segments; i++)
         {
-            int next = (i + 1) % segments;
-            int outerBottom = i;
-            int outerTop = i + segments;
-            int innerBottom = i + segments * 2;
-            int innerTop = i + segments * 3;
-            int nextOuterBottom = next;
-            int nextOuterTop = next + segments;
-            int nextInnerBottom = next + segments * 2;
-            int nextInnerTop = next + segments * 3;
+            var next = (i + 1) % segments;
+            var outerBottom = i;
+            var outerTop = i + segments;
+            var innerBottom = i + segments * 2;
+            var innerTop = i + segments * 3;
+            var nextOuterBottom = next;
+            var nextOuterTop = next + segments;
+            var nextInnerBottom = next + segments * 2;
+            var nextInnerTop = next + segments * 3;
 
             triangles[triangleIndex++] = outerBottom;
             triangles[triangleIndex++] = outerTop;
@@ -2290,20 +2249,20 @@ public static class RayTracingSceneGenerator
         segments = Mathf.Max(3, segments);
         var vertices = new Vector3[segments + 2];
         var triangles = new int[segments * 6];
-        float halfHeight = height * 0.5f;
+        var halfHeight = height * 0.5f;
         vertices[segments] = new Vector3(0.0f, halfHeight, 0.0f);
         vertices[segments + 1] = new Vector3(0.0f, -halfHeight, 0.0f);
 
-        for (int i = 0; i < segments; i++)
+        for (var i = 0; i < segments; i++)
         {
-            float angle = i * Mathf.PI * 2.0f / segments;
+            var angle = i * Mathf.PI * 2.0f / segments;
             vertices[i] = new Vector3(Mathf.Cos(angle) * radius, -halfHeight, Mathf.Sin(angle) * radius);
         }
 
-        int triangleIndex = 0;
-        for (int i = 0; i < segments; i++)
+        var triangleIndex = 0;
+        for (var i = 0; i < segments; i++)
         {
-            int next = (i + 1) % segments;
+            var next = (i + 1) % segments;
             triangles[triangleIndex++] = i;
             triangles[triangleIndex++] = segments;
             triangles[triangleIndex++] = next;
@@ -2336,17 +2295,17 @@ public static class RayTracingSceneGenerator
             }
         }
 
-        int triangleIndex = 0;
-        for (int i = 0; i < majorSegments; i++)
+        var triangleIndex = 0;
+        for (var i = 0; i < majorSegments; i++)
         {
-            int nextI = (i + 1) % majorSegments;
-            for (int j = 0; j < minorSegments; j++)
+            var nextI = (i + 1) % majorSegments;
+            for (var j = 0; j < minorSegments; j++)
             {
-                int nextJ = (j + 1) % minorSegments;
-                int a = i * minorSegments + j;
-                int b = nextI * minorSegments + j;
-                int c = i * minorSegments + nextJ;
-                int d = nextI * minorSegments + nextJ;
+                var nextJ = (j + 1) % minorSegments;
+                var a = i * minorSegments + j;
+                var b = nextI * minorSegments + j;
+                var c = i * minorSegments + nextJ;
+                var d = nextI * minorSegments + nextJ;
                 triangles[triangleIndex++] = a;
                 triangles[triangleIndex++] = b;
                 triangles[triangleIndex++] = c;
@@ -2519,14 +2478,14 @@ public static class RayTracingSceneGenerator
 
     private static void FillRect(Texture2D texture, int x, int y, int width, int height, Color32 color)
     {
-        int minX = Mathf.Clamp(x, 0, texture.width);
-        int minY = Mathf.Clamp(y, 0, texture.height);
-        int maxX = Mathf.Clamp(x + width, 0, texture.width);
-        int maxY = Mathf.Clamp(y + height, 0, texture.height);
+        var minX = Mathf.Clamp(x, 0, texture.width);
+        var minY = Mathf.Clamp(y, 0, texture.height);
+        var maxX = Mathf.Clamp(x + width, 0, texture.width);
+        var maxY = Mathf.Clamp(y + height, 0, texture.height);
 
-        for (int py = minY; py < maxY; py++)
+        for (var py = minY; py < maxY; py++)
         {
-            for (int px = minX; px < maxX; px++)
+            for (var px = minX; px < maxX; px++)
             {
                 texture.SetPixel(px, py, color);
             }
@@ -2535,7 +2494,7 @@ public static class RayTracingSceneGenerator
 
     private static void Save(Scene scene, string sceneName)
     {
-        string path = GetScenePath(sceneName);
+        var path = GetScenePath(sceneName);
         if (File.Exists(path) && !_overwriteExistingScenes)
         {
             Debug.LogWarning($"Skipping save for existing generated scene: {path}");
@@ -2572,7 +2531,7 @@ public static class RayTracingSceneGenerator
     private static string GetScenePath(string sceneName)
     {
         const string benchmarkPrefix = "Benchmark_";
-        string generatedName = sceneName.StartsWith(benchmarkPrefix, StringComparison.Ordinal)
+        var generatedName = sceneName.StartsWith(benchmarkPrefix, StringComparison.Ordinal)
             ? sceneName.Substring(benchmarkPrefix.Length)
             : sceneName;
         return $"{GeneratedSceneFolder}/{generatedName}.unity";

@@ -35,7 +35,7 @@ public static class RayMeshAssetGenerator
         rayMaterial.Type = RayMaterial.MaterialType.Diffuse;
         rayMaterial.Color = Color.white;
         rayMaterial.Smoothness = 0.8f;
-        gameObject.AddComponent<RayTracingObject>();
+        gameObject.AddComponent<PathTracingObject>();
 
         Undo.RegisterCreatedObjectUndo(gameObject, "Create Ray Traced Textured Plane");
         Selection.activeGameObject = gameObject;

@@ -29,6 +29,9 @@ public class RayMaterial : MonoBehaviour
     [Tooltip("Optional linear height map for simple parallax mapping. The red channel is sampled in tangent space.")]
     public Texture2D ParallaxTexture;
 
+    [Tooltip("Shared UV scale applied to all material textures. Values above one make the texture pattern repeat more often.")]
+    public Vector2 TextureUvScale = Vector2.one;
+
     [Range(0f, 0.2f)]
     [Tooltip("Simple parallax UV displacement scale. This is not parallax occlusion mapping.")]
     public float ParallaxStrength;

@@ -1,3 +1,5 @@
+using PathTracing.Camera;
+using PathTracing.Lighting;
 using UnityEngine;
 
 public sealed class SceneSettings
@@ -5,6 +7,10 @@ public sealed class SceneSettings
     public string SceneName;
     public Vector3 CameraPosition;
     public Vector3 CameraEuler;
+    public CameraBehavior CameraBehavior = CameraBehavior.Free;
+    public Vector3 CameraFocusPosition;
+    // Zero means use the distance implied by CameraPosition.
+    public float CameraOrbitZoom;
     public float FieldOfView = 60.0f;
 
     public int NumberOfPasses = 1;
@@ -14,18 +20,18 @@ public sealed class SceneSettings
     public int TopLevelBvhMinObjectCount = 64;
     public int ShadowBvhMinObjectCount = 64;
     public float ShadowRandomness = 0.65f;
-    public GameManager.LightSamplingStrategy LightSamplingStrategy = GameManager.LightSamplingStrategy.ImportanceSampled;
+    public LightSamplingStrategy LightSamplingStrategy = LightSamplingStrategy.ImportanceSampled;
     public int LightSampleCount = 1;
 
     public bool EnableSpatialDenoising = true;
     public float DenoiserLuminanceSigma = 0.05f;
     public int DenoiserIterations = 1;
 
-    public bool EnableCaustics = false;
+    public bool EnableCaustics = true;
     public int CausticPhotonCount = 65536;
-    public float CausticGatherRadius = 0.025f;
+    public float CausticGatherRadius = 0.015f;
     public int CausticSeed = 1;
-    public float CausticIntensity = 4.0f;
+    public float CausticIntensity = 1.0f;
 
     public float FogDensityScale = 1.0f;
     public float FogScatteringScale = 1.0f;
@@ -34,7 +40,7 @@ public sealed class SceneSettings
 
     public bool CameraAutoFocus = false;
     public float CameraFocalDistance = 18.0f;
-    public GameManager.CameraApertureMode CameraApertureMode = GameManager.CameraApertureMode.LensRadius;
+    public CameraApertureMode CameraApertureMode = CameraApertureMode.LensRadius;
     public float CameraApertureRadius = 0.005f;
     public int CameraApertureBladeCount = 0;
     public float CameraApertureBladeRotation = 0.0f;

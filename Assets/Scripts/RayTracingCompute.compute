@@ -299,6 +299,7 @@ struct Sphere
     int textureIndex;
     int normalTextureIndex;
     int parallaxTextureIndex;
+    float2 textureUvScale;
     float parallaxStrength;
     float minimumParallaxStrength;
 };
@@ -353,6 +354,7 @@ struct MeshTriangle
     int metallicRoughnessTextureIndex;
     int normalTextureIndex;
     int parallaxTextureIndex;
+    float2 textureUvScale;
     float parallaxStrength;
     float minimumParallaxStrength;
     int interpolateNormals;
@@ -1553,6 +1555,7 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere, int objectInd
         float2 uv = float2(
             atan2(sphereNormal.z, sphereNormal.x) / (2.0f * PI) + 0.5f,
             asin(clamp(sphereNormal.y, -1.0f, 1.0f)) / PI + 0.5f);
+        uv *= sphere.textureUvScale;
         uv = ApplySphereParallax(sphere, sphereNormal, uv, normalize(-ray.direction));
         bestHit.normal = ApplySphereNormal(sphere, bestHit.normal, uv);
         bestHit.uv = uv;
@@ -1579,6 +1582,7 @@ void IntersectLightSphere(Ray ray, inout RayHit bestHit, Light light, int object
     sphere.textureIndex = -1;
     sphere.normalTextureIndex = -1;
     sphere.parallaxTextureIndex = -1;
+    sphere.textureUvScale = float2(1.0f, 1.0f);
     sphere.parallaxStrength = 0.0f;
     sphere.minimumParallaxStrength = 0.0f;
     IntersectSphere(ray, bestHit, sphere, objectIndex);
@@ -1860,6 +1864,7 @@ RayHit IntersectTriangle(Ray ray, RayHit currentHit, MeshTriangle meshTriangle, 
             + meshTriangle.uv1 * barycentric.x
             + meshTriangle.uv2 * barycentric.y;
         float3 viewDirection = normalize(-ray.direction);
+        uv *= meshTriangle.textureUvScale;
         uv = ApplySimpleParallax(meshTriangle, geometricNormal, barycentric, uv, viewDirection);
         normal = GetTriangleOpticalNormal(meshTriangle, geometricNormal, barycentric, uv);
 

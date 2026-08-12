@@ -7,7 +7,7 @@ using UnityEngine;
 [RequireComponent(typeof(MeshRenderer))]
 [RequireComponent(typeof(MeshCollider))]
 [RequireComponent(typeof(RayMaterial))]
-[RequireComponent(typeof(RayTracingObject))]
+[RequireComponent(typeof(PathTracingObject))]
 public class RayMeshPrimitive : MonoBehaviour
 {
     public enum PrimitiveType
