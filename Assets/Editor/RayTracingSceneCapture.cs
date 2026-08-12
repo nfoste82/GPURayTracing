@@ -28,7 +28,7 @@ public static class RayTracingSceneCapture
         string outputArgument = GetCommandLineArgument("-rayTracingOutput");
         bool generateScenes = HasCommandLineArgument("-rayTracingGenerateScenes");
         string label = GetCommandLineArgument("-rayTracingCaptureLabel") ?? DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
-        GameManager.DebugRenderMode debugRenderMode = GetDebugRenderMode();
+        DebugRenderMode debugRenderMode = GetDebugRenderMode();
         if (!TryGetCaptureSettings(out int samplesPerScene, out int captureWidth, out int captureHeight))
         {
             ExitBatchMode(1);
@@ -62,7 +62,7 @@ public static class RayTracingSceneCapture
         int samplesPerScene,
         int captureWidth,
         int captureHeight,
-        GameManager.DebugRenderMode debugRenderMode)
+        DebugRenderMode debugRenderMode)
     {
         try
         {
@@ -151,16 +151,16 @@ public static class RayTracingSceneCapture
         manager.RebuildBuffers(false);
     }
 
-    private static GameManager.DebugRenderMode GetDebugRenderMode()
+    private static DebugRenderMode GetDebugRenderMode()
     {
         string argument = GetCommandLineArgument("-rayTracingDebugRenderMode");
         if (argument == null)
         {
-            return GameManager.DebugRenderMode.FinalColor;
+            return DebugRenderMode.FinalColor;
         }
 
-        if (Enum.TryParse(argument, true, out GameManager.DebugRenderMode mode)
-            && Enum.IsDefined(typeof(GameManager.DebugRenderMode), mode))
+        if (Enum.TryParse(argument, true, out DebugRenderMode mode)
+            && Enum.IsDefined(typeof(DebugRenderMode), mode))
         {
             return mode;
         }
@@ -308,7 +308,7 @@ public static class RayTracingSceneCapture
         manager.randomNoise = false;
         manager.enableFrameAccumulation = true;
         manager.enableTemporalDenoising = false;
-        manager.debugRenderMode = GameManager.DebugRenderMode.FinalColor;
+        manager.debugRenderMode = DebugRenderMode.FinalColor;
         manager.numberOfPasses = 1;
         manager._singleFrame = true;
 

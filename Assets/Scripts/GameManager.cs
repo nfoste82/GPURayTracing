@@ -229,41 +229,6 @@ public class GameManager : MonoBehaviour
     private const int MaxImportanceLights = 128;
     private bool _warnedImportanceLightOverflow = false;
 
-    public enum DebugRenderMode
-    {
-        FinalColor = 0,
-        Normals = 1,
-        Albedo = 2,
-        Emission = 3,
-        DirectLight = 4,
-        Throughput = 5,
-        BounceCount = 6,
-        HitDistance = 7,
-        AccelerationStructures = 8,
-        GlassScatter = 9,
-        Caustics = 10,
-        RawBeauty = 11,
-        FeatureNormal = 12,
-        FeatureAlbedo = 13,
-        FeatureDepth = 14,
-        FeatureIdentity = 15,
-        FeatureValidity = 16,
-        SpatialDenoised = 17,
-        AtrousIteration1 = 18,
-        AtrousIteration2 = 19,
-        AtrousIteration3 = 20,
-        MotionVectors = 21,
-        TemporalReprojectedRadiance = 22,
-        TemporalHistoryAcceptance = 23,
-        TemporalRejectionReason = 24,
-        TemporalDenoised = 25,
-        TemporalHistoryLength = 26,
-        TemporalDenoisedTint = 27,
-        TemporalVariance = 28,
-        CausticPreservationMask = 29,
-        TerrainCells = 30
-    }
-
     public DebugRenderMode debugRenderMode = DebugRenderMode.FinalColor;
 
     [Tooltip("Camera movement speed in world units per second.")]
@@ -399,36 +364,8 @@ public class GameManager : MonoBehaviour
     private RenderTexture _denoiserIteration3Texture;
     private RenderTexture _causticPreservationMaskTexture;
     private ComputeShader _spatialDenoiserShader;
-    private RenderTexture _motionVectorTexture;
-    private RenderTexture _temporalRadianceHistoryA;
-    private RenderTexture _temporalRadianceHistoryB;
-    private RenderTexture _temporalNormalHistoryA;
-    private RenderTexture _temporalNormalHistoryB;
-    private RenderTexture _temporalDepthHistoryA;
-    private RenderTexture _temporalDepthHistoryB;
-    private RenderTexture _temporalIdentityHistoryA;
-    private RenderTexture _temporalIdentityHistoryB;
-    private RenderTexture _temporalValidityHistoryA;
-    private RenderTexture _temporalValidityHistoryB;
-    private RenderTexture _temporalHistoryLengthA;
-    private RenderTexture _temporalHistoryLengthB;
-    private RenderTexture _temporalMomentsA;
-    private RenderTexture _temporalMomentsB;
-    private RenderTexture _temporalVarianceTexture;
-    private RenderTexture _temporalReprojectedRadianceTexture;
-    private RenderTexture _temporalDiagnosticsTexture;
-    private bool _temporalHistoryReadIsA = true;
-    private bool _temporalHistoryValid;
+    private readonly TemporalDenoisingManager _temporalDenoisingManager = new ();
     private bool _temporalDynamicSceneChanged;
-    private bool _hasTemporalStateHash;
-    private int _temporalStateHash;
-    private Matrix4x4 _currentUnjitteredViewProjection;
-    private Matrix4x4 _previousUnjitteredViewProjection;
-    private Vector2 _currentTemporalJitterNdc;
-    private Vector2 _previousTemporalJitterNdc;
-    private Vector3 _previousTemporalCameraPosition;
-    private Quaternion _previousTemporalCameraRotation;
-    private uint _temporalFrameIndex;
     private bool _hasRenderedCameraState;
     private Vector3 _lastRenderedCameraPosition;
     private Quaternion _lastRenderedCameraRotation;
@@ -605,6 +542,15 @@ public class GameManager : MonoBehaviour
     public bool IsShadowBvhActive => _shadowBvhNodes.Count > 0;
     // TextureSize is the internal ray-tracing resolution; DisplayTextureSize is the camera target size.
     public Vector2Int TextureSize => _textureSize;
+    internal ComputeShader SpatialDenoiserShader => _spatialDenoiserShader;
+    internal RenderTexture OutputTexture => _outputTexture;
+    internal RenderTexture BeautyTexture => _beautyTexture;
+    internal RenderTexture FeatureNormalTexture => _featureNormalTexture;
+    internal RenderTexture FeatureDepthTexture => _featureDepthTexture;
+    internal RenderTexture FeatureIdentityTexture => _featureIdentityTexture;
+    internal RenderTexture FeatureValidityTexture => _featureValidityTexture;
+    internal RenderTexture CausticPreservationMaskTexture => _causticPreservationMaskTexture;
+    internal Water WaterInternal => _water;
     public Vector2Int DisplayTextureSize => _displayTextureSize;
     public int AccumulatedFrameCount => _accumulatedFrameCount;
     public bool IsVideoCaptureActive => _videoCaptureActive;
@@ -719,6 +665,7 @@ public class GameManager : MonoBehaviour
 
     private void Start()
     {
+        _temporalDenoisingManager.Initialize(this);
         if (!_singleFrame && Time.timeScale == 0.0f)
         {
             Time.timeScale = 1.0f;
@@ -859,7 +806,7 @@ public class GameManager : MonoBehaviour
         _featureIdentityTexture = CreateFeatureTexture(RenderTextureFormat.RFloat);
         _featureValidityTexture = CreateFeatureTexture(RenderTextureFormat.RHalf);
         ResetFrameAccumulation();
-        ResetTemporalHistory();
+        _temporalDenoisingManager.ResetHistory();
     }
 
     private RenderTexture CreateFeatureTexture(RenderTextureFormat format)
@@ -887,6 +834,13 @@ public class GameManager : MonoBehaviour
         _denoiserPongTexture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
         _causticPreservationMaskTexture = CreateFeatureTexture(RenderTextureFormat.RHalf);
     }
+
+    internal void EnsureSpatialDenoiserResourcesInternal() => EnsureSpatialDenoiserResources();
+    internal RenderTexture CreateFeatureTextureInternal(RenderTextureFormat format) => CreateFeatureTexture(format);
+    internal void GenerateCausticPreservationMaskInternal(int threadGroupsX, int threadGroupsY) => GenerateCausticPreservationMask(threadGroupsX, threadGroupsY);
+    internal void RunSpatialDenoiserInternal(RenderTexture source, RenderTexture variance) => RunSpatialDenoiser(source, variance);
+    internal bool IsFogEnabledInternal() => IsFogEnabled();
+    internal float GetCameraApertureRadiusInternal() => GetCameraApertureRadius();
 
     private void EnsureSpatialDenoiserShader()
     {
@@ -963,21 +917,14 @@ public class GameManager : MonoBehaviour
 
     private bool IsTemporalDebugMode()
     {
-        return debugRenderMode == DebugRenderMode.MotionVectors
-            || debugRenderMode == DebugRenderMode.TemporalReprojectedRadiance
-            || debugRenderMode == DebugRenderMode.TemporalHistoryAcceptance
-            || debugRenderMode == DebugRenderMode.TemporalRejectionReason
-            || debugRenderMode == DebugRenderMode.TemporalDenoised
-            || debugRenderMode == DebugRenderMode.TemporalHistoryLength
-            || debugRenderMode == DebugRenderMode.TemporalDenoisedTint
-            || debugRenderMode == DebugRenderMode.TemporalVariance;
+        return _temporalDenoisingManager.IsDebugMode(debugRenderMode);
     }
 
     private bool ShouldRunTemporalDenoiser()
     {
         // Keep temporal history warm while the camera is still. The still-image path remains the
         // presented output, but its stable history is immediately available when motion resumes.
-        return enableTemporalDenoising || IsTemporalDebugMode();
+        return _temporalDenoisingManager.ShouldRun(debugRenderMode);
     }
 
     private bool IsCausticPreservationDebugMode()
@@ -987,83 +934,19 @@ public class GameManager : MonoBehaviour
 
     private bool ShouldUseTemporalAccumulation()
     {
-        return enableTemporalDenoising && debugRenderMode == DebugRenderMode.FinalColor && IsCameraMoving();
+        return _temporalDenoisingManager.ShouldUseAccumulation(debugRenderMode);
     }
 
-    private bool IsCameraMoving()
-    {
-        return _hasRenderedCameraState
-            && (Vector3.Distance(renderTextureCamera.transform.position, _lastRenderedCameraPosition) >= temporalMotionDistance
-                || Quaternion.Angle(renderTextureCamera.transform.rotation, _lastRenderedCameraRotation) >= temporalMotionAngle);
-    }
+    private bool IsCameraMoving() => _temporalDenoisingManager.ShouldUseAccumulation(DebugRenderMode.FinalColor);
 
     private void EnsureTemporalDenoiserResources()
     {
-        EnsureSpatialDenoiserResources();
-        if (_spatialDenoiserShader == null || _temporalRadianceHistoryA != null)
-        {
-            return;
-        }
-
-        _motionVectorTexture = CreateFeatureTexture(RenderTextureFormat.RGHalf);
-        _temporalRadianceHistoryA = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
-        _temporalRadianceHistoryB = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
-        _temporalNormalHistoryA = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
-        _temporalNormalHistoryB = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
-        _temporalDepthHistoryA = CreateFeatureTexture(RenderTextureFormat.RHalf);
-        _temporalDepthHistoryB = CreateFeatureTexture(RenderTextureFormat.RHalf);
-        _temporalIdentityHistoryA = CreateFeatureTexture(RenderTextureFormat.RFloat);
-        _temporalIdentityHistoryB = CreateFeatureTexture(RenderTextureFormat.RFloat);
-        _temporalValidityHistoryA = CreateFeatureTexture(RenderTextureFormat.RHalf);
-        _temporalValidityHistoryB = CreateFeatureTexture(RenderTextureFormat.RHalf);
-        _temporalHistoryLengthA = CreateFeatureTexture(RenderTextureFormat.RHalf);
-        _temporalHistoryLengthB = CreateFeatureTexture(RenderTextureFormat.RHalf);
-        _temporalMomentsA = CreateFeatureTexture(RenderTextureFormat.RGHalf);
-        _temporalMomentsB = CreateFeatureTexture(RenderTextureFormat.RGHalf);
-        _temporalVarianceTexture = CreateFeatureTexture(RenderTextureFormat.RHalf);
-        _temporalReprojectedRadianceTexture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
-        _temporalDiagnosticsTexture = CreateFeatureTexture(RenderTextureFormat.RGHalf);
+        _temporalDenoisingManager.EnsureResources();
     }
 
     private void ReleaseTemporalDenoiserResources()
     {
-        _motionVectorTexture?.Release();
-        _temporalRadianceHistoryA?.Release();
-        _temporalRadianceHistoryB?.Release();
-        _temporalNormalHistoryA?.Release();
-        _temporalNormalHistoryB?.Release();
-        _temporalDepthHistoryA?.Release();
-        _temporalDepthHistoryB?.Release();
-        _temporalIdentityHistoryA?.Release();
-        _temporalIdentityHistoryB?.Release();
-        _temporalValidityHistoryA?.Release();
-        _temporalValidityHistoryB?.Release();
-        _temporalHistoryLengthA?.Release();
-        _temporalHistoryLengthB?.Release();
-        _temporalMomentsA?.Release();
-        _temporalMomentsB?.Release();
-        _temporalVarianceTexture?.Release();
-        _temporalReprojectedRadianceTexture?.Release();
-        _temporalDiagnosticsTexture?.Release();
-        _motionVectorTexture = null;
-        _temporalRadianceHistoryA = null;
-        _temporalRadianceHistoryB = null;
-        _temporalNormalHistoryA = null;
-        _temporalNormalHistoryB = null;
-        _temporalDepthHistoryA = null;
-        _temporalDepthHistoryB = null;
-        _temporalIdentityHistoryA = null;
-        _temporalIdentityHistoryB = null;
-        _temporalValidityHistoryA = null;
-        _temporalValidityHistoryB = null;
-        _temporalHistoryLengthA = null;
-        _temporalHistoryLengthB = null;
-        _temporalMomentsA = null;
-        _temporalMomentsB = null;
-        _temporalVarianceTexture = null;
-        _temporalReprojectedRadianceTexture = null;
-        _temporalDiagnosticsTexture = null;
-        _temporalHistoryReadIsA = true;
+        _temporalDenoisingManager.ReleaseResources();
     }
 
     private void Update()
@@ -1640,6 +1523,13 @@ public class GameManager : MonoBehaviour
 
     private void RunTemporalDenoiser()
     {
+        _temporalDenoisingManager.SetDynamicSceneChanged(_temporalDynamicSceneChanged);
+        _temporalDenoisingManager.Run(debugRenderMode);
+    }
+
+    #if false
+    private void RunTemporalDenoiserLegacy()
+    {
         EnsureTemporalDenoiserResources();
         if (_spatialDenoiserShader == null || _motionVectorTexture == null)
         {
@@ -1763,6 +1653,8 @@ public class GameManager : MonoBehaviour
         _temporalHistoryValid = true;
     }
 
+    #endif
+
     private void PresentCausticPreservationMask()
     {
         EnsureSpatialDenoiserResources();
@@ -1787,23 +1679,7 @@ public class GameManager : MonoBehaviour
         _hasAccumulationStateHash = false;
     }
 
-    private void ResetTemporalHistory()
-    {
-        _temporalHistoryValid = false;
-        _hasTemporalStateHash = false;
-        _temporalHistoryReadIsA = true;
-    }
-
-    private bool IsTemporalPathUnsupported()
-    {
-        // Pinhole primary features still provide conservative surface motion under depth of field.
-        // Difficult primary materials are classified per pixel through FeatureNormal.a. Static
-        // water and transmission use capped history; animated water still lacks wave motion.
-        return IsFogEnabled()
-            || _temporalDynamicSceneChanged
-            || (_water != null && _water.WaveSpeed > 0.0f && _water.WaveAmplitude > 0.0f);
-    }
-
+    #if false
     private void PrepareTemporalCameraState()
     {
         Matrix4x4 gpuProjection = GL.GetGPUProjectionMatrix(renderTextureCamera.projectionMatrix, true);
@@ -1887,6 +1763,7 @@ public class GameManager : MonoBehaviour
             return hash;
         }
     }
+    #endif
 
     private void EnsureCausticResources()
     {
@@ -2281,10 +2158,10 @@ public class GameManager : MonoBehaviour
             Time.captureDeltaTime = 0.0f;
             _videoCaptureAwaitingSimulationStep = false;
         }
-        if (!ShouldRunTemporalDenoiser() && _temporalRadianceHistoryA != null)
+        if (!ShouldRunTemporalDenoiser() && _temporalDenoisingManager.HasResources)
         {
             ReleaseTemporalDenoiserResources();
-            ResetTemporalHistory();
+            _temporalDenoisingManager.ResetHistory();
         }
 
         // Detect a switch to a debug variant that has not been compiled yet. The first Dispatch of
@@ -2311,6 +2188,7 @@ public class GameManager : MonoBehaviour
         long firstFramePreparationStart = _startupProfilePending ? Stopwatch.GetTimestamp() : 0;
         UpdateTrackedFocusPoint();
         _temporalDynamicSceneChanged = false;
+        _temporalDenoisingManager.SetDynamicSceneChanged(false);
         UpdateSpheres();
         UpdateTriangles();
         UpdateTopLevelBvh();
@@ -2321,7 +2199,7 @@ public class GameManager : MonoBehaviour
 
         if (ShouldRunTemporalDenoiser())
         {
-            PrepareTemporalCameraState();
+            _temporalDenoisingManager.PrepareCameraState();
         }
 
         bool useFrameAccumulation = ShouldUseFrameAccumulation();
@@ -2362,7 +2240,7 @@ public class GameManager : MonoBehaviour
         if (!useDedicatedCausticsDebugKernel && ShouldRunTemporalDenoiser())
         {
             RunTemporalDenoiser();
-            CommitTemporalCameraState();
+            _temporalDenoisingManager.CommitCameraState();
         }
         else if (!useDedicatedCausticsDebugKernel && IsCausticPreservationDebugMode())
         {
@@ -2388,7 +2266,7 @@ public class GameManager : MonoBehaviour
         {
             _accumulatedFrameCount++;
         }
-        CommitRenderedCameraState();
+        _temporalDenoisingManager.CommitRenderedCameraState();
 
         // The dispatch above triggered (and blocked on) any first-time variant compile. Record
         // that this debug mode is now warm so future switches to it are instant, and clear the
@@ -5218,7 +5096,8 @@ public class GameManager : MonoBehaviour
 
         shader.SetMatrix("_CameraToWorld", renderTextureCamera.cameraToWorldMatrix);
         shader.SetMatrix("_CameraInverseProjection", renderTextureCamera.projectionMatrix.inverse);
-        shader.SetVector("_FrameJitterNdc", new Vector4(_currentTemporalJitterNdc.x, _currentTemporalJitterNdc.y, 0.0f, 0.0f));
+        Vector2 temporalJitter = _temporalDenoisingManager.CurrentJitterNdc;
+        shader.SetVector("_FrameJitterNdc", new Vector4(temporalJitter.x, temporalJitter.y, 0.0f, 0.0f));
         shader.SetInt("_UseTemporalJitter", ShouldRunTemporalDenoiser() ? 1 : 0);
 
         _skyboxLightColorAsVector = new Vector4(_skyboxLightColor.r / 255f, _skyboxLightColor.g / 255f, _skyboxLightColor.b / 255f, 1.0f);
@@ -5497,32 +5376,32 @@ public class GameManager : MonoBehaviour
             Destroy(_terrainAlphamapTexture);
             _terrainAlphamapTexture = null;
         }
-        TerrainData data = _terrain != null ? _terrain.Data : null;
+        var data = _terrain != null ? _terrain.Data : null;
         if (data == null)
         {
             return;
         }
 
-        RayTracingTerrain.TerrainCell[] cells = _terrain.BuildCells();
+        var cells = _terrain.BuildCells();
         _terrainCellBuffer = new ComputeBuffer(Mathf.Max(1, cells.Length), sizeof(float) * 2);
         _terrainCellBuffer.SetData(cells);
-        float[] heights = _terrain.BuildHeights();
+        var heights = _terrain.BuildHeights();
         _terrainHeightBuffer = new ComputeBuffer(Mathf.Max(1, heights.Length), sizeof(float));
         _terrainHeightBuffer.SetData(heights.Length > 0 ? heights : new[] { 0.0f });
-        int alphaWidth = Mathf.Max(1, data.alphamapWidth);
-        int alphaHeight = Mathf.Max(1, data.alphamapHeight);
+        var alphaWidth = Mathf.Max(1, data.alphamapWidth);
+        var alphaHeight = Mathf.Max(1, data.alphamapHeight);
         _terrainAlphamapTexture = new Texture2D(alphaWidth, alphaHeight, TextureFormat.RGBA32, false, true)
         {
             name = "Ray Tracing Terrain Alphamap",
             filterMode = FilterMode.Bilinear,
             wrapMode = TextureWrapMode.Clamp
         };
-        Color[] alphamap = _terrain.BuildAlphamap();
+        var alphamap = _terrain.BuildAlphamap();
         _terrainAlphamapTexture.SetPixels(alphamap.Length > 0 ? alphamap : new[] { Color.black });
         _terrainAlphamapTexture.Apply(false, true);
         if (profileStartup)
         {
-            Vector4 averageWeights = _terrain.GetAverageLayerWeights();
+            var averageWeights = _terrain.GetAverageLayerWeights();
             Debug.Log(
                 $"Terrain material upload: {data.terrainLayers.Length} layers, {alphaWidth}x{alphaHeight} alphamap, " +
                 $"average weights ({averageWeights.x:F2}, {averageWeights.y:F2}, {averageWeights.z:F2}, {averageWeights.w:F2}).",
@@ -5544,8 +5423,8 @@ public class GameManager : MonoBehaviour
 
     private int CalculateSampleOffset()
     {
-        long frameIndex = ShouldUseFrameAccumulation() ? _accumulatedFrameCount : _renderedFrameCount;
-        long sampleOffset = frameIndex * Mathf.Max(1, numberOfPasses);
+        var frameIndex = ShouldUseFrameAccumulation() ? _accumulatedFrameCount : _renderedFrameCount;
+        var sampleOffset = frameIndex * Mathf.Max(1, numberOfPasses);
         return (int)Math.Min(int.MaxValue, sampleOffset);
     }
 
@@ -5561,7 +5440,7 @@ public class GameManager : MonoBehaviour
             return Mathf.Max(0.0f, cameraApertureRadius);
         }
 
-        float focalLengthInWorldUnits = Mathf.Max(0.0f, renderTextureCamera.focalLength) * 0.001f;
+        var focalLengthInWorldUnits = Mathf.Max(0.0f, renderTextureCamera.focalLength) * 0.001f;
         return focalLengthInWorldUnits / (2.0f * Mathf.Max(0.1f, cameraFStop))
             * Mathf.Max(0.0f, cameraApertureScale);
     }
@@ -5652,20 +5531,20 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, renderTextureCamera.cameraToWorldMatrix);
             hash = AddHash(hash, renderTextureCamera.projectionMatrix);
             hash = AddHash(hash, _spheres.Count);
-            for (int i = 0; i < _spheres.Count; i++)
+            for (var i = 0; i < _spheres.Count; i++)
             {
                 hash = AddHash(hash, _spheres[i]);
             }
 
             hash = AddHash(hash, _lights.Count);
-            for (int i = 0; i < _lights.Count; i++)
+            for (var i = 0; i < _lights.Count; i++)
             {
-        hash = AddHash(hash, _lights[i]);
+                hash = AddHash(hash, _lights[i]);
             }
 
             hash = AddHash(hash, _triangles.Count);
             hash = AddHash(hash, _meshInfos.Count);
-            for (int i = 0; i < _meshObjects.Count; i++)
+            for (var i = 0; i < _meshObjects.Count; i++)
             {
                 hash = AddHash(hash, _meshObjects[i]);
             }
@@ -5678,27 +5557,27 @@ public class GameManager : MonoBehaviour
     {
         unchecked
         {
-            int hash = 17;
+            var hash = 17;
             hash = AddHash(hash, 5); // Progressive, low-discrepancy photon-map algorithm version.
             hash = AddHash(hash, causticPhotonCount);
             hash = AddHash(hash, causticGatherRadius);
             hash = AddHash(hash, causticSeed);
             hash = AddHash(hash, numBounces);
             hash = AddHash(hash, _spheres.Count);
-            for (int i = 0; i < _spheres.Count; i++)
+            for (var i = 0; i < _spheres.Count; i++)
             {
                 hash = AddHash(hash, _spheres[i]);
             }
 
             hash = AddHash(hash, _lights.Count);
-            for (int i = 0; i < _lights.Count; i++)
+            for (var i = 0; i < _lights.Count; i++)
             {
                 hash = AddHash(hash, _lights[i]);
             }
 
             hash = AddHash(hash, _triangles.Count);
             hash = AddHash(hash, _meshInfos.Count);
-            for (int i = 0; i < _meshObjects.Count; i++)
+            for (var i = 0; i < _meshObjects.Count; i++)
             {
                 hash = AddHash(hash, _meshObjects[i]);
             }
