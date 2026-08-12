@@ -72,6 +72,7 @@ public sealed class GameManagerEditor : Editor
         DrawSection(manager, "Denoising", false, DrawDenoising);
         DrawSection(manager, "Volumetric Fog", false, DrawVolumetricFog);
         DrawSection(manager, "Caustics", false, DrawCaustics);
+        DrawSection(manager, "Terrain", true, () => DrawTerrain(manager));
         DrawSection(manager, "Acceleration Structures", false, () =>
         {
             DrawProperty("topLevelBvhMinObjectCount");
@@ -254,6 +255,25 @@ public sealed class GameManagerEditor : Editor
                 DrawProperty("causticGatherRadius");
                 DrawProperty("causticIntensity");
             }
+    }
+
+    private static void DrawTerrain(GameManager manager)
+    {
+        RayTracingTerrain terrain = manager.GetComponentInChildren<RayTracingTerrain>(true);
+        if (terrain == null)
+        {
+            EditorGUILayout.HelpBox("Add a RayTracingTerrain beneath this GameManager to configure terrain rendering.", MessageType.Info);
+            return;
+        }
+
+        var terrainObject = new SerializedObject(terrain);
+        terrainObject.Update();
+        EditorGUILayout.PropertyField(terrainObject.FindProperty("Terrain"));
+        EditorGUILayout.PropertyField(terrainObject.FindProperty("AccelerationResolution"));
+        EditorGUILayout.PropertyField(terrainObject.FindProperty("MarchSteps"));
+        EditorGUILayout.PropertyField(terrainObject.FindProperty("RefinementSteps"));
+        EditorGUILayout.PropertyField(terrainObject.FindProperty("Seed"));
+        terrainObject.ApplyModifiedProperties();
     }
 
     private void DrawSection(GameManager manager, string title, bool defaultExpanded, Action content)

@@ -37,10 +37,22 @@ public sealed class RayTracingTerrain : MonoBehaviour
             Terrain.drawHeightmap = true;
         }
 
-        GameManager manager = GetComponentInParent<GameManager>();
+        TerrainManager manager = GetComponentInParent<TerrainManager>();
         if (manager == null)
         {
-            Debug.LogError($"RayTracingTerrain '{name}' must be a child of a GameManager.", this);
+            GameManager gameManager = GetComponentInParent<GameManager>();
+            if (gameManager != null)
+            {
+                manager = gameManager.GetComponent<TerrainManager>();
+                if (manager == null)
+                {
+                    manager = gameManager.gameObject.AddComponent<TerrainManager>();
+                }
+            }
+        }
+        if (manager == null)
+        {
+            Debug.LogError($"RayTracingTerrain '{name}' must be a child of a TerrainManager.", this);
             enabled = false;
             return;
         }
@@ -53,7 +65,7 @@ public sealed class RayTracingTerrain : MonoBehaviour
 
     private void OnDisable()
     {
-        GameManager manager = GetComponentInParent<GameManager>();
+        TerrainManager manager = GetComponentInParent<TerrainManager>();
         if (manager != null)
         {
             manager.UnregisterTerrain(this);

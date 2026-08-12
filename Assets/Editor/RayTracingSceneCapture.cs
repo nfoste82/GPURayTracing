@@ -88,7 +88,8 @@ public static class RayTracingSceneCapture
                 manager.numberOfPasses = 1;
                 manager._singleFrame = true;
                 RayTracingTerrain terrain = UnityEngine.Object.FindFirstObjectByType<RayTracingTerrain>();
-                if (terrain != null && !manager.RegisterTerrain(terrain))
+                TerrainManager terrainManager = manager.GetComponent<TerrainManager>();
+                if (terrain != null && terrainManager != null && !terrainManager.RegisterTerrain(terrain))
                 {
                     throw new InvalidOperationException($"Scene capture could not register its terrain: {trimmedPath}");
                 }
