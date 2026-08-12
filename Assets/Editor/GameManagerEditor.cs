@@ -90,7 +90,6 @@ public sealed class GameManagerEditor : Editor
         DrawSection(manager, "Setup", true, () =>
         {
             DrawProperty("shader");
-            DrawProperty("renderTextureCamera");
         });
 
         serializedObject.ApplyModifiedProperties();
@@ -122,20 +121,32 @@ public sealed class GameManagerEditor : Editor
 
     private void DrawCameraSettings(GameManager manager)
     {
-        EditorGUILayout.LabelField("Camera Controls", EditorStyles.boldLabel);
-        DrawProperty("cameraBehavior");
-        DrawProperty("cameraMovementSpeed");
-        if ((CameraBehavior)serializedObject.FindProperty("cameraBehavior").enumValueIndex == CameraBehavior.OrbitFocusPoint)
+        CameraManager cameraManager = manager.GetComponent<CameraManager>();
+        if (cameraManager == null)
         {
-            DrawProperty("cameraFocusPosition");
-            DrawProperty("cameraOrbitZoom");
+            EditorGUILayout.HelpBox("CameraManager is required on the GameManager.", MessageType.Error);
+            return;
         }
-        if (manager.renderTextureCamera != null)
+        var cameraObject = new SerializedObject(cameraManager);
+        cameraObject.Update();
+        if (cameraManager.renderTextureCamera == null && manager.renderTextureCamera != null)
         {
-            var cameraObject = new SerializedObject(manager.renderTextureCamera);
-            cameraObject.Update();
-            EditorGUILayout.PropertyField(cameraObject.FindProperty("field of view"), new GUIContent("Field Of View"));
-            cameraObject.ApplyModifiedProperties();
+            cameraObject.FindProperty("renderTextureCamera").objectReferenceValue = manager.renderTextureCamera;
+        }
+        EditorGUILayout.LabelField("Camera Controls", EditorStyles.boldLabel);
+        DrawCameraProperty(cameraObject, "cameraBehavior");
+        DrawCameraProperty(cameraObject, "cameraMovementSpeed");
+        if ((CameraBehavior)cameraObject.FindProperty("cameraBehavior").enumValueIndex == CameraBehavior.OrbitFocusPoint)
+        {
+            DrawCameraProperty(cameraObject, "cameraFocusPosition");
+            DrawCameraProperty(cameraObject, "cameraOrbitZoom");
+        }
+        if (cameraManager.renderTextureCamera != null)
+        {
+            var unityCameraObject = new SerializedObject(cameraManager.renderTextureCamera);
+            unityCameraObject.Update();
+            EditorGUILayout.PropertyField(unityCameraObject.FindProperty("field of view"), new GUIContent("Field Of View"));
+            unityCameraObject.ApplyModifiedProperties();
         }
         else
         {
@@ -144,34 +155,40 @@ public sealed class GameManagerEditor : Editor
 
         EditorGUILayout.Space();
         EditorGUILayout.LabelField("Focus and Lens", EditorStyles.boldLabel);
-        DrawProperty("cameraAutoFocus");
-        DrawProperty("enableClickToFocus");
-        using (new EditorGUI.DisabledScope(!serializedObject.FindProperty("enableClickToFocus").boolValue))
+        DrawCameraProperty(cameraObject, "cameraAutoFocus");
+        DrawCameraProperty(cameraObject, "enableClickToFocus");
+        using (new EditorGUI.DisabledScope(!cameraObject.FindProperty("enableClickToFocus").boolValue))
         {
-            DrawProperty("trackClickedFocusPoint");
+            DrawCameraProperty(cameraObject, "trackClickedFocusPoint");
         }
-        DrawProperty("autoFocusTransparentOpacityThreshold");
-        DrawProperty("cameraFocalDistance");
-        DrawProperty("cameraApertureMode");
+        DrawCameraProperty(cameraObject, "autoFocusTransparentOpacityThreshold");
+        DrawCameraProperty(cameraObject, "cameraFocalDistance");
+        DrawCameraProperty(cameraObject, "cameraApertureMode");
 
-        CameraApertureMode apertureMode = (CameraApertureMode)serializedObject
+        CameraApertureMode apertureMode = (CameraApertureMode)cameraObject
             .FindProperty("cameraApertureMode").enumValueIndex;
         if (apertureMode == CameraApertureMode.LensRadius)
         {
-            DrawProperty("cameraApertureRadius");
+            DrawCameraProperty(cameraObject, "cameraApertureRadius");
         }
         else if (apertureMode == CameraApertureMode.FStop)
         {
-            DrawProperty("cameraFStop");
-            DrawProperty("cameraApertureScale");
+            DrawCameraProperty(cameraObject, "cameraFStop");
+            DrawCameraProperty(cameraObject, "cameraApertureScale");
         }
 
-        DrawProperty("cameraApertureBladeCount");
-        if (serializedObject.FindProperty("cameraApertureBladeCount").intValue >= 3)
+        DrawCameraProperty(cameraObject, "cameraApertureBladeCount");
+        if (cameraObject.FindProperty("cameraApertureBladeCount").intValue >= 3)
         {
-            DrawProperty("cameraApertureBladeRotation");
+            DrawCameraProperty(cameraObject, "cameraApertureBladeRotation");
         }
-        DrawProperty("cameraAnamorphicRatio");
+        DrawCameraProperty(cameraObject, "cameraAnamorphicRatio");
+        cameraObject.ApplyModifiedProperties();
+    }
+
+    private static void DrawCameraProperty(SerializedObject cameraObject, string propertyPath)
+    {
+        EditorGUILayout.PropertyField(cameraObject.FindProperty(propertyPath));
     }
 
     private static void DrawDirectionalLighting(GameManager manager)
@@ -216,14 +233,15 @@ public sealed class GameManagerEditor : Editor
         DrawProperty("enableTemporalDenoising");
         using (new EditorGUI.DisabledScope(!serializedObject.FindProperty("enableTemporalDenoising").boolValue))
         {
-            DrawProperty("temporalMaxHistoryLength");
-            DrawProperty("temporalMotionDistance");
-            DrawProperty("temporalMotionAngle");
-            DrawProperty("temporalDepthThreshold");
-            DrawProperty("temporalNormalThreshold");
-            DrawProperty("temporalCameraCutDistance");
-            DrawProperty("temporalCameraCutAngle");
-            DrawProperty("temporalVarianceGuidedFiltering");
+            SerializedProperty temporalManager = serializedObject.FindProperty("_temporalDenoisingManager");
+            EditorGUILayout.PropertyField(temporalManager.FindPropertyRelative("temporalMaxHistoryLength"));
+            EditorGUILayout.PropertyField(temporalManager.FindPropertyRelative("temporalMotionDistance"));
+            EditorGUILayout.PropertyField(temporalManager.FindPropertyRelative("temporalMotionAngle"));
+            EditorGUILayout.PropertyField(temporalManager.FindPropertyRelative("temporalDepthThreshold"));
+            EditorGUILayout.PropertyField(temporalManager.FindPropertyRelative("temporalNormalThreshold"));
+            EditorGUILayout.PropertyField(temporalManager.FindPropertyRelative("temporalCameraCutDistance"));
+            EditorGUILayout.PropertyField(temporalManager.FindPropertyRelative("temporalCameraCutAngle"));
+            EditorGUILayout.PropertyField(temporalManager.FindPropertyRelative("temporalVarianceGuidedFiltering"));
         }
 
         if (serializedObject.FindProperty("enableSpatialDenoising").boolValue
@@ -248,13 +266,14 @@ public sealed class GameManagerEditor : Editor
 
     private void DrawCaustics()
     {
-            DrawProperty("enableCaustics");
-            using (new EditorGUI.DisabledScope(!serializedObject.FindProperty("enableCaustics").boolValue))
-            {
-                DrawProperty("causticPhotonCount");
-                DrawProperty("causticGatherRadius");
-                DrawProperty("causticIntensity");
-            }
+        DrawProperty("enableCaustics");
+        SerializedProperty caustics = serializedObject.FindProperty("_causticsManager");
+        using (new EditorGUI.DisabledScope(!serializedObject.FindProperty("enableCaustics").boolValue))
+        {
+            EditorGUILayout.PropertyField(caustics.FindPropertyRelative("_photonCount"), new GUIContent("Caustic Photon Count"));
+            EditorGUILayout.PropertyField(caustics.FindPropertyRelative("_gatherRadius"));
+            EditorGUILayout.PropertyField(caustics.FindPropertyRelative("_intensity"));
+        }
     }
 
     private static void DrawTerrain(GameManager manager)
@@ -295,6 +314,12 @@ public sealed class GameManagerEditor : Editor
     private void DrawProperty(string propertyPath, string label = null)
     {
         SerializedProperty property = serializedObject.FindProperty(propertyPath);
+        if (property == null)
+        {
+            EditorGUILayout.HelpBox($"Serialized property '{propertyPath}' could not be found on GameManager.", MessageType.Warning);
+            return;
+        }
+
         EditorGUILayout.PropertyField(property, label == null ? null : new GUIContent(label));
     }
 
@@ -305,28 +330,29 @@ public sealed class GameManagerEditor : Editor
 
     private void DrawVideoCaptureSettings(GameManager manager)
     {
+        SerializedProperty videoCapture = serializedObject.FindProperty("_videoCaptureManager");
         EditorGUILayout.PropertyField(
-            serializedObject.FindProperty("videoSamplesPerFrame"),
+            videoCapture.FindPropertyRelative("samplesPerFrame"),
             new GUIContent("Quality Samples Per Output Frame"));
         EditorGUILayout.PropertyField(
-            serializedObject.FindProperty("videoFrameTimeStep"),
+            videoCapture.FindPropertyRelative("frameTimeStep"),
             new GUIContent("Output Frame Time Step (seconds)"));
         EditorGUILayout.PropertyField(
-            serializedObject.FindProperty("videoDuration"),
+            videoCapture.FindPropertyRelative("duration"),
             new GUIContent("Video Duration (seconds)"));
-        EditorGUILayout.PropertyField(serializedObject.FindProperty("videoOutputFolder"));
-        EditorGUILayout.PropertyField(serializedObject.FindProperty("videoEncodeMp4"));
-        if (serializedObject.FindProperty("videoEncodeMp4").boolValue)
+        EditorGUILayout.PropertyField(videoCapture.FindPropertyRelative("outputFolder"));
+        EditorGUILayout.PropertyField(videoCapture.FindPropertyRelative("encodeMp4"));
+        if (videoCapture.FindPropertyRelative("encodeMp4").boolValue)
         {
-            EditorGUILayout.PropertyField(serializedObject.FindProperty("videoFfmpegPath"));
+            EditorGUILayout.PropertyField(videoCapture.FindPropertyRelative("ffmpegPath"));
         }
 
-        int frameCount = GameManager.CalculateVideoFrameCount(manager.videoDuration, manager.videoFrameTimeStep);
+        int frameCount = VideoCaptureManager.CalculateFrameCount(manager.VideoCapture.duration, manager.VideoCapture.frameTimeStep);
         var overlay = manager.GetComponent<RayTracingBenchmarkOverlay>();
         float averageFrameMs = overlay != null ? overlay.AverageFrameMs : 0.0f;
-        double estimateSeconds = GameManager.EstimateVideoCaptureSeconds(
+        double estimateSeconds = VideoCaptureManager.EstimateCaptureSeconds(
             frameCount,
-            manager.videoSamplesPerFrame,
+            manager.VideoCapture.samplesPerFrame,
             Mathf.Max(1, manager.numberOfPasses),
             averageFrameMs,
             manager.enableCaustics);
@@ -334,41 +360,41 @@ public sealed class GameManagerEditor : Editor
             ? FormatDuration(estimateSeconds)
             : "available after frame statistics have been collected in Play mode";
         EditorGUILayout.HelpBox(
-            $"Output frames: {frameCount:N0} ({manager.videoDuration:0.###} seconds / {manager.videoFrameTimeStep:0.######}-second timestep)\n" +
-            $"Quality: {manager.videoSamplesPerFrame:N0} samples accumulated into each output frame\n" +
+            $"Output frames: {frameCount:N0} ({manager.VideoCapture.duration:0.###} seconds / {manager.VideoCapture.frameTimeStep:0.######}-second timestep)\n" +
+            $"Quality: {manager.VideoCapture.samplesPerFrame:N0} samples accumulated into each output frame\n" +
             $"Estimated render time: {estimate}\n" +
             "Changing quality samples does not change the output frame count. Lossless PNG frames are retained; ffmpeg creates video.mp4 after capture. Encoding and disk-write time are not included in the estimate.",
             MessageType.Info);
 
-        if (manager.IsVideoEncodingActive)
+        if (manager.VideoCapture.IsEncodingActive)
         {
-            EditorGUILayout.HelpBox($"Encoding MP4 with ffmpeg...\n{manager.VideoOutputPath}", MessageType.Info);
+            EditorGUILayout.HelpBox($"Encoding MP4 with ffmpeg...\n{manager.VideoCapture.OutputPath}", MessageType.Info);
             Repaint();
         }
-        else if (manager.IsVideoCaptureActive)
+        else if (manager.VideoCapture.IsActive)
         {
-            float progress = manager.VideoCaptureFrameCount > 0
-                ? manager.VideoCaptureCompletedFrameCount / (float)manager.VideoCaptureFrameCount
+            float progress = manager.VideoCapture.FrameCount > 0
+                ? manager.VideoCapture.CompletedFrameCount / (float)manager.VideoCapture.FrameCount
                 : 0.0f;
             EditorGUI.ProgressBar(
                 EditorGUILayout.GetControlRect(false, 20.0f),
                 progress,
-                $"{manager.VideoCaptureCompletedFrameCount:N0} / {manager.VideoCaptureFrameCount:N0} frames");
-            EditorGUILayout.LabelField("Output", manager.VideoCaptureDirectory ?? string.Empty);
+                $"{manager.VideoCapture.CompletedFrameCount:N0} / {manager.VideoCapture.FrameCount:N0} frames");
+            EditorGUILayout.LabelField("Output", manager.VideoCapture.DirectoryPath ?? string.Empty);
             if (GUILayout.Button("Cancel Capture"))
             {
-                manager.CancelVideoCapture();
+                manager.VideoCapture.Cancel();
             }
             Repaint();
         }
         else
         {
-            using (new EditorGUI.DisabledScope(!EditorApplication.isPlaying || frameCount <= 0 || manager.IsVideoEncodingActive))
+            using (new EditorGUI.DisabledScope(!EditorApplication.isPlaying || frameCount <= 0 || manager.VideoCapture.IsEncodingActive))
             {
                 if (GUILayout.Button("Start Video Capture"))
                 {
                     serializedObject.ApplyModifiedProperties();
-                    manager.StartVideoCapture();
+                    manager.VideoCapture.Start();
                 }
             }
         }

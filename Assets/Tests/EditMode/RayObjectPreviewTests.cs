@@ -13,7 +13,7 @@ namespace GPURayTracing.Tests
             try
             {
                 Type rayMaterialType = Type.GetType("RayMaterial, Assembly-CSharp");
-                Type rayTracingObjectType = Type.GetType("RayTracingObject, Assembly-CSharp");
+                Type rayTracingObjectType = Type.GetType("PathTracingObject, Assembly-CSharp");
                 Assert.That(rayMaterialType, Is.Not.Null);
                 Assert.That(rayTracingObjectType, Is.Not.Null);
 

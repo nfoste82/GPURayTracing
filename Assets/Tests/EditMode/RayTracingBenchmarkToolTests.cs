@@ -37,8 +37,8 @@ public class RayTracingBenchmarkToolTests
     [TestCase(0.0f, 0.5f, 0)]
     public void VideoCapture_CalculatesOutputFrameCount(float duration, float timeStep, int expected)
     {
-        Type managerType = GetRuntimeType("GameManager");
-        MethodInfo method = managerType.GetMethod("CalculateVideoFrameCount", BindingFlags.Public | BindingFlags.Static);
+        Type managerType = GetRuntimeType("VideoCaptureManager");
+        MethodInfo method = managerType.GetMethod("CalculateFrameCount", BindingFlags.Public | BindingFlags.Static);
 
         Assert.That(method, Is.Not.Null);
         Assert.That(method.Invoke(null, new object[] { duration, timeStep }), Is.EqualTo(expected));
@@ -47,28 +47,28 @@ public class RayTracingBenchmarkToolTests
     [Test]
     public void VideoCapture_EstimatesRenderTimeFromCurrentSampleRate()
     {
-        Type managerType = GetRuntimeType("GameManager");
+        Type managerType = GetRuntimeType("VideoCaptureManager");
         MethodInfo method = managerType.GetMethod(
-            "EstimateVideoCaptureSeconds",
+            "EstimateCaptureSeconds",
             BindingFlags.Public | BindingFlags.Static,
             null,
-            new[] { typeof(int), typeof(int), typeof(int), typeof(float) },
+            new[] { typeof(int), typeof(int), typeof(int), typeof(float), typeof(bool) },
             null);
 
         Assert.That(method, Is.Not.Null);
-        double seconds = (double)method.Invoke(null, new object[] { 150, 128, 4, 20.0f });
+        double seconds = (double)method.Invoke(null, new object[] { 150, 128, 4, 20.0f, false });
         Assert.That(seconds, Is.EqualTo(96.0).Within(0.0001));
     }
 
     [Test]
     public void VideoCapture_WithCaustics_UsesOnePhotonBatchPerRequestedSample()
     {
-        Type managerType = GetRuntimeType("GameManager");
+        Type managerType = GetRuntimeType("VideoCaptureManager");
         MethodInfo dispatchSamplesMethod = managerType.GetMethod(
-            "GetVideoSamplesPerDispatch",
+            "GetSamplesPerDispatch",
             BindingFlags.NonPublic | BindingFlags.Static);
         MethodInfo estimateMethod = managerType.GetMethod(
-            "EstimateVideoCaptureSeconds",
+            "EstimateCaptureSeconds",
             BindingFlags.Public | BindingFlags.Static,
             null,
             new[] { typeof(int), typeof(int), typeof(int), typeof(float), typeof(bool) },
@@ -86,9 +86,9 @@ public class RayTracingBenchmarkToolTests
     [Test]
     public void VideoCapture_EncoderUsesTimestepAsFrameRateAndNumberedPngInput()
     {
-        Type managerType = GetRuntimeType("GameManager");
+        Type managerType = GetRuntimeType("VideoCaptureManager");
         MethodInfo method = managerType.GetMethod(
-            "BuildVideoEncoderArguments",
+            "BuildEncoderArguments",
             BindingFlags.NonPublic | BindingFlags.Static);
 
         Assert.That(method, Is.Not.Null);
@@ -144,7 +144,7 @@ public class RayTracingBenchmarkToolTests
         {
             Type managerType = GetRuntimeType("GameManager");
             Type materialType = GetRuntimeType("RayMaterial");
-            Type rayTracingObjectType = GetRuntimeType("RayTracingObject");
+            Type rayTracingObjectType = GetRuntimeType("PathTracingObject");
             Component manager = root.AddComponent(managerType);
             meshObject.transform.SetParent(root.transform);
 
@@ -191,7 +191,7 @@ public class RayTracingBenchmarkToolTests
         {
             Type managerType = GetRuntimeType("GameManager");
             Type lightType = GetRuntimeType("RayLight");
-            Type rayTracingObjectType = GetRuntimeType("RayTracingObject");
+            Type rayTracingObjectType = GetRuntimeType("PathTracingObject");
             Component manager = root.AddComponent(managerType);
             lightObject.transform.SetParent(root.transform);
 
@@ -257,7 +257,7 @@ public class RayTracingBenchmarkToolTests
         {
             Type managerType = GetRuntimeType("GameManager");
             Type materialType = GetRuntimeType("RayMaterial");
-            Type rayTracingObjectType = GetRuntimeType("RayTracingObject");
+            Type rayTracingObjectType = GetRuntimeType("PathTracingObject");
             Component manager = root.AddComponent(managerType);
             meshObject.transform.SetParent(root.transform);
 
@@ -310,7 +310,7 @@ public class RayTracingBenchmarkToolTests
         {
             Type managerType = GetRuntimeType("GameManager");
             Type materialType = GetRuntimeType("RayMaterial");
-            Type rayTracingObjectType = GetRuntimeType("RayTracingObject");
+            Type rayTracingObjectType = GetRuntimeType("PathTracingObject");
             Component manager = root.AddComponent(managerType);
             mesh = CreateTwoTriangleMesh();
 
@@ -346,7 +346,7 @@ public class RayTracingBenchmarkToolTests
         {
             Type managerType = GetRuntimeType("GameManager");
             Type lightType = GetRuntimeType("RayLight");
-            Type rayTracingObjectType = GetRuntimeType("RayTracingObject");
+            Type rayTracingObjectType = GetRuntimeType("PathTracingObject");
             Component manager = root.AddComponent(managerType);
             lightObject.transform.SetParent(root.transform);
             lightObject.AddComponent<SphereCollider>();
@@ -379,7 +379,7 @@ public class RayTracingBenchmarkToolTests
         {
             Type managerType = GetRuntimeType("GameManager");
             Type lightType = GetRuntimeType("RayLight");
-            Type rayTracingObjectType = GetRuntimeType("RayTracingObject");
+            Type rayTracingObjectType = GetRuntimeType("PathTracingObject");
             Component manager = root.AddComponent(managerType);
             lightObject.transform.SetParent(root.transform);
             mesh = CreateTwoTriangleMesh();

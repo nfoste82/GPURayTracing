@@ -81,10 +81,10 @@ public class RayTracingBenchmarkOverlay : MonoBehaviour
         _builder.Append("Caustics: ").Append(gameManager.enableCaustics ? "on" : "off");
         if (gameManager.enableCaustics)
         {
-            _builder.Append("  Photons: ").Append(gameManager.CausticGridPhotonCount)
-                .Append("  Target pairs: ").Append(gameManager.CausticTargetPairCount)
-                .Append("  Grid cells: ").Append(gameManager.CausticGridCellCount)
-                .Append("  OOB: ").Append(gameManager.CausticGridOutOfBoundsCount);
+            _builder.Append("  Photons: ").Append(gameManager.Caustics.GridPhotonCount)
+                .Append("  Target pairs: ").Append(gameManager.Caustics.TargetPairCount)
+                .Append("  Grid cells: ").Append(gameManager.Caustics.GridCellCount)
+                .Append("  OOB: ").Append(gameManager.Caustics.GridOutOfBoundsCount);
         }
         _builder.AppendLine();
         _builder.Append("Fog: ").Append(gameManager.IsVolumetricFogActive ? "on" : "off");

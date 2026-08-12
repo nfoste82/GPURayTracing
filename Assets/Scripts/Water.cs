@@ -51,6 +51,25 @@ public class Water : MonoBehaviour
 
     public float Depth => Mathf.Max(0.01f, Mathf.Abs(transform.lossyScale.y));
 
+    internal int AddAccumulationStateHash(int hash)
+    {
+        hash = GameManager.AddHash(hash, GetInstanceID());
+        hash = GameManager.AddHash(hash, TopCenter);
+        hash = GameManager.AddHash(hash, new Vector3(Size.x, Size.y, Depth));
+        hash = GameManager.AddHash(hash, Color.r);
+        hash = GameManager.AddHash(hash, Color.g);
+        hash = GameManager.AddHash(hash, Color.b);
+        hash = GameManager.AddHash(hash, Smoothness);
+        hash = GameManager.AddHash(hash, Opacity);
+        hash = GameManager.AddHash(hash, AbsorptionStrength);
+        hash = GameManager.AddHash(hash, RefractionIndex);
+        hash = GameManager.AddHash(hash, WaveAmplitude);
+        hash = GameManager.AddHash(hash, WaveScale);
+        hash = GameManager.AddHash(hash, WaveSpeed);
+        hash = GameManager.AddHash(hash, MarchSteps);
+        return GameManager.AddHash(hash, RefinementSteps);
+    }
+
     private void Reset()
     {
         transform.localScale = new Vector3(24.0f, 4.0f, 24.0f);

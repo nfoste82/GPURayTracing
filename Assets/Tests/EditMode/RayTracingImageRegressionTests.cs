@@ -26,6 +26,12 @@ namespace GPURayTracing.Tests
             public float specular;
             public float transmission;
             public int materialType;
+            public int textureIndex;
+            public int normalTextureIndex;
+            public int parallaxTextureIndex;
+            public Vector2 textureUvScale;
+            public float parallaxStrength;
+            public float minimumParallaxStrength;
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -74,6 +80,10 @@ namespace GPURayTracing.Tests
             public int textureIndex;
             public int metallicRoughnessTextureIndex;
             public int normalTextureIndex;
+            public int parallaxTextureIndex;
+            public Vector2 textureUvScale;
+            public float parallaxStrength;
+            public float minimumParallaxStrength;
             public int interpolateNormals;
             public int lightIndex;
         }
@@ -790,9 +800,10 @@ namespace GPURayTracing.Tests
             meshTextures = meshTextures ?? CreateMeshTextureArray();
             var meshDataTextures = CreateMeshTextureArray();
             var meshNormalTextures = CreateNormalTextureArray();
-            ComputeBuffer sphereBuffer = CreateBuffer(spheres, 64);
+            var meshParallaxTextures = CreateParallaxTextureArray();
+            ComputeBuffer sphereBuffer = CreateBuffer(spheres, 92);
             ComputeBuffer lightBuffer = CreateBuffer(lights, 88);
-            ComputeBuffer triangleBuffer = CreateBuffer(triangles, 232);
+            ComputeBuffer triangleBuffer = CreateBuffer(triangles, 252);
             ComputeBuffer meshBuffer = CreateBuffer(meshes, 48);
             ComputeBuffer bvhBuffer = CreateBuffer(bvhNodes, 48);
             ComputeBuffer topLevelBuffer = CreateDummyBuffer(48);
@@ -825,6 +836,7 @@ namespace GPURayTracing.Tests
                 shader.SetTexture(kernel, "_MeshAlbedoTextures", meshTextures);
                 shader.SetTexture(kernel, "_MeshMetallicRoughnessTextures", meshDataTextures);
                 shader.SetTexture(kernel, "_MeshNormalTextures", meshNormalTextures);
+                shader.SetTexture(kernel, "_MeshParallaxTextures", meshParallaxTextures);
                 shader.SetBuffer(kernel, "_Spheres", sphereBuffer);
                 shader.SetBuffer(kernel, "_Lights", lightBuffer);
                 shader.SetBuffer(kernel, "_Triangles", triangleBuffer);
@@ -921,6 +933,7 @@ namespace GPURayTracing.Tests
                 }
                 UnityEngine.Object.DestroyImmediate(meshDataTextures);
                 UnityEngine.Object.DestroyImmediate(meshNormalTextures);
+                UnityEngine.Object.DestroyImmediate(meshParallaxTextures);
             }
         }
 
@@ -997,9 +1010,9 @@ namespace GPURayTracing.Tests
                 Assert.Ignore("The active graphics device did not compile the caustics kernels. Run without -nographics.");
             }
 
-            ComputeBuffer sphereBuffer = CreateBuffer(spheres, 64);
+            ComputeBuffer sphereBuffer = CreateBuffer(spheres, 92);
             ComputeBuffer lightBuffer = CreateBuffer(lights, 88);
-            ComputeBuffer triangleBuffer = CreateBuffer(triangles, 232);
+            ComputeBuffer triangleBuffer = CreateBuffer(triangles, 252);
             ComputeBuffer meshBuffer = CreateBuffer(meshes, 48);
             ComputeBuffer bvhBuffer = CreateBuffer(bvhNodes, 48);
             ComputeBuffer topLevelBuffer = CreateDummyBuffer(48);
@@ -1058,6 +1071,7 @@ namespace GPURayTracing.Tests
             var map = new CausticMap(options.photonCount, targetPairs, targetTriangles);
             var meshDataTextures = CreateMeshTextureArray();
             var meshNormalTextures = CreateNormalTextureArray();
+            var meshParallaxTextures = CreateParallaxTextureArray();
             SetCausticParameters(shader, options);
             shader.SetInt("_NumSpheres", sphereCount);
             shader.SetInt("_NumLights", lightCount);
@@ -1084,6 +1098,7 @@ namespace GPURayTracing.Tests
             shader.SetBuffer(traceKernel, "_CausticTargetTriangles", map.targetTriangles);
             shader.SetTexture(traceKernel, "_MeshMetallicRoughnessTextures", meshDataTextures);
             shader.SetTexture(traceKernel, "_MeshNormalTextures", meshNormalTextures);
+            shader.SetTexture(traceKernel, "_MeshParallaxTextures", meshParallaxTextures);
             shader.Dispatch(clearKernel, 1, 1, 1);
             shader.Dispatch(traceKernel, Mathf.CeilToInt(options.photonCount / 32.0f), 1, 1);
             shader.Dispatch(clearGridKernel, 1024, 1, 1);
@@ -1091,6 +1106,7 @@ namespace GPURayTracing.Tests
             meshLightCdfBuffer.Release();
             UnityEngine.Object.DestroyImmediate(meshDataTextures);
             UnityEngine.Object.DestroyImmediate(meshNormalTextures);
+            UnityEngine.Object.DestroyImmediate(meshParallaxTextures);
             return map;
         }
 
@@ -1718,6 +1734,14 @@ namespace GPURayTracing.Tests
         {
             var texture = new Texture2DArray(1, 1, 1, TextureFormat.RGBA32, false, true);
             texture.SetPixels(new[] { Color.white }, 0);
+            texture.Apply(false, false);
+            return texture;
+        }
+
+        private static Texture2DArray CreateParallaxTextureArray()
+        {
+            var texture = new Texture2DArray(1, 1, 1, TextureFormat.RGBA32, false, true);
+            texture.SetPixels(new[] { Color.black }, 0);
             texture.Apply(false, false);
             return texture;
         }

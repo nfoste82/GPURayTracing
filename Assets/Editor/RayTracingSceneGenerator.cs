@@ -334,8 +334,9 @@ public static class RayTracingSceneGenerator
 
         var managerObject = new GameObject("Game Manager");
         var manager = managerObject.AddComponent<GameManager>();
+        var cameraManager = managerObject.GetComponent<CameraManager>();
         manager.shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
-        manager.renderTextureCamera = camera;
+        cameraManager.renderTextureCamera = camera;
         manager.InitSceneSettings(settings);
         manager.skyboxTexture = AssetDatabase.LoadAssetAtPath<Texture>(SkyboxPath);
         

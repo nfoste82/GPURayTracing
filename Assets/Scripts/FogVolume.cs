@@ -24,6 +24,17 @@ public class FogVolume : MonoBehaviour
         }
     }
 
+    internal int AddAccumulationStateHash(int hash)
+    {
+        hash = GameManager.AddHash(hash, GetInstanceID());
+        hash = GameManager.AddHash(hash, Center);
+        hash = GameManager.AddHash(hash, Size);
+        hash = GameManager.AddHash(hash, Density);
+        hash = GameManager.AddHash(hash, ScatteringAlbedo.r);
+        hash = GameManager.AddHash(hash, ScatteringAlbedo.g);
+        return GameManager.AddHash(hash, ScatteringAlbedo.b);
+    }
+
     private void Reset()
     {
         transform.localScale = new Vector3(20.0f, 10.0f, 20.0f);

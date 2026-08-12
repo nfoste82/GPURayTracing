@@ -1,9 +1,42 @@
+using System;
 using UnityEngine;
 
 namespace PathTracing.TemporalDenoising
 {
+    [Serializable]
     public sealed class TemporalDenoisingManager
     {
+        [Range(1, 64)]
+        [Tooltip("Maximum effective temporal samples per pixel. Higher values reduce noise but respond more slowly to valid lighting changes.")]
+        public int temporalMaxHistoryLength = 16;
+
+        [Tooltip("Camera translation at or above this per-frame distance uses temporal accumulation instead of still-frame accumulation.")]
+        [Min(0.00001f)]
+        public float temporalMotionDistance = 0.0001f;
+
+        [Tooltip("Camera rotation at or above this per-frame angle uses temporal accumulation instead of still-frame accumulation.")]
+        [Min(0.0001f)]
+        public float temporalMotionAngle = 0.01f;
+
+        [Range(0.01f, 1.0f)]
+        [Tooltip("Relative primary-hit depth difference allowed when validating reprojected history.")]
+        public float temporalDepthThreshold = 0.05f;
+
+        [Range(-1.0f, 1.0f)]
+        [Tooltip("Minimum primary-hit normal dot product allowed when validating reprojected history.")]
+        public float temporalNormalThreshold = 0.9f;
+
+        [Tooltip("Camera translation at or above this distance is treated as a cut and resets temporal history.")]
+        [Min(0.01f)]
+        public float temporalCameraCutDistance = 5.0f;
+
+        [Tooltip("Camera rotation at or above this angle is treated as a cut and resets temporal history.")]
+        [Range(1.0f, 180.0f)]
+        public float temporalCameraCutAngle = 45.0f;
+
+        [Tooltip("Applies the spatial A-Trous passes to temporally accumulated radiance, using temporal luminance variance to relax filtering only where noise remains.")]
+        public bool temporalVarianceGuidedFiltering = true;
+
         private static readonly int PreviousDepth = Shader.PropertyToID("PreviousDepth");
         private static readonly int Beauty = Shader.PropertyToID("Beauty");
         private static readonly int FeatureNormal = Shader.PropertyToID("FeatureNormal");
@@ -78,6 +111,17 @@ namespace PathTracing.TemporalDenoising
         public Vector2 CurrentJitterNdc => _currentJitterNdc;
         public bool HasResources => _radianceHistoryA != null;
         public bool HistoryValid => _historyValid;
+
+        public void ValidateSettings()
+        {
+            temporalDepthThreshold = Mathf.Max(0.01f, temporalDepthThreshold);
+            temporalNormalThreshold = Mathf.Clamp(temporalNormalThreshold, -1.0f, 1.0f);
+            temporalCameraCutDistance = Mathf.Max(0.01f, temporalCameraCutDistance);
+            temporalCameraCutAngle = Mathf.Clamp(temporalCameraCutAngle, 1.0f, 180.0f);
+            temporalMaxHistoryLength = Mathf.Clamp(temporalMaxHistoryLength, 1, 64);
+            temporalMotionDistance = Mathf.Max(0.00001f, temporalMotionDistance);
+            temporalMotionAngle = Mathf.Max(0.0001f, temporalMotionAngle);
+        }
 
         public void Initialize(GameManager gameManager)
         {
@@ -192,8 +236,8 @@ namespace PathTracing.TemporalDenoising
             _currentJitterNdc = GetJitter(_frameIndex, _gameManager.TextureSize);
             var stateHash = CalculateStateHash();
             var cameraCut = _historyValid
-                            && (Vector3.Distance(camera.transform.position, _previousCameraPosition) >= _gameManager.temporalCameraCutDistance
-                                || Quaternion.Angle(camera.transform.rotation, _previousCameraRotation) >= _gameManager.temporalCameraCutAngle);
+                            && (Vector3.Distance(camera.transform.position, _previousCameraPosition) >= temporalCameraCutDistance
+                                || Quaternion.Angle(camera.transform.rotation, _previousCameraRotation) >= temporalCameraCutAngle);
             if (!_hasStateHash || stateHash != _stateHash || cameraCut)
             {
                 ResetHistory();
@@ -288,9 +332,9 @@ namespace PathTracing.TemporalDenoising
             shader.SetTexture(validationKernel, TemporalDiagnostics, _diagnosticsTexture);
             shader.SetInt(TemporalHistoryValid, _historyValid ? 1 : 0);
             shader.SetInt(TemporalUnsupported, IsPathUnsupported() ? 1 : 0);
-            shader.SetFloat(TemporalDepthThreshold, _gameManager.temporalDepthThreshold);
-            shader.SetFloat(TemporalNormalThreshold, _gameManager.temporalNormalThreshold);
-            shader.SetInt(TemporalMaxHistoryLength, _gameManager.temporalMaxHistoryLength);
+            shader.SetFloat(TemporalDepthThreshold, temporalDepthThreshold);
+            shader.SetFloat(TemporalNormalThreshold, temporalNormalThreshold);
+            shader.SetInt(TemporalMaxHistoryLength, temporalMaxHistoryLength);
             shader.SetFloat(TemporalCameraRotationDelta, _hasRenderedCameraState
                 ? Quaternion.Angle(_gameManager.renderTextureCamera.transform.rotation, _lastRenderedCameraRotation) : 0.0f);
             shader.Dispatch(validationKernel, groupsX, groupsY, 1);
@@ -332,12 +376,12 @@ namespace PathTracing.TemporalDenoising
                 shader.SetTexture(visualizeKernel, PresentationResult, _gameManager.OutputTexture);
                 shader.SetInt(TemporalDebugMode, temporalDebugMode);
                 shader.SetFloat(Exposure, _gameManager.exposure);
-                shader.SetInt(TemporalMaxHistoryLength, _gameManager.temporalMaxHistoryLength);
+                shader.SetInt(TemporalMaxHistoryLength, temporalMaxHistoryLength);
                 shader.Dispatch(visualizeKernel, groupsX, groupsY, 1);
             }
             else if (ShouldUseAccumulation(debugMode))
             {
-                if (_gameManager.temporalVarianceGuidedFiltering)
+                if (temporalVarianceGuidedFiltering)
                 {
                     _gameManager.RunSpatialDenoiserInternal(nextRadiance, _varianceTexture);
                 }
@@ -359,8 +403,8 @@ namespace PathTracing.TemporalDenoising
         {
             var camera = _gameManager.renderTextureCamera;
             return _hasRenderedCameraState
-                   && (Vector3.Distance(camera.transform.position, _lastRenderedCameraPosition) >= _gameManager.temporalMotionDistance
-                       || Quaternion.Angle(camera.transform.rotation, _lastRenderedCameraRotation) >= _gameManager.temporalMotionAngle);
+                   && (Vector3.Distance(camera.transform.position, _lastRenderedCameraPosition) >= temporalMotionDistance
+                       || Quaternion.Angle(camera.transform.rotation, _lastRenderedCameraRotation) >= temporalMotionAngle);
         }
 
         private bool IsPathUnsupported()

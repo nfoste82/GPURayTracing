@@ -225,8 +225,8 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
         AppendSetting(builder, "frame_accumulation", gameManager.enableFrameAccumulation);
         AppendSetting(builder, "debug_render_mode", gameManager.debugRenderMode);
         AppendSetting(builder, "random_noise", gameManager.randomNoise);
-        AppendSetting(builder, "camera_autofocus", gameManager.cameraAutoFocus);
-        AppendSetting(builder, "camera_focal_distance", gameManager.cameraFocalDistance);
+        AppendSetting(builder, "camera_autofocus", gameManager.CameraManager.cameraAutoFocus);
+        AppendSetting(builder, "camera_focal_distance", gameManager.CameraManager.cameraFocalDistance);
         AppendSetting(builder, "light_falloff_scale", gameManager.lightFalloffScale);
         AppendSetting(builder, "exposure", gameManager.exposure);
         AppendSetting(builder, "firefly_clamp", gameManager.fireflyClamp);

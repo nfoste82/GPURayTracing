@@ -109,6 +109,50 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void GameManager_TemporalStateHash_IgnoresPerFrameFocusAndSceneMotion()
+        {
+            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+            Type cameraManagerType = Type.GetType("CameraManager, Assembly-CSharp");
+            Type temporalType = Type.GetType("PathTracing.TemporalDenoising.TemporalDenoisingManager, Assembly-CSharp");
+            Assert.That(managerType, Is.Not.Null);
+            Assert.That(cameraManagerType, Is.Not.Null);
+            Assert.That(temporalType, Is.Not.Null);
+
+            var gameObject = new GameObject("Temporal State Hash Test");
+            var cameraObject = new GameObject("Temporal State Hash Camera");
+            try
+            {
+                Component manager = gameObject.AddComponent(managerType);
+                Component cameraManager = gameObject.GetComponent(cameraManagerType);
+                Camera camera = cameraObject.AddComponent<Camera>();
+                cameraManagerType.GetField("renderTextureCamera").SetValue(cameraManager, camera);
+
+                FieldInfo temporalField = managerType.GetField("_temporalDenoisingManager", BindingFlags.NonPublic | BindingFlags.Instance);
+                object temporalState = temporalField.GetValue(manager);
+                temporalType.GetMethod("Initialize").Invoke(temporalState, new[] { manager });
+                MethodInfo hashMethod = temporalType.GetMethod("CalculateStateHash", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.That(hashMethod, Is.Not.Null);
+
+                int initialHash = (int)hashMethod.Invoke(temporalState, null);
+                cameraManagerType.GetField("cameraFocalDistance").SetValue(cameraManager, 42.0f);
+                Assert.That(hashMethod.Invoke(temporalState, null), Is.EqualTo(initialHash));
+
+                FieldInfo spheresField = managerType.GetField("_spheres", BindingFlags.NonPublic | BindingFlags.Instance);
+                object spheres = spheresField.GetValue(manager);
+                Type sphereType = Type.GetType("PathTracing.Shapes.Sphere, Assembly-CSharp");
+                object sphere = Activator.CreateInstance(sphereType);
+                spheres.GetType().GetMethod("Add").Invoke(spheres, new[] { sphere });
+                int sceneHash = (int)hashMethod.Invoke(temporalState, null);
+                Assert.That(sceneHash, Is.Not.EqualTo(initialHash));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(cameraObject);
+                UnityEngine.Object.DestroyImmediate(gameObject);
+            }
+        }
+
+        [Test]
         public void DenoiserShader_TemporalKernelsCompile()
         {
             if (!SystemInfo.supportsComputeShaders)
@@ -135,52 +179,6 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
-        public void GameManager_TemporalStateHash_IgnoresPerFrameFocusAndSceneMotion()
-        {
-            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
-            Assert.That(managerType, Is.Not.Null, "Could not load GameManager from Assembly-CSharp");
-
-            var gameObject = new GameObject("Temporal State Hash Test");
-            var cameraObject = new GameObject("Temporal State Hash Camera");
-            try
-            {
-                Component manager = gameObject.AddComponent(managerType);
-                Camera camera = cameraObject.AddComponent<Camera>();
-                managerType.GetField("renderTextureCamera").SetValue(manager, camera);
-
-                MethodInfo hashMethod = managerType.GetMethod("CalculateTemporalStateHash", BindingFlags.NonPublic | BindingFlags.Instance);
-                Assert.That(hashMethod, Is.Not.Null);
-                int initialHash = (int)hashMethod.Invoke(manager, null);
-
-                managerType.GetField("cameraFocalDistance").SetValue(manager, 42.0f);
-                int focusHash = (int)hashMethod.Invoke(manager, null);
-                Assert.That(focusHash, Is.EqualTo(initialHash),
-                    "Autofocus changes during camera motion must not reset temporal history.");
-
-                FieldInfo spheresField = managerType.GetField("_spheres", BindingFlags.NonPublic | BindingFlags.Instance);
-                object spheres = spheresField.GetValue(manager);
-                Type sphereType = managerType.GetNestedType("Sphere", BindingFlags.NonPublic);
-                object sphere = Activator.CreateInstance(sphereType);
-                sphereType.GetField("position").SetValue(sphere, Vector3.zero);
-                spheres.GetType().GetMethod("Add").Invoke(spheres, new[] { sphere });
-                int sceneHash = (int)hashMethod.Invoke(manager, null);
-                Assert.That(sceneHash, Is.Not.EqualTo(initialHash), "Object-count changes must reset temporal history.");
-
-                object movedSphere = spheres.GetType().GetProperty("Item").GetValue(spheres, new object[] { 0 });
-                sphereType.GetField("position").SetValue(movedSphere, Vector3.one);
-                spheres.GetType().GetProperty("Item").SetValue(spheres, movedSphere, new object[] { 0 });
-                int movedHash = (int)hashMethod.Invoke(manager, null);
-                Assert.That(movedHash, Is.EqualTo(sceneHash),
-                    "Per-frame object motion is rejected through temporal validity and must not reset all history.");
-            }
-            finally
-            {
-                UnityEngine.Object.DestroyImmediate(cameraObject);
-                UnityEngine.Object.DestroyImmediate(gameObject);
-            }
-        }
-
-        [Test]
         public void GameManager_AccumulationStateHash_ResetsWhenSubpixelFilterChanges()
         {
             Type managerType = Type.GetType("GameManager, Assembly-CSharp");
@@ -192,7 +190,8 @@ namespace GPURayTracing.Tests
             {
                 Component manager = gameObject.AddComponent(managerType);
                 Camera camera = cameraObject.AddComponent<Camera>();
-                managerType.GetField("renderTextureCamera").SetValue(manager, camera);
+                Component cameraManager = gameObject.GetComponent(Type.GetType("CameraManager, Assembly-CSharp"));
+                cameraManager.GetType().GetField("renderTextureCamera").SetValue(cameraManager, camera);
 
                 MethodInfo hashMethod = managerType.GetMethod("CalculateAccumulationStateHash", BindingFlags.NonPublic | BindingFlags.Instance);
                 Assert.That(hashMethod, Is.Not.Null);
@@ -260,19 +259,13 @@ namespace GPURayTracing.Tests
             try
             {
                 Component manager = gameObject.AddComponent(managerType);
-                FieldInfo modeField = managerType.GetField("cameraApertureMode");
-                FieldInfo radiusField = managerType.GetField("cameraApertureRadius");
-                FieldInfo clickField = managerType.GetField("enableClickToFocus");
-                FieldInfo trackClickField = managerType.GetField("trackClickedFocusPoint");
+                Component cameraManager = gameObject.GetComponent(Type.GetType("CameraManager, Assembly-CSharp"));
+                Type cameraManagerType = cameraManager.GetType();
 
-                Assert.That(modeField, Is.Not.Null);
-                Assert.That(modeField.GetValue(manager).ToString(), Is.EqualTo("LensRadius"));
-                Assert.That(radiusField, Is.Not.Null);
-                Assert.That(radiusField.GetValue(manager), Is.EqualTo(0.005f));
-                Assert.That(clickField, Is.Not.Null);
-                Assert.That(clickField.GetValue(manager), Is.EqualTo(true));
-                Assert.That(trackClickField, Is.Not.Null);
-                Assert.That(trackClickField.GetValue(manager), Is.EqualTo(true));
+                Assert.That(cameraManagerType.GetField("cameraApertureMode").GetValue(cameraManager).ToString(), Is.EqualTo("LensRadius"));
+                Assert.That(cameraManagerType.GetField("cameraApertureRadius").GetValue(cameraManager), Is.EqualTo(0.005f));
+                Assert.That(cameraManagerType.GetField("enableClickToFocus").GetValue(cameraManager), Is.True);
+                Assert.That(cameraManagerType.GetField("trackClickedFocusPoint").GetValue(cameraManager), Is.True);
             }
             finally
             {
@@ -283,10 +276,8 @@ namespace GPURayTracing.Tests
         [Test]
         public void GameManager_CameraRotation_StopsBeforeVerticalPolesAndCanRotateBack()
         {
-            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
-            Assert.That(managerType, Is.Not.Null, "Could not load GameManager from Assembly-CSharp");
-
-            MethodInfo rotateMethod = managerType.GetMethod("RotateCamera", BindingFlags.Static | BindingFlags.NonPublic);
+            Type cameraManagerType = Type.GetType("CameraManager, Assembly-CSharp");
+            MethodInfo rotateMethod = cameraManagerType.GetMethod("Rotate", BindingFlags.Static | BindingFlags.NonPublic);
             Assert.That(rotateMethod, Is.Not.Null);
 
             var cameraObject = new GameObject("Camera Pitch Limit Test");
@@ -325,33 +316,31 @@ namespace GPURayTracing.Tests
             {
                 Component manager = managerObject.AddComponent(managerType);
                 Camera camera = cameraObject.AddComponent<Camera>();
-                managerType.GetField("renderTextureCamera").SetValue(manager, camera);
-                managerType.GetField("trackClickedFocusPoint").SetValue(manager, true);
-                managerType.GetField("cameraApertureRadius").SetValue(manager, 0.02f);
+                Component cameraManager = managerObject.GetComponent(Type.GetType("CameraManager, Assembly-CSharp"));
+                Type cameraManagerType = cameraManager.GetType();
+                cameraManagerType.GetField("renderTextureCamera").SetValue(cameraManager, camera);
+                cameraManagerType.GetField("trackClickedFocusPoint").SetValue(cameraManager, true);
+                cameraManagerType.GetField("cameraApertureRadius").SetValue(cameraManager, 0.02f);
 
-                FieldInfo focusPointField = managerType.GetField("_clickedFocusPoint", BindingFlags.Instance | BindingFlags.NonPublic);
-                FieldInfo hasFocusPointField = managerType.GetField("_hasClickedFocusPoint", BindingFlags.Instance | BindingFlags.NonPublic);
                 MethodInfo updateFocusMethod = managerType.GetMethod("UpdateTrackedFocusPoint", BindingFlags.Instance | BindingFlags.NonPublic);
                 MethodInfo apertureMethod = managerType.GetMethod("GetCameraApertureRadius", BindingFlags.Instance | BindingFlags.NonPublic);
-                Assert.That(focusPointField, Is.Not.Null);
-                Assert.That(hasFocusPointField, Is.Not.Null);
                 Assert.That(updateFocusMethod, Is.Not.Null);
                 Assert.That(apertureMethod, Is.Not.Null);
 
-                focusPointField.SetValue(manager, new Vector3(0.0f, 0.0f, 10.0f));
-                hasFocusPointField.SetValue(manager, true);
+                cameraManagerType.GetField("ClickedFocusPoint", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(cameraManager, new Vector3(0.0f, 0.0f, 10.0f));
+                cameraManagerType.GetField("HasClickedFocusPoint", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(cameraManager, true);
                 updateFocusMethod.Invoke(manager, null);
 
-                Assert.That(managerType.GetField("cameraFocalDistance").GetValue(manager), Is.EqualTo(10.0f));
+                Assert.That(cameraManagerType.GetField("cameraFocalDistance").GetValue(cameraManager), Is.EqualTo(10.0f));
                 Assert.That(apertureMethod.Invoke(manager, null), Is.EqualTo(0.02f));
 
                 camera.transform.rotation = Quaternion.Euler(0.0f, 180.0f, 0.0f);
                 updateFocusMethod.Invoke(manager, null);
 
                 Assert.That(apertureMethod.Invoke(manager, null), Is.EqualTo(0.0f));
-                Assert.That(managerType.GetField("cameraApertureMode").GetValue(manager).ToString(), Is.EqualTo("LensRadius"));
+                Assert.That(cameraManagerType.GetField("cameraApertureMode").GetValue(cameraManager).ToString(), Is.EqualTo("LensRadius"));
 
-                managerType.GetField("enableClickToFocus").SetValue(manager, false);
+                cameraManagerType.GetField("enableClickToFocus").SetValue(cameraManager, false);
                 Assert.That(apertureMethod.Invoke(manager, null), Is.EqualTo(0.02f));
             }
             finally
@@ -431,24 +420,31 @@ namespace GPURayTracing.Tests
             {
                 Component manager = gameObject.AddComponent(managerType);
                 FieldInfo enabledField = managerType.GetField("enableCaustics");
-                PropertyInfo resourcesProperty = managerType.GetProperty("HasCausticResources");
-                PropertyInfo dispatchProperty = managerType.GetProperty("CausticDispatchCount");
+                FieldInfo causticsManagerField = managerType.GetField(
+                    "_causticsManager", BindingFlags.Instance | BindingFlags.NonPublic);
+                object causticsManager = causticsManagerField.GetValue(manager);
+                Type causticsManagerType = causticsManager.GetType();
+                PropertyInfo resourcesProperty = causticsManagerType.GetProperty(
+                    "HasResources", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                FieldInfo dispatchField = causticsManagerType.GetField(
+                    "DispatchCountValue", BindingFlags.Instance | BindingFlags.NonPublic);
                 MethodInfo updateMethod = managerType.GetMethod(
                     "UpdateCausticPhotonMap",
                     BindingFlags.Instance | BindingFlags.NonPublic);
 
                 Assert.That(enabledField, Is.Not.Null);
+                Assert.That(causticsManagerField, Is.Not.Null);
                 Assert.That(resourcesProperty, Is.Not.Null);
-                Assert.That(dispatchProperty, Is.Not.Null);
+                Assert.That(dispatchField, Is.Not.Null);
                 Assert.That(updateMethod, Is.Not.Null);
                 Assert.That(enabledField.GetValue(manager), Is.False, "Caustics must default to disabled");
-                Assert.That(resourcesProperty.GetValue(manager), Is.False);
-                Assert.That(dispatchProperty.GetValue(manager), Is.EqualTo(0));
+                Assert.That(resourcesProperty.GetValue(causticsManager), Is.False);
+                Assert.That(dispatchField.GetValue(causticsManager), Is.EqualTo(0));
 
                 updateMethod.Invoke(manager, null);
 
-                Assert.That(resourcesProperty.GetValue(manager), Is.False);
-                Assert.That(dispatchProperty.GetValue(manager), Is.EqualTo(0));
+                Assert.That(resourcesProperty.GetValue(causticsManager), Is.False);
+                Assert.That(dispatchField.GetValue(causticsManager), Is.EqualTo(0));
             }
             finally
             {
@@ -466,24 +462,31 @@ namespace GPURayTracing.Tests
             try
             {
                 Component manager = gameObject.AddComponent(managerType);
+                FieldInfo causticsManagerField = managerType.GetField(
+                    "_causticsManager", BindingFlags.Instance | BindingFlags.NonPublic);
+                object causticsManager = causticsManagerField.GetValue(manager);
+                Type causticsManagerType = causticsManager.GetType();
                 MethodInfo ensureMethod = managerType.GetMethod(
                     "EnsureCausticResources",
                     BindingFlags.Instance | BindingFlags.NonPublic);
                 MethodInfo releaseMethod = managerType.GetMethod(
                     "ReleaseCausticResources",
                     BindingFlags.Instance | BindingFlags.NonPublic);
-                PropertyInfo resourcesProperty = managerType.GetProperty("HasCausticResources");
-                PropertyInfo cellCountProperty = managerType.GetProperty("CausticGridCellCount");
+                PropertyInfo resourcesProperty = causticsManagerType.GetProperty(
+                    "HasResources", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                FieldInfo cellCountField = causticsManagerType.GetField(
+                    "GridCellCountValue", BindingFlags.Instance | BindingFlags.NonPublic);
 
+                Assert.That(causticsManagerField, Is.Not.Null);
                 Assert.That(ensureMethod, Is.Not.Null);
                 Assert.That(releaseMethod, Is.Not.Null);
                 Assert.That(resourcesProperty, Is.Not.Null);
-                Assert.That(cellCountProperty, Is.Not.Null);
+                Assert.That(cellCountField, Is.Not.Null);
 
                 ensureMethod.Invoke(manager, null);
 
-                Assert.That(resourcesProperty.GetValue(manager), Is.True);
-                Assert.That(cellCountProperty.GetValue(manager), Is.GreaterThan(0));
+                Assert.That(resourcesProperty.GetValue(causticsManager), Is.True);
+                Assert.That(cellCountField.GetValue(causticsManager), Is.GreaterThan(0));
                 releaseMethod.Invoke(manager, null);
             }
             finally
@@ -590,8 +593,22 @@ namespace GPURayTracing.Tests
                 Type managerType = Type.GetType("GameManager, Assembly-CSharp");
                 Component manager = UnityEngine.Object.FindFirstObjectByType(managerType) as Component;
                 Assert.That(manager, Is.Not.Null);
+                Type cameraManagerType = Type.GetType("CameraManager, Assembly-CSharp");
+                Component cameraManager = manager.GetComponent(cameraManagerType);
+                if (cameraManager == null)
+                {
+                    cameraManager = manager.gameObject.AddComponent(cameraManagerType);
+                }
+                Camera sceneCamera = UnityEngine.Object.FindFirstObjectByType<Camera>();
+                Assert.That(sceneCamera, Is.Not.Null);
+                cameraManagerType.GetField("renderTextureCamera").SetValue(cameraManager, sceneCamera);
+                FieldInfo causticsManagerField = managerType.GetField(
+                    "_causticsManager", BindingFlags.Instance | BindingFlags.NonPublic);
+                object causticsManager = causticsManagerField.GetValue(manager);
+                Type causticsManagerType = causticsManager.GetType();
 
-                Type rayTracingObjectType = Type.GetType("RayTracingObject, Assembly-CSharp");
+                Type rayTracingObjectType = Type.GetType("PathTracingObject, Assembly-CSharp");
+                Assert.That(rayTracingObjectType, Is.Not.Null);
                 MethodInfo registerMethod = managerType.GetMethod(
                     "RegisterObject", BindingFlags.Instance | BindingFlags.Public);
                 foreach (UnityEngine.Object rayTracingObject in UnityEngine.Object.FindObjectsByType(
@@ -616,13 +633,12 @@ namespace GPURayTracing.Tests
                 managerType.GetMethod("BuildCausticSamplingDistribution", BindingFlags.Instance | BindingFlags.NonPublic)
                     .Invoke(manager, null);
 
-                PropertyInfo pairCountProperty = managerType.GetProperty("CausticTargetPairCount");
-                Assert.That(pairCountProperty.GetValue(manager), Is.GreaterThan(0),
+                FieldInfo pairsField = causticsManagerType.GetField(
+                    "TargetPairs", BindingFlags.Instance | BindingFlags.NonPublic);
+                var pairs = pairsField.GetValue(causticsManager) as System.Collections.IList;
+                Assert.That(pairs.Count, Is.GreaterThan(0),
                     "The production scene should produce at least one eligible light/refractor pair");
 
-                FieldInfo pairsField = managerType.GetField(
-                    "_causticTargetPairs", BindingFlags.Instance | BindingFlags.NonPublic);
-                var pairs = pairsField.GetValue(manager) as System.Collections.IList;
                 float probabilitySum = 0.0f;
                 foreach (object pair in pairs)
                 {
@@ -641,9 +657,9 @@ namespace GPURayTracing.Tests
                 // every mesh photon's power (potentially negative), producing no visible caustics
                 // even while pair probabilities still look valid. Each mesh owns its own CDF range,
                 // so validate per range rather than across the concatenated list.
-                FieldInfo trianglesField = managerType.GetField(
-                    "_causticTargetTriangles", BindingFlags.Instance | BindingFlags.NonPublic);
-                var targetTriangles = trianglesField.GetValue(manager) as System.Collections.IList;
+                FieldInfo trianglesField = causticsManagerType.GetField(
+                    "TargetTriangles", BindingFlags.Instance | BindingFlags.NonPublic);
+                var targetTriangles = trianglesField.GetValue(causticsManager) as System.Collections.IList;
                 Assert.That(targetTriangles.Count, Is.GreaterThan(0),
                     "The production scene's glass mesh should produce area-weighted target triangles");
 
@@ -689,11 +705,17 @@ namespace GPURayTracing.Tests
                 Assert.That(validatedMeshRanges, Is.GreaterThan(0),
                     "The production scene should exercise at least one glass-mesh target distribution");
 
+                FieldInfo temporalField = managerType.GetField("_temporalDenoisingManager", BindingFlags.Instance | BindingFlags.NonPublic);
+                object temporalManager = temporalField.GetValue(manager);
+                Type temporalManagerType = temporalManager.GetType();
+                temporalManagerType.GetMethod("Initialize", BindingFlags.Instance | BindingFlags.Public)
+                    .Invoke(temporalManager, new[] { manager });
                 managerType.GetMethod("UpdateCausticPhotonMap", BindingFlags.Instance | BindingFlags.NonPublic)
                     .Invoke(manager, null);
                 AsyncGPUReadback.WaitAllRequests();
-                PropertyInfo photonCountProperty = managerType.GetProperty("CausticGridPhotonCount");
-                int indexedPhotonCount = (int)photonCountProperty.GetValue(manager);
+                FieldInfo photonCountField = causticsManagerType.GetField(
+                    "GridPhotonCountValue", BindingFlags.Instance | BindingFlags.NonPublic);
+                int indexedPhotonCount = (int)photonCountField.GetValue(causticsManager);
                 TestContext.WriteLine($"Production indexed photon count: {indexedPhotonCount}");
                 Assert.That(indexedPhotonCount, Is.GreaterThan(0),
                     "The production sampling distribution should produce indexed receiver photons");

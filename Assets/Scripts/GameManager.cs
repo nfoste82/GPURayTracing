@@ -19,11 +19,10 @@ using Debug = UnityEngine.Debug;
 using Light = PathTracing.Lighting.Light;
 
 [RequireComponent(typeof(TerrainManager))]
+[RequireComponent(typeof(CameraManager))]
 public class GameManager : MonoBehaviour
 {
-    private const float MaxCameraPitch = 89.0f;
-    private const float DefaultCameraOrbitZoom = 2.0f;
-
+    [SerializeField, HideInInspector] private CameraManager _cameraManager;
     public void InitSceneSettings(SceneSettings settings)
     {
         numberOfPasses = settings.NumberOfPasses;
@@ -44,27 +43,13 @@ public class GameManager : MonoBehaviour
         fogScatteringScale = settings.FogScatteringScale;
         fogInScatteringIntensity = settings.FogInScatteringIntensity;
         enableFogMultipleScattering = settings.EnableFogMultipleScattering;
-        cameraAutoFocus = settings.CameraAutoFocus;
-        cameraFocalDistance = settings.CameraFocalDistance;
-        cameraApertureMode = settings.CameraApertureMode;
-        cameraApertureRadius = settings.CameraApertureRadius;
-        cameraApertureBladeCount = settings.CameraApertureBladeCount;
-        cameraApertureBladeRotation = settings.CameraApertureBladeRotation;
-        cameraAnamorphicRatio = settings.CameraAnamorphicRatio;
-        cameraMovementSpeed = settings.CameraMovementSpeed;
-        cameraBehavior = settings.CameraBehavior;
-        cameraFocusPosition = settings.CameraFocusPosition;
-        if (cameraBehavior == CameraBehavior.OrbitFocusPoint && renderTextureCamera != null)
-        {
-            InitializeOrbitCameraFromSceneSettings(settings);
-        }
         lightFalloffScale = settings.LightFalloffScale;
         exposure = settings.Exposure;
         fireflyClamp = settings.FireflyClamp;
         randomNoise = settings.RandomNoise;
         _skyboxLightColor = settings.SkyboxLightColor;
-        _activeCameraBehavior = cameraBehavior;
-        _hasActiveCameraBehavior = renderTextureCamera != null;
+
+        CameraManager.InitSceneSettings(settings);
     }
 
     [SerializeField, HideInInspector]
@@ -77,7 +62,25 @@ public class GameManager : MonoBehaviour
     public bool profileStartup = true;
 
     public ComputeShader shader;
-    public Camera renderTextureCamera;
+
+    public CameraManager CameraManager
+    {
+        get
+        {
+            if (_cameraManager == null)
+            {
+                _cameraManager = GetComponent<CameraManager>();
+            }
+
+            return _cameraManager;
+        }
+    }
+
+    public Camera renderTextureCamera
+    {
+        get => CameraManager.renderTextureCamera;
+        set => CameraManager.renderTextureCamera = value;
+    }
 
     [Header("Spatial denoising")]
     [Tooltip("Applies an edge-aware spatial A-trous filter to linear HDR beauty. This does not use temporal history.")]
@@ -107,42 +110,11 @@ public class GameManager : MonoBehaviour
     [Tooltip("Uses camera-only temporal reprojection and bounded HDR accumulation while the camera moves, then allows progressive still accumulation when it stops.")]
     public bool enableTemporalDenoising = false;
 
-    [Range(1, 64)]
-    [Tooltip("Maximum effective temporal samples per pixel. Higher values reduce noise but respond more slowly to valid lighting changes.")]
-    public int temporalMaxHistoryLength = 16;
-
-    [Tooltip("Camera translation at or above this per-frame distance uses temporal accumulation instead of still-frame accumulation.")]
-    [Min(0.00001f)]
-    public float temporalMotionDistance = 0.0001f;
-
-    [Tooltip("Camera rotation at or above this per-frame angle uses temporal accumulation instead of still-frame accumulation.")]
-    [Min(0.0001f)]
-    public float temporalMotionAngle = 0.01f;
-
-    [Range(0.01f, 1.0f)]
-    [Tooltip("Relative primary-hit depth difference allowed when validating reprojected history.")]
-    public float temporalDepthThreshold = 0.05f;
-
-    [Range(-1.0f, 1.0f)]
-    [Tooltip("Minimum primary-hit normal dot product allowed when validating reprojected history.")]
-    public float temporalNormalThreshold = 0.9f;
-
-    [Tooltip("Camera translation at or above this distance is treated as a cut and resets temporal history.")]
-    [Min(0.01f)]
-    public float temporalCameraCutDistance = 5.0f;
-
-    [Tooltip("Camera rotation at or above this angle is treated as a cut and resets temporal history.")]
-    [Range(1.0f, 180.0f)]
-    public float temporalCameraCutAngle = 45.0f;
-
-    [Tooltip("Applies the spatial A-Trous passes to temporally accumulated radiance, using temporal luminance variance to relax filtering only where noise remains.")]
-    public bool temporalVarianceGuidedFiltering = true;
-
     [Header("Caustic preservation")]
     [Tooltip("Prevents the denoiser from diffusing isolated HDR caustic candidates into neighboring receiver pixels. Higher values preserve only stronger local outliers.")]
     [Range(1.5f, 32.0f)]
     public float causticPreservationThreshold = 4.0f;
-    
+
     [Header("Quality settings (Higher quality -> Slower)")]
     [Tooltip("Percentage of the camera viewport traced before bilinear reconstruction to the display resolution. Lower values reduce ray work but soften fine detail.")]
     [Range(25.0f, 100.0f)]
@@ -184,7 +156,7 @@ public class GameManager : MonoBehaviour
     [Tooltip("Diagnostic: cap how many lights each shading point samples. 0 = sample all lights (normal). Lower values confirm the per-hit light loop is the bottleneck.")]
     [Range(0, 256)]
     public int maxLightSamples = 0;
-    
+
     [Tooltip("How direct lighting samples scene lights. AllLights is accurate but scales with light count; UniformRandom is much faster in many-light scenes but noisy; ImportanceSampled favors bright/nearby lights for much less noise per sample.")]
     public LightSamplingStrategy lightSamplingStrategy = LightSamplingStrategy.ImportanceSampled;
 
@@ -194,19 +166,6 @@ public class GameManager : MonoBehaviour
 
     [Tooltip("Builds a photon map for sphere and triangle-light caustics through glass, closed meshes, and the registered water volume. Disabled by default.")]
     public bool enableCaustics = false;
-
-    [Range(64, 4194200)]
-    [Tooltip("Photon attempts traced for each rendered frame. Independent batches are averaged by final-color frame accumulation.")]
-    public int causticPhotonCount = 65536;
-
-    [Range(0.01f, 2.0f)]
-    public float causticGatherRadius = 0.025f;
-
-    [HideInInspector]
-    public int causticSeed = 1;
-
-    [Range(0.0f, 10.0f)]
-    public float causticIntensity = 4.0f;
 
     [Tooltip("Globally enables the registered FogVolume without disabling its component or changing shader resources.")]
     public bool enableVolumetricFog = true;
@@ -225,72 +184,13 @@ public class GameManager : MonoBehaviour
 
     [Tooltip("Allows paths to scatter repeatedly in fog. More physical, but slower, noisier, and more likely to wash out high-contrast light shafts.")]
     public bool enableFogMultipleScattering = false;
-    
+
     // Must match MaxImportanceLights in RayTracingCompute.compute. Lights beyond this count
     // are ignored by the ImportanceSampled strategy.
     private const int MaxImportanceLights = 128;
     private bool _warnedImportanceLightOverflow = false;
 
     public DebugRenderMode debugRenderMode = DebugRenderMode.FinalColor;
-
-    [Tooltip("Camera movement speed in world units per second.")]
-    [Min(0.01f)]
-    public float cameraMovementSpeed = 3.0f;
-
-    
-
-    [Tooltip("Selects how keyboard input controls the camera.")]
-    public CameraBehavior cameraBehavior = CameraBehavior.Free;
-
-    [Tooltip("The world-space point used by the orbit camera.")]
-    public Vector3 cameraFocusPosition;
-
-    [Tooltip("Distance from the orbit focus point. Keyboard zoom starts at 2 units when orbit mode is entered.")]
-    [Min(0.1f)]
-    public float cameraOrbitZoom = DefaultCameraOrbitZoom;
-    
-    [Tooltip("Continuously focuses the center of the image. A successful click-to-focus selection disables this so the selected distance remains active.")]
-    public bool cameraAutoFocus = true;
-
-    [Tooltip("Left-click the rendered Game view to focus on the first qualifying ray-traced surface under the pointer.")]
-    public bool enableClickToFocus = true;
-
-    [Tooltip("Keeps a successful click-to-focus world point in focus as the camera moves. While the point is outside the camera frustum, depth of field temporarily uses a pinhole aperture without changing the selected aperture mode.")]
-    public bool trackClickedFocusPoint = true;
-
-    [Tooltip("Autofocus ignores ray-traced objects with opacity at or below this value, allowing focus through mostly transparent glass.")]
-    [Range(0.0f, 1.0f)]
-    public float autoFocusTransparentOpacityThreshold = 0.5f;
-    
-    [Min(0.1f)]
-    public float cameraFocalDistance = 100f;
-
-    [Tooltip("Pinhole disables depth-of-field blur. Lens Radius gives direct artistic control. F-Stop derives aperture size from the Unity camera focal length.")]
-    public CameraApertureMode cameraApertureMode = CameraApertureMode.LensRadius;
-
-    [Tooltip("World-space aperture radius used in Lens Radius mode.")]
-    [Range(0.0f, 0.1f)]
-    public float cameraApertureRadius = 0.005f;
-
-    [Tooltip("Photographic f-number used in F-Stop mode. Lower values create shallower depth of field.")]
-    [Range(0.7f, 32.0f)]
-    public float cameraFStop = 2.8f;
-
-    [Tooltip("Scales the physical aperture derived from focal length and f-stop. A value of 1 assumes one world unit is one meter.")]
-    [Range(0.01f, 100.0f)]
-    public float cameraApertureScale = 1.0f;
-
-    [Tooltip("0 uses a circular aperture. Values from 3 to 16 produce polygonal bokeh.")]
-    [Range(0, 16)]
-    public int cameraApertureBladeCount = 0;
-
-    [Tooltip("Rotates polygonal aperture blades and their bokeh shape, in degrees.")]
-    [Range(0.0f, 360.0f)]
-    public float cameraApertureBladeRotation = 0.0f;
-
-    [Tooltip("Stretches bokeh horizontally above 1 and vertically below 1 while preserving aperture area.")]
-    [Range(0.25f, 4.0f)]
-    public float cameraAnamorphicRatio = 1.0f;
 
     [Tooltip("Higher values make direct light fall off faster with distance.")]
     [Range(0.001f, 1.0f)]
@@ -303,21 +203,6 @@ public class GameManager : MonoBehaviour
     [Tooltip("Maximum HDR luminance of one path sample before averaging. Lower positive values clamp fireflies more strongly; 0 disables the clamp.")]
     [Range(0.0f, 8.0f)]
     public float fireflyClamp = 1.0f;
-
-    private float previousFocalDistance = 100f;
-    private float timeSincePreviousFocusDistance = 1f;
-    private bool _hasAutoFocusState;
-    private bool _autoFocusSceneChanged;
-    private Vector3 _lastAutoFocusCameraPosition;
-    private Quaternion _lastAutoFocusCameraRotation;
-    private int _lastAutoFocusNumberOfPasses;
-    private int _lastAutoFocusWaterStateHash;
-    private float _autoFocusTargetDistance;
-    private CameraBehavior _activeCameraBehavior;
-    private bool _hasActiveCameraBehavior;
-    private float _orbitYaw;
-    private float _orbitPitch;
-    private float _orbitDistance = DefaultCameraOrbitZoom;
 
     public bool randomNoise = false;
 
@@ -366,7 +251,8 @@ public class GameManager : MonoBehaviour
     private RenderTexture _denoiserIteration3Texture;
     private RenderTexture _causticPreservationMaskTexture;
     private ComputeShader _spatialDenoiserShader;
-    private readonly TemporalDenoisingManager _temporalDenoisingManager = new ();
+    [SerializeField]
+    private TemporalDenoisingManager _temporalDenoisingManager = new TemporalDenoisingManager();
     private bool _temporalDynamicSceneChanged;
     private bool _hasRenderedCameraState;
     private Vector3 _lastRenderedCameraPosition;
@@ -415,41 +301,8 @@ public class GameManager : MonoBehaviour
     private ComputeBuffer _shadowBvhNodeBuffer;
     private ComputeBuffer _meshLightTriangleCdfBuffer;
     
-    // Camera focus
-    private ComputeBuffer _focusQueryBuffer;
-    private bool _focusQueryPending;
-    private bool _focusQueryInFlight;
-    private Vector2 _pendingFocusQueryUv;
-    private Vector3 _focusQueryCameraPosition;
-    private Vector3 _focusQueryCameraForward;
-    private Vector3 _clickedFocusPoint;
-    private bool _hasClickedFocusPoint;
-    private bool _clickedFocusPointInFrustum;
-    private int _focusQueryGeneration;
-    private AsyncGPUReadbackRequest _focusReadbackRequest;
-    
-    // Caustics data
-    private ComputeBuffer _causticPhotonBuffer;
-    private ComputeBuffer _causticPhotonMetadataBuffer;
-    private ComputeBuffer _causticGridCellHeadBuffer;
-    private ComputeBuffer _causticPhotonNextBuffer;
-    private ComputeBuffer _causticTargetPairBuffer;
-    private ComputeBuffer _causticTargetTriangleBuffer;
-    private readonly List<CausticTargetPair> _causticTargetPairs = new ();
-    private readonly List<CausticTargetTriangle> _causticTargetTriangles = new ();
-    private Vector3 _causticGridMin;
-    private Vector3Int _causticGridDimensions;
-    private float _causticGridCellSize;
-    private int _causticGridCellCount;
-    private int _causticGridOutOfBoundsCount;
-    private int _causticGridPhotonCount;
-    private int _causticPhotonStateHash;
-    private bool _hasCausticPhotonStateHash;
-    private int _causticFrameIndex;
-    private bool _previousCausticsEnabled;
-    private int _causticDispatchCount;
-    private bool _causticMetadataReadbackInFlight;
-    private int _causticMetadataReadbackGeneration;
+    [SerializeField, HideInInspector]
+    private CausticsManager _causticsManager = new();
 
     // Acceleration structures only need rebuilding when object bounds, membership, or their
     // activation thresholds change. Material-only edits keep the existing bounds valid.
@@ -473,48 +326,8 @@ public class GameManager : MonoBehaviour
     [Tooltip("Freezes simulation time and progressively refines the current view. Camera and scene changes reset accumulation and render the updated view.")]
     public bool _singleFrame = false;
     
-    // Video capture data
-    [Tooltip("Total path-tracing samples per pixel accumulated for each output frame.")]
-    [Min(1)]
-    public int videoSamplesPerFrame = 128;
-
-    [Tooltip("Simulation time advanced between output frames, in seconds.")]
-    [Min(0.001f)]
-    public float videoFrameTimeStep = 1.0f / 30.0f;
-
-    [Tooltip("Total simulated duration to capture, in seconds.")]
-    [Min(0.1f)]
-    public float videoDuration = 5.0f;
-
-    [Tooltip("Absolute output folder, or a folder relative to Application.persistentDataPath.")]
-    public string videoOutputFolder = "VideoFrames";
-
-    [Tooltip("Encodes the completed PNG sequence as an H.264 MP4 while retaining the lossless source frames.")]
-    public bool videoEncodeMp4 = true;
-
-    [Tooltip("Optional ffmpeg executable path. Leave blank to search PATH and common Homebrew locations.")]
-    public string videoFfmpegPath = "";
-
-    private bool _previousSingleFrame;
-    private float _singleFrameRenderTime;
-    private bool _videoCaptureActive;
-    private bool _videoCaptureAwaitingSimulationStep;
-    private int _videoCaptureFrameIndex;
-    private int _videoCaptureFrameCount;
-    private int _videoCaptureDispatchesPerFrame;
-    private string _videoCaptureDirectory;
-    private bool _videoPreviousSingleFrame;
-    private float _videoPreviousSingleFrameRenderTime;
-    private bool _videoPreviousFrameAccumulation;
-    private bool _videoPreviousTemporalDenoising;
-    private int _videoPreviousNumberOfPasses;
-    private int _videoPreviousTargetFrameRate;
-    private int _videoPreviousVSyncCount;
-    private float _videoPreviousTimeScale;
-    private float _videoPreviousCaptureDeltaTime;
-    private Process _videoEncodingProcess;
-    private bool _videoEncodingActive;
-    private string _videoOutputPath;
+    internal bool _previousSingleFrame;
+    internal float _singleFrameRenderTime;
 
     // Compute-shader variants compile synchronously on their first Dispatch, which freezes the
     // main thread (the spinning-wheel stall) the first time a debug render mode is selected. We
@@ -527,11 +340,19 @@ public class GameManager : MonoBehaviour
     private bool _appliedFogEnabled;
     private bool _pendingVariantWarmup;
 
+    private TerrainManager _terrainManager;
+    [SerializeField, HideInInspector]
+    private VideoCaptureManager _videoCaptureManager = new();
+    public VideoCaptureManager VideoCapture => _videoCaptureManager;
+    public CausticsManager Caustics => _causticsManager;
+    public int causticPhotonCount { get => _causticsManager.PhotonCount; set => _causticsManager.PhotonCount = value; }
+    public float causticGatherRadius { get => _causticsManager.GatherRadius; set => _causticsManager.GatherRadius = value; }
+    public int causticSeed { get => _causticsManager.Seed; set => _causticsManager.Seed = value; }
+    public float causticIntensity { get => _causticsManager.Intensity; set => _causticsManager.Intensity = value; }
+
     // True for the single frame where the "Compiling shader variant" overlay should be shown
     // before the blocking compile happens. Read by RayTracingBenchmarkOverlay.
     public bool IsCompilingShaderVariant => _pendingVariantWarmup;
-
-
     public int SphereCount => _spheres.Count;
     public int LightCount => _lights.Count;
     public int MeshCount => _meshInfos.Count;
@@ -555,22 +376,7 @@ public class GameManager : MonoBehaviour
     internal Water WaterInternal => _water;
     public Vector2Int DisplayTextureSize => _displayTextureSize;
     public int AccumulatedFrameCount => _accumulatedFrameCount;
-    public bool IsVideoCaptureActive => _videoCaptureActive;
-    public int VideoCaptureCompletedFrameCount => _videoCaptureFrameIndex;
-    public int VideoCaptureFrameCount => _videoCaptureActive ? _videoCaptureFrameCount : CalculateVideoFrameCount(videoDuration, videoFrameTimeStep);
-    public string VideoCaptureDirectory => _videoCaptureDirectory;
-    public bool IsVideoEncodingActive => _videoEncodingActive;
-    public string VideoOutputPath => _videoOutputPath;
-    public bool HasCausticResources => _causticPhotonBuffer != null && _causticPhotonMetadataBuffer != null
-        && _causticGridCellHeadBuffer != null && _causticPhotonNextBuffer != null
-        && _causticTargetPairBuffer != null && _causticTargetTriangleBuffer != null;
-    public int CausticDispatchCount => _causticDispatchCount;
-    public int CausticGridCellCount => _causticGridCellCount;
-    public int CausticGridPhotonCount => _causticGridPhotonCount;
-    public int CausticGridOutOfBoundsCount => _causticGridOutOfBoundsCount;
-    public int CausticTargetPairCount => _causticTargetPairs.Count;
     public int SphereLightCount => _lightObjects.Count;
-    public int DirectionalLightCount => _directionalLights.Count;
     
     public int MeshLightCount
     {
@@ -648,7 +454,6 @@ public class GameManager : MonoBehaviour
 
     private Water _water;
     private FogVolume _fogVolume;
-    private TerrainManager _terrainManager;
     private readonly Stopwatch _startupStopwatch = Stopwatch.StartNew();
     private readonly List<string> _startupProfilePhases = new ();
     private double _startupRegistrationMilliseconds;
@@ -663,6 +468,8 @@ public class GameManager : MonoBehaviour
 
     private void Start()
     {
+        _videoCaptureManager.Initialize(this);
+        CameraManager.FocusRequested += QueueFocusQuery;
         _terrainManager = GetComponent<TerrainManager>();
         _terrainManager.TerrainChanged += ResetFrameAccumulation;
         _temporalDenoisingManager.Initialize(this);
@@ -675,12 +482,15 @@ public class GameManager : MonoBehaviour
         _startupProfilePending = profileStartup;
         EnsureBenchmarkComponents();
         SyncUnitySkyboxPreview();
-        long outputTextureStart = Stopwatch.GetTimestamp();
+
+        var outputTextureStart = Stopwatch.GetTimestamp();
         EnsureOutputTextureSize(Screen.width, Screen.height);
         AddStartupProfilePhase("output textures", outputTextureStart);
-        long bakedBvhLoadStart = Stopwatch.GetTimestamp();
+
+        var bakedBvhLoadStart = Stopwatch.GetTimestamp();
         TryLoadBakedMeshBvhs();
         AddStartupProfilePhase($"baked mesh BVH load ({_bvhBakeLoadStatus})", bakedBvhLoadStart);
+
         _startupInitializationPending = true;
         _startupInitializationStatus = "Preparing ray tracing scene data";
         StartCoroutine(InitializeStartupBuffers());
@@ -720,18 +530,10 @@ public class GameManager : MonoBehaviour
         spatialDenoiserAlbedoSigma = Mathf.Max(0.01f, spatialDenoiserAlbedoSigma);
         spatialDenoiserLuminanceSigma = Mathf.Max(0.01f, spatialDenoiserLuminanceSigma);
         subpixelJitterScale = Mathf.Clamp(subpixelJitterScale, 0.0f, 2.0f);
-        temporalDepthThreshold = Mathf.Max(0.01f, temporalDepthThreshold);
-        temporalNormalThreshold = Mathf.Clamp(temporalNormalThreshold, -1.0f, 1.0f);
-        temporalCameraCutDistance = Mathf.Max(0.01f, temporalCameraCutDistance);
-        temporalCameraCutAngle = Mathf.Clamp(temporalCameraCutAngle, 1.0f, 180.0f);
-        temporalMaxHistoryLength = Mathf.Clamp(temporalMaxHistoryLength, 1, 64);
-        cameraOrbitZoom = Mathf.Max(0.1f, cameraOrbitZoom);
-        temporalMotionDistance = Mathf.Max(0.00001f, temporalMotionDistance);
-        temporalMotionAngle = Mathf.Max(0.0001f, temporalMotionAngle);
+        _temporalDenoisingManager.ValidateSettings();
+        CameraManager.cameraOrbitZoom = Mathf.Max(0.1f, CameraManager.cameraOrbitZoom);
         causticPreservationThreshold = Mathf.Clamp(causticPreservationThreshold, 1.5f, 32.0f);
-        videoSamplesPerFrame = Mathf.Max(1, videoSamplesPerFrame);
-        videoFrameTimeStep = Mathf.Max(0.000001f, videoFrameTimeStep);
-        videoDuration = Mathf.Max(0.000001f, videoDuration);
+        _videoCaptureManager.ValidateSettings();
         SyncUnitySkyboxPreview();
     }
 
@@ -937,13 +739,6 @@ public class GameManager : MonoBehaviour
         return _temporalDenoisingManager.ShouldUseAccumulation(debugRenderMode);
     }
 
-    private bool IsCameraMoving() => _temporalDenoisingManager.ShouldUseAccumulation(DebugRenderMode.FinalColor);
-
-    private void EnsureTemporalDenoiserResources()
-    {
-        _temporalDenoisingManager.EnsureResources();
-    }
-
     private void ReleaseTemporalDenoiserResources()
     {
         _temporalDenoisingManager.ReleaseResources();
@@ -951,7 +746,7 @@ public class GameManager : MonoBehaviour
 
     private void Update()
     {
-        UpdateVideoEncoding();
+        _videoCaptureManager.Update();
 
         if (_buffersNeedRebuilding)
         {
@@ -963,17 +758,13 @@ public class GameManager : MonoBehaviour
             SetSingleFrameMode(_singleFrame);
         }
 
-        if (_videoCaptureActive)
+        if (_videoCaptureManager.HandleInput())
         {
-            if (Input.GetKeyDown(KeyCode.Escape))
-            {
-                CancelVideoCapture();
-            }
             return;
         }
 
-        HandleInputForCamera(renderTextureCamera);
-        HandleClickToFocusInput();
+        CameraManager.HandleInput();
+        CameraManager.HandleFocusInput();
 
         if (Input.GetKeyDown(KeyCode.T))
         {
@@ -1043,249 +834,31 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    private void EnableSingleFrameSettings()
+    private static void EnableSingleFrameSettings()
     {
         QualitySettings.vSyncCount = 0;
         Application.targetFrameRate = 10;
         Time.timeScale = 0.0f;
     }
 
-    private void EnableRealtimeSettings()
+    private static void EnableRealtimeSettings()
     {
         QualitySettings.vSyncCount = 2;
         Application.targetFrameRate = 60;
         Time.timeScale = 1.0f;
     }
-    
-    private void HandleInputForCamera(Camera camera)
-    {
-        if (camera == null)
-        {
-            return;
-        }
 
-        if (!_hasActiveCameraBehavior || _activeCameraBehavior != cameraBehavior)
-        {
-            SwitchCameraBehavior(camera);
-        }
-
-        if (cameraBehavior == CameraBehavior.OrbitFocusPoint)
-        {
-            HandleOrbitCameraInput(camera);
-            return;
-        }
-
-        float movementDelta = Time.unscaledDeltaTime;
-
-        if (Input.GetKey(KeyCode.W))
-        {
-            camera.transform.position += camera.transform.forward * movementDelta * cameraMovementSpeed;
-        }
-        else if (Input.GetKey(KeyCode.S))
-        {
-            camera.transform.position -= camera.transform.forward * movementDelta * cameraMovementSpeed;
-        }
-        
-        if (Input.GetKey(KeyCode.A))
-        {
-            camera.transform.position -= camera.transform.right * movementDelta * cameraMovementSpeed;
-        }
-        else if (Input.GetKey(KeyCode.D))
-        {
-            camera.transform.position += camera.transform.right * movementDelta * cameraMovementSpeed;
-        }
-        
-        float yawDelta = 0.0f;
-        if (Input.GetKey(KeyCode.LeftArrow))
-        {
-            yawDelta = -movementDelta * 50.0f;
-        }
-        else if (Input.GetKey(KeyCode.RightArrow))
-        {
-            yawDelta = movementDelta * 50.0f;
-        }
-
-        float pitchDelta = 0.0f;
-        if (Input.GetKey(KeyCode.UpArrow))
-        {
-            pitchDelta = movementDelta * 50.0f;
-        }
-        else if (Input.GetKey(KeyCode.DownArrow))
-        {
-            pitchDelta = -movementDelta * 50.0f;
-        }
-
-        if (yawDelta != 0.0f || pitchDelta != 0.0f)
-        {
-            RotateCamera(camera.transform, yawDelta, pitchDelta);
-        }
-    }
-
-    private void SwitchCameraBehavior(Camera camera)
-    {
-        Vector3 previousPosition = camera.transform.position;
-        Quaternion previousRotation = camera.transform.rotation;
-        float previousFocalDistanceValue = cameraFocalDistance;
-        _activeCameraBehavior = cameraBehavior;
-        _hasActiveCameraBehavior = true;
-        if (cameraBehavior == CameraBehavior.OrbitFocusPoint)
-        {
-            cameraFocusPosition = camera.transform.position + camera.transform.forward * DefaultCameraOrbitZoom;
-            cameraOrbitZoom = DefaultCameraOrbitZoom;
-            cameraFocalDistance = DefaultCameraOrbitZoom;
-            previousFocalDistance = cameraFocalDistance;
-            InitializeOrbitCamera(camera, false);
-        }
-
-        // Changing the input scheme alone does not change the rendered camera state. Keep the
-        // progressive result valid when the orbit transition leaves the camera pose unchanged.
-        if (camera.transform.position == previousPosition
-            && camera.transform.rotation == previousRotation
-            && Mathf.Approximately(cameraFocalDistance, previousFocalDistanceValue)
-            && _hasAccumulationStateHash)
-        {
-            _accumulationStateHash = CalculateAccumulationStateHash();
-        }
-    }
-
-    private void InitializeOrbitCameraFromSceneSettings(SceneSettings settings)
-    {
-        bool hasConfiguredPosition = settings.CameraPosition != Vector3.zero;
-        bool hasConfiguredZoom = settings.CameraOrbitZoom > 0.0f;
-        if (hasConfiguredPosition)
-        {
-            renderTextureCamera.transform.position = settings.CameraPosition;
-        }
-
-        if (hasConfiguredPosition)
-        {
-            Vector3 forward = cameraFocusPosition - settings.CameraPosition;
-            if (forward.sqrMagnitude > 0.0001f)
-            {
-                renderTextureCamera.transform.rotation = Quaternion.LookRotation(forward.normalized, Vector3.up);
-            }
-
-            cameraOrbitZoom = hasConfiguredZoom
-                ? settings.CameraOrbitZoom
-                : Vector3.Distance(settings.CameraPosition, cameraFocusPosition);
-            _orbitDistance = Mathf.Max(0.1f, cameraOrbitZoom);
-            if (hasConfiguredZoom)
-            {
-                renderTextureCamera.transform.position = cameraFocusPosition - renderTextureCamera.transform.forward * _orbitDistance;
-            }
-            renderTextureCamera.transform.LookAt(cameraFocusPosition);
-        }
-        else if (hasConfiguredZoom)
-        {
-            cameraOrbitZoom = settings.CameraOrbitZoom;
-            _orbitDistance = Mathf.Max(0.1f, cameraOrbitZoom);
-            renderTextureCamera.transform.position = cameraFocusPosition - renderTextureCamera.transform.forward * _orbitDistance;
-            renderTextureCamera.transform.LookAt(cameraFocusPosition);
-        }
-        else
-        {
-            cameraOrbitZoom = DefaultCameraOrbitZoom;
-            _orbitDistance = cameraOrbitZoom;
-            InitializeOrbitCamera(renderTextureCamera);
-        }
-
-        cameraFocalDistance = _orbitDistance;
-        previousFocalDistance = cameraFocalDistance;
-    }
-
-    private void InitializeOrbitCamera(Camera camera, bool applyTransform = true)
-    {
-        Vector3 offset = camera.transform.position - cameraFocusPosition;
-        if (offset.sqrMagnitude < 0.0001f)
-        {
-            offset = -camera.transform.forward * DefaultCameraOrbitZoom;
-        }
-
-        _orbitDistance = Mathf.Max(0.1f, cameraOrbitZoom);
-        _orbitYaw = Mathf.Atan2(offset.x, offset.z) * Mathf.Rad2Deg;
-        _orbitPitch = Mathf.Clamp(Mathf.Asin(Mathf.Clamp(offset.y / offset.magnitude, -1.0f, 1.0f)) * Mathf.Rad2Deg, -MaxCameraPitch, MaxCameraPitch);
-        if (applyTransform)
-        {
-            ApplyOrbitCameraTransform(camera);
-        }
-    }
-
-    private void HandleOrbitCameraInput(Camera camera)
-    {
-        var movementDelta = Time.unscaledDeltaTime;
-        var movementScale = Mathf.Max(0.0f, cameraMovementSpeed);
-        var orbitAngle = movementDelta * 20.0f * movementScale;
-        
-        if (Input.GetKey(KeyCode.A)) _orbitYaw -= orbitAngle;
-        if (Input.GetKey(KeyCode.D)) _orbitYaw += orbitAngle;
-        if (Input.GetKey(KeyCode.W)) _orbitPitch += orbitAngle;
-        if (Input.GetKey(KeyCode.S)) _orbitPitch -= orbitAngle;
-        
-        _orbitPitch = Mathf.Clamp(_orbitPitch, -MaxCameraPitch, MaxCameraPitch);
-        
-        if (Input.GetKey(KeyCode.UpArrow) || Input.GetKey(KeyCode.E))
-        {
-            _orbitDistance = Mathf.Max(0.1f, _orbitDistance - movementDelta * movementScale);
-        }
-        if (Input.GetKey(KeyCode.DownArrow) || Input.GetKey(KeyCode.Q))
-        {
-            _orbitDistance += movementDelta * movementScale;
-        }
-        cameraOrbitZoom = _orbitDistance;
-        ApplyOrbitCameraTransform(camera);
-    }
-
-    private void ApplyOrbitCameraTransform(Camera camera)
-    {
-        float yaw = _orbitYaw * Mathf.Deg2Rad;
-        float pitch = _orbitPitch * Mathf.Deg2Rad;
-        Vector3 offset = new Vector3(Mathf.Sin(yaw) * Mathf.Cos(pitch), Mathf.Sin(pitch), Mathf.Cos(yaw) * Mathf.Cos(pitch)) * _orbitDistance;
-        camera.transform.position = cameraFocusPosition + offset;
-        camera.transform.LookAt(cameraFocusPosition);
-    }
-
-    private static void RotateCamera(Transform cameraTransform, float yawDelta, float pitchDelta)
-    {
-        Vector3 eulerAngles = cameraTransform.eulerAngles;
-        float pitch = Mathf.DeltaAngle(0.0f, eulerAngles.x);
-        eulerAngles.x = Mathf.Clamp(pitch + pitchDelta, -MaxCameraPitch, MaxCameraPitch);
-        eulerAngles.y += yawDelta;
-        cameraTransform.eulerAngles = eulerAngles;
-    }
-
-    private void HandleClickToFocusInput()
-    {
-        if (!enableClickToFocus || _focusQueryInFlight || !Input.GetMouseButtonDown(0) || renderTextureCamera == null)
-        {
-            return;
-        }
-
-        Rect pixelRect = renderTextureCamera.pixelRect;
-        Vector2 mousePosition = Input.mousePosition;
-        if (!pixelRect.Contains(mousePosition) || pixelRect.width <= 0.0f || pixelRect.height <= 0.0f)
-        {
-            return;
-        }
-
-        Vector2 viewportPosition = new Vector2(
-            (mousePosition.x - pixelRect.x) / pixelRect.width,
-            (mousePosition.y - pixelRect.y) / pixelRect.height);
-        _pendingFocusQueryUv = viewportPosition * 2.0f - Vector2.one;
-        _focusQueryPending = true;
-    }
-    
     private void OnDestroy()
     {
+        if (_cameraManager != null)
+        {
+            _cameraManager.FocusRequested -= QueueFocusQuery;
+        }
         if (_terrainManager != null)
         {
             _terrainManager.TerrainChanged -= ResetFrameAccumulation;
         }
-        if (_videoCaptureActive)
-        {
-            FinishVideoCapture(false);
-        }
-        _videoEncodingProcess?.Dispose();
-        _videoEncodingProcess = null;
+        _videoCaptureManager.Release();
         _outputTexture?.Release();
         _presentationTexture?.Release();
         _accumulationTexture?.Release();
@@ -1305,16 +878,26 @@ public class GameManager : MonoBehaviour
         _topLevelBvhNodeBuffer?.Release();
         _shadowBvhNodeBuffer?.Release();
         _meshLightTriangleCdfBuffer?.Release();
-        if (_focusQueryInFlight)
+        if (CameraManager.FocusQueryInFlight)
         {
-            _focusReadbackRequest.WaitForCompletion();
+            CameraManager.FocusReadbackRequest.WaitForCompletion();
         }
-        _focusQueryGeneration++;
-        _causticMetadataReadbackGeneration++;
-        _focusQueryBuffer?.Release();
-        _focusQueryBuffer = null;
-        ReleaseCausticResources();
+        CameraManager.FocusQueryGeneration++;
+        CameraManager.FocusQueryBuffer?.Release();
+        CameraManager.FocusQueryBuffer = null;
+        _causticsManager.ReleaseResources();
         DestroyRuntimeTextureArrays();
+    }
+
+    private void QueueFocusQuery(Vector2 viewportPosition)
+    {
+        if (CameraManager.FocusQueryInFlight)
+        {
+            return;
+        }
+
+        CameraManager.PendingFocusQueryUv = viewportPosition;
+        CameraManager.FocusQueryPending = true;
     }
 
     private void DestroyRuntimeTextureArrays()
@@ -1362,7 +945,7 @@ public class GameManager : MonoBehaviour
             CreateOutputTexture(internalWidth, internalHeight);
         }
 
-        renderTextureCamera.aspect = (float)_displayTextureSize.x / _displayTextureSize.y;
+        CameraManager.SetAspect((float)_displayTextureSize.x / _displayTextureSize.y);
     }
 
     private static Vector2Int CalculateInternalRenderSize(int displayWidth, int displayHeight, float percent)
@@ -1583,9 +1166,9 @@ public class GameManager : MonoBehaviour
         _spatialDenoiserShader.SetTexture(validationKernel, "TemporalDiagnostics", _temporalDiagnosticsTexture);
         _spatialDenoiserShader.SetInt("_TemporalHistoryValid", _temporalHistoryValid ? 1 : 0);
         _spatialDenoiserShader.SetInt("_TemporalUnsupported", IsTemporalPathUnsupported() ? 1 : 0);
-        _spatialDenoiserShader.SetFloat("_TemporalDepthThreshold", temporalDepthThreshold);
-        _spatialDenoiserShader.SetFloat("_TemporalNormalThreshold", temporalNormalThreshold);
-        _spatialDenoiserShader.SetInt("_TemporalMaxHistoryLength", temporalMaxHistoryLength);
+        _spatialDenoiserShader.SetFloat("_TemporalDepthThreshold", _temporalDenoisingManager.temporalDepthThreshold);
+        _spatialDenoiserShader.SetFloat("_TemporalNormalThreshold", _temporalDenoisingManager.temporalNormalThreshold);
+        _spatialDenoiserShader.SetInt("_TemporalMaxHistoryLength", _temporalDenoisingManager.temporalMaxHistoryLength);
         _spatialDenoiserShader.SetFloat("_TemporalCameraRotationDelta", _hasRenderedCameraState
             ? Quaternion.Angle(renderTextureCamera.transform.rotation, _lastRenderedCameraRotation) : 0.0f);
         _spatialDenoiserShader.Dispatch(validationKernel, threadGroupsX, threadGroupsY, 1);
@@ -1628,12 +1211,12 @@ public class GameManager : MonoBehaviour
             _spatialDenoiserShader.SetTexture(visualizeKernel, "PresentationResult", _outputTexture);
             _spatialDenoiserShader.SetInt("_TemporalDebugMode", debugMode);
             _spatialDenoiserShader.SetFloat("_Exposure", exposure);
-            _spatialDenoiserShader.SetInt("_TemporalMaxHistoryLength", temporalMaxHistoryLength);
+            _spatialDenoiserShader.SetInt("_TemporalMaxHistoryLength", _temporalDenoisingManager.temporalMaxHistoryLength);
             _spatialDenoiserShader.Dispatch(visualizeKernel, threadGroupsX, threadGroupsY, 1);
         }
         else if (ShouldUseTemporalAccumulation())
         {
-            if (temporalVarianceGuidedFiltering)
+            if (_temporalDenoisingManager.temporalVarianceGuidedFiltering)
             {
                 RunSpatialDenoiser(nextRadiance, _temporalVarianceTexture);
             }
@@ -1671,7 +1254,7 @@ public class GameManager : MonoBehaviour
         _spatialDenoiserShader.Dispatch(kernel, threadGroupsX, threadGroupsY, 1);
     }
 
-    private void ResetFrameAccumulation()
+    internal void ResetFrameAccumulation()
     {
         _accumulatedFrameCount = 0;
         _hasAccumulationStateHash = false;
@@ -1684,8 +1267,8 @@ public class GameManager : MonoBehaviour
         _currentUnjitteredViewProjection = gpuProjection * renderTextureCamera.worldToCameraMatrix;
         _currentTemporalJitterNdc = GetTemporalJitterNdc(_temporalFrameIndex, _textureSize);
         int stateHash = CalculateTemporalStateHash();
-        bool cameraCut = _temporalHistoryValid && (Vector3.Distance(renderTextureCamera.transform.position, _previousTemporalCameraPosition) >= temporalCameraCutDistance
-            || Quaternion.Angle(renderTextureCamera.transform.rotation, _previousTemporalCameraRotation) >= temporalCameraCutAngle);
+        bool cameraCut = _temporalHistoryValid && (Vector3.Distance(renderTextureCamera.transform.position, _previousTemporalCameraPosition) >= _temporalDenoisingManager.temporalCameraCutDistance
+            || Quaternion.Angle(renderTextureCamera.transform.rotation, _previousTemporalCameraRotation) >= _temporalDenoisingManager.temporalCameraCutAngle);
         if (!_hasTemporalStateHash || stateHash != _temporalStateHash || cameraCut)
         {
             ResetTemporalHistory();
@@ -1767,31 +1350,31 @@ public class GameManager : MonoBehaviour
     {
         int photonCapacity = Mathf.Max(1, causticPhotonCount);
         CalculateCausticGridLayout();
-        if (_causticPhotonBuffer != null && _causticPhotonBuffer.count == photonCapacity
-            && _causticPhotonMetadataBuffer != null
-            && _causticPhotonNextBuffer != null && _causticPhotonNextBuffer.count == photonCapacity
-            && _causticGridCellHeadBuffer != null && _causticGridCellHeadBuffer.count == _causticGridCellCount
-            && _causticTargetPairBuffer != null && _causticTargetPairBuffer.count == Mathf.Max(1, _causticTargetPairs.Count)
-            && _causticTargetTriangleBuffer != null && _causticTargetTriangleBuffer.count == Mathf.Max(1, _causticTargetTriangles.Count))
+        if (_causticsManager.PhotonBuffer != null && _causticsManager.PhotonBuffer.count == photonCapacity
+            && _causticsManager.PhotonMetadataBuffer != null
+            && _causticsManager.PhotonNextBuffer != null && _causticsManager.PhotonNextBuffer.count == photonCapacity
+            && _causticsManager.GridCellHeadBuffer != null && _causticsManager.GridCellHeadBuffer.count == _causticsManager.GridCellCount
+            && _causticsManager.TargetPairBuffer != null && _causticsManager.TargetPairBuffer.count == Mathf.Max(1, _causticsManager.TargetPairs.Count)
+            && _causticsManager.TargetTriangleBuffer != null && _causticsManager.TargetTriangleBuffer.count == Mathf.Max(1, _causticsManager.TargetTriangles.Count))
         {
             return;
         }
 
         ReleaseCausticResources();
         CalculateCausticGridLayout();
-        _causticPhotonBuffer = new ComputeBuffer(photonCapacity, CausticPhotonStride);
-        _causticPhotonMetadataBuffer = new ComputeBuffer(CausticMetadataCount, sizeof(uint));
-        _causticPhotonNextBuffer = new ComputeBuffer(photonCapacity, sizeof(int));
-        _causticGridCellHeadBuffer = new ComputeBuffer(_causticGridCellCount, sizeof(int));
-        _causticTargetPairBuffer = CreateComputeBuffer(_causticTargetPairs, CausticTargetPairStride);
-        _causticTargetTriangleBuffer = CreateComputeBuffer(_causticTargetTriangles, CausticTargetTriangleStride);
-        _hasCausticPhotonStateHash = false;
+        _causticsManager.PhotonBuffer = new ComputeBuffer(photonCapacity, CausticPhotonStride);
+        _causticsManager.PhotonMetadataBuffer = new ComputeBuffer(CausticMetadataCount, sizeof(uint));
+        _causticsManager.PhotonNextBuffer = new ComputeBuffer(photonCapacity, sizeof(int));
+        _causticsManager.GridCellHeadBuffer = new ComputeBuffer(_causticsManager.GridCellCount, sizeof(int));
+        _causticsManager.TargetPairBuffer = CreateComputeBuffer(_causticsManager.TargetPairs, CausticTargetPairStride);
+        _causticsManager.TargetTriangleBuffer = CreateComputeBuffer(_causticsManager.TargetTriangles, CausticTargetTriangleStride);
+        _causticsManager.HasPhotonStateHash = false;
     }
 
     private void BuildCausticSamplingDistribution()
     {
-        _causticTargetPairs.Clear();
-        _causticTargetTriangles.Clear();
+        _causticsManager.TargetPairs.Clear();
+        _causticsManager.TargetTriangles.Clear();
         var meshTriangleRanges = new Dictionary<int, Vector2Int>();
 
         for (var meshIndex = 0; meshIndex < _meshInfos.Count; meshIndex++)
@@ -1802,7 +1385,7 @@ public class GameManager : MonoBehaviour
                 continue;
             }
 
-            var triangleStart = _causticTargetTriangles.Count;
+            var triangleStart = _causticsManager.TargetTriangles.Count;
             var totalArea = 0.0f;
             for (var triangleOffset = 0; triangleOffset < mesh.triangleCount; triangleOffset++)
             {
@@ -1810,7 +1393,7 @@ public class GameManager : MonoBehaviour
                 totalArea += 0.5f * Vector3.Cross(
                     triangle.vertex1 - triangle.vertex0,
                     triangle.vertex2 - triangle.vertex0).magnitude;
-                _causticTargetTriangles.Add(new CausticTargetTriangle
+                _causticsManager.TargetTriangles.Add(new CausticTargetTriangle
                 {
                     triangleIndex = mesh.triangleStart + triangleOffset,
                     cumulativeProbability = totalArea
@@ -1819,7 +1402,7 @@ public class GameManager : MonoBehaviour
 
             if (totalArea <= 1e-8f)
             {
-                _causticTargetTriangles.RemoveRange(triangleStart, _causticTargetTriangles.Count - triangleStart);
+                _causticsManager.TargetTriangles.RemoveRange(triangleStart, _causticsManager.TargetTriangles.Count - triangleStart);
                 continue;
             }
 
@@ -1828,11 +1411,11 @@ public class GameManager : MonoBehaviour
             // previous element back out of the list here would divide it by totalArea a second time
             // (it was normalized on the prior iteration), which corrupts every per-triangle
             // probability and therefore every photon's power.
-            var lastTriangleIndex = _causticTargetTriangles.Count - 1;
+            var lastTriangleIndex = _causticsManager.TargetTriangles.Count - 1;
             var previousCdf = 0.0f;
-            for (var triangleIndex = triangleStart; triangleIndex < _causticTargetTriangles.Count; triangleIndex++)
+            for (var triangleIndex = triangleStart; triangleIndex < _causticsManager.TargetTriangles.Count; triangleIndex++)
             {
-                var target = _causticTargetTriangles[triangleIndex];
+                var target = _causticsManager.TargetTriangles[triangleIndex];
                 var normalizedCdf = target.cumulativeProbability / totalArea;
                 target.selectionProbability = normalizedCdf - previousCdf;
                 
@@ -1840,9 +1423,9 @@ public class GameManager : MonoBehaviour
                 target.cumulativeProbability = triangleIndex == lastTriangleIndex ? 1.0f : normalizedCdf;
                 
                 previousCdf = normalizedCdf;
-                _causticTargetTriangles[triangleIndex] = target;
+                _causticsManager.TargetTriangles[triangleIndex] = target;
             }
-            meshTriangleRanges.Add(meshIndex, new Vector2Int(triangleStart, _causticTargetTriangles.Count - triangleStart));
+            meshTriangleRanges.Add(meshIndex, new Vector2Int(triangleStart, _causticsManager.TargetTriangles.Count - triangleStart));
         }
 
         var pairWeights = new List<float>();
@@ -1884,7 +1467,7 @@ public class GameManager : MonoBehaviour
             }
         }
 
-        if (_causticTargetPairs.Count == 0)
+        if (_causticsManager.TargetPairs.Count == 0)
         {
             return;
         }
@@ -1898,20 +1481,20 @@ public class GameManager : MonoBehaviour
         }
 
         var cumulativeProbability = 0.0f;
-        for (var i = 0; i < _causticTargetPairs.Count; i++)
+        for (var i = 0; i < _causticsManager.TargetPairs.Count; i++)
         {
-            var pair = _causticTargetPairs[i];
+            var pair = _causticsManager.TargetPairs[i];
             pair.selectionProbability = pairWeights[i] / totalWeight;
             cumulativeProbability += pair.selectionProbability;
-            pair.cumulativeProbability = i == _causticTargetPairs.Count - 1 ? 1.0f : cumulativeProbability;
-            _causticTargetPairs[i] = pair;
+            pair.cumulativeProbability = i == _causticsManager.TargetPairs.Count - 1 ? 1.0f : cumulativeProbability;
+            _causticsManager.TargetPairs[i] = pair;
         }
     }
 
     private void AddCausticTargetPair(int lightIndex, int refractorType, int refractorIndex,
         int triangleStart, int triangleCount, float weight, List<float> weights, ref float maximumWeight)
     {
-        _causticTargetPairs.Add(new CausticTargetPair
+        _causticsManager.TargetPairs.Add(new CausticTargetPair
         {
             lightIndex = lightIndex,
             refractorType = refractorType,
@@ -1973,51 +1556,33 @@ public class GameManager : MonoBehaviour
             dimensions = CausticsLogic.CalculateCausticGridDimensions(size, cellSize);
         }
 
-        _causticGridMin = boundsMin;
-        _causticGridCellSize = cellSize;
-        _causticGridDimensions = dimensions;
-        _causticGridCellCount = dimensions.x * dimensions.y * dimensions.z;
+        _causticsManager.GridMin = boundsMin;
+        _causticsManager.GridCellSize = cellSize;
+        _causticsManager.GridDimensions = dimensions;
+        _causticsManager.GridCellCountValue = dimensions.x * dimensions.y * dimensions.z;
     }
     
 
     private void ReleaseCausticResources()
     {
-        _causticMetadataReadbackGeneration++;
-        _causticMetadataReadbackInFlight = false;
-        _causticPhotonBuffer?.Release();
-        _causticPhotonMetadataBuffer?.Release();
-        _causticGridCellHeadBuffer?.Release();
-        _causticPhotonNextBuffer?.Release();
-        _causticTargetPairBuffer?.Release();
-        _causticTargetTriangleBuffer?.Release();
-        _causticPhotonBuffer = null;
-        _causticPhotonMetadataBuffer = null;
-        _causticGridCellHeadBuffer = null;
-        _causticPhotonNextBuffer = null;
-        _causticTargetPairBuffer = null;
-        _causticTargetTriangleBuffer = null;
-        _causticGridCellCount = 0;
-        _causticGridPhotonCount = 0;
-        _causticGridOutOfBoundsCount = 0;
-        _hasCausticPhotonStateHash = false;
-        _causticFrameIndex = 0;
+        _causticsManager.ReleaseResources();
     }
 
     private void UpdateCausticPhotonMap()
     {
         if (!enableCaustics)
         {
-            if (_previousCausticsEnabled || HasCausticResources)
+            if (_causticsManager.PreviousEnabled || _causticsManager.HasResources)
             {
                 ReleaseCausticResources();
                 ResetFrameAccumulation();
             }
-            _previousCausticsEnabled = false;
+            _causticsManager.PreviousEnabled = false;
             return;
         }
 
         int stateHash = CalculateCausticPhotonStateHash();
-        bool stateChanged = !_hasCausticPhotonStateHash || stateHash != _causticPhotonStateHash;
+        bool stateChanged = !_causticsManager.HasPhotonStateHash || stateHash != _causticsManager.PhotonStateHash;
         if (stateChanged)
         {
             BuildCausticSamplingDistribution();
@@ -2025,20 +1590,20 @@ public class GameManager : MonoBehaviour
         EnsureCausticResources();
         if (stateChanged)
         {
-            _causticTargetPairBuffer.SetData(_causticTargetPairs.Count > 0
-                ? _causticTargetPairs
+            _causticsManager.TargetPairBuffer.SetData(_causticsManager.TargetPairs.Count > 0
+                ? _causticsManager.TargetPairs
                 : new List<CausticTargetPair> { default });
-            _causticTargetTriangleBuffer.SetData(_causticTargetTriangles.Count > 0
-                ? _causticTargetTriangles
+            _causticsManager.TargetTriangleBuffer.SetData(_causticsManager.TargetTriangles.Count > 0
+                ? _causticsManager.TargetTriangles
                 : new List<CausticTargetTriangle> { default });
-            _causticPhotonStateHash = stateHash;
-            _hasCausticPhotonStateHash = true;
-            _causticFrameIndex = 0;
+            _causticsManager.PhotonStateHash = stateHash;
+            _causticsManager.HasPhotonStateHash = true;
+            _causticsManager.FrameIndex = 0;
             ResetFrameAccumulation();
         }
         else if (!ShouldUseFrameAccumulation())
         {
-            _previousCausticsEnabled = true;
+            _causticsManager.PreviousEnabled = true;
             return;
         }
 
@@ -2055,38 +1620,38 @@ public class GameManager : MonoBehaviour
         SetSceneBuffers(traceKernel);
         shader.Dispatch(clearKernel, 1, 1, 1);
         shader.Dispatch(traceKernel, Mathf.CeilToInt(Mathf.Max(1, causticPhotonCount) / (float)CausticTraceThreadCount), 1, 1);
-        shader.Dispatch(clearGridKernel, Mathf.CeilToInt(_causticGridCellCount / (float)CausticTraceThreadCount), 1, 1);
+        shader.Dispatch(clearGridKernel, Mathf.CeilToInt(_causticsManager.GridCellCount / (float)CausticTraceThreadCount), 1, 1);
         shader.Dispatch(buildGridKernel, Mathf.CeilToInt(Mathf.Max(1, causticPhotonCount) / (float)CausticTraceThreadCount), 1, 1);
         RequestCausticMetadataReadback();
-        _causticDispatchCount++;
+        _causticsManager.DispatchCountValue++;
         if (ShouldUseFrameAccumulation())
         {
-            _causticFrameIndex = _causticFrameIndex == int.MaxValue ? 0 : _causticFrameIndex + 1;
+            _causticsManager.FrameIndex = _causticsManager.FrameIndex == int.MaxValue ? 0 : _causticsManager.FrameIndex + 1;
         }
-        _previousCausticsEnabled = true;
+        _causticsManager.PreviousEnabled = true;
     }
 
     private void RequestCausticMetadataReadback()
     {
-        if (_causticMetadataReadbackInFlight || _causticPhotonMetadataBuffer == null)
+        if (_causticsManager.MetadataReadbackInFlight || _causticsManager.PhotonMetadataBuffer == null)
         {
             return;
         }
 
-        _causticMetadataReadbackInFlight = true;
-        int generation = _causticMetadataReadbackGeneration;
-        AsyncGPUReadback.Request(_causticPhotonMetadataBuffer,
+        _causticsManager.MetadataReadbackInFlight = true;
+        int generation = _causticsManager.MetadataReadbackGeneration;
+        AsyncGPUReadback.Request(_causticsManager.PhotonMetadataBuffer,
             request => CompleteCausticMetadataReadback(request, generation));
     }
 
     private void CompleteCausticMetadataReadback(AsyncGPUReadbackRequest request, int generation)
     {
-        if (generation != _causticMetadataReadbackGeneration)
+        if (generation != _causticsManager.MetadataReadbackGeneration)
         {
             return;
         }
 
-        _causticMetadataReadbackInFlight = false;
+        _causticsManager.MetadataReadbackInFlight = false;
         if (request.hasError)
         {
             Debug.LogWarning("Caustic metadata GPU readback failed.", this);
@@ -2096,8 +1661,8 @@ public class GameManager : MonoBehaviour
         var metadata = request.GetData<uint>();
         if (metadata.Length >= CausticMetadataCount)
         {
-            _causticGridOutOfBoundsCount = (int)metadata[4];
-            _causticGridPhotonCount = (int)metadata[5];
+            _causticsManager.GridOutOfBoundsCountValue = (int)metadata[4];
+            _causticsManager.GridPhotonCountValue = (int)metadata[5];
         }
     }
 
@@ -2149,13 +1714,7 @@ public class GameManager : MonoBehaviour
             Graphics.Blit(src, dest);
             return;
         }
-        if (_videoCaptureActive && _videoCaptureAwaitingSimulationStep)
-        {
-            _singleFrameRenderTime = Time.time;
-            Time.timeScale = 0.0f;
-            Time.captureDeltaTime = 0.0f;
-            _videoCaptureAwaitingSimulationStep = false;
-        }
+        _videoCaptureManager.PrepareRender();
         if (!ShouldRunTemporalDenoiser() && _temporalDenoisingManager.HasResources)
         {
             ReleaseTemporalDenoiserResources();
@@ -2192,7 +1751,7 @@ public class GameManager : MonoBehaviour
         UpdateTopLevelBvh();
         UpdateShadowBvh();
         UpdateAutoFocus();
-        _autoFocusSceneChanged = false;
+        CameraManager.AutoFocusSceneChanged = false;
         UpdateCausticPhotonMap();
 
         if (ShouldRunTemporalDenoiser())
@@ -2275,11 +1834,7 @@ public class GameManager : MonoBehaviour
         _appliedFogEnabled = fogEnabled;
         _pendingVariantWarmup = false;
 
-        if (_videoCaptureActive && !_videoCaptureAwaitingSimulationStep
-            && _accumulatedFrameCount >= _videoCaptureDispatchesPerFrame)
-        {
-            SaveVideoFrameAndAdvance();
-        }
+        _videoCaptureManager.CompleteRender();
 
         Graphics.Blit(debugRenderMode == DebugRenderMode.FinalColor && !useDedicatedCausticsDebugKernel
             ? _presentationTexture : _outputTexture, dest);
@@ -2312,193 +1867,7 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    public static int CalculateVideoFrameCount(float duration, float frameTimeStep)
-    {
-        if (duration <= 0.0f || frameTimeStep <= 0.0f)
-        {
-            return 0;
-        }
-
-        double frameCount = Math.Ceiling((double)duration / frameTimeStep - 0.0000001);
-        return frameCount >= int.MaxValue ? int.MaxValue : Math.Max(1, (int)frameCount);
-    }
-
-    public static double EstimateVideoCaptureSeconds(
-        int frameCount,
-        int samplesPerFrame,
-        int currentSamplesPerFrame,
-        float averageFrameMs)
-    {
-        return EstimateVideoCaptureSeconds(
-            frameCount,
-            samplesPerFrame,
-            currentSamplesPerFrame,
-            averageFrameMs,
-            false);
-    }
-
-    public static double EstimateVideoCaptureSeconds(
-        int frameCount,
-        int samplesPerFrame,
-        int currentSamplesPerFrame,
-        float averageFrameMs,
-        bool causticsEnabled)
-    {
-        if (frameCount <= 0 || samplesPerFrame <= 0 || currentSamplesPerFrame <= 0 || averageFrameMs <= 0.0f)
-        {
-            return 0.0;
-        }
-
-        // A caustic photon batch advances once per dispatch rather than once per camera sample.
-        // Capture therefore dispatches every requested caustic sample separately.
-        if (causticsEnabled)
-        {
-            return frameCount * (double)samplesPerFrame * averageFrameMs / 1000.0;
-        }
-
-        return frameCount * (double)samplesPerFrame / currentSamplesPerFrame * averageFrameMs / 1000.0;
-    }
-
-    public void StartVideoCapture()
-    {
-        if (_videoCaptureActive || _videoEncodingActive || !Application.isPlaying)
-        {
-            return;
-        }
-
-        int frameCount = CalculateVideoFrameCount(videoDuration, videoFrameTimeStep);
-        if (frameCount <= 0)
-        {
-            Debug.LogError("Video capture requires a positive duration and frame time step.", this);
-            return;
-        }
-        if (debugRenderMode != DebugRenderMode.FinalColor)
-        {
-            Debug.LogError("Video capture requires the FinalColor debug render mode so frame accumulation is available.", this);
-            return;
-        }
-
-        int samplesPerFrame = Mathf.Max(1, videoSamplesPerFrame);
-        int samplesPerDispatch = GetVideoSamplesPerDispatch(samplesPerFrame, enableCaustics);
-        string outputRoot = string.IsNullOrWhiteSpace(videoOutputFolder) ? "VideoFrames" : videoOutputFolder.Trim();
-        if (!Path.IsPathRooted(outputRoot))
-        {
-            outputRoot = Path.Combine(Application.persistentDataPath, outputRoot);
-        }
-
-        try
-        {
-            _videoCaptureDirectory = Path.Combine(outputRoot, DateTime.Now.ToString("yyyyMMdd_HHmmss_fff"));
-            int suffix = 1;
-            while (Directory.Exists(_videoCaptureDirectory))
-            {
-                _videoCaptureDirectory = Path.Combine(outputRoot, $"{DateTime.Now:yyyyMMdd_HHmmss_fff}_{suffix++}");
-            }
-            Directory.CreateDirectory(_videoCaptureDirectory);
-        }
-        catch (Exception exception)
-        {
-            Debug.LogError($"Could not create video capture directory: {exception.Message}", this);
-            _videoCaptureDirectory = null;
-            return;
-        }
-
-        _videoPreviousSingleFrame = _singleFrame;
-        _videoPreviousSingleFrameRenderTime = _singleFrameRenderTime;
-        _videoPreviousFrameAccumulation = enableFrameAccumulation;
-        _videoPreviousTemporalDenoising = enableTemporalDenoising;
-        _videoPreviousNumberOfPasses = numberOfPasses;
-        _videoPreviousTargetFrameRate = Application.targetFrameRate;
-        _videoPreviousVSyncCount = QualitySettings.vSyncCount;
-        _videoPreviousTimeScale = Time.timeScale;
-        _videoPreviousCaptureDeltaTime = Time.captureDeltaTime;
-
-        _videoCaptureFrameIndex = 0;
-        _videoCaptureFrameCount = frameCount;
-        _videoCaptureDispatchesPerFrame = samplesPerFrame / samplesPerDispatch;
-        _videoCaptureAwaitingSimulationStep = false;
-        _videoCaptureActive = true;
-        _singleFrame = true;
-        _previousSingleFrame = true;
-        _singleFrameRenderTime = Time.time;
-        enableFrameAccumulation = true;
-        enableTemporalDenoising = false;
-        numberOfPasses = samplesPerDispatch;
-        EnableSingleFrameSettings();
-        Application.targetFrameRate = 1000;
-        ResetFrameAccumulation();
-
-        Debug.Log(
-            $"Video capture started: {frameCount:N0} frames, {samplesPerFrame:N0} samples per frame, " +
-            $"output '{_videoCaptureDirectory}'. Press Escape to cancel.",
-            this);
-    }
-
-    public void CancelVideoCapture()
-    {
-        if (!_videoCaptureActive)
-        {
-            return;
-        }
-
-        Debug.Log($"Video capture cancelled after {_videoCaptureFrameIndex:N0} of {_videoCaptureFrameCount:N0} frames.", this);
-        FinishVideoCapture(false);
-    }
-
-    private static int GetVideoSamplesPerDispatch(int samplesPerFrame, bool causticsEnabled)
-    {
-        if (causticsEnabled)
-        {
-            return 1;
-        }
-
-        for (int candidate = Mathf.Min(MaxNumberOfPasses, samplesPerFrame); candidate > 1; candidate--)
-        {
-            if (samplesPerFrame % candidate == 0)
-            {
-                return candidate;
-            }
-        }
-        return 1;
-    }
-
-    private void SaveVideoFrameAndAdvance()
-    {
-        string path = Path.Combine(_videoCaptureDirectory, $"frame_{_videoCaptureFrameIndex:D6}.png");
-        try
-        {
-            File.WriteAllBytes(path, EncodeCurrentOutputPng());
-        }
-        catch (Exception exception)
-        {
-            Debug.LogError($"Video capture failed while writing '{path}': {exception.Message}", this);
-            FinishVideoCapture(false);
-            return;
-        }
-        _videoCaptureFrameIndex++;
-        if (_videoCaptureFrameIndex >= _videoCaptureFrameCount)
-        {
-            string completedDirectory = _videoCaptureDirectory;
-            int completedFrameCount = _videoCaptureFrameCount;
-            FinishVideoCapture(true);
-            if (videoEncodeMp4)
-            {
-                StartVideoEncoding(completedDirectory, videoFrameTimeStep);
-            }
-            Debug.Log(
-                $"Video capture complete: {completedFrameCount:N0} PNG frames written to '{completedDirectory}'." +
-                (_videoEncodingActive ? " MP4 encoding started." : string.Empty),
-                this);
-            return;
-        }
-
-        ResetFrameAccumulation();
-        _videoCaptureAwaitingSimulationStep = true;
-        Time.captureDeltaTime = Mathf.Max(0.000001f, videoFrameTimeStep);
-        Time.timeScale = 1.0f;
-    }
-
-    private byte[] EncodeCurrentOutputPng()
+    internal byte[] EncodeCurrentOutputPng()
     {
         int width = Mathf.Max(1, _displayTextureSize.x);
         int height = Mathf.Max(1, _displayTextureSize.y);
@@ -2524,121 +1893,6 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    private void FinishVideoCapture(bool completed)
-    {
-        _videoCaptureActive = false;
-        _videoCaptureAwaitingSimulationStep = false;
-        _singleFrame = _videoPreviousSingleFrame;
-        _previousSingleFrame = _videoPreviousSingleFrame;
-        _singleFrameRenderTime = _videoPreviousSingleFrameRenderTime;
-        enableFrameAccumulation = _videoPreviousFrameAccumulation;
-        enableTemporalDenoising = _videoPreviousTemporalDenoising;
-        numberOfPasses = _videoPreviousNumberOfPasses;
-        Application.targetFrameRate = _videoPreviousTargetFrameRate;
-        QualitySettings.vSyncCount = _videoPreviousVSyncCount;
-        Time.captureDeltaTime = _videoPreviousCaptureDeltaTime;
-        Time.timeScale = _videoPreviousTimeScale;
-        ResetFrameAccumulation();
-
-        if (!completed)
-        {
-            _videoCaptureFrameCount = 0;
-        }
-    }
-
-    private void StartVideoEncoding(string frameDirectory, float frameTimeStep)
-    {
-        string executable = ResolveFfmpegExecutable(videoFfmpegPath);
-        _videoOutputPath = Path.Combine(frameDirectory, "video.mp4");
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = executable,
-            Arguments = BuildVideoEncoderArguments(frameDirectory, _videoOutputPath, frameTimeStep),
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        try
-        {
-            _videoEncodingProcess = Process.Start(startInfo);
-            _videoEncodingActive = _videoEncodingProcess != null;
-            if (!_videoEncodingActive)
-            {
-                Debug.LogError("ffmpeg did not start. The lossless PNG sequence has been retained.", this);
-            }
-        }
-        catch (Exception exception)
-        {
-            _videoEncodingProcess = null;
-            _videoEncodingActive = false;
-            Debug.LogError(
-                $"Could not start ffmpeg at '{executable}': {exception.Message}. " +
-                "Set Video Ffmpeg Path or install ffmpeg. The lossless PNG sequence has been retained.",
-                this);
-        }
-    }
-
-    private void UpdateVideoEncoding()
-    {
-        if (!_videoEncodingActive || _videoEncodingProcess == null || !_videoEncodingProcess.HasExited)
-        {
-            return;
-        }
-
-        int exitCode = _videoEncodingProcess.ExitCode;
-        _videoEncodingProcess.Dispose();
-        _videoEncodingProcess = null;
-        _videoEncodingActive = false;
-        if (exitCode == 0 && File.Exists(_videoOutputPath))
-        {
-            Debug.Log($"Video encoding complete: '{_videoOutputPath}'.", this);
-        }
-        else
-        {
-            Debug.LogError(
-                $"ffmpeg exited with code {exitCode}. The lossless PNG sequence has been retained in '{_videoCaptureDirectory}'.",
-                this);
-        }
-    }
-
-    private static string ResolveFfmpegExecutable(string configuredPath)
-    {
-        if (!string.IsNullOrWhiteSpace(configuredPath))
-        {
-            return configuredPath.Trim();
-        }
-
-        string[] commonPaths = { "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg" };
-        for (int i = 0; i < commonPaths.Length; i++)
-        {
-            if (File.Exists(commonPaths[i]))
-            {
-                return commonPaths[i];
-            }
-        }
-        return "ffmpeg";
-    }
-
-    private static string BuildVideoEncoderArguments(string frameDirectory, string outputPath, float frameTimeStep)
-    {
-        double frameRate = 1.0 / Math.Max(0.000001, frameTimeStep);
-        double roundedFrameRate = Math.Round(frameRate);
-        if (Math.Abs(frameRate - roundedFrameRate) < 0.0001)
-        {
-            frameRate = roundedFrameRate;
-        }
-        string frameRateText = frameRate.ToString("0.########", CultureInfo.InvariantCulture);
-        string inputPath = Path.Combine(frameDirectory, "frame_%06d.png");
-        return $"-y -framerate {frameRateText} -start_number 0 -i {QuoteProcessArgument(inputPath)} " +
-            "-vf \"pad=ceil(iw/2)*2:ceil(ih/2)*2\" " +
-            $"-c:v libx264 -preset slow -crf 18 -pix_fmt yuv420p -movflags +faststart {QuoteProcessArgument(outputPath)}";
-    }
-
-    private static string QuoteProcessArgument(string value)
-    {
-        return "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
-    }
-
     private static int GetShaderVariantKey(DebugRenderMode mode, bool causticsEnabled, bool fogEnabled)
     {
         return ((int)mode << 2) | (causticsEnabled ? 2 : 0) | (fogEnabled ? 1 : 0);
@@ -2654,40 +1908,40 @@ public class GameManager : MonoBehaviour
 
     private void DispatchPendingFocusQuery()
     {
-        if (!_focusQueryPending || _focusQueryInFlight)
+        if (!CameraManager.FocusQueryPending || CameraManager.FocusQueryInFlight)
         {
             return;
         }
 
-        if (_focusQueryBuffer == null)
+        if (CameraManager.FocusQueryBuffer == null)
         {
-            _focusQueryBuffer = new ComputeBuffer(1, sizeof(float) * 4);
+            CameraManager.FocusQueryBuffer = new ComputeBuffer(1, sizeof(float) * 4);
         }
 
         int kernel = shader.FindKernel("CSFocusQuery");
         SetShaderParameters(kernel);
-        shader.SetVector("_FocusQueryUv", _pendingFocusQueryUv);
-        shader.SetBuffer(kernel, "_FocusQueryResult", _focusQueryBuffer);
+        shader.SetVector("_FocusQueryUv", CameraManager.PendingFocusQueryUv);
+        shader.SetBuffer(kernel, "_FocusQueryResult", CameraManager.FocusQueryBuffer);
         shader.Dispatch(kernel, 1, 1, 1);
 
-        _focusQueryPending = false;
-        _focusQueryInFlight = true;
-        _focusQueryCameraPosition = renderTextureCamera.transform.position;
-        _focusQueryCameraForward = renderTextureCamera.transform.forward;
-        int generation = _focusQueryGeneration;
-        _focusReadbackRequest = AsyncGPUReadback.Request(
-            _focusQueryBuffer,
+        CameraManager.FocusQueryPending = false;
+        CameraManager.FocusQueryInFlight = true;
+        CameraManager.FocusQueryCameraPosition = renderTextureCamera.transform.position;
+        CameraManager.FocusQueryCameraForward = renderTextureCamera.transform.forward;
+        int generation = CameraManager.FocusQueryGeneration;
+        CameraManager.FocusReadbackRequest = AsyncGPUReadback.Request(
+            CameraManager.FocusQueryBuffer,
             request => CompleteFocusQuery(request, generation));
     }
 
     private void CompleteFocusQuery(AsyncGPUReadbackRequest request, int generation)
     {
-        if (generation != _focusQueryGeneration)
+        if (generation != CameraManager.FocusQueryGeneration)
         {
             return;
         }
 
-        _focusQueryInFlight = false;
+        CameraManager.FocusQueryInFlight = false;
         if (request.hasError)
         {
             Debug.LogWarning("GPU click-to-focus readback failed.", this);
@@ -2701,58 +1955,56 @@ public class GameManager : MonoBehaviour
         }
 
         Vector3 hitPosition = new Vector3(result.x, result.y, result.z);
-        float focusDistance = Vector3.Dot(hitPosition - _focusQueryCameraPosition, _focusQueryCameraForward);
+        float focusDistance = Vector3.Dot(hitPosition - CameraManager.FocusQueryCameraPosition, CameraManager.FocusQueryCameraForward);
         if (focusDistance <= 0.0f)
         {
             return;
         }
 
-        cameraAutoFocus = false;
-        if (cameraBehavior == CameraBehavior.OrbitFocusPoint)
+        CameraManager.cameraAutoFocus = false;
+        if (CameraManager.cameraBehavior == CameraBehavior.OrbitFocusPoint)
         {
-            cameraFocusPosition = hitPosition;
-            _orbitDistance = DefaultCameraOrbitZoom;
-            InitializeOrbitCamera(renderTextureCamera);
+            CameraManager.SetOrbitFocus(hitPosition);
         }
-        cameraFocalDistance = cameraBehavior == CameraBehavior.OrbitFocusPoint
-            ? DefaultCameraOrbitZoom
+        CameraManager.cameraFocalDistance = CameraManager.cameraBehavior == CameraBehavior.OrbitFocusPoint
+            ? CameraManager.DefaultOrbitZoom
             : Mathf.Max(0.1f, focusDistance);
-        previousFocalDistance = cameraFocalDistance;
-        _clickedFocusPoint = hitPosition;
-        _hasClickedFocusPoint = enableClickToFocus && trackClickedFocusPoint;
+        CameraManager.PreviousFocalDistance = CameraManager.cameraFocalDistance;
+        CameraManager.ClickedFocusPoint = hitPosition;
+        CameraManager.HasClickedFocusPoint = CameraManager.enableClickToFocus && CameraManager.trackClickedFocusPoint;
         UpdateTrackedFocusPoint();
         ResetFrameAccumulation();
     }
 
     private void UpdateTrackedFocusPoint()
     {
-        if (!enableClickToFocus || !trackClickedFocusPoint || !_hasClickedFocusPoint || renderTextureCamera == null)
+        if (!CameraManager.enableClickToFocus || !CameraManager.trackClickedFocusPoint || !CameraManager.HasClickedFocusPoint || renderTextureCamera == null)
         {
-            _hasClickedFocusPoint = false;
-            _clickedFocusPointInFrustum = false;
+            CameraManager.HasClickedFocusPoint = false;
+            CameraManager.ClickedFocusPointInFrustum = false;
             return;
         }
 
-        Vector3 viewportPoint = renderTextureCamera.WorldToViewportPoint(_clickedFocusPoint);
-        _clickedFocusPointInFrustum = viewportPoint.z >= renderTextureCamera.nearClipPlane
+        Vector3 viewportPoint = renderTextureCamera.WorldToViewportPoint(CameraManager.ClickedFocusPoint);
+        CameraManager.ClickedFocusPointInFrustum = viewportPoint.z >= renderTextureCamera.nearClipPlane
             && viewportPoint.z <= renderTextureCamera.farClipPlane
             && viewportPoint.x >= 0.0f && viewportPoint.x <= 1.0f
             && viewportPoint.y >= 0.0f && viewportPoint.y <= 1.0f;
 
-        if (_clickedFocusPointInFrustum)
+        if (CameraManager.ClickedFocusPointInFrustum)
         {
-            if (cameraBehavior == CameraBehavior.OrbitFocusPoint)
+            if (CameraManager.cameraBehavior == CameraBehavior.OrbitFocusPoint)
             {
-                cameraFocalDistance = DefaultCameraOrbitZoom;
-                previousFocalDistance = cameraFocalDistance;
+                CameraManager.cameraFocalDistance = CameraManager.DefaultOrbitZoom;
+                CameraManager.PreviousFocalDistance = CameraManager.cameraFocalDistance;
                 return;
             }
-            cameraFocalDistance = Mathf.Max(
+            CameraManager.cameraFocalDistance = Mathf.Max(
                 0.1f,
                 Vector3.Dot(
-                    _clickedFocusPoint - renderTextureCamera.transform.position,
+                    CameraManager.ClickedFocusPoint - renderTextureCamera.transform.position,
                     renderTextureCamera.transform.forward));
-            previousFocalDistance = cameraFocalDistance;
+            CameraManager.PreviousFocalDistance = CameraManager.cameraFocalDistance;
         }
     }
 
@@ -2894,7 +2146,7 @@ public class GameManager : MonoBehaviour
             _topLevelBvhDirty = true;
         }
 
-        _autoFocusSceneChanged |= spheresChanged || lightsChanged;
+        CameraManager.AutoFocusSceneChanged |= spheresChanged || lightsChanged;
     }
 
     private static bool LightBoundsChanged(Light current, Light previous)
@@ -2922,7 +2174,7 @@ public class GameManager : MonoBehaviour
 
         UpdateMeshChangeCache(out bool geometryChanged, out bool materialChanged);
         _temporalDynamicSceneChanged |= geometryChanged || materialChanged;
-        _autoFocusSceneChanged |= geometryChanged || materialChanged;
+        CameraManager.AutoFocusSceneChanged |= geometryChanged || materialChanged;
         if (!geometryChanged && !materialChanged)
         {
             return;
@@ -4475,7 +3727,7 @@ public class GameManager : MonoBehaviour
 
     private bool ShouldAutoFocusIgnoreObject(float opacity)
     {
-        return opacity <= autoFocusTransparentOpacityThreshold;
+        return opacity <= CameraManager.autoFocusTransparentOpacityThreshold;
     }
 
     public void RebuildBuffers(bool startupProfile = false)
@@ -4615,7 +3867,7 @@ public class GameManager : MonoBehaviour
 
         _rayTracingObjects.Add(obj);
         _buffersNeedRebuilding = true;
-        _autoFocusSceneChanged = true;
+        CameraManager.AutoFocusSceneChanged = true;
         ResetFrameAccumulation();
 
         var material = obj.GetComponent<RayMaterial>();
@@ -4733,7 +3985,7 @@ public class GameManager : MonoBehaviour
         }
 
         _water = water;
-        _autoFocusSceneChanged = true;
+        CameraManager.AutoFocusSceneChanged = true;
         ResetFrameAccumulation();
         return true;
     }
@@ -4761,7 +4013,7 @@ public class GameManager : MonoBehaviour
             }
         }
         _buffersNeedRebuilding = true;
-        _autoFocusSceneChanged = true;
+        CameraManager.AutoFocusSceneChanged = true;
         ResetFrameAccumulation();
     }
 
@@ -4787,7 +4039,7 @@ public class GameManager : MonoBehaviour
             }
         }
         _buffersNeedRebuilding = true;
-        _autoFocusSceneChanged = true;
+        CameraManager.AutoFocusSceneChanged = true;
         ResetFrameAccumulation();
     }
 
@@ -4829,7 +4081,7 @@ public class GameManager : MonoBehaviour
         }
 
         _water = null;
-        _autoFocusSceneChanged = true;
+        CameraManager.AutoFocusSceneChanged = true;
         ResetFrameAccumulation();
     }
 
@@ -4869,7 +4121,7 @@ public class GameManager : MonoBehaviour
     {
         _rayTracingObjects.Remove(obj);
         _buffersNeedRebuilding = true;
-        _autoFocusSceneChanged = true;
+        CameraManager.AutoFocusSceneChanged = true;
         ResetFrameAccumulation();
 
         var sphereIndex = _sphereObjects.FindIndex(sphere => sphere.obj == obj);
@@ -4930,20 +4182,20 @@ public class GameManager : MonoBehaviour
         shader.SetInt("_CausticPhotonAttemptCount", Mathf.Max(1, causticPhotonCount));
         shader.SetInt("_CausticMaxBounces", Mathf.Clamp(numBounces, 1, 16));
         shader.SetInt("_CausticSeed", causticSeed);
-        shader.SetInt("_CausticFrameIndex", _causticFrameIndex);
+        shader.SetInt("_CausticFrameIndex", _causticsManager.FrameIndex);
         shader.SetFloat("_CausticGatherRadius", Mathf.Max(0.001f, causticGatherRadius));
         shader.SetFloat("_CausticIntensity", Mathf.Max(0.0f, causticIntensity));
-        shader.SetVector("_CausticGridMin", _causticGridMin);
-        shader.SetFloat("_CausticGridCellSize", _causticGridCellSize);
-        shader.SetInts("_CausticGridDimensions", _causticGridDimensions.x, _causticGridDimensions.y, _causticGridDimensions.z);
-        shader.SetInt("_CausticGridCellCount", _causticGridCellCount);
-        shader.SetInt("_NumCausticTargetPairs", _causticTargetPairs.Count);
-        SetComputeBuffer("_CausticPhotons", _causticPhotonBuffer, kernelHandle);
-        SetComputeBuffer("_CausticPhotonMetadata", _causticPhotonMetadataBuffer, kernelHandle);
-        SetComputeBuffer("_CausticGridCellHeads", _causticGridCellHeadBuffer, kernelHandle);
-        SetComputeBuffer("_CausticPhotonNext", _causticPhotonNextBuffer, kernelHandle);
-        SetComputeBuffer("_CausticTargetPairs", _causticTargetPairBuffer, kernelHandle);
-        SetComputeBuffer("_CausticTargetTriangles", _causticTargetTriangleBuffer, kernelHandle);
+        shader.SetVector("_CausticGridMin", _causticsManager.GridMin);
+        shader.SetFloat("_CausticGridCellSize", _causticsManager.GridCellSize);
+        shader.SetInts("_CausticGridDimensions", _causticsManager.GridDimensions.x, _causticsManager.GridDimensions.y, _causticsManager.GridDimensions.z);
+        shader.SetInt("_CausticGridCellCount", _causticsManager.GridCellCount);
+        shader.SetInt("_NumCausticTargetPairs", _causticsManager.TargetPairs.Count);
+        SetComputeBuffer("_CausticPhotons", _causticsManager.PhotonBuffer, kernelHandle);
+        SetComputeBuffer("_CausticPhotonMetadata", _causticsManager.PhotonMetadataBuffer, kernelHandle);
+        SetComputeBuffer("_CausticGridCellHeads", _causticsManager.GridCellHeadBuffer, kernelHandle);
+        SetComputeBuffer("_CausticPhotonNext", _causticsManager.PhotonNextBuffer, kernelHandle);
+        SetComputeBuffer("_CausticTargetPairs", _causticsManager.TargetPairBuffer, kernelHandle);
+        SetComputeBuffer("_CausticTargetTriangles", _causticsManager.TargetTriangleBuffer, kernelHandle);
     }
 
     private static float GetWorldSphereRadius(SphereCollider sphereCollider, Transform sphereTransform)
@@ -4955,51 +4207,51 @@ public class GameManager : MonoBehaviour
 
     private void UpdateAutoFocus()
     {
-        if (!cameraAutoFocus)
+        if (!CameraManager.cameraAutoFocus)
         {
-            _hasAutoFocusState = false;
+            CameraManager.HasAutoFocusState = false;
             return;
         }
 
         int waterStateHash = CalculateAutoFocusWaterStateHash();
         Transform cameraTransform = renderTextureCamera.transform;
-        bool inputsChanged = !_hasAutoFocusState
-            || _autoFocusSceneChanged
-            || _lastAutoFocusCameraPosition != cameraTransform.position
-            || _lastAutoFocusCameraRotation != cameraTransform.rotation
-            || _lastAutoFocusNumberOfPasses != numberOfPasses
-            || _lastAutoFocusWaterStateHash != waterStateHash;
+        bool inputsChanged = !CameraManager.HasAutoFocusState
+            || CameraManager.AutoFocusSceneChanged
+            || CameraManager.LastAutoFocusCameraPosition != cameraTransform.position
+            || CameraManager.LastAutoFocusCameraRotation != cameraTransform.rotation
+            || CameraManager.LastAutoFocusNumberOfPasses != numberOfPasses
+            || CameraManager.LastAutoFocusWaterStateHash != waterStateHash;
 
         if (inputsChanged)
         {
-            _autoFocusTargetDistance = GetNearestIntersectionDistanceForAutoFocus(
+            CameraManager.AutoFocusTargetDistance = GetNearestIntersectionDistanceForAutoFocus(
                 new Ray(cameraTransform.position, cameraTransform.forward));
-            if (_autoFocusTargetDistance < 1.0f)
+            if (CameraManager.AutoFocusTargetDistance < 1.0f)
             {
-                float modifier = Mathf.Lerp(1.75f, 1.0f, _autoFocusTargetDistance);
-                _autoFocusTargetDistance = Mathf.Max(_autoFocusTargetDistance * modifier, 0.1f);
+                float modifier = Mathf.Lerp(1.75f, 1.0f, CameraManager.AutoFocusTargetDistance);
+                CameraManager.AutoFocusTargetDistance = Mathf.Max(CameraManager.AutoFocusTargetDistance * modifier, 0.1f);
             }
 
-            _lastAutoFocusCameraPosition = cameraTransform.position;
-            _lastAutoFocusCameraRotation = cameraTransform.rotation;
-            _lastAutoFocusNumberOfPasses = numberOfPasses;
-            _lastAutoFocusWaterStateHash = waterStateHash;
-            _hasAutoFocusState = true;
+            CameraManager.LastAutoFocusCameraPosition = cameraTransform.position;
+            CameraManager.LastAutoFocusCameraRotation = cameraTransform.rotation;
+            CameraManager.LastAutoFocusNumberOfPasses = numberOfPasses;
+            CameraManager.LastAutoFocusWaterStateHash = waterStateHash;
+            CameraManager.HasAutoFocusState = true;
         }
 
-        cameraFocalDistance = Mathf.Lerp(
-            previousFocalDistance,
-            _autoFocusTargetDistance,
-            Mathf.SmoothStep(0.0f, 1.0f, timeSincePreviousFocusDistance));
+        CameraManager.cameraFocalDistance = Mathf.Lerp(
+            CameraManager.PreviousFocalDistance,
+            CameraManager.AutoFocusTargetDistance,
+            Mathf.SmoothStep(0.0f, 1.0f, CameraManager.TimeSincePreviousFocusDistance));
 
-        if (Mathf.Abs(cameraFocalDistance - _autoFocusTargetDistance) < 0.05f)
+        if (Mathf.Abs(CameraManager.cameraFocalDistance - CameraManager.AutoFocusTargetDistance) < 0.05f)
         {
-            previousFocalDistance = cameraFocalDistance;
-            timeSincePreviousFocusDistance = 0.0f;
+            CameraManager.PreviousFocalDistance = CameraManager.cameraFocalDistance;
+            CameraManager.TimeSincePreviousFocusDistance = 0.0f;
         }
         else
         {
-            timeSincePreviousFocusDistance += Time.unscaledDeltaTime;
+            CameraManager.TimeSincePreviousFocusDistance += Time.unscaledDeltaTime;
         }
     }
 
@@ -5177,11 +4429,11 @@ public class GameManager : MonoBehaviour
         shader.SetFloat("_ShadowRandomness", shadowRandomness);
         shader.SetFloat("_ParallaxMaximumStrengthCosine", Mathf.Cos(Mathf.Clamp(parallaxMaximumStrengthAngle, 0.0f, 90.0f) * Mathf.Deg2Rad));
         shader.SetFloat("_LightFalloffScale", lightFalloffScale);
-        shader.SetFloat("_FocalDistance", cameraFocalDistance);
+        shader.SetFloat("_FocalDistance", CameraManager.cameraFocalDistance);
         shader.SetFloat("_ApertureRadius", GetCameraApertureRadius());
-        shader.SetInt("_ApertureBladeCount", cameraApertureBladeCount >= 3 ? cameraApertureBladeCount : 0);
-        shader.SetFloat("_ApertureBladeRotation", cameraApertureBladeRotation * Mathf.Deg2Rad);
-        shader.SetFloat("_AnamorphicRatio", Mathf.Clamp(cameraAnamorphicRatio, 0.25f, 4.0f));
+        shader.SetInt("_ApertureBladeCount", CameraManager.cameraApertureBladeCount >= 3 ? CameraManager.cameraApertureBladeCount : 0);
+        shader.SetFloat("_ApertureBladeRotation", CameraManager.cameraApertureBladeRotation * Mathf.Deg2Rad);
+        shader.SetFloat("_AnamorphicRatio", Mathf.Clamp(CameraManager.cameraAnamorphicRatio, 0.25f, 4.0f));
         shader.SetFloat("_Exposure", exposure);
         shader.SetFloat("_FireflyClamp", Mathf.Max(0.0f, fireflyClamp));
         SetWaterShaderParameters();
@@ -5264,27 +4516,27 @@ public class GameManager : MonoBehaviour
 
     private float GetCameraApertureRadius()
     {
-        if (cameraApertureMode == CameraApertureMode.Pinhole || IsTrackedFocusPointOutsideFrustum())
+        if (CameraManager.cameraApertureMode == CameraApertureMode.Pinhole || IsTrackedFocusPointOutsideFrustum())
         {
             return 0.0f;
         }
 
-        if (cameraApertureMode == CameraApertureMode.LensRadius)
+        if (CameraManager.cameraApertureMode == CameraApertureMode.LensRadius)
         {
-            return Mathf.Max(0.0f, cameraApertureRadius);
+            return Mathf.Max(0.0f, CameraManager.cameraApertureRadius);
         }
 
         var focalLengthInWorldUnits = Mathf.Max(0.0f, renderTextureCamera.focalLength) * 0.001f;
-        return focalLengthInWorldUnits / (2.0f * Mathf.Max(0.1f, cameraFStop))
-            * Mathf.Max(0.0f, cameraApertureScale);
+        return focalLengthInWorldUnits / (2.0f * Mathf.Max(0.1f, CameraManager.cameraFStop))
+            * Mathf.Max(0.0f, CameraManager.cameraApertureScale);
     }
 
     private bool IsTrackedFocusPointOutsideFrustum()
     {
-        return enableClickToFocus
-            && trackClickedFocusPoint
-            && _hasClickedFocusPoint
-            && !_clickedFocusPointInFrustum;
+        return CameraManager.enableClickToFocus
+            && CameraManager.trackClickedFocusPoint
+            && CameraManager.HasClickedFocusPoint
+            && !CameraManager.ClickedFocusPointInFrustum;
     }
 
     private int CalculateAccumulationStateHash()
@@ -5306,15 +4558,7 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, shadowRandomness);
             hash = AddHash(hash, parallaxMaximumStrengthAngle);
             hash = AddHash(hash, lightFalloffScale);
-            hash = AddHash(hash, cameraFocalDistance);
-            hash = AddHash(hash, (int)cameraApertureMode);
-            hash = AddHash(hash, cameraApertureRadius);
-            hash = AddHash(hash, cameraFStop);
-            hash = AddHash(hash, cameraApertureScale);
-            hash = AddHash(hash, cameraApertureBladeCount);
-            hash = AddHash(hash, cameraApertureBladeRotation);
-            hash = AddHash(hash, cameraAnamorphicRatio);
-            hash = AddHash(hash, IsTrackedFocusPointOutsideFrustum() ? 1 : 0);
+            hash = CameraManager.AddAccumulationStateHash(hash, IsTrackedFocusPointOutsideFrustum());
             hash = AddHash(hash, fireflyClamp);
             if (enableCaustics)
             {
@@ -5322,27 +4566,12 @@ public class GameManager : MonoBehaviour
                 hash = AddHash(hash, causticGatherRadius);
                 hash = AddHash(hash, causticSeed);
                 hash = AddHash(hash, causticIntensity);
-                hash = AddHash(hash, _causticPhotonStateHash);
+                hash = AddHash(hash, _causticsManager.PhotonStateHash);
             }
-            hash = AddHash(hash, _water != null ? _water.GetInstanceID() : 0);
             if (_water != null)
             {
-                hash = AddHash(hash, _water.TopCenter);
-                hash = AddHash(hash, new Vector3(_water.Size.x, _water.Size.y, _water.Depth));
-                hash = AddHash(hash, _water.Color.r);
-                hash = AddHash(hash, _water.Color.g);
-                hash = AddHash(hash, _water.Color.b);
-                hash = AddHash(hash, _water.Smoothness);
-                hash = AddHash(hash, _water.Opacity);
-                hash = AddHash(hash, _water.AbsorptionStrength);
-                hash = AddHash(hash, _water.RefractionIndex);
-                hash = AddHash(hash, _water.WaveAmplitude);
-                hash = AddHash(hash, _water.WaveScale);
-                hash = AddHash(hash, _water.WaveSpeed);
-                hash = AddHash(hash, _water.MarchSteps);
-                hash = AddHash(hash, _water.RefinementSteps);
+                hash = _water.AddAccumulationStateHash(hash);
             }
-            hash = AddHash(hash, _fogVolume != null ? _fogVolume.GetInstanceID() : 0);
             hash = AddHash(hash, enableVolumetricFog ? 1 : 0);
             hash = AddHash(hash, fogDensityScale);
             hash = AddHash(hash, fogScatteringScale);
@@ -5350,20 +4579,13 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, enableFogMultipleScattering ? 1 : 0);
             if (_fogVolume != null)
             {
-                hash = AddHash(hash, _fogVolume.Center);
-                hash = AddHash(hash, _fogVolume.Size);
-                hash = AddHash(hash, _fogVolume.Density);
-                hash = AddHash(hash, _fogVolume.ScatteringAlbedo.r);
-                hash = AddHash(hash, _fogVolume.ScatteringAlbedo.g);
-                hash = AddHash(hash, _fogVolume.ScatteringAlbedo.b);
+                hash = _fogVolume.AddAccumulationStateHash(hash);
             }
             hash = AddHash(hash, randomNoise ? 1 : 0);
             hash = AddHash(hash, skyboxTexture != null ? skyboxTexture.GetInstanceID() : 0);
             hash = AddHash(hash, _skyboxLightColor.r);
             hash = AddHash(hash, _skyboxLightColor.g);
             hash = AddHash(hash, _skyboxLightColor.b);
-            hash = AddHash(hash, renderTextureCamera.cameraToWorldMatrix);
-            hash = AddHash(hash, renderTextureCamera.projectionMatrix);
             hash = AddHash(hash, _spheres.Count);
             for (var i = 0; i < _spheres.Count; i++)
             {
@@ -5442,7 +4664,7 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    private static int AddHash(int hash, int value)
+    internal static int AddHash(int hash, int value)
     {
         unchecked
         {
@@ -5450,19 +4672,19 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    private static int AddHash(int hash, float value)
+    internal static int AddHash(int hash, float value)
     {
         return AddHash(hash, value.GetHashCode());
     }
 
-    private static int AddHash(int hash, Vector3 value)
+    internal static int AddHash(int hash, Vector3 value)
     {
         hash = AddHash(hash, value.x);
         hash = AddHash(hash, value.y);
         return AddHash(hash, value.z);
     }
 
-    private static int AddHash(int hash, Matrix4x4 value)
+    internal static int AddHash(int hash, Matrix4x4 value)
     {
         for (int i = 0; i < 16; i++)
         {
