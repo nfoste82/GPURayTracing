@@ -7,8 +7,8 @@ namespace PathTracing.Lighting
         public Vector3 position;
         public Vector3 emission;
         public Vector3 u;
-        public Vector3 v;
         public float radius;
+        public Vector3 v;
         public float area;
         public Vector3 normal;
         public int type;

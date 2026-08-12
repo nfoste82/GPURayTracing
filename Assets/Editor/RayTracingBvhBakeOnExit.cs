@@ -17,8 +17,6 @@ public static class RayTracingBvhBakeOnExit
     {
         public string managerId;
         public string signature;
-        public string originalBakeAssetPath;
-        public string generatedBakeAssetPath;
     }
 
     private const string SessionKey = "GPURayTracing.PendingBvhBakeOnExit";
@@ -38,10 +36,6 @@ public static class RayTracingBvhBakeOnExit
         {
             SaveRuntimeBakes();
         }
-        else if (state == PlayModeStateChange.EnteredEditMode)
-        {
-            EditorApplication.delayCall += AssignSavedBakes;
-        }
     }
 
     private static void CapturePendingBakes()
@@ -58,8 +52,7 @@ public static class RayTracingBvhBakeOnExit
             pending.items.Add(new PendingBake
             {
                 managerId = GlobalObjectId.GetGlobalObjectIdSlow(manager).ToString(),
-                signature = RayTracingBvhBakeUtility.CalculateSignature(entries),
-                originalBakeAssetPath = AssetDatabase.GetAssetPath(manager.EditorBvhBake)
+                signature = RayTracingBvhBakeUtility.CalculateSignature(entries)
             });
         }
         SessionState.SetString(SessionKey, JsonUtility.ToJson(pending));
@@ -83,8 +76,7 @@ public static class RayTracingBvhBakeOnExit
             }
 
             var entries = RayTracingBvhBakeUtility.GetMeshEntries(manager);
-            var originalBake = AssetDatabase.LoadAssetAtPath<RayTracingBvhBakeAsset>(item.originalBakeAssetPath);
-            if (RayTracingBvhBakeUtility.IsBakeCurrent(originalBake, entries))
+            if (RayTracingBvhBakeUtility.IsBakeCurrent(manager, entries))
             {
                 continue;
             }
@@ -94,40 +86,9 @@ public static class RayTracingBvhBakeOnExit
                 continue;
             }
 
-            item.generatedBakeAssetPath = RayTracingBvhBakeUtility.SaveBuiltTemplates(manager, entries, item.signature);
-            pending.items[i] = item;
+            RayTracingBvhBakeUtility.SaveBuiltTemplates(manager, entries, item.signature);
         }
-        SessionState.SetString(SessionKey, JsonUtility.ToJson(pending));
-    }
-
-    private static void AssignSavedBakes()
-    {
-        PendingBakeList pending = LoadPendingBakes();
         SessionState.EraseString(SessionKey);
-        foreach (PendingBake item in pending.items)
-        {
-            if (string.IsNullOrEmpty(item.generatedBakeAssetPath)
-                || !GlobalObjectId.TryParse(item.managerId, out GlobalObjectId managerId))
-            {
-                continue;
-            }
-
-            var manager = GlobalObjectId.GlobalObjectIdentifierToObjectSlow(managerId) as GameManager;
-            var bake = AssetDatabase.LoadAssetAtPath<RayTracingBvhBakeAsset>(item.generatedBakeAssetPath);
-            if (manager == null || bake == null)
-            {
-                continue;
-            }
-
-            var entries = RayTracingBvhBakeUtility.GetMeshEntries(manager);
-            if (RayTracingBvhBakeUtility.CalculateSignature(entries) != item.signature)
-            {
-                Debug.LogWarning("Skipped assigning the automatic BVH bake because the restored scene no longer matches its pre-Play state.", manager);
-                continue;
-            }
-
-            RayTracingBvhBakeUtility.AssignBake(manager, bake, "Assign automatic ray tracing BVH bake");
-        }
     }
 
     private static PendingBakeList LoadPendingBakes()
