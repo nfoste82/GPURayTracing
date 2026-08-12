@@ -8,13 +8,13 @@ TerrainLayer:
   m_PrefabAsset: {fileID: 0}
   m_Name: SeededTerrainLayer1
   m_DiffuseTexture: {fileID: 2800000, guid: c4ac4331f1a5b4293b1f42a5b20bd476, type: 3}
-  m_NormalMapTexture: {fileID: 0}
-  m_MaskMapTexture: {fileID: 0}
+  m_NormalMapTexture: {fileID: 2800000, guid: 5fb0cc49c170149408ae9cfd4b62214f, type: 3}
+  m_MaskMapTexture: {fileID: 2800000, guid: 6e318faaad6904fa6a42f4a3d36d2c76, type: 3}
   m_TileSize: {x: 9, y: 9}
   m_TileOffset: {x: 0, y: 0}
   m_Specular: {r: 0, g: 0, b: 0, a: 0}
-  m_Metallic: 0
-  m_Smoothness: 0
+  m_Metallic: 1
+  m_Smoothness: 1
   m_NormalScale: 1
   m_DiffuseRemapMin: {x: 0, y: 0, z: 0, w: 0}
   m_DiffuseRemapMax: {x: 1, y: 1, z: 1, w: 1}

@@ -28,6 +28,20 @@ public static class RayTracingSceneGenerator
         "Assets/Textures/Terrain/rock_05_diff_2k.jpg",
         "Assets/Textures/Terrain/rock_boulder_dry_diff_2k.jpg"
     };
+    private static readonly string[] TerrainNormalTexturePaths =
+    {
+        "Assets/Textures/Terrain/dirt_floor_nor_gl_2k.png",
+        "Assets/Textures/Terrain/sparse_grass_nor_gl_2k.png",
+        "Assets/Textures/Terrain/rock_05_nor_gl_2k.png",
+        "Assets/Textures/Terrain/rock_boulder_dry_nor_gl_2k.png"
+    };
+    private static readonly string[] TerrainMaskTexturePaths =
+    {
+        "Assets/Textures/Terrain/dirt_floor_mask_2k.png",
+        "Assets/Textures/Terrain/sparse_grass_mask_2k.png",
+        "Assets/Textures/Terrain/rock_05_mask_2k.png",
+        "Assets/Textures/Terrain/rock_boulder_dry_mask_2k.png"
+    };
     private static readonly float[] TerrainTextureTileSizes = { 7.0f, 9.0f, 6.0f, 8.0f };
     private const int WolfensteinTextureTileSize = 64;
     private static HashSet<string> _requestedScenePaths;
@@ -165,6 +179,14 @@ public static class RayTracingSceneGenerator
             var parallaxMapped = AddPrimitiveMesh(context.Root, "Parallax Mapping " + shapes[i], shapes[i], new Vector3(2.5f, 1.0f, z), new Vector3(0.0f, 0.0f, 0.0f), Vector3.one * 1.65f, Color.white, RayMaterial.MaterialType.Diffuse, smoothnesses[i], 1.0f);
             ConfigureSurfaceMaps(parallaxMapped, albedo, normal, height, arm, parallexStrengths[i]);
         }
+
+        var sphere = AddSphere(context.Root, "Normal Mapping Sphere", new Vector3(-2.5f, 0.85f, 7.75f), 0.85f,
+            Color.white, RayMaterial.MaterialType.Diffuse, 0.24f);
+        ConfigureSurfaceMaps(sphere, metalAlbedo, metalNormal, null, metalArm, 0.0f);
+
+        var parallaxSphere = AddSphere(context.Root, "Parallax Mapping Sphere", new Vector3(2.5f, 0.85f, 7.75f), 0.85f,
+            Color.white, RayMaterial.MaterialType.Diffuse, 0.24f);
+        ConfigureSurfaceMaps(parallaxSphere, metalAlbedo, metalNormal, metalHeight, metalArm, 0.0193f);
         
         // Add lights above the pyramids
         AddLight(context.Root, "Parallax-Mapped Pyramid Light", new Vector3(2.5f, 2.03f, 3.25f), 0.2f, new Color32(255, 235, 205, 255), 2.75f);
@@ -177,6 +199,9 @@ public static class RayTracingSceneGenerator
         // Add lights for dodecahedrons
         AddLight(context.Root, "Parallax-Mapped Dodecahedron Light", new Vector3(3.25f, 1.78f, 6.42f), 0.2f, new Color32(255, 235, 205, 255), 2.75f);
         AddLight(context.Root, "Normal-Mapped Dodecahedron Light", new Vector3(-3.25f, 1.78f, 6.42f), 0.2f, new Color32(255, 235, 205, 255), 2.75f);
+
+        AddLight(context.Root, "Parallax-Mapped Sphere Light", new Vector3(2.5f, 1.95f, 8.67f), 0.2f, new Color32(255, 235, 205, 255), 2.75f);
+        AddLight(context.Root, "Normal-Mapped Sphere Light", new Vector3(-2.5f, 1.95f, 8.67f), 0.2f, new Color32(255, 235, 205, 255), 2.75f);
         
         Save(context.Scene, sceneName);
     }
@@ -606,7 +631,9 @@ public static class RayTracingSceneGenerator
         for (int i = 0; i < layers.Length; i++)
         {
             ConfigureTerrainTexture(TerrainTexturePaths[i]);
-            layers[i] = CreateTerrainLayer(i, colors[i], TerrainTexturePaths[i], TerrainTextureTileSizes[i]);
+            ConfigureTerrainDataTexture(TerrainNormalTexturePaths[i]);
+            ConfigureTerrainDataTexture(TerrainMaskTexturePaths[i]);
+            layers[i] = CreateTerrainLayer(i, colors[i], TerrainTexturePaths[i], TerrainNormalTexturePaths[i], TerrainMaskTexturePaths[i], TerrainTextureTileSizes[i]);
         }
         terrainData.terrainLayers = layers;
 
@@ -730,7 +757,7 @@ public static class RayTracingSceneGenerator
     }
 
 
-    private static TerrainLayer CreateTerrainLayer(int index, Color fallbackColor, string texturePath, float tileSize)
+    private static TerrainLayer CreateTerrainLayer(int index, Color fallbackColor, string texturePath, string normalPath, string maskPath, float tileSize)
     {
         string layerPath = GeneratedAssetFolder + $"/SeededTerrainLayer{index}.terrainlayer";
         TerrainLayer layer = AssetDatabase.LoadAssetAtPath<TerrainLayer>(layerPath);
@@ -746,6 +773,11 @@ public static class RayTracingSceneGenerator
             texture = CreateTerrainColorTexture(index, fallbackColor);
         }
         layer.diffuseTexture = texture;
+        layer.normalMapTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(normalPath);
+        layer.maskMapTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(maskPath);
+        layer.metallic = 1.0f;
+        layer.smoothness = 1.0f;
+        layer.normalScale = 1.0f;
         layer.tileSize = Vector2.one * tileSize;
         EditorUtility.SetDirty(layer);
         return layer;
@@ -782,6 +814,36 @@ public static class RayTracingSceneGenerator
         }
 
         bool changed = false;
+        if (importer.wrapMode != TextureWrapMode.Repeat)
+        {
+            importer.wrapMode = TextureWrapMode.Repeat;
+            changed = true;
+        }
+        if (importer.textureCompression != TextureImporterCompression.CompressedHQ)
+        {
+            importer.textureCompression = TextureImporterCompression.CompressedHQ;
+            changed = true;
+        }
+        if (changed)
+        {
+            importer.SaveAndReimport();
+        }
+    }
+
+    private static void ConfigureTerrainDataTexture(string path)
+    {
+        var importer = AssetImporter.GetAtPath(path) as TextureImporter;
+        if (importer == null)
+        {
+            return;
+        }
+
+        bool changed = false;
+        if (importer.sRGBTexture)
+        {
+            importer.sRGBTexture = false;
+            changed = true;
+        }
         if (importer.wrapMode != TextureWrapMode.Repeat)
         {
             importer.wrapMode = TextureWrapMode.Repeat;

@@ -109,11 +109,23 @@ Texture2D<float4> _TerrainLayer0;
 Texture2D<float4> _TerrainLayer1;
 Texture2D<float4> _TerrainLayer2;
 Texture2D<float4> _TerrainLayer3;
+Texture2D<float4> _TerrainNormal0;
+Texture2D<float4> _TerrainNormal1;
+Texture2D<float4> _TerrainNormal2;
+Texture2D<float4> _TerrainNormal3;
+Texture2D<float4> _TerrainMask0;
+Texture2D<float4> _TerrainMask1;
+Texture2D<float4> _TerrainMask2;
+Texture2D<float4> _TerrainMask3;
 SamplerState sampler_TerrainLayer0;
 float2 _TerrainLayer0Tiling;
 float2 _TerrainLayer1Tiling;
 float2 _TerrainLayer2Tiling;
 float2 _TerrainLayer3Tiling;
+float4 _TerrainLayerProperties0;
+float4 _TerrainLayerProperties1;
+float4 _TerrainLayerProperties2;
+float4 _TerrainLayerProperties3;
 struct TerrainCell { float minHeight; float maxHeight; };
 StructuredBuffer<TerrainCell> _TerrainCells;
 #endif
@@ -284,6 +296,11 @@ struct Sphere
     float specular;
     float transmission;
     int materialType;
+    int textureIndex;
+    int normalTextureIndex;
+    int parallaxTextureIndex;
+    float parallaxStrength;
+    float minimumParallaxStrength;
 };
 
 StructuredBuffer<Sphere> _Spheres;
@@ -1294,7 +1311,7 @@ float3 GetTerrainNormal(float2 worldXZ)
     return normalize(float3(-heightX / (2.0f * sampleOffset.x), 1.0f, -heightZ / (2.0f * sampleOffset.y)));
 }
 
-float3 GetTerrainAlbedo(float2 uv)
+void GetTerrainWeights(float2 uv, out float4 weights)
 {
     int2 alphamapSize;
     _TerrainAlphamap.GetDimensions(alphamapSize.x, alphamapSize.y);
@@ -1302,57 +1319,117 @@ float3 GetTerrainAlbedo(float2 uv)
     int2 alphamap0 = (int2)floor(alphamapPosition);
     int2 alphamap1 = min(alphamapSize - 1, alphamap0 + 1);
     float2 alphamapBlend = frac(alphamapPosition);
-    float4 weights = lerp(
+    weights = lerp(
         lerp(_TerrainAlphamap.Load(int3(alphamap0.x, alphamap0.y, 0)), _TerrainAlphamap.Load(int3(alphamap1.x, alphamap0.y, 0)), alphamapBlend.x),
         lerp(_TerrainAlphamap.Load(int3(alphamap0.x, alphamap1.y, 0)), _TerrainAlphamap.Load(int3(alphamap1.x, alphamap1.y, 0)), alphamapBlend.x),
         alphamapBlend.y);
     float weightSum = max(0.0001f, dot(weights, 1.0f));
     weights /= weightSum;
+}
+
+void GetTerrainTextureSampleCoordinates(float2 uv, int2 size, out int2 p0, out int2 p1, out float2 blend)
+{
+    float2 position = frac(uv) * size - 0.5f;
+    p0 = (int2)floor(position);
+    p1 = p0 + 1;
+    p0 = (p0 % size + size) % size;
+    p1 = (p1 % size + size) % size;
+    blend = frac(position);
+}
+
+#define SAMPLE_TERRAIN_TEXTURE(texture, uv) SampleTerrainTexture_##texture(uv)
+#define DEFINE_TERRAIN_TEXTURE_SAMPLER(texture) \
+float4 SampleTerrainTexture_##texture(float2 uv) \
+{ \
+    int2 size; texture.GetDimensions(size.x, size.y); \
+    int2 p0; int2 p1; float2 blend; \
+    GetTerrainTextureSampleCoordinates(uv, size, p0, p1, blend); \
+    return lerp(lerp(texture.Load(int3(p0.x, p0.y, 0)), texture.Load(int3(p1.x, p0.y, 0)), blend.x), \
+        lerp(texture.Load(int3(p0.x, p1.y, 0)), texture.Load(int3(p1.x, p1.y, 0)), blend.x), blend.y); \
+}
+
+DEFINE_TERRAIN_TEXTURE_SAMPLER(_TerrainLayer0)
+DEFINE_TERRAIN_TEXTURE_SAMPLER(_TerrainLayer1)
+DEFINE_TERRAIN_TEXTURE_SAMPLER(_TerrainLayer2)
+DEFINE_TERRAIN_TEXTURE_SAMPLER(_TerrainLayer3)
+DEFINE_TERRAIN_TEXTURE_SAMPLER(_TerrainNormal0)
+DEFINE_TERRAIN_TEXTURE_SAMPLER(_TerrainNormal1)
+DEFINE_TERRAIN_TEXTURE_SAMPLER(_TerrainNormal2)
+DEFINE_TERRAIN_TEXTURE_SAMPLER(_TerrainNormal3)
+DEFINE_TERRAIN_TEXTURE_SAMPLER(_TerrainMask0)
+DEFINE_TERRAIN_TEXTURE_SAMPLER(_TerrainMask1)
+DEFINE_TERRAIN_TEXTURE_SAMPLER(_TerrainMask2)
+DEFINE_TERRAIN_TEXTURE_SAMPLER(_TerrainMask3)
+
+float3 GetTerrainAlbedo(float2 uv)
+{
+    float4 weights;
+    GetTerrainWeights(uv, weights);
     // Use explicit wrapping and bilinear filtering so all backends match the terrain preview
     // without depending on an imported texture's sampler state.
     float2 layerUv0 = frac(uv * _TerrainLayer0Tiling);
     float2 layerUv1 = frac(uv * _TerrainLayer1Tiling);
     float2 layerUv2 = frac(uv * _TerrainLayer2Tiling);
     float2 layerUv3 = frac(uv * _TerrainLayer3Tiling);
-    int2 size0; _TerrainLayer0.GetDimensions(size0.x, size0.y);
-    int2 size1; _TerrainLayer1.GetDimensions(size1.x, size1.y);
-    int2 size2; _TerrainLayer2.GetDimensions(size2.x, size2.y);
-    int2 size3; _TerrainLayer3.GetDimensions(size3.x, size3.y);
-    float2 samplePosition0 = layerUv0 * size0 - 0.5f;
-    float2 samplePosition1 = layerUv1 * size1 - 0.5f;
-    float2 samplePosition2 = layerUv2 * size2 - 0.5f;
-    float2 samplePosition3 = layerUv3 * size3 - 0.5f;
-    int2 layer00 = (int2)floor(samplePosition0); int2 layer01 = layer00 + 1;
-    int2 layer10 = (int2)floor(samplePosition1); int2 layer11 = layer10 + 1;
-    int2 layer20 = (int2)floor(samplePosition2); int2 layer21 = layer20 + 1;
-    int2 layer30 = (int2)floor(samplePosition3); int2 layer31 = layer30 + 1;
-    layer00 = (layer00 % size0 + size0) % size0; layer01 = (layer01 % size0 + size0) % size0;
-    layer10 = (layer10 % size1 + size1) % size1; layer11 = (layer11 % size1 + size1) % size1;
-    layer20 = (layer20 % size2 + size2) % size2; layer21 = (layer21 % size2 + size2) % size2;
-    layer30 = (layer30 % size3 + size3) % size3; layer31 = (layer31 % size3 + size3) % size3;
-    float2 blend0 = frac(samplePosition0); float2 blend1 = frac(samplePosition1);
-    float2 blend2 = frac(samplePosition2); float2 blend3 = frac(samplePosition3);
-    float3 color0 = lerp(lerp(_TerrainLayer0.Load(int3(layer00.x, layer00.y, 0)).rgb, _TerrainLayer0.Load(int3(layer01.x, layer00.y, 0)).rgb, blend0.x), lerp(_TerrainLayer0.Load(int3(layer00.x, layer01.y, 0)).rgb, _TerrainLayer0.Load(int3(layer01.x, layer01.y, 0)).rgb, blend0.x), blend0.y);
-    float3 color1 = lerp(lerp(_TerrainLayer1.Load(int3(layer10.x, layer10.y, 0)).rgb, _TerrainLayer1.Load(int3(layer11.x, layer10.y, 0)).rgb, blend1.x), lerp(_TerrainLayer1.Load(int3(layer10.x, layer11.y, 0)).rgb, _TerrainLayer1.Load(int3(layer11.x, layer11.y, 0)).rgb, blend1.x), blend1.y);
-    float3 color2 = lerp(lerp(_TerrainLayer2.Load(int3(layer20.x, layer20.y, 0)).rgb, _TerrainLayer2.Load(int3(layer21.x, layer20.y, 0)).rgb, blend2.x), lerp(_TerrainLayer2.Load(int3(layer20.x, layer21.y, 0)).rgb, _TerrainLayer2.Load(int3(layer21.x, layer21.y, 0)).rgb, blend2.x), blend2.y);
-    float3 color3 = lerp(lerp(_TerrainLayer3.Load(int3(layer30.x, layer30.y, 0)).rgb, _TerrainLayer3.Load(int3(layer31.x, layer30.y, 0)).rgb, blend3.x), lerp(_TerrainLayer3.Load(int3(layer30.x, layer31.y, 0)).rgb, _TerrainLayer3.Load(int3(layer31.x, layer31.y, 0)).rgb, blend3.x), blend3.y);
+    float3 color0 = SAMPLE_TERRAIN_TEXTURE(_TerrainLayer0, layerUv0).rgb;
+    float3 color1 = SAMPLE_TERRAIN_TEXTURE(_TerrainLayer1, layerUv1).rgb;
+    float3 color2 = SAMPLE_TERRAIN_TEXTURE(_TerrainLayer2, layerUv2).rgb;
+    float3 color3 = SAMPLE_TERRAIN_TEXTURE(_TerrainLayer3, layerUv3).rgb;
     return color0 * weights.x + color1 * weights.y + color2 * weights.z + color3 * weights.w;
+}
+
+float3 GetTerrainNormal(float2 uv, float3 geometricNormal)
+{
+    float4 weights; GetTerrainWeights(uv, weights);
+    float3 n0 = SAMPLE_TERRAIN_TEXTURE(_TerrainNormal0, uv * _TerrainLayer0Tiling).xyz * 2.0f - 1.0f;
+    float3 n1 = SAMPLE_TERRAIN_TEXTURE(_TerrainNormal1, uv * _TerrainLayer1Tiling).xyz * 2.0f - 1.0f;
+    float3 n2 = SAMPLE_TERRAIN_TEXTURE(_TerrainNormal2, uv * _TerrainLayer2Tiling).xyz * 2.0f - 1.0f;
+    float3 n3 = SAMPLE_TERRAIN_TEXTURE(_TerrainNormal3, uv * _TerrainLayer3Tiling).xyz * 2.0f - 1.0f;
+    n0.xy *= _TerrainLayerProperties0.z;
+    n1.xy *= _TerrainLayerProperties1.z;
+    n2.xy *= _TerrainLayerProperties2.z;
+    n3.xy *= _TerrainLayerProperties3.z;
+    float3 tangent = float3(1.0f, 0.0f, 0.0f);
+    tangent = normalize(tangent - geometricNormal * dot(tangent, geometricNormal));
+    if (dot(tangent, tangent) < 1e-6f) tangent = float3(0.0f, 0.0f, 1.0f);
+    float3 bitangent = normalize(cross(geometricNormal, tangent));
+    float3 tangentNormal = normalize(n0 * weights.x + n1 * weights.y + n2 * weights.z + n3 * weights.w);
+    float3 mapped = normalize(tangent * tangentNormal.x + bitangent * tangentNormal.y + geometricNormal * tangentNormal.z);
+    return dot(mapped, geometricNormal) < 0.0f ? -mapped : mapped;
+}
+
+float4 GetTerrainMask(float2 uv)
+{
+    float4 weights; GetTerrainWeights(uv, weights);
+    return SAMPLE_TERRAIN_TEXTURE(_TerrainMask0, uv * _TerrainLayer0Tiling) * weights.x
+        + SAMPLE_TERRAIN_TEXTURE(_TerrainMask1, uv * _TerrainLayer1Tiling) * weights.y
+        + SAMPLE_TERRAIN_TEXTURE(_TerrainMask2, uv * _TerrainLayer2Tiling) * weights.z
+        + SAMPLE_TERRAIN_TEXTURE(_TerrainMask3, uv * _TerrainLayer3Tiling) * weights.w;
 }
 
 void SetTerrainHit(Ray ray, float hitDistance, inout RayHit bestHit)
 {
     float3 position = ray.origin + ray.direction * hitDistance;
-    float3 normal = GetTerrainNormal(position.xz);
+    float2 uv = (position.xz - _TerrainPosition.xz) / _TerrainSize.xz;
+    float3 geometricNormal = GetTerrainNormal(position.xz);
+    float3 normal = GetTerrainNormal(uv, geometricNormal);
+    float4 mask = GetTerrainMask(uv);
+    float4 weights;
+    GetTerrainWeights(uv, weights);
+    float metallic = dot(weights, float4(_TerrainLayerProperties0.x, _TerrainLayerProperties1.x,
+        _TerrainLayerProperties2.x, _TerrainLayerProperties3.x)) * mask.r;
+    float smoothness = dot(weights, float4(_TerrainLayerProperties0.y, _TerrainLayerProperties1.y,
+        _TerrainLayerProperties2.y, _TerrainLayerProperties3.y)) * mask.a;
     bestHit.position = position;
     bestHit.obj_position = _TerrainPosition;
-    bestHit.geometricNormal = dot(normal, ray.direction) > 0.0f ? -normal : normal;
-    bestHit.normal = bestHit.geometricNormal;
+    bestHit.geometricNormal = dot(geometricNormal, ray.direction) > 0.0f ? -geometricNormal : geometricNormal;
+    bestHit.normal = dot(normal, ray.direction) > 0.0f ? -normal : normal;
     bestHit.emission = 0.0f;
-    bestHit.color = GetTerrainAlbedo((position.xz - _TerrainPosition.xz) / _TerrainSize.xz);
+    bestHit.color = GetTerrainAlbedo(uv) * mask.g;
     bestHit.obj_radius = 0.0f;
     bestHit.distance = hitDistance;
-    bestHit.smoothness = 0.18f;
-    bestHit.metallic = 0.0f;
+    bestHit.smoothness = saturate(smoothness);
+    bestHit.metallic = saturate(metallic);
     bestHit.opacity = 1.0f;
     bestHit.refraction = 1.0f;
     bestHit.specular = 0.0f;
@@ -1360,7 +1437,7 @@ void SetTerrainHit(Ray ray, float hitDistance, inout RayHit bestHit)
     bestHit.materialType = MaterialDiffuse;
     bestHit.meshIndex = -1;
     bestHit.objectIndex = -2;
-    bestHit.uv = (position.xz - _TerrainPosition.xz) / _TerrainSize.xz;
+    bestHit.uv = uv;
     bestHit.textureIndex = -1;
     bestHit.metallicRoughnessTextureIndex = -1;
     bestHit.normalTextureIndex = -1;
@@ -1423,6 +1500,9 @@ void IntersectTerrain(Ray ray, inout RayHit bestHit)
 }
 #endif
 
+float2 ApplySphereParallax(Sphere sphere, float3 normal, float2 uv, float3 viewDirection);
+float3 ApplySphereNormal(Sphere sphere, float3 geometricNormal, float2 uv);
+
 void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere, int objectIndex)
 {
     // Calculate distance along the ray where the sphere is intersected
@@ -1469,10 +1549,16 @@ void IntersectSphere(Ray ray, inout RayHit bestHit, Sphere sphere, int objectInd
         bestHit.materialType = sphere.materialType;
         bestHit.meshIndex = -1;
         bestHit.objectIndex = objectIndex;
-        bestHit.uv = float2(0.0f, 0.0f);
-        bestHit.textureIndex = -1;
+        float3 sphereNormal = bestHit.geometricNormal;
+        float2 uv = float2(
+            atan2(sphereNormal.z, sphereNormal.x) / (2.0f * PI) + 0.5f,
+            asin(clamp(sphereNormal.y, -1.0f, 1.0f)) / PI + 0.5f);
+        uv = ApplySphereParallax(sphere, sphereNormal, uv, normalize(-ray.direction));
+        bestHit.normal = ApplySphereNormal(sphere, bestHit.normal, uv);
+        bestHit.uv = uv;
+        bestHit.textureIndex = sphere.textureIndex;
         bestHit.metallicRoughnessTextureIndex = -1;
-        bestHit.normalTextureIndex = -1;
+        bestHit.normalTextureIndex = sphere.normalTextureIndex;
         bestHit.lightIndex = objectIndex;
     }
 }
@@ -1490,6 +1576,11 @@ void IntersectLightSphere(Ray ray, inout RayHit bestHit, Light light, int object
     sphere.transmission = 1.0f;
     sphere.refraction = 1.0f;
     sphere.materialType = MaterialEmissive;
+    sphere.textureIndex = -1;
+    sphere.normalTextureIndex = -1;
+    sphere.parallaxTextureIndex = -1;
+    sphere.parallaxStrength = 0.0f;
+    sphere.minimumParallaxStrength = 0.0f;
     IntersectSphere(ray, bestHit, sphere, objectIndex);
 }
 
@@ -1717,6 +1808,42 @@ float2 ApplySimpleParallax(MeshTriangle meshTriangle, float3 normal, float2 bary
     float parallaxStrength = lerp(meshTriangle.minimumParallaxStrength, meshTriangle.parallaxStrength, grazingFade);
     float offsetScale = parallaxStrength * (height - 0.5f) / max(abs(viewTangent.z), 0.15f);
     return uv + viewTangent.xy * offsetScale;
+}
+
+float2 ApplySphereParallax(Sphere sphere, float3 normal, float2 uv, float3 viewDirection)
+{
+    if (sphere.parallaxTextureIndex < 0 || sphere.parallaxStrength <= 0.0f)
+    {
+        return uv;
+    }
+
+    float3 helper = abs(normal.y) < 0.999f ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f);
+    float3 tangent = normalize(cross(helper, normal));
+    float3 bitangent = normalize(cross(normal, tangent));
+    float3 viewTangent = normalize(float3(dot(viewDirection, tangent), dot(viewDirection, bitangent), dot(viewDirection, normal)));
+    float height = _MeshParallaxTextures.SampleLevel(sampler_MeshParallaxTextures, float3(frac(uv), sphere.parallaxTextureIndex), 0).r;
+    float grazingFade = smoothstep(0.0f, max(_ParallaxMaximumStrengthCosine, 0.0001f), abs(viewTangent.z));
+    float parallaxStrength = lerp(sphere.minimumParallaxStrength, sphere.parallaxStrength, grazingFade);
+    float offsetScale = parallaxStrength * (height - 0.5f) / max(abs(viewTangent.z), 0.15f);
+    return uv + viewTangent.xy * offsetScale;
+}
+
+float3 ApplySphereNormal(Sphere sphere, float3 geometricNormal, float2 uv)
+{
+    if (sphere.normalTextureIndex < 0)
+    {
+        return geometricNormal;
+    }
+
+    float3 helper = abs(geometricNormal.y) < 0.999f ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f);
+    float3 tangent = normalize(cross(helper, geometricNormal));
+    float3 bitangent = normalize(cross(geometricNormal, tangent));
+    float3 tangentNormal = _MeshNormalTextures.SampleLevel(
+        sampler_MeshNormalTextures,
+        float3(frac(uv), sphere.normalTextureIndex),
+        0).xyz * 2.0f - 1.0f;
+    float3 mappedNormal = normalize(tangent * tangentNormal.x + bitangent * tangentNormal.y + geometricNormal * tangentNormal.z);
+    return dot(mappedNormal, geometricNormal) < 0.0f ? -mappedNormal : mappedNormal;
 }
 
 RayHit IntersectTriangle(Ray ray, RayHit currentHit, MeshTriangle meshTriangle, int triangleIndex)
@@ -4883,6 +5010,11 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     normalProbeSphere.transmission = 1.0f;
     normalProbeSphere.refraction = 1.5f;
     normalProbeSphere.materialType = MaterialGlass;
+    normalProbeSphere.textureIndex = -1;
+    normalProbeSphere.normalTextureIndex = -1;
+    normalProbeSphere.parallaxTextureIndex = -1;
+    normalProbeSphere.parallaxStrength = 0.0f;
+    normalProbeSphere.minimumParallaxStrength = 0.0f;
     RayHit insideSphereHit = CreateRayHit();
     IntersectSphere(CreateRay(float3(0.0f, 0.0f, 0.0f), normal), insideSphereHit, normalProbeSphere, 0);
     RegressionResults[41] = float4(insideSphereHit.normal, dot(insideSphereHit.geometricNormal, normal));

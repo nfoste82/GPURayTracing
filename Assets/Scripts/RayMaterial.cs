@@ -40,6 +40,12 @@ public class RayMaterial : MonoBehaviour
     private void OnValidate()
     {
         MinimumParallaxStrength = Mathf.Min(MinimumParallaxStrength, ParallaxStrength);
+#if UNITY_EDITOR
+        if (!Application.isPlaying && gameObject.scene.IsValid())
+        {
+            UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(gameObject.scene);
+        }
+#endif
     }
 
     [Tooltip("Interpolate imported mesh vertex normals for smooth shading, refraction, and caustic photon optics. Intersections still use the triangle geometry.")]

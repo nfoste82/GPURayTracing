@@ -642,7 +642,7 @@ public class GameManager : MonoBehaviour
     private static bool _buffersNeedRebuilding = false;
     private static readonly List<RayTracingObject> _rayTracingObjects = new List<RayTracingObject>();
 
-    private const int SphereStride = 64;
+    private const int SphereStride = 84;
     private const int LightStride = 88;
     private const int MaxNumberOfPasses = 32;
     private const int TriangleStride = 244;
@@ -690,6 +690,11 @@ public class GameManager : MonoBehaviour
         public float specular;
         public float transmission;
         public int materialType;
+        public int textureIndex;
+        public int normalTextureIndex;
+        public int parallaxTextureIndex;
+        public float parallaxStrength;
+        public float minimumParallaxStrength;
         
         public float Intersect(Vector3 origin, Vector3 direction)
         {
@@ -1182,18 +1187,26 @@ public class GameManager : MonoBehaviour
 
     private void ReleaseSpatialDenoiserResources()
     {
-        _denoiserPingTexture?.Release();
-        _denoiserPongTexture?.Release();
-        _denoiserIteration1Texture?.Release();
-        _denoiserIteration2Texture?.Release();
-        _denoiserIteration3Texture?.Release();
-        _causticPreservationMaskTexture?.Release();
+        ReleaseRenderTexture(_denoiserPingTexture);
+        ReleaseRenderTexture(_denoiserPongTexture);
+        ReleaseRenderTexture(_denoiserIteration1Texture);
+        ReleaseRenderTexture(_denoiserIteration2Texture);
+        ReleaseRenderTexture(_denoiserIteration3Texture);
+        ReleaseRenderTexture(_causticPreservationMaskTexture);
         _denoiserPingTexture = null;
         _denoiserPongTexture = null;
         _denoiserIteration1Texture = null;
         _denoiserIteration2Texture = null;
         _denoiserIteration3Texture = null;
         _causticPreservationMaskTexture = null;
+    }
+
+    private static void ReleaseRenderTexture(RenderTexture texture)
+    {
+        if (texture != null)
+        {
+            texture.Release();
+        }
     }
 
     private bool ShouldRunSpatialDenoiser()
@@ -3030,6 +3043,7 @@ public class GameManager : MonoBehaviour
         _hasTransparentSphereBlockers = false;
         bool spheresChanged = false;
         bool sphereBoundsChanged = false;
+        bool sphereTexturesChanged = false;
         bool lightsChanged = false;
         bool lightBoundsChanged = false;
         for (int i = 0; i < _spheres.Count; ++i)
@@ -3047,6 +3061,9 @@ public class GameManager : MonoBehaviour
             sphere.radius = radius;
 
             var material = sphereObject.material;
+            int previousTextureIndex = sphere.textureIndex;
+            int previousNormalTextureIndex = sphere.normalTextureIndex;
+            int previousParallaxTextureIndex = sphere.parallaxTextureIndex;
             sphere.color = material.Color.ToVector3();
             sphere.refraction = material.RefractionIndex;
             sphere.opacity = material.Opacity;
@@ -3054,6 +3071,14 @@ public class GameManager : MonoBehaviour
             sphere.specular = material.Specular;
             sphere.transmission = material.Transmission;
             sphere.materialType = (int)material.Type;
+            sphere.textureIndex = GetMeshTextureIndex(material.AlbedoTexture, _meshAlbedoTextures);
+            sphere.normalTextureIndex = GetMeshTextureIndex(material.NormalTexture, _meshNormalTextures);
+            sphere.parallaxTextureIndex = GetMeshTextureIndex(material.ParallaxTexture, _meshParallaxTextures);
+            sphere.parallaxStrength = material.ParallaxStrength;
+            sphere.minimumParallaxStrength = Mathf.Min(material.MinimumParallaxStrength, material.ParallaxStrength);
+            sphereTexturesChanged |= previousTextureIndex != sphere.textureIndex
+                || previousNormalTextureIndex != sphere.normalTextureIndex
+                || previousParallaxTextureIndex != sphere.parallaxTextureIndex;
             spheresChanged |= !sphere.Equals(previousSphere);
 
             if (sphere.opacity < ShadowBlockerOpaqueThreshold)
@@ -3126,6 +3151,11 @@ public class GameManager : MonoBehaviour
             {
                 _sphereBuffer.SetData(_spheres);
             }
+        }
+
+        if (sphereTexturesChanged)
+        {
+            RebuildMeshTextureArrays();
         }
 
         int requiredLightBufferCount = Mathf.Max(1, _lights.Count);
@@ -3431,6 +3461,21 @@ public class GameManager : MonoBehaviour
         _meshMetallicRoughnessTextures.Clear();
         _meshNormalTextures.Clear();
         _meshParallaxTextures.Clear();
+        for (int sphereIndex = 0; sphereIndex < _sphereObjects.Count; sphereIndex++)
+        {
+            var sphereMaterial = _sphereObjects[sphereIndex].material;
+            var sphere = _spheres[sphereIndex];
+            sphere.textureIndex = sphereMaterial != null
+                ? GetMeshTextureIndex(sphereMaterial.AlbedoTexture, _meshAlbedoTextures)
+                : -1;
+            sphere.normalTextureIndex = sphereMaterial != null
+                ? GetMeshTextureIndex(sphereMaterial.NormalTexture, _meshNormalTextures)
+                : -1;
+            sphere.parallaxTextureIndex = sphereMaterial != null
+                ? GetMeshTextureIndex(sphereMaterial.ParallaxTexture, _meshParallaxTextures)
+                : -1;
+            _spheres[sphereIndex] = sphere;
+        }
         int analyticLightCount = _lightObjects.Count + _directionalLights.Count * 2;
         if (_lights.Count > analyticLightCount)
         {
@@ -4869,6 +4914,9 @@ public class GameManager : MonoBehaviour
                 specular = material.Specular,
                 transmission = material.Transmission,
                 materialType = (int)material.Type,
+                textureIndex = -1,
+                normalTextureIndex = -1,
+                parallaxTextureIndex = -1,
             };
             _spheres.Add(sphere);
             _sphereObjects.Add(new RayTracedSphere
@@ -5487,10 +5535,22 @@ public class GameManager : MonoBehaviour
         shader.SetTexture(kernelHandle, "_TerrainLayer1", GetTerrainLayerTexture(layers, 1));
         shader.SetTexture(kernelHandle, "_TerrainLayer2", GetTerrainLayerTexture(layers, 2));
         shader.SetTexture(kernelHandle, "_TerrainLayer3", GetTerrainLayerTexture(layers, 3));
+        shader.SetTexture(kernelHandle, "_TerrainNormal0", GetTerrainLayerNormalTexture(layers, 0));
+        shader.SetTexture(kernelHandle, "_TerrainNormal1", GetTerrainLayerNormalTexture(layers, 1));
+        shader.SetTexture(kernelHandle, "_TerrainNormal2", GetTerrainLayerNormalTexture(layers, 2));
+        shader.SetTexture(kernelHandle, "_TerrainNormal3", GetTerrainLayerNormalTexture(layers, 3));
+        shader.SetTexture(kernelHandle, "_TerrainMask0", GetTerrainLayerMaskTexture(layers, 0));
+        shader.SetTexture(kernelHandle, "_TerrainMask1", GetTerrainLayerMaskTexture(layers, 1));
+        shader.SetTexture(kernelHandle, "_TerrainMask2", GetTerrainLayerMaskTexture(layers, 2));
+        shader.SetTexture(kernelHandle, "_TerrainMask3", GetTerrainLayerMaskTexture(layers, 3));
         shader.SetVector("_TerrainLayer0Tiling", GetTerrainLayerTiling(layers, 0, size));
         shader.SetVector("_TerrainLayer1Tiling", GetTerrainLayerTiling(layers, 1, size));
         shader.SetVector("_TerrainLayer2Tiling", GetTerrainLayerTiling(layers, 2, size));
         shader.SetVector("_TerrainLayer3Tiling", GetTerrainLayerTiling(layers, 3, size));
+        shader.SetVector("_TerrainLayerProperties0", GetTerrainLayerProperties(layers, 0));
+        shader.SetVector("_TerrainLayerProperties1", GetTerrainLayerProperties(layers, 1));
+        shader.SetVector("_TerrainLayerProperties2", GetTerrainLayerProperties(layers, 2));
+        shader.SetVector("_TerrainLayerProperties3", GetTerrainLayerProperties(layers, 3));
         shader.SetVector("_TerrainPosition", new Vector4(position.x, position.y, position.z, 0.0f));
         shader.SetVector("_TerrainSize", new Vector4(size.x, size.y, size.z, 0.0f));
         shader.SetInt("_TerrainCellResolution", Mathf.Clamp(_terrain.AccelerationResolution, 4, 64));
@@ -5506,6 +5566,31 @@ public class GameManager : MonoBehaviour
         return layers != null && index < layers.Length && layers[index] != null && layers[index].diffuseTexture != null
             ? layers[index].diffuseTexture
             : Texture2D.whiteTexture;
+    }
+
+    private static Texture2D GetTerrainLayerNormalTexture(TerrainLayer[] layers, int index)
+    {
+        return layers != null && index < layers.Length && layers[index] != null && layers[index].normalMapTexture != null
+            ? layers[index].normalMapTexture
+            : Texture2D.normalTexture;
+    }
+
+    private static Texture2D GetTerrainLayerMaskTexture(TerrainLayer[] layers, int index)
+    {
+        return layers != null && index < layers.Length && layers[index] != null && layers[index].maskMapTexture != null
+            ? layers[index].maskMapTexture
+            : Texture2D.whiteTexture;
+    }
+
+    private static Vector4 GetTerrainLayerProperties(TerrainLayer[] layers, int index)
+    {
+        if (layers == null || index < 0 || index >= layers.Length || layers[index] == null)
+        {
+            return new Vector4(0.0f, 1.0f, 0.0f, 1.0f);
+        }
+
+        TerrainLayer layer = layers[index];
+        return new Vector4(layer.metallic, layer.smoothness, layer.normalScale, 0.04f);
     }
 
     private static Vector2 GetTerrainLayerTiling(TerrainLayer[] layers, int index, Vector3 terrainSize)
@@ -5840,7 +5925,12 @@ public class GameManager : MonoBehaviour
         hash = AddHash(hash, value.refraction);
         hash = AddHash(hash, value.specular);
         hash = AddHash(hash, value.transmission);
-        return AddHash(hash, value.materialType);
+        hash = AddHash(hash, value.materialType);
+        hash = AddHash(hash, value.textureIndex);
+        hash = AddHash(hash, value.normalTextureIndex);
+        hash = AddHash(hash, value.parallaxTextureIndex);
+        hash = AddHash(hash, value.parallaxStrength);
+        return AddHash(hash, value.minimumParallaxStrength);
     }
 
     private static int AddHash(int hash, Light value)
