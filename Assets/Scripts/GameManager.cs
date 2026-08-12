@@ -68,9 +68,6 @@ public class GameManager : MonoBehaviour
     }
 
     [SerializeField, HideInInspector]
-    private RayTracingBvhBakeAsset bvhBake;
-
-    [SerializeField, HideInInspector]
     private bool bakeBvhUponExit = true;
 
     [Tooltip("Logs phase timings for initial scene buffer construction and the first compute dispatch.")]
@@ -3432,6 +3429,11 @@ public class GameManager : MonoBehaviour
     private void TryLoadBakedMeshBvhs()
     {
         _loadedBakedMeshBvhs = false;
+#if UNITY_EDITOR
+        RayTracingBvhBakeAsset bvhBake = FindEditorBvhBake();
+#else
+        RayTracingBvhBakeAsset bvhBake = null;
+#endif
         if (bvhBake == null)
         {
             _bvhBakeLoadStatus = "no bake assigned";
@@ -3545,7 +3547,15 @@ public class GameManager : MonoBehaviour
     private int FindBakedMeshEntry(Mesh mesh, bool interpolateNormals)
     {
 #if UNITY_EDITOR
+        RayTracingBvhBakeAsset bvhBake = FindEditorBvhBake();
+        if (bvhBake == null)
+        {
+            return -1;
+        }
+
         string identity = GetEditorMeshIdentity(mesh);
+#else
+        return -1;
 #endif
         for (int i = 0; i < bvhBake.meshes.Count; i++)
         {
@@ -3569,6 +3579,13 @@ public class GameManager : MonoBehaviour
 #if UNITY_EDITOR
     private bool EditorIsBvhBakeCurrent()
     {
+        RayTracingBvhBakeAsset bvhBake = FindEditorBvhBake();
+        if (bvhBake == null)
+        {
+            _bvhBakeLoadStatus = "no local bake found";
+            return false;
+        }
+
         var expectedKeys = new HashSet<string>();
         foreach (var meshObject in _meshObjects)
         {
@@ -3620,6 +3637,19 @@ public class GameManager : MonoBehaviour
             return guid + ":" + localId;
         }
         return "scene:" + mesh.name + ":" + mesh.vertexCount + ":" + GetMeshIndexCount(mesh);
+    }
+
+    private RayTracingBvhBakeAsset FindEditorBvhBake()
+    {
+        if (string.IsNullOrEmpty(gameObject.scene.path))
+        {
+            return null;
+        }
+
+        string sceneGuid = UnityEditor.AssetDatabase.AssetPathToGUID(gameObject.scene.path);
+        string managerId = UnityEditor.GlobalObjectId.GetGlobalObjectIdSlow(this).targetObjectId.ToString();
+        string path = $"Assets/Generated/RayTracingBvhBakes/{sceneGuid}_{managerId}.asset";
+        return UnityEditor.AssetDatabase.LoadAssetAtPath<RayTracingBvhBakeAsset>(path);
     }
 #endif
 
@@ -3685,8 +3715,7 @@ public class GameManager : MonoBehaviour
 #if UNITY_EDITOR
     public RayTracingBvhBakeAsset EditorBvhBake
     {
-        get => bvhBake;
-        set => bvhBake = value;
+        get => FindEditorBvhBake();
     }
 
     public bool EditorBakeBvhUponExit

@@ -6,7 +6,6 @@ using System.Text;
 using PathTracing.Camera;
 using PathTracing.Lighting;
 using UnityEditor;
-using UnityEditor.SceneManagement;
 using UnityEngine;
 
 [CustomEditor(typeof(GameManager))]
@@ -512,7 +511,12 @@ public static class RayTracingBvhBakeUtility
     public static bool IsBakeCurrent(GameManager manager)
     {
         var entries = GetMeshEntries(manager);
-        return IsBakeCurrent(manager.EditorBvhBake, entries);
+        return IsBakeCurrent(manager, entries);
+    }
+
+    public static bool IsBakeCurrent(GameManager manager, List<RayTracingBvhBakeAsset.MeshEntry> entries)
+    {
+        return IsBakeCurrent(FindBake(manager), entries);
     }
 
     public static bool IsBakeCurrent(RayTracingBvhBakeAsset bake, List<RayTracingBvhBakeAsset.MeshEntry> entries)
@@ -549,9 +553,7 @@ public static class RayTracingBvhBakeUtility
                 entries[i] = entry;
             }
 
-            string assetPath = SaveBuiltTemplates(manager, entries, signature);
-            var bake = AssetDatabase.LoadAssetAtPath<RayTracingBvhBakeAsset>(assetPath);
-            AssignBake(manager, bake, "Assign baked ray tracing BVH");
+            SaveBuiltTemplates(manager, entries, signature);
             Debug.Log($"Baked {entries.Count:N0} ray tracing mesh BVHs.", manager);
         }
         finally
@@ -597,6 +599,19 @@ public static class RayTracingBvhBakeUtility
         return assetPath;
     }
 
+    public static RayTracingBvhBakeAsset FindBake(GameManager manager)
+    {
+        if (string.IsNullOrEmpty(manager.gameObject.scene.path))
+        {
+            return null;
+        }
+
+        string sceneGuid = AssetDatabase.AssetPathToGUID(manager.gameObject.scene.path);
+        string managerId = GlobalObjectId.GetGlobalObjectIdSlow(manager).targetObjectId.ToString();
+        string assetPath = $"{BakeFolder}/{sceneGuid}_{managerId}.asset";
+        return AssetDatabase.LoadAssetAtPath<RayTracingBvhBakeAsset>(assetPath);
+    }
+
     private static void DeleteStaleSceneBakes(
         GameManager bakedManager,
         string sceneGuid,
@@ -614,19 +629,25 @@ public static class RayTracingBvhBakeUtility
         {
             foreach (GameManager manager in root.GetComponentsInChildren<GameManager>(true))
             {
-                if (manager == bakedManager || manager.EditorBvhBake == null)
+                if (manager == bakedManager)
                 {
                     continue;
                 }
 
-                string referencedAssetPath = AssetDatabase.GetAssetPath(manager.EditorBvhBake);
+                RayTracingBvhBakeAsset bake = FindBake(manager);
+                if (bake == null)
+                {
+                    continue;
+                }
+
+                string referencedAssetPath = AssetDatabase.GetAssetPath(bake);
                 if (!string.IsNullOrEmpty(referencedAssetPath))
                 {
                     preservedPaths.Add(referencedAssetPath);
                 }
-                if (!string.IsNullOrEmpty(manager.EditorBvhBake.streamingAssetsRelativePath))
+                if (!string.IsNullOrEmpty(bake.streamingAssetsRelativePath))
                 {
-                    preservedPaths.Add("Assets/StreamingAssets/" + manager.EditorBvhBake.streamingAssetsRelativePath);
+                    preservedPaths.Add("Assets/StreamingAssets/" + bake.streamingAssetsRelativePath);
                 }
             }
         }
@@ -663,17 +684,6 @@ public static class RayTracingBvhBakeUtility
             }
         }
         return deletedCount;
-    }
-
-    public static void AssignBake(GameManager manager, RayTracingBvhBakeAsset bake, string undoName)
-    {
-        Undo.RecordObject(manager, undoName);
-        var serializedManager = new SerializedObject(manager);
-        serializedManager.FindProperty("bvhBake").objectReferenceValue = bake;
-        serializedManager.ApplyModifiedPropertiesWithoutUndo();
-        EditorUtility.SetDirty(manager);
-        EditorSceneManager.MarkSceneDirty(manager.gameObject.scene);
-        EditorSceneManager.SaveScene(manager.gameObject.scene);
     }
 
     public static bool IsBakeBinaryUsable(RayTracingBvhBakeAsset bake)
