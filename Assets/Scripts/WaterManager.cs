@@ -1,4 +1,4 @@
-using DefaultNamespace;
+using PathTracing;
 using UnityEngine;
 
 [DisallowMultipleComponent]

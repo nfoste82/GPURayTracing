@@ -1,6 +1,6 @@
 using UnityEngine;
 
-namespace DefaultNamespace
+namespace PathTracing
 {
     public static class ColorExtensions
     {

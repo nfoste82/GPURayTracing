@@ -5,7 +5,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text;
-using DefaultNamespace;
+using PathTracing;
 using PathTracing.AccelerationStructures;
 using PathTracing.Camera;
 using PathTracing.Caustics;
@@ -155,12 +155,20 @@ public class GameManager : MonoBehaviour
     [Range(0, 256)]
     public int maxLightSamples = 0;
 
-    [Tooltip("How direct lighting samples scene lights. AllLights is accurate but scales with light count; UniformRandom is much faster in many-light scenes but noisy; ImportanceSampled favors bright/nearby lights for much less noise per sample.")]
-    public LightSamplingStrategy lightSamplingStrategy = LightSamplingStrategy.ImportanceSampled;
+    [SerializeField, HideInInspector]
+    private LightingManager _lightingManager = new();
 
-    [Tooltip("UniformRandom/ImportanceSampled only: how many lights each shading point samples per pass. 1 is fastest/noisiest; higher values reduce noise toward AllLights quality at proportional cost.")]
-    [Range(1, 64)]
-    public int lightSampleCount = 1;
+    public LightingManager Lighting => _lightingManager ??= new LightingManager();
+    public LightSamplingStrategy lightSamplingStrategy
+    {
+        get => _lightingManager.LightSamplingStrategy;
+        set => _lightingManager.LightSamplingStrategy = value;
+    }
+    public int lightSampleCount
+    {
+        get => _lightingManager.LightSampleCount;
+        set => _lightingManager.LightSampleCount = value;
+    }
 
     [Tooltip("Builds a photon map for sphere and triangle-light caustics through glass, closed meshes, and the registered water volume. Disabled by default.")]
     public bool enableCaustics = false;
@@ -190,9 +198,11 @@ public class GameManager : MonoBehaviour
 
     public DebugRenderMode debugRenderMode = DebugRenderMode.FinalColor;
 
-    [Tooltip("Higher values make direct light fall off faster with distance.")]
-    [Range(0.001f, 1.0f)]
-    public float lightFalloffScale = 0.16f;
+    public float lightFalloffScale
+    {
+        get => _lightingManager.LightFalloffScale;
+        set => _lightingManager.LightFalloffScale = value;
+    }
 
     [Tooltip("Master brightness applied before ACES tone mapping. Acts like a camera exposure dial.")]
     [Range(0.0f, 8.0f)]
@@ -204,7 +214,11 @@ public class GameManager : MonoBehaviour
 
     public bool randomNoise = false;
 
-    public Color32 _skyboxLightColor = new Color32(123, 107, 101, 255);
+    public Color32 _skyboxLightColor
+    {
+        get => _lightingManager.SkyboxLightColor;
+        set => _lightingManager.SkyboxLightColor = value;
+    }
 
     public Texture skyboxTexture;
 
@@ -267,9 +281,9 @@ public class GameManager : MonoBehaviour
     private readonly List<PathTracedSphere> _sphereObjects = new ();
     private ComputeBuffer _sphereBuffer;
 
-    private List<Light> _lights = new ();
-    private readonly List<PathTracedLight> _lightObjects = new ();
-    private readonly List<RayDirectionalLight> _directionalLights = new();
+    private List<Light> _lights => _lightingManager.MutableLights;
+    private List<PathTracedLight> _lightObjects => _lightingManager.MutableLightObjects;
+    private List<RayDirectionalLight> _directionalLights => _lightingManager.MutableDirectionalLights;
     private ComputeBuffer _lightBuffer;
 
     private List<Triangle> _triangles = new ();
@@ -468,6 +482,9 @@ public class GameManager : MonoBehaviour
     private static readonly int TopLevelBvhNodes = Shader.PropertyToID("_TopLevelBvhNodes");
     private static readonly int ShadowBvhNodes = Shader.PropertyToID("_ShadowBvhNodes");
     private static readonly int MeshLightTriangleCdf = Shader.PropertyToID("_MeshLightTriangleCdf");
+    private static readonly int NumSpheres = Shader.PropertyToID("_NumSpheres");
+    private static readonly int NumTriangles = Shader.PropertyToID("_NumTriangles");
+    private static readonly int NumMeshes = Shader.PropertyToID("_NumMeshes");
 
     private const int SphereStride = 92;
     private const int LightStride = 88;
@@ -495,9 +512,6 @@ public class GameManager : MonoBehaviour
     private const int TopLevelObjectTypeLight = 1;
     private const int TopLevelObjectTypeMesh = 2;
     
-    private const float VirtualSunDistance = 10000.0f;
-    
-
     private WaterManager _waterManager;
     private FogVolume _fogVolume;
     private readonly Stopwatch _startupStopwatch = Stopwatch.StartNew();
@@ -2014,27 +2028,10 @@ public class GameManager : MonoBehaviour
             _lights[i] = lightData;
         }
 
-        var directionalStart = _lightObjects.Count;
-        for (var i = 0; i < _directionalLights.Count; ++i)
-        {
-            var directionalLight = _directionalLights[i];
-            var lightIndex = directionalStart + i * 2;
-            if (directionalLight == null || lightIndex + 1 >= _lights.Count)
-            {
-                continue;
-            }
-
-            Light first = default;
-            UpdateVirtualSunTriangles(directionalLight, ref first, out Light second);
-            var directionalChanged = !first.Equals(_lights[lightIndex]) || !second.Equals(_lights[lightIndex + 1]);
-            var directionalBoundsChanged = LightBoundsChanged(first, _lights[lightIndex])
-                                           || LightBoundsChanged(second, _lights[lightIndex + 1]);
-            _temporalDynamicSceneChanged |= directionalChanged;
-            lightsChanged |= directionalChanged;
-            lightBoundsChanged |= directionalBoundsChanged;
-            _lights[lightIndex] = first;
-            _lights[lightIndex + 1] = second;
-        }
+        bool directionalLightsChanged = _lightingManager.UpdateDirectionalLights(out bool directionalBoundsChanged);
+        _temporalDynamicSceneChanged |= directionalLightsChanged;
+        lightsChanged |= directionalLightsChanged;
+        lightBoundsChanged |= directionalBoundsChanged;
 
         if (sphereBoundsChanged)
         {
@@ -2072,21 +2069,6 @@ public class GameManager : MonoBehaviour
         }
 
         CameraManager.AutoFocusSceneChanged |= spheresChanged || lightsChanged;
-    }
-
-    private static bool LightBoundsChanged(Light current, Light previous)
-    {
-        if (current.type == (int)PathTracedLightType.Sphere && previous.type == (int)PathTracedLightType.Sphere)
-        {
-            return current.position != previous.position || !Mathf.Approximately(current.radius, previous.radius);
-        }
-
-        // Directional lights use two finite virtual triangles in the top-level BVH. Their
-        // bounds depend on the triangle basis as well as the origin, but not radiance/normal.
-        return current.type != previous.type
-            || current.position != previous.position
-            || current.u != previous.u
-            || current.v != previous.v;
     }
 
     private void UpdateTriangles()
@@ -3573,8 +3555,8 @@ public class GameManager : MonoBehaviour
     private static int ClampBvhSplitToDepth(int leftCount, int count, int depth)
     {
         // Bound each child's population by what the remaining binary-tree depth can hold.
-        int remainingDepth = BvhStackSize - depth - 1;
-        int maxChildCount = remainingDepth >= 30 ? int.MaxValue : 1 << remainingDepth;
+        var remainingDepth = BvhStackSize - depth - 1;
+        var maxChildCount = remainingDepth >= 30 ? int.MaxValue : 1 << remainingDepth;
         return Mathf.Clamp(leftCount, Mathf.Max(1, count - maxChildCount), Mathf.Min(count - 1, maxChildCount));
     }
 
@@ -3588,9 +3570,9 @@ public class GameManager : MonoBehaviour
             return 0f;
         }
 
-        float x = Mathf.Max(0f, size.x);
-        float y = Mathf.Max(0f, size.y);
-        float z = Mathf.Max(0f, size.z);
+        var x = Mathf.Max(0f, size.x);
+        var y = Mathf.Max(0f, size.y);
+        var z = Mathf.Max(0f, size.z);
         return x * y + y * z + z * x;
     }
 
@@ -3613,8 +3595,8 @@ public class GameManager : MonoBehaviour
         var t1 = Vector3.Scale(boundsMax - ray.origin, inverseDirection);
         var tMin3 = Vector3.Min(t0, t1);
         var tMax3 = Vector3.Max(t0, t1);
-        float tMin = Mathf.Max(tMin3.x, Mathf.Max(tMin3.y, tMin3.z));
-        float tMax = Mathf.Min(tMax3.x, Mathf.Min(tMax3.y, tMax3.z));
+        var tMin = Mathf.Max(tMin3.x, Mathf.Max(tMin3.y, tMin3.z));
+        var tMax = Mathf.Min(tMax3.x, Mathf.Min(tMax3.y, tMax3.z));
 
         return tMax >= Mathf.Max(0.0f, tMin) && tMin < maxDistance;
     }
@@ -3689,7 +3671,7 @@ public class GameManager : MonoBehaviour
 
     public void RebuildBuffers(bool startupProfile = false)
     {
-        long rebuildStart = Stopwatch.GetTimestamp();
+        var rebuildStart = Stopwatch.GetTimestamp();
         _profileBuiltMeshTemplateCount = 0;
         _profileBuiltMeshTemplateTicks = 0;
         _profileTextureArrayTicks = 0;
@@ -3743,12 +3725,12 @@ public class GameManager : MonoBehaviour
             AddStartupProfilePhase($"shadow BVH ({_shadowBvhNodes.Count:N0} nodes)", phaseStart);
         }
 
-        shader.SetInt("_NumSpheres", _spheres.Count);
-        shader.SetInt("_NumLights", _lights.Count);
-        shader.SetInt("_NumTriangles", _triangles.Count);
-        shader.SetInt("_NumMeshes", _meshInfos.Count);
-        shader.SetInt("_NumTopLevelBvhNodes", _topLevelBvhNodes.Count);
-        shader.SetInt("_NumShadowBvhNodes", _shadowBvhNodes.Count);
+        shader.SetInt(NumSpheres, _spheres.Count);
+        shader.SetInt(NumLights, _lights.Count);
+        shader.SetInt(NumTriangles, _triangles.Count);
+        shader.SetInt(NumMeshes, _meshInfos.Count);
+        shader.SetInt(NumTopLevelBvhNodes, _topLevelBvhNodes.Count);
+        shader.SetInt(NumShadowBvhNodes, _shadowBvhNodes.Count);
 
         phaseStart = Stopwatch.GetTimestamp();
         _sphereBuffer = CreateComputeBuffer(_spheres, SphereStride);
@@ -3778,7 +3760,7 @@ public class GameManager : MonoBehaviour
             return;
         }
 
-        double milliseconds = elapsedTicks * 1000.0 / Stopwatch.Frequency;
+        var milliseconds = elapsedTicks * 1000.0 / Stopwatch.Frequency;
         _startupProfilePhases.Add($"  {name}: {milliseconds:N1} ms");
     }
 
@@ -3788,7 +3770,7 @@ public class GameManager : MonoBehaviour
         var message = new StringBuilder(512);
         message.AppendLine($"Ray tracing startup profile for '{gameObject.scene.name}':");
         message.AppendLine($"  object registration / Unity startup before Start: {_startupRegistrationMilliseconds:N1} ms");
-        for (int i = 0; i < _startupProfilePhases.Count; i++)
+        for (var i = 0; i < _startupProfilePhases.Count; i++)
         {
             message.AppendLine(_startupProfilePhases[i]);
         }
@@ -3927,85 +3909,19 @@ public class GameManager : MonoBehaviour
 
     public void RegisterDirectionalLight(RayDirectionalLight directionalLight)
     {
-        if (directionalLight == null || _directionalLights.Contains(directionalLight))
-        {
-            return;
-        }
-
-        _directionalLights.Add(directionalLight);
-        int insertionIndex = _lightObjects.Count + (_directionalLights.Count - 1) * 2;
-        Light first = default;
-        UpdateVirtualSunTriangles(directionalLight, ref first, out Light second);
-        _lights.Insert(insertionIndex, first);
-        _lights.Insert(insertionIndex + 1, second);
-        for (int i = 0; i < _triangles.Count; i++)
-        {
-            Triangle triangle = _triangles[i];
-            if (triangle.lightIndex >= insertionIndex)
-            {
-                triangle.lightIndex += 2;
-                _triangles[i] = triangle;
-            }
-        }
-        _buffersNeedRebuilding = true;
-        CameraManager.AutoFocusSceneChanged = true;
-        ResetFrameAccumulation();
+        _lightingManager.RegisterDirectionalLight(directionalLight, _triangles, MarkLightingSceneChanged);
     }
 
     public void UnregisterDirectionalLight(RayDirectionalLight directionalLight)
     {
-        var directionalIndex = _directionalLights.IndexOf(directionalLight);
-        if (directionalIndex < 0)
-        {
-            return;
-        }
+        _lightingManager.UnregisterDirectionalLight(directionalLight, _triangles, MarkLightingSceneChanged);
+    }
 
-        var lightIndex = _lightObjects.Count + directionalIndex * 2;
-        _directionalLights.RemoveAt(directionalIndex);
-        _lights.RemoveAt(lightIndex);
-        _lights.RemoveAt(lightIndex);
-        for (int i = 0; i < _triangles.Count; i++)
-        {
-            Triangle triangle = _triangles[i];
-            if (triangle.lightIndex > lightIndex)
-            {
-                triangle.lightIndex -= 2;
-                _triangles[i] = triangle;
-            }
-        }
+    private void MarkLightingSceneChanged()
+    {
         _buffersNeedRebuilding = true;
         CameraManager.AutoFocusSceneChanged = true;
         ResetFrameAccumulation();
-    }
-
-    private static void UpdateVirtualSunTriangles(RayDirectionalLight directionalLight, ref Light first, out Light second)
-    {
-        var lightDirection = directionalLight.transform.forward.normalized;
-        var center = -lightDirection * VirtualSunDistance;
-        var radius = VirtualSunDistance * Mathf.Tan(Mathf.Clamp(directionalLight.AngularRadius, 0.0f, 10.0f) * Mathf.Deg2Rad);
-        var tangent = Vector3.Cross(Mathf.Abs(lightDirection.y) < 0.999f ? Vector3.up : Vector3.right, lightDirection).normalized * radius;
-        var bitangent = Vector3.Cross(lightDirection, tangent).normalized * radius;
-        var emission = directionalLight.Color.ToVector3() * Mathf.Max(0.0f, directionalLight.Intensity);
-        // The emitter's front face points back toward the scene; rays travel from this virtual
-        // disc along transform.forward toward shaded points.
-        first = CreateVirtualSunTriangle(center - tangent - bitangent, tangent * 2.0f, bitangent * 2.0f, lightDirection, emission);
-        second = CreateVirtualSunTriangle(center + tangent + bitangent, -tangent * 2.0f, -bitangent * 2.0f, lightDirection, emission);
-    }
-
-    private static Light CreateVirtualSunTriangle(Vector3 position, Vector3 u, Vector3 v, Vector3 normal, Vector3 emission)
-    {
-        return new Light
-        {
-            position = position,
-            emission = emission,
-            u = u,
-            v = v,
-            // Photon transport uses this to undo the arbitrary virtual-disc placement distance.
-            radius = VirtualSunDistance,
-            area = Vector3.Cross(u, v).magnitude * 0.5f,
-            normal = normal,
-            type = (int)PathTracedLightType.SunTriangle
-        };
     }
 
     public bool RegisterFogVolume(FogVolume fogVolume)

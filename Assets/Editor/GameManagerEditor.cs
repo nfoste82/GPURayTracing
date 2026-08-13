@@ -53,18 +53,18 @@ public sealed class GameManagerEditor : Editor
         });
         DrawSection(manager, "Lighting", true, () =>
         {
-            DrawProperty("lightSamplingStrategy");
-            if (serializedObject.FindProperty("lightSamplingStrategy").enumValueIndex != (int)LightSamplingStrategy.AllLights)
+            DrawLightingProperty("lightSamplingStrategy", "Light Sampling Strategy");
+            if (serializedObject.FindProperty("_lightingManager._lightSamplingStrategy").enumValueIndex != (int)LightSamplingStrategy.AllLights)
             {
-                DrawProperty("lightSampleCount");
+                DrawLightingProperty("lightSampleCount", "Light Sample Count");
             }
-            DrawProperty("lightFalloffScale", "Local Light Falloff Scale");
+            DrawLightingProperty("lightFalloffScale", "Local Light Falloff Scale");
             DrawDirectionalLighting(manager);
         });
         DrawSection(manager, "Image and Environment", true, () =>
         {
             DrawProperty("exposure");
-            DrawProperty("_skyboxLightColor", "Skybox Light Color");
+            DrawLightingProperty("skyboxLightColor", "Skybox Light Color");
             DrawProperty("skyboxTexture");
         });
         DrawSection(manager, "Camera", true, () => DrawCameraSettings(manager));
@@ -341,6 +341,18 @@ public sealed class GameManagerEditor : Editor
         if (property == null)
         {
             EditorGUILayout.HelpBox($"Serialized property '{propertyPath}' could not be found on GameManager.", MessageType.Warning);
+            return;
+        }
+
+        EditorGUILayout.PropertyField(property, label == null ? null : new GUIContent(label));
+    }
+
+    private void DrawLightingProperty(string propertyName, string label = null)
+    {
+        SerializedProperty property = serializedObject.FindProperty("_lightingManager._" + propertyName);
+        if (property == null)
+        {
+            EditorGUILayout.HelpBox($"Serialized lighting property '{propertyName}' could not be found on GameManager.", MessageType.Warning);
             return;
         }
 

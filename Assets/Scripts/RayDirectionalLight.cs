@@ -19,7 +19,7 @@ public class RayDirectionalLight : MonoBehaviour
     {
         if (Application.isPlaying)
         {
-            GameManager manager = GetComponentInParent<GameManager>();
+            var manager = GetComponentInParent<GameManager>();
             if (manager != null)
             {
                 manager.RegisterDirectionalLight(this);
@@ -31,7 +31,7 @@ public class RayDirectionalLight : MonoBehaviour
     {
         if (Application.isPlaying)
         {
-            GameManager manager = GetComponentInParent<GameManager>();
+            var manager = GetComponentInParent<GameManager>();
             if (manager != null)
             {
                 manager.UnregisterDirectionalLight(this);
