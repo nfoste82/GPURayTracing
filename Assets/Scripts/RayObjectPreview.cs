@@ -24,6 +24,12 @@ public class RayObjectPreview : MonoBehaviour
     private float _previewRadius = -1.0f;
     private Vector3 _previewCenter;
 
+    public bool HideRendererInPlayMode
+    {
+        get => hideRendererInPlayMode;
+        set => hideRendererInPlayMode = value;
+    }
+
     private void OnEnable()
     {
         SyncPreview();

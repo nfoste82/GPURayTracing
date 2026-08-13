@@ -166,7 +166,9 @@ Alongside `_DebugRenderMode`, `SetShaderParameters()` toggles the `DEBUG_RENDER`
 
 - WASD moves `renderTextureCamera` at the inspector-configurable `cameraMovementSpeed` in world units per second.
 - Arrow keys rotate `renderTextureCamera`.
+- With `CameraBehavior.OrbitFocusPoint`, WASD rotates around `cameraFocusPosition`; Up/Down or E/Q dollies, the mouse wheel dollies, and inspector edits to `cameraOrbitZoom` immediately set the orbit distance.
 - Left click focuses on the selected ray-traced surface when `enableClickToFocus` is enabled. Mostly transparent surfaces use the existing autofocus opacity threshold and the query includes shader-only procedural water.
+- In `CameraBehavior.OrbitFocusPoint`, right-click selects the orbit target instead; left-click remains reserved for click-to-focus.
 - `T` toggles single-frame mode.
 - `Space` resumes real-time rendering.
 - `debugRenderMode` is exposed in the `GameManager` inspector and selects final color or one of the shader debug visualizations.

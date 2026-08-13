@@ -79,6 +79,7 @@ public sealed class CameraManager : MonoBehaviour
     private float _orbitYaw;
     private float _orbitPitch;
     private float _orbitDistance = DefaultOrbitZoom;
+    private float _lastSerializedOrbitZoom = DefaultOrbitZoom;
 
     private float PreviousFocalDistance = 100f;
     private bool HasAutoFocusState;
@@ -180,7 +181,8 @@ public sealed class CameraManager : MonoBehaviour
 
     public void HandleFocusInput()
     {
-        if (!enableClickToFocus || Input.GetMouseButtonDown(0) == false || renderTextureCamera == null)
+        int focusMouseButton = cameraBehavior == CameraBehavior.OrbitFocusPoint ? 1 : 0;
+        if (!enableClickToFocus || Input.GetMouseButtonDown(focusMouseButton) == false || renderTextureCamera == null)
         {
             return;
         }
@@ -403,7 +405,7 @@ public sealed class CameraManager : MonoBehaviour
             SetOrbitFocus(hitPosition);
         }
         cameraFocalDistance = cameraBehavior == CameraBehavior.OrbitFocusPoint
-            ? DefaultOrbitZoom
+            ? _orbitDistance
             : Mathf.Max(0.1f, focusDistance);
         PreviousFocalDistance = cameraFocalDistance;
         ClickedFocusPoint = hitPosition;
@@ -443,6 +445,7 @@ public sealed class CameraManager : MonoBehaviour
         }
         
         _orbitDistance = Mathf.Max(0.1f, cameraOrbitZoom);
+        _lastSerializedOrbitZoom = _orbitDistance;
         renderTextureCamera.transform.position = cameraFocusPosition - renderTextureCamera.transform.forward * _orbitDistance;
         renderTextureCamera.transform.LookAt(cameraFocusPosition);
         cameraFocalDistance = _orbitDistance;
@@ -478,6 +481,7 @@ public sealed class CameraManager : MonoBehaviour
             offset = -rayCamera.transform.forward * DefaultOrbitZoom;
         }
         _orbitDistance = Mathf.Max(0.1f, cameraOrbitZoom);
+        _lastSerializedOrbitZoom = _orbitDistance;
         _orbitYaw = Mathf.Atan2(offset.x, offset.z) * Mathf.Rad2Deg;
         _orbitPitch = Mathf.Clamp(Mathf.Asin(Mathf.Clamp(offset.y / offset.magnitude, -1.0f, 1.0f)) * Mathf.Rad2Deg, -MaxCameraPitch, MaxCameraPitch);
     }
@@ -494,15 +498,46 @@ public sealed class CameraManager : MonoBehaviour
         if (Input.GetKey(KeyCode.S)) _orbitPitch -= angle;
         
         _orbitPitch = Mathf.Clamp(_orbitPitch, -MaxCameraPitch, MaxCameraPitch);
+
+        // Inspector edits occur outside the orbit input path. Use the serialized
+        // value before applying keyboard or mouse-wheel zoom for this frame.
+        if (!Mathf.Approximately(cameraOrbitZoom, _lastSerializedOrbitZoom))
+        {
+            _orbitDistance = Mathf.Max(0.1f, cameraOrbitZoom);
+        }
         
         if (Input.GetKey(KeyCode.UpArrow) || Input.GetKey(KeyCode.E)) _orbitDistance = Mathf.Max(0.1f, _orbitDistance - delta * scale);
         if (Input.GetKey(KeyCode.DownArrow) || Input.GetKey(KeyCode.Q)) _orbitDistance += delta * scale;
+        float scroll = Input.mouseScrollDelta.y;
+        if (!Mathf.Approximately(scroll, 0.0f))
+        {
+            _orbitDistance = Mathf.Max(0.1f, _orbitDistance - scroll * Mathf.Max(0.1f, _orbitDistance) * 0.15f);
+        }
         
         cameraOrbitZoom = _orbitDistance;
+        _lastSerializedOrbitZoom = _orbitDistance;
         
         var offset = new Vector3(Mathf.Sin(_orbitYaw * Mathf.Deg2Rad) * Mathf.Cos(_orbitPitch * Mathf.Deg2Rad), Mathf.Sin(_orbitPitch * Mathf.Deg2Rad), Mathf.Cos(_orbitYaw * Mathf.Deg2Rad) * Mathf.Cos(_orbitPitch * Mathf.Deg2Rad)) * _orbitDistance;
         camera.transform.position = cameraFocusPosition + offset;
         camera.transform.LookAt(cameraFocusPosition);
+    }
+
+    public void SetOrbitState(Vector3 focusPosition, Vector3 cameraPosition)
+    {
+        if (renderTextureCamera == null)
+        {
+            return;
+        }
+
+        cameraBehavior = CameraBehavior.OrbitFocusPoint;
+        cameraFocusPosition = focusPosition;
+        cameraOrbitZoom = Mathf.Max(0.1f, Vector3.Distance(cameraPosition, focusPosition));
+        renderTextureCamera.transform.position = cameraPosition;
+        renderTextureCamera.transform.LookAt(focusPosition);
+        _activeBehavior = cameraBehavior;
+        _hasActiveBehavior = true;
+        InitializeOrbit(renderTextureCamera);
+        cameraFocalDistance = _orbitDistance;
     }
 
     private static void Rotate(Transform transform, float yawDelta, float pitchDelta)

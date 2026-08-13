@@ -111,12 +111,20 @@ float EstimateCurrentVariance(uint2 pixel, uint width, uint height)
 
 float3 ACESFilmicToneMap(float3 color)
 {
-    const float a = 2.51f;
-    const float b = 0.03f;
-    const float c = 2.43f;
-    const float d = 0.59f;
-    const float e = 0.14f;
-    return saturate((color * (a * color + b)) / (color * (c * color + d) + e));
+    // Match Three.js ACESFilmicToneMapping, including its AP1 color transforms.
+    const float3x3 acesInput = float3x3(
+        0.59719f, 0.35458f, 0.04823f,
+        0.07600f, 0.90834f, 0.01566f,
+        0.02840f, 0.13383f, 0.83777f);
+    const float3x3 acesOutput = float3x3(
+         1.60475f, -0.53108f, -0.07367f,
+        -0.10208f,  1.10813f, -0.00605f,
+        -0.00327f, -0.07276f,  1.07602f);
+
+    color = mul(acesInput, color);
+    float3 a = color * (color + 0.0245786f) - 0.000090537f;
+    float3 b = color * (0.983729f * color + 0.4329510f) + 0.238081f;
+    return saturate(mul(acesOutput, a / b));
 }
 
 float4 SampleCatmullRom(Texture2D<float4> source, float2 uv)

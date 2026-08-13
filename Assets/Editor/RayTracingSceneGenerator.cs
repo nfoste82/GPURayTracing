@@ -20,6 +20,7 @@ public static class RayTracingSceneGenerator
     private const string TeapotBaseModelPath = "Assets/Models/Teapot/Mesh000.obj";
     private const string TeapotBodyModelPath = "Assets/Models/Teapot/Mesh001.obj";
     private const string DefaultCheckerGrayTexturePath = "Default-Checker-Gray.png";
+    private const string MaterialBallGltfUrl = "https://raw.githubusercontent.com/gkjohnson/3d-demo-data/main/models/usd-shader-ball/usd-shaderball-scene.glb";
     private const string RenderManTextureFolder = "Assets/Textures/RenderManSwatch";
     private const string MetalPlateTextureFolder = "Assets/Textures";
     private const string TerrainPreviewMaterialPath = GeneratedAssetFolder + "/TerrainPreview.mat";
@@ -116,6 +117,7 @@ public static class RayTracingSceneGenerator
             CreateTerrainScene();
             CreateTeapotMaterialScene();
             CreateParallaxMappingScene();
+            CreateRemoteMaterialBallScene();
 
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
@@ -206,6 +208,49 @@ public static class RayTracingSceneGenerator
         AddLight(context.Root, "Normal-Mapped Sphere Light", new Vector3(-2.5f, 1.95f, 8.67f), 0.2f, new Color32(255, 235, 205, 255), 2.75f);
         
         Save(context.Scene, sceneName);
+    }
+
+    [MenuItem("Tools/Ray Tracing/Generate Remote Material Ball Scene")]
+    public static void CreateRemoteMaterialBallScene()
+    {
+        const string sceneName = "RemoteMaterialBall";
+        if (ShouldSkipExistingScene(sceneName))
+        {
+            return;
+        }
+
+        var context = CreateBaseScene(new SceneSettings
+        {
+            SceneName = sceneName,
+            CameraPosition = Vector3.zero,
+            CameraEuler = new Vector3(0.0f, 0.0f, 0.0f),
+            FieldOfView = 45.0f,
+            NumBounces = 10,
+            Exposure = 1.46f,
+            LightFalloffScale = 0.008f,
+            SkyboxLightColor = new Color32(16, 16, 16, 255),
+            DirectionalLightIntensity = 0.0f,
+            TopLevelBvhMinObjectCount = 0,
+            ShadowBvhMinObjectCount = 0,
+            CameraApertureMode = CameraApertureMode.Pinhole,
+            FireflyClamp = 0,
+        });
+
+        var assetObject = new GameObject("USD Material Ball Remote Asset");
+        assetObject.transform.SetParent(context.Root, false);
+        assetObject.transform.localScale = Vector3.one;
+        assetObject.AddComponent<RayTracingQuickControls>();
+        var remoteAsset = assetObject.AddComponent<RemoteGltfRayTracingAsset>();
+        remoteAsset.Url = MaterialBallGltfUrl;
+        assetObject.AddComponent<MaterialBallSceneController>();
+
+        Save(context.Scene, sceneName);
+    }
+
+    [MenuItem("Tools/Ray Tracing/Regenerate Remote Material Ball Scene")]
+    public static void RegenerateRemoteMaterialBallScene()
+    {
+        GenerateScenes(new[] { GetScenePath("RemoteMaterialBall") }, true);
     }
 
     private static void ConfigureSurfaceMaps(GameObject obj, Texture2D albedo, Texture2D normal, Texture2D height, Texture2D roughness, float parallaxStrength, Vector2 uvScale)
