@@ -52,6 +52,11 @@ namespace PathTracing.Caustics
         internal ComputeBuffer TargetPairBuffer;
         internal ComputeBuffer TargetTriangleBuffer;
 
+        internal const int PhotonStride = 36;
+        internal const int MetadataCount = 6;
+        internal const int TargetPairStride = 32;
+        internal const int TargetTriangleStride = 12;
+
         public bool HasResources => PhotonBuffer != null && PhotonMetadataBuffer != null
             && GridCellHeadBuffer != null && PhotonNextBuffer != null
             && TargetPairBuffer != null && TargetTriangleBuffer != null;
@@ -61,6 +66,40 @@ namespace PathTracing.Caustics
         public int GridPhotonCount => GridPhotonCountValue;
         public int GridOutOfBoundsCount => GridOutOfBoundsCountValue;
         public int TargetPairCount => TargetPairs.Count;
+
+        internal void EnsureResources(int photonCount)
+        {
+            int photonCapacity = Mathf.Max(1, photonCount);
+            int targetPairCapacity = Mathf.Max(1, TargetPairs.Count);
+            int targetTriangleCapacity = Mathf.Max(1, TargetTriangles.Count);
+            if (PhotonBuffer != null && PhotonBuffer.count == photonCapacity
+                && PhotonMetadataBuffer != null
+                && PhotonNextBuffer != null && PhotonNextBuffer.count == photonCapacity
+                && GridCellHeadBuffer != null && GridCellHeadBuffer.count == GridCellCount
+                && TargetPairBuffer != null && TargetPairBuffer.count == targetPairCapacity
+                && TargetTriangleBuffer != null && TargetTriangleBuffer.count == targetTriangleCapacity)
+            {
+                return;
+            }
+
+            // ReleaseResources clears diagnostics, including the layout calculated by GameManager.
+            // Preserve the current grid capacity before releasing the previous buffers.
+            int gridCellCount = Mathf.Max(1, GridCellCount);
+            ReleaseResources();
+            GridCellCountValue = gridCellCount;
+            PhotonBuffer = new ComputeBuffer(photonCapacity, PhotonStride);
+            PhotonMetadataBuffer = new ComputeBuffer(MetadataCount, sizeof(uint));
+            PhotonNextBuffer = new ComputeBuffer(photonCapacity, sizeof(int));
+            GridCellHeadBuffer = new ComputeBuffer(gridCellCount, sizeof(int));
+            TargetPairBuffer = CreateComputeBuffer(TargetPairs, TargetPairStride);
+            TargetTriangleBuffer = CreateComputeBuffer(TargetTriangles, TargetTriangleStride);
+            HasPhotonStateHash = false;
+        }
+
+        private static ComputeBuffer CreateComputeBuffer<T>(List<T> data, int stride) where T : struct
+        {
+            return new ComputeBuffer(Mathf.Max(1, data.Count), stride);
+        }
 
         internal void ReleaseResources()
         {

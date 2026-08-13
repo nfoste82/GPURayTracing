@@ -20,6 +20,7 @@ using Light = PathTracing.Lighting.Light;
 
 [RequireComponent(typeof(TerrainManager))]
 [RequireComponent(typeof(CameraManager))]
+[RequireComponent(typeof(WaterManager))]
 public class GameManager : MonoBehaviour
 {
     [SerializeField, HideInInspector] private CameraManager _cameraManager;
@@ -370,7 +371,7 @@ public class GameManager : MonoBehaviour
     internal RenderTexture FeatureIdentityTexture => _featureIdentityTexture;
     internal RenderTexture FeatureValidityTexture => _featureValidityTexture;
     internal RenderTexture CausticPreservationMaskTexture => _causticPreservationMaskTexture;
-    internal Water WaterInternal => _water;
+    public Water WaterInternal => WaterManager.Water;
     public Vector2Int DisplayTextureSize => _displayTextureSize;
     public int AccumulatedFrameCount => _accumulatedFrameCount;
     public int SphereLightCount => _lightObjects.Count;
@@ -406,7 +407,7 @@ public class GameManager : MonoBehaviour
             return count;
         }
     }
-    public bool HasWaterVolume => _water != null;
+    public bool HasWaterVolume => WaterManager.HasWaterVolume;
     public bool IsVolumetricFogActive => IsFogEnabled();
     public float EffectiveFogDensity => IsFogEnabled() ? _fogVolume.Density * Mathf.Max(0.0f, fogDensityScale) : 0.0f;
     public Color EffectiveFogScatteringAlbedo => IsFogEnabled()
@@ -424,10 +425,6 @@ public class GameManager : MonoBehaviour
     private const int BvhNodeStride = 48;
     private const int TopLevelBvhNodeStride = 48;
     private const int MeshLightTriangleCdfStride = 4;
-    private const int CausticPhotonStride = 36;
-    private const int CausticTargetPairStride = 32;
-    private const int CausticTargetTriangleStride = 12;
-    private const int CausticMetadataCount = 6;
     // The photon transport kernel carries a medium stack and intersection state. A 32-thread
     // group keeps Metal register allocation within its recommended per-group budget.
     private const int CausticTraceThreadCount = 32;
@@ -449,7 +446,7 @@ public class GameManager : MonoBehaviour
     private const float VirtualSunDistance = 10000.0f;
     
 
-    private Water _water;
+    private WaterManager _waterManager;
     private FogVolume _fogVolume;
     private readonly Stopwatch _startupStopwatch = Stopwatch.StartNew();
     private readonly List<string> _startupProfilePhases = new ();
@@ -462,6 +459,25 @@ public class GameManager : MonoBehaviour
     private int _profileBuiltMeshTemplateCount;
     private long _profileBuiltMeshTemplateTicks;
     private long _profileTextureArrayTicks;
+
+    public WaterManager WaterManager
+    {
+        get
+        {
+            if (_waterManager == null)
+            {
+                _waterManager = GetComponent<WaterManager>();
+            }
+
+            return _waterManager;
+        }
+    }
+
+    internal void OnWaterChanged()
+    {
+        CameraManager.AutoFocusSceneChanged = true;
+        ResetFrameAccumulation();
+    }
 
     private void Start()
     {
@@ -1241,10 +1257,10 @@ public class GameManager : MonoBehaviour
             return;
         }
 
-        int threadGroupsX = Mathf.CeilToInt(_textureSize.x / 8.0f);
-        int threadGroupsY = Mathf.CeilToInt(_textureSize.y / 8.0f);
+        var threadGroupsX = Mathf.CeilToInt(_textureSize.x / 8.0f);
+        var threadGroupsY = Mathf.CeilToInt(_textureSize.y / 8.0f);
         GenerateCausticPreservationMask(threadGroupsX, threadGroupsY);
-        int kernel = _spatialDenoiserShader.FindKernel("CSVisualizeTemporal");
+        var kernel = _spatialDenoiserShader.FindKernel("CSVisualizeTemporal");
         _spatialDenoiserShader.SetTexture(kernel, "PreservationMask", _causticPreservationMaskTexture);
         _spatialDenoiserShader.SetTexture(kernel, "PresentationResult", _outputTexture);
         _spatialDenoiserShader.SetInt("_TemporalDebugMode", 9);
@@ -1255,117 +1271,6 @@ public class GameManager : MonoBehaviour
     {
         _accumulatedFrameCount = 0;
         _hasAccumulationStateHash = false;
-    }
-
-    #if false
-    private void PrepareTemporalCameraState()
-    {
-        Matrix4x4 gpuProjection = GL.GetGPUProjectionMatrix(renderTextureCamera.projectionMatrix, true);
-        _currentUnjitteredViewProjection = gpuProjection * renderTextureCamera.worldToCameraMatrix;
-        _currentTemporalJitterNdc = GetTemporalJitterNdc(_temporalFrameIndex, _textureSize);
-        int stateHash = CalculateTemporalStateHash();
-        bool cameraCut = _temporalHistoryValid && (Vector3.Distance(renderTextureCamera.transform.position, _previousTemporalCameraPosition) >= _temporalDenoisingManager.temporalCameraCutDistance
-            || Quaternion.Angle(renderTextureCamera.transform.rotation, _previousTemporalCameraRotation) >= _temporalDenoisingManager.temporalCameraCutAngle);
-        if (!_hasTemporalStateHash || stateHash != _temporalStateHash || cameraCut)
-        {
-            ResetTemporalHistory();
-            _temporalStateHash = stateHash;
-            _hasTemporalStateHash = true;
-        }
-
-        if (!_temporalHistoryValid)
-        {
-            _previousUnjitteredViewProjection = _currentUnjitteredViewProjection;
-            _previousTemporalJitterNdc = _currentTemporalJitterNdc;
-        }
-    }
-
-    private void CommitTemporalCameraState()
-    {
-        _previousUnjitteredViewProjection = _currentUnjitteredViewProjection;
-        _previousTemporalJitterNdc = _currentTemporalJitterNdc;
-        _previousTemporalCameraPosition = renderTextureCamera.transform.position;
-        _previousTemporalCameraRotation = renderTextureCamera.transform.rotation;
-        _temporalFrameIndex++;
-    }
-
-    private void CommitRenderedCameraState()
-    {
-        _lastRenderedCameraPosition = renderTextureCamera.transform.position;
-        _lastRenderedCameraRotation = renderTextureCamera.transform.rotation;
-        _hasRenderedCameraState = true;
-    }
-
-    private static Vector2 GetTemporalJitterNdc(uint frameIndex, Vector2Int size)
-    {
-        float Halton(uint index, uint radix)
-        {
-            float result = 0.0f;
-            float fraction = 1.0f / radix;
-            while (index > 0)
-            {
-                result += fraction * (index % radix);
-                index /= radix;
-                fraction /= radix;
-            }
-            return result;
-        }
-
-        return new Vector2(
-            (Halton(frameIndex + 1, 2) - 0.5f) * 2.0f / Mathf.Max(1, size.x),
-            (Halton(frameIndex + 1, 3) - 0.5f) * 2.0f / Mathf.Max(1, size.y));
-    }
-
-    private int CalculateTemporalStateHash()
-    {
-        unchecked
-        {
-            int hash = 17;
-            hash = AddHash(hash, _textureSize.x);
-            hash = AddHash(hash, _textureSize.y);
-            hash = AddHash(hash, renderResolutionPercent);
-            hash = AddHash(hash, numberOfPasses);
-            hash = AddHash(hash, numBounces);
-            hash = AddHash(hash, shadowQuality);
-            hash = AddHash(hash, lightSamplingStrategy.GetHashCode());
-            hash = AddHash(hash, lightSampleCount);
-            hash = AddHash(hash, maxLightSamples);
-            hash = AddHash(hash, GetCameraApertureRadius());
-            hash = AddHash(hash, enableCaustics ? 1 : 0);
-            hash = AddHash(hash, IsFogEnabled() ? 1 : 0);
-            hash = AddHash(hash, _water != null ? _water.GetInstanceID() : 0);
-            hash = AddHash(hash, skyboxTexture != null ? skyboxTexture.GetInstanceID() : 0);
-            hash = AddHash(hash, _spheres.Count);
-            hash = AddHash(hash, _lights.Count);
-            hash = AddHash(hash, _meshObjects.Count);
-            return hash;
-        }
-    }
-    #endif
-
-    private void EnsureCausticResources()
-    {
-        int photonCapacity = Mathf.Max(1, causticPhotonCount);
-        CalculateCausticGridLayout();
-        if (_causticsManager.PhotonBuffer != null && _causticsManager.PhotonBuffer.count == photonCapacity
-            && _causticsManager.PhotonMetadataBuffer != null
-            && _causticsManager.PhotonNextBuffer != null && _causticsManager.PhotonNextBuffer.count == photonCapacity
-            && _causticsManager.GridCellHeadBuffer != null && _causticsManager.GridCellHeadBuffer.count == _causticsManager.GridCellCount
-            && _causticsManager.TargetPairBuffer != null && _causticsManager.TargetPairBuffer.count == Mathf.Max(1, _causticsManager.TargetPairs.Count)
-            && _causticsManager.TargetTriangleBuffer != null && _causticsManager.TargetTriangleBuffer.count == Mathf.Max(1, _causticsManager.TargetTriangles.Count))
-        {
-            return;
-        }
-
-        ReleaseCausticResources();
-        CalculateCausticGridLayout();
-        _causticsManager.PhotonBuffer = new ComputeBuffer(photonCapacity, CausticPhotonStride);
-        _causticsManager.PhotonMetadataBuffer = new ComputeBuffer(CausticMetadataCount, sizeof(uint));
-        _causticsManager.PhotonNextBuffer = new ComputeBuffer(photonCapacity, sizeof(int));
-        _causticsManager.GridCellHeadBuffer = new ComputeBuffer(_causticsManager.GridCellCount, sizeof(int));
-        _causticsManager.TargetPairBuffer = CreateComputeBuffer(_causticsManager.TargetPairs, CausticTargetPairStride);
-        _causticsManager.TargetTriangleBuffer = CreateComputeBuffer(_causticsManager.TargetTriangles, CausticTargetTriangleStride);
-        _causticsManager.HasPhotonStateHash = false;
     }
 
     private void BuildCausticSamplingDistribution()
@@ -1454,11 +1359,11 @@ public class GameManager : MonoBehaviour
                     pairWeights, ref maximumWeight);
             }
 
-            if (CausticsLogic.IsCausticRefractor(_water))
+            if (CausticsLogic.IsCausticRefractor(WaterInternal))
             {
-                var waterSize = _water.Size;
+                var waterSize = WaterInternal.Size;
                 AddCausticTargetPair(lightIndex, 2, -1, 0, 0,
-                    CausticsLogic.GetCausticPairWeight(light, _water.TopCenter,
+                    CausticsLogic.GetCausticPairWeight(light, WaterInternal.TopCenter,
                         new Vector3(waterSize.x, 0.0f, waterSize.y).magnitude * 0.5f),
                     pairWeights, ref maximumWeight);
             }
@@ -1522,14 +1427,11 @@ public class GameManager : MonoBehaviour
                 ref hasBounds, ref boundsMin, ref boundsMax);
         }
         
-        if (_water != null)
+        if (WaterManager.TryGetCausticBounds(out Vector3 waterBoundsMin, out Vector3 waterBoundsMax))
         {
-            var waterSize = _water.Size;
-            var waveHeight = Mathf.Max(0.001f, _water.WaveAmplitude);
-            var halfSize = new Vector3(waterSize.x * 0.5f, 0.0f, waterSize.y * 0.5f);
             CausticsLogic.EncapsulateCausticBounds(
-                _water.TopCenter - halfSize + Vector3.down * (_water.Depth + waveHeight),
-                _water.TopCenter + halfSize + Vector3.up * waveHeight,
+                waterBoundsMin,
+                waterBoundsMax,
                 ref hasBounds, ref boundsMin, ref boundsMax);
         }
 
@@ -1556,7 +1458,8 @@ public class GameManager : MonoBehaviour
         _causticsManager.GridMin = boundsMin;
         _causticsManager.GridCellSize = cellSize;
         _causticsManager.GridDimensions = dimensions;
-        _causticsManager.GridCellCountValue = dimensions.x * dimensions.y * dimensions.z;
+        long gridCellCount = (long)dimensions.x * dimensions.y * dimensions.z;
+        _causticsManager.GridCellCountValue = Mathf.Max(1, (int)Mathf.Min(int.MaxValue, gridCellCount));
     }
     
 
@@ -1584,7 +1487,8 @@ public class GameManager : MonoBehaviour
         {
             BuildCausticSamplingDistribution();
         }
-        EnsureCausticResources();
+        CalculateCausticGridLayout();
+        _causticsManager.EnsureResources(causticPhotonCount);
         if (stateChanged)
         {
             _causticsManager.TargetPairBuffer.SetData(_causticsManager.TargetPairs.Count > 0
@@ -1617,7 +1521,8 @@ public class GameManager : MonoBehaviour
         SetSceneBuffers(traceKernel);
         shader.Dispatch(clearKernel, 1, 1, 1);
         shader.Dispatch(traceKernel, Mathf.CeilToInt(Mathf.Max(1, causticPhotonCount) / (float)CausticTraceThreadCount), 1, 1);
-        shader.Dispatch(clearGridKernel, Mathf.CeilToInt(_causticsManager.GridCellCount / (float)CausticTraceThreadCount), 1, 1);
+        shader.Dispatch(clearGridKernel, Mathf.Max(1,
+            Mathf.CeilToInt(_causticsManager.GridCellCount / (float)CausticTraceThreadCount)), 1, 1);
         shader.Dispatch(buildGridKernel, Mathf.CeilToInt(Mathf.Max(1, causticPhotonCount) / (float)CausticTraceThreadCount), 1, 1);
         RequestCausticMetadataReadback();
         _causticsManager.DispatchCountValue++;
@@ -1656,7 +1561,7 @@ public class GameManager : MonoBehaviour
         }
 
         var metadata = request.GetData<uint>();
-        if (metadata.Length >= CausticMetadataCount)
+        if (metadata.Length >= CausticsManager.MetadataCount)
         {
             _causticsManager.GridOutOfBoundsCountValue = (int)metadata[4];
             _causticsManager.GridPhotonCountValue = (int)metadata[5];
@@ -1676,13 +1581,13 @@ public class GameManager : MonoBehaviour
         shader.SetInt("_NumMeshes", _meshInfos.Count);
         shader.SetInt("_NumTopLevelBvhNodes", _topLevelBvhNodes.Count);
         shader.SetInt("_NumShadowBvhNodes", _shadowBvhNodes.Count);
-        SetWaterShaderParameters();
+        WaterManager.SetShaderParameters(shader, Application.isPlaying ? GetRenderTime() : 0.0f);
         SetTerrainShaderParameters(traceKernel);
     }
 
     private bool ShouldUseFrameAccumulation()
     {
-        bool animatedWater = _water != null && _water.WaveAmplitude > 0.0f && _water.WaveSpeed > 0.0f && !_singleFrame;
+        bool animatedWater = WaterManager.IsAnimated && !_singleFrame;
         return enableFrameAccumulation && debugRenderMode == DebugRenderMode.FinalColor && !animatedWater
             && !ShouldUseTemporalAccumulation();
     }
@@ -3997,28 +3902,6 @@ public class GameManager : MonoBehaviour
         Debug.LogWarning($"RayTracingObject '{obj.name}' needs RayMaterial with SphereCollider or MeshFilter, or RayLight with SphereCollider or MeshFilter.", obj);
     }
 
-    public bool RegisterWater(Water water)
-    {
-        if (_water == water)
-        {
-            return true;
-        }
-
-        if (_water != null)
-        {
-            Debug.LogError(
-                $"Only one active Water component is supported by GameManager '{name}'. " +
-                $"Disable '{_water.name}' before enabling '{water.name}'.",
-                water);
-            return false;
-        }
-
-        _water = water;
-        CameraManager.AutoFocusSceneChanged = true;
-        ResetFrameAccumulation();
-        return true;
-    }
-
     public void RegisterDirectionalLight(RayDirectionalLight directionalLight)
     {
         if (directionalLight == null || _directionalLights.Contains(directionalLight))
@@ -4100,18 +3983,6 @@ public class GameManager : MonoBehaviour
             normal = normal,
             type = (int)PathTracedLightType.SunTriangle
         };
-    }
-
-    public void UnregisterWater(Water water)
-    {
-        if (_water != water)
-        {
-            return;
-        }
-
-        _water = null;
-        CameraManager.AutoFocusSceneChanged = true;
-        ResetFrameAccumulation();
     }
 
     public bool RegisterFogVolume(FogVolume fogVolume)
@@ -4288,12 +4159,12 @@ public class GameManager : MonoBehaviour
     {
         unchecked
         {
-            int hash = _water != null ? _water.GetInstanceID() : 0;
-            if (_water != null)
+            int hash = WaterInternal != null ? WaterInternal.GetInstanceID() : 0;
+            if (WaterInternal != null)
             {
-                hash = AddHash(hash, _water.TopCenter);
-                hash = AddHash(hash, _water.Size);
-                hash = AddHash(hash, _water.Opacity);
+                hash = AddHash(hash, WaterInternal.TopCenter);
+                hash = AddHash(hash, WaterInternal.Size);
+                hash = AddHash(hash, WaterInternal.Opacity);
             }
 
             return hash;
@@ -4343,22 +4214,9 @@ public class GameManager : MonoBehaviour
             nearestDistance = GetNearestMeshIntersectionDistance(ray, meshInfo, nearestDistance);
         }
         
-        if (_water != null && !ShouldAutoFocusIgnoreObject(_water.Opacity) && Mathf.Abs(ray.direction.y) > 0.000001f)
+        if (WaterManager.TryGetAutoFocusHit(ray, nearestDistance, out float waterHitDistance))
         {
-            Vector3 waterCenter = _water.TopCenter;
-            Vector2 waterSize = _water.Size;
-            float hitDistance = (waterCenter.y - ray.origin.y) / ray.direction.y;
-            var hitPoint = ray.origin + ray.direction * hitDistance;
-            var halfSize = waterSize * 0.5f;
-            if (hitDistance > 0.0f
-                && hitDistance < nearestDistance
-                && hitPoint.x >= waterCenter.x - halfSize.x
-                && hitPoint.x <= waterCenter.x + halfSize.x
-                && hitPoint.z >= waterCenter.z - halfSize.y
-                && hitPoint.z <= waterCenter.z + halfSize.y)
-            {
-                nearestDistance = hitDistance;
-            }
+            nearestDistance = waterHitDistance;
         }
 
         return nearestDistance;
@@ -4465,7 +4323,7 @@ public class GameManager : MonoBehaviour
         shader.SetFloat("_AnamorphicRatio", Mathf.Clamp(CameraManager.cameraAnamorphicRatio, 0.25f, 4.0f));
         shader.SetFloat("_Exposure", exposure);
         shader.SetFloat("_FireflyClamp", Mathf.Max(0.0f, fireflyClamp));
-        SetWaterShaderParameters();
+        WaterManager.SetShaderParameters(shader, Application.isPlaying ? GetRenderTime() : 0.0f);
         SetTerrainShaderParameters(kernelHandle);
         bool fogEnabled = IsFogEnabled();
         Vector3 fogCenter = fogEnabled ? _fogVolume.Center : Vector3.zero;
@@ -4493,30 +4351,6 @@ public class GameManager : MonoBehaviour
         bool hasTransparentShadowBlockers = _hasTransparentSphereBlockers || _hasTransparentMeshBlockers;
         shader.SetInt("_HasTransparentShadowBlockers", hasTransparentShadowBlockers ? 1 : 0);
         SetSceneBuffers(kernelHandle);
-    }
-
-    private void SetWaterShaderParameters()
-    {
-        bool waterEnabled = _water != null;
-        Vector3 waterCenter = waterEnabled ? _water.TopCenter : Vector3.zero;
-        Vector2 waterSize = waterEnabled ? _water.Size : Vector2.one;
-        Color32 waterColor = waterEnabled ? _water.Color : new Color32(255, 255, 255, 255);
-        shader.SetInt("_WaterEnabled", waterEnabled ? 1 : 0);
-        shader.SetVector("_WaterCenter", new Vector4(waterCenter.x, waterCenter.y, waterCenter.z, 0.0f));
-        shader.SetVector("_WaterSize", new Vector4(waterSize.x, waterSize.y, 0.0f, 0.0f));
-        shader.SetFloat("_WaterDepth", waterEnabled ? _water.Depth : 1.0f);
-        Vector3 waterColorVector = waterColor.ToVector3();
-        shader.SetVector("_WaterColor", new Vector4(waterColorVector.x, waterColorVector.y, waterColorVector.z, 0.0f));
-        shader.SetFloat("_WaterSmoothness", waterEnabled ? _water.Smoothness : 0.0f);
-        shader.SetFloat("_WaterOpacity", waterEnabled ? Mathf.Clamp01(_water.Opacity) : 0.0f);
-        shader.SetFloat("_WaterAbsorptionStrength", waterEnabled ? Mathf.Max(0.0f, _water.AbsorptionStrength) : 0.0f);
-        shader.SetFloat("_WaterRefraction", waterEnabled ? _water.RefractionIndex : 1.0f);
-        shader.SetFloat("_WaterWaveAmplitude", waterEnabled ? Mathf.Max(0.0f, _water.WaveAmplitude) : 0.0f);
-        shader.SetFloat("_WaterWaveScale", waterEnabled ? Mathf.Max(0.001f, _water.WaveScale) : 1.0f);
-        shader.SetFloat("_WaterWaveSpeed", waterEnabled ? Mathf.Max(0.0f, _water.WaveSpeed) : 0.0f);
-        shader.SetFloat("_WaterTime", Application.isPlaying ? GetRenderTime() : 0.0f);
-        shader.SetInt("_WaterMarchSteps", waterEnabled ? Mathf.Clamp(_water.MarchSteps, 8, 64) : 8);
-        shader.SetInt("_WaterRefinementSteps", waterEnabled ? Mathf.Clamp(_water.RefinementSteps, 2, 8) : 2);
     }
 
     private void SetTerrainShaderParameters(int kernelHandle)
@@ -4597,10 +4431,7 @@ public class GameManager : MonoBehaviour
                 hash = AddHash(hash, causticIntensity);
                 hash = AddHash(hash, _causticsManager.PhotonStateHash);
             }
-            if (_water != null)
-            {
-                hash = _water.AddAccumulationStateHash(hash);
-            }
+            hash = WaterManager.AddAccumulationStateHash(hash);
             hash = AddHash(hash, enableVolumetricFog ? 1 : 0);
             hash = AddHash(hash, fogDensityScale);
             hash = AddHash(hash, fogScatteringScale);
@@ -4618,20 +4449,20 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, _spheres.Count);
             for (var i = 0; i < _spheres.Count; i++)
             {
-                hash = AddHash(hash, _spheres[i]);
+                hash = _spheres[i].AddHash(hash);
             }
 
             hash = AddHash(hash, _lights.Count);
             for (var i = 0; i < _lights.Count; i++)
             {
-                hash = AddHash(hash, _lights[i]);
+                hash = _lights[i].AddHash(hash);
             }
 
             hash = AddHash(hash, _triangles.Count);
             hash = AddHash(hash, _meshInfos.Count);
             for (var i = 0; i < _meshObjects.Count; i++)
             {
-                hash = AddHash(hash, _meshObjects[i]);
+                hash = _meshObjects[i].AddHash(hash);
             }
 
             return hash;
@@ -4651,44 +4482,22 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, _spheres.Count);
             for (var i = 0; i < _spheres.Count; i++)
             {
-                hash = AddHash(hash, _spheres[i]);
+                hash = _spheres[i].AddHash(hash);
             }
 
             hash = AddHash(hash, _lights.Count);
             for (var i = 0; i < _lights.Count; i++)
             {
-                hash = AddHash(hash, _lights[i]);
+                hash = _lights[i].AddHash(hash);
             }
 
             hash = AddHash(hash, _triangles.Count);
             hash = AddHash(hash, _meshInfos.Count);
             for (var i = 0; i < _meshObjects.Count; i++)
             {
-                hash = AddHash(hash, _meshObjects[i]);
+                hash = _meshObjects[i].AddHash(hash);
             }
-            hash = AddHash(hash, _water != null ? _water.GetInstanceID() : 0);
-            if (_water != null)
-            {
-                hash = AddHash(hash, _water.TopCenter);
-                hash = AddHash(hash, new Vector3(_water.Size.x, _water.Size.y, _water.Depth));
-                hash = AddHash(hash, _water.Color.r);
-                hash = AddHash(hash, _water.Color.g);
-                hash = AddHash(hash, _water.Color.b);
-                hash = AddHash(hash, _water.Smoothness);
-                hash = AddHash(hash, _water.Opacity);
-                hash = AddHash(hash, _water.AbsorptionStrength);
-                hash = AddHash(hash, _water.RefractionIndex);
-                hash = AddHash(hash, _water.WaveAmplitude);
-                hash = AddHash(hash, _water.WaveScale);
-                hash = AddHash(hash, _water.WaveSpeed);
-                hash = AddHash(hash, _water.MarchSteps);
-                hash = AddHash(hash, _water.RefinementSteps);
-                // Frozen water is deterministic in single-frame mode; include the phase otherwise.
-                if (!_singleFrame && _water.WaveAmplitude > 0.0f && _water.WaveSpeed > 0.0f)
-                {
-                    hash = AddHash(hash, GetRenderTime());
-                }
-            }
+            hash = WaterManager.AddCausticPhotonStateHash(hash, _singleFrame, GetRenderTime());
             return hash;
         }
     }
@@ -4713,6 +4522,12 @@ public class GameManager : MonoBehaviour
         return AddHash(hash, value.z);
     }
 
+    internal static int AddHash(int hash, Vector2 value)
+    {
+        hash = AddHash(hash, value.x);
+        return AddHash(hash, value.y);
+    }
+
     internal static int AddHash(int hash, Matrix4x4 value)
     {
         for (int i = 0; i < 16; i++)
@@ -4723,57 +4538,4 @@ public class GameManager : MonoBehaviour
         return hash;
     }
 
-    private static int AddHash(int hash, Sphere value)
-    {
-        hash = AddHash(hash, value.position);
-        hash = AddHash(hash, value.color);
-        hash = AddHash(hash, value.emission);
-        hash = AddHash(hash, value.radius);
-        hash = AddHash(hash, value.smoothness);
-        hash = AddHash(hash, value.opacity);
-        hash = AddHash(hash, value.refraction);
-        hash = AddHash(hash, value.specular);
-        hash = AddHash(hash, value.transmission);
-        hash = AddHash(hash, value.materialType);
-        hash = AddHash(hash, value.textureIndex);
-        hash = AddHash(hash, value.normalTextureIndex);
-        hash = AddHash(hash, value.parallaxTextureIndex);
-        hash = AddHash(hash, value.textureUvScale);
-        hash = AddHash(hash, value.parallaxStrength);
-        return AddHash(hash, value.minimumParallaxStrength);
-    }
-
-    private static int AddHash(int hash, Light value)
-    {
-        hash = AddHash(hash, value.position);
-        hash = AddHash(hash, value.emission);
-        hash = AddHash(hash, value.u);
-        hash = AddHash(hash, value.radius);
-        hash = AddHash(hash, value.v);
-        hash = AddHash(hash, value.area);
-        hash = AddHash(hash, value.normal);
-        return AddHash(hash, value.type);
-    }
-
-    private static int AddHash(int hash, PathTracedMesh value)
-    {
-        hash = AddHash(hash, value.transform.localToWorldMatrix);
-        hash = AddHash(hash, value.previousColor);
-        hash = AddHash(hash, value.previousEmission);
-        hash = AddHash(hash, value.previousSmoothness);
-        hash = AddHash(hash, value.previousMetallic);
-        hash = AddHash(hash, value.previousOpacity);
-        hash = AddHash(hash, value.previousRefraction);
-        hash = AddHash(hash, value.previousSpecular);
-        hash = AddHash(hash, value.previousTransmission);
-        hash = AddHash(hash, value.previousMaterialType);
-        hash = AddHash(hash, value.previousAlbedoTexture != null ? value.previousAlbedoTexture.GetInstanceID() : 0);
-        hash = AddHash(hash, value.previousMetallicRoughnessTexture != null ? value.previousMetallicRoughnessTexture.GetInstanceID() : 0);
-        hash = AddHash(hash, value.previousNormalTexture != null ? value.previousNormalTexture.GetInstanceID() : 0);
-        hash = AddHash(hash, value.previousParallaxTexture != null ? value.previousParallaxTexture.GetInstanceID() : 0);
-        hash = AddHash(hash, value.previousTextureUvScale);
-        hash = AddHash(hash, value.previousParallaxStrength);
-        hash = AddHash(hash, value.previousMinimumParallaxStrength);
-        return AddHash(hash, value.previousInterpolateNormals ? 1 : 0);
-    }
 }

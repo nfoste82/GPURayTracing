@@ -70,6 +70,7 @@ public sealed class GameManagerEditor : Editor
         DrawSection(manager, "Camera", true, () => DrawCameraSettings(manager));
         DrawSection(manager, "Denoising", false, DrawDenoising);
         DrawSection(manager, "Volumetric Fog", false, DrawVolumetricFog);
+        DrawSection(manager, "Water", false, () => DrawWater(manager));
         DrawSection(manager, "Caustics", false, DrawCaustics);
         DrawSection(manager, "Terrain", true, () => DrawTerrain(manager));
         DrawSection(manager, "Acceleration Structures", false, () =>
@@ -261,6 +262,30 @@ public sealed class GameManagerEditor : Editor
             DrawProperty("fogInScatteringIntensity");
             DrawProperty("enableFogMultipleScattering");
         }
+    }
+
+    private static void DrawWater(GameManager manager)
+    {
+        Water water = manager.WaterInternal;
+        if (water == null)
+        {
+            EditorGUILayout.HelpBox("Add a Water component beneath this GameManager to configure water rendering.", MessageType.Info);
+            return;
+        }
+
+        var waterObject = new SerializedObject(water);
+        waterObject.Update();
+        EditorGUILayout.PropertyField(waterObject.FindProperty("Color"));
+        EditorGUILayout.PropertyField(waterObject.FindProperty("Smoothness"));
+        EditorGUILayout.PropertyField(waterObject.FindProperty("Opacity"));
+        EditorGUILayout.PropertyField(waterObject.FindProperty("AbsorptionStrength"));
+        EditorGUILayout.PropertyField(waterObject.FindProperty("RefractionIndex"));
+        EditorGUILayout.PropertyField(waterObject.FindProperty("WaveAmplitude"));
+        EditorGUILayout.PropertyField(waterObject.FindProperty("WaveScale"));
+        EditorGUILayout.PropertyField(waterObject.FindProperty("WaveSpeed"));
+        EditorGUILayout.PropertyField(waterObject.FindProperty("MarchSteps"));
+        EditorGUILayout.PropertyField(waterObject.FindProperty("RefinementSteps"));
+        waterObject.ApplyModifiedProperties();
     }
 
     private void DrawCaustics()

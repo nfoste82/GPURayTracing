@@ -85,7 +85,8 @@ public class Water : MonoBehaviour
             return;
         }
 
-        if (!gameManager.RegisterWater(this))
+        WaterManager waterManager = gameManager.GetComponent<WaterManager>();
+        if (waterManager == null || !waterManager.RegisterWater(this))
         {
             enabled = false;
         }
@@ -96,7 +97,8 @@ public class Water : MonoBehaviour
         var gameManager = GetComponentInParent<GameManager>();
         if (gameManager != null)
         {
-            gameManager.UnregisterWater(this);
+            WaterManager waterManager = gameManager.GetComponent<WaterManager>();
+            waterManager?.UnregisterWater(this);
         }
     }
 

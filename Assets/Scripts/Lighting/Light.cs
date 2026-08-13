@@ -17,6 +17,18 @@ namespace PathTracing.Lighting
         public float totalArea;
         public float padding;
 
+        public int AddHash(int hash)
+        {
+            hash = GameManager.AddHash(hash, position);
+            hash = GameManager.AddHash(hash, emission);
+            hash = GameManager.AddHash(hash, u);
+            hash = GameManager.AddHash(hash, radius);
+            hash = GameManager.AddHash(hash, v);
+            hash = GameManager.AddHash(hash, area);
+            hash = GameManager.AddHash(hash, normal);
+            return GameManager.AddHash(hash, type);
+        }
+
         public float Intersect(Vector3 origin, Vector3 direction)
         {
             var diffToSphere = position - origin;

@@ -20,6 +20,26 @@ namespace PathTracing.Shapes
         public Vector2 textureUvScale;
         public float parallaxStrength;
         public float minimumParallaxStrength;
+
+        public int AddHash(int hash)
+        {
+            hash = GameManager.AddHash(hash, position);
+            hash = GameManager.AddHash(hash, color);
+            hash = GameManager.AddHash(hash, emission);
+            hash = GameManager.AddHash(hash, radius);
+            hash = GameManager.AddHash(hash, smoothness);
+            hash = GameManager.AddHash(hash, opacity);
+            hash = GameManager.AddHash(hash, refraction);
+            hash = GameManager.AddHash(hash, specular);
+            hash = GameManager.AddHash(hash, transmission);
+            hash = GameManager.AddHash(hash, materialType);
+            hash = GameManager.AddHash(hash, textureIndex);
+            hash = GameManager.AddHash(hash, normalTextureIndex);
+            hash = GameManager.AddHash(hash, parallaxTextureIndex);
+            hash = GameManager.AddHash(hash, textureUvScale);
+            hash = GameManager.AddHash(hash, parallaxStrength);
+            return GameManager.AddHash(hash, minimumParallaxStrength);
+        }
         
         public float Intersect(Vector3 origin, Vector3 direction)
         {
