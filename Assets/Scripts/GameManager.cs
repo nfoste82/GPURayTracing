@@ -415,7 +415,59 @@ public class GameManager : MonoBehaviour
         : Color.black;
 
     private static bool _buffersNeedRebuilding = false;
-    private static readonly List<PathTracingObject> _rayTracingObjects = new List<PathTracingObject>();
+    private static readonly List<PathTracingObject> _rayTracingObjects = new ();
+    private static readonly int SkyboxTexture = Shader.PropertyToID("_SkyboxTexture");
+    private static readonly int MeshAlbedoTextures = Shader.PropertyToID("_MeshAlbedoTextures");
+    private static readonly int MeshMetallicRoughnessTextures = Shader.PropertyToID("_MeshMetallicRoughnessTextures");
+    private static readonly int MeshNormalTextures = Shader.PropertyToID("_MeshNormalTextures");
+    private static readonly int MeshParallaxTextures = Shader.PropertyToID("_MeshParallaxTextures");
+    private static readonly int CameraToWorld = Shader.PropertyToID("_CameraToWorld");
+    private static readonly int CameraInverseProjection = Shader.PropertyToID("_CameraInverseProjection");
+    private static readonly int FrameJitterNdc = Shader.PropertyToID("_FrameJitterNdc");
+    private static readonly int UseTemporalJitter = Shader.PropertyToID("_UseTemporalJitter");
+    private static readonly int SkyboxLight = Shader.PropertyToID("_SkyboxLight");
+    private static readonly int Seed = Shader.PropertyToID("_Seed");
+    private static readonly int NumberOfPasses = Shader.PropertyToID("_NumberOfPasses");
+    private static readonly int SubpixelJitterScale = Shader.PropertyToID("_SubpixelJitterScale");
+    private static readonly int NumBounces = Shader.PropertyToID("_NumBounces");
+    private static readonly int Mode = Shader.PropertyToID("_DebugRenderMode");
+    private static readonly int UseFrameAccumulation = Shader.PropertyToID("_UseFrameAccumulation");
+    private static readonly int FrameCount = Shader.PropertyToID("_AccumulatedFrameCount");
+    private static readonly int SampleOffset = Shader.PropertyToID("_SampleOffset");
+    private static readonly int MaxLightSamples = Shader.PropertyToID("_MaxLightSamples");
+    private static readonly int SamplingStrategy = Shader.PropertyToID("_LightSamplingStrategy");
+    private static readonly int LightSampleCount = Shader.PropertyToID("_LightSampleCount");
+    private static readonly int Quality = Shader.PropertyToID("_ShadowQuality");
+    private static readonly int ShadowRandomness = Shader.PropertyToID("_ShadowRandomness");
+    private static readonly int ParallaxMaximumStrengthCosine = Shader.PropertyToID("_ParallaxMaximumStrengthCosine");
+    private static readonly int LightFalloffScale = Shader.PropertyToID("_LightFalloffScale");
+    private static readonly int FocalDistance = Shader.PropertyToID("_FocalDistance");
+    private static readonly int ApertureRadius = Shader.PropertyToID("_ApertureRadius");
+    private static readonly int ApertureBladeCount = Shader.PropertyToID("_ApertureBladeCount");
+    private static readonly int ApertureBladeRotation = Shader.PropertyToID("_ApertureBladeRotation");
+    private static readonly int AnamorphicRatio = Shader.PropertyToID("_AnamorphicRatio");
+    private static readonly int Exposure = Shader.PropertyToID("_Exposure");
+    private static readonly int FireflyClamp = Shader.PropertyToID("_FireflyClamp");
+    private static readonly int FogEnabled = Shader.PropertyToID("_FogEnabled");
+    private static readonly int FogBoundsMin = Shader.PropertyToID("_FogBoundsMin");
+    private static readonly int FogBoundsMax = Shader.PropertyToID("_FogBoundsMax");
+    private static readonly int FogScatteringAlbedo = Shader.PropertyToID("_FogScatteringAlbedo");
+    private static readonly int FogDensity = Shader.PropertyToID("_FogDensity");
+    private static readonly int FogInScatteringIntensity = Shader.PropertyToID("_FogInScatteringIntensity");
+    private static readonly int FogMultipleScattering = Shader.PropertyToID("_FogMultipleScattering");
+    private static readonly int NumLights = Shader.PropertyToID("_NumLights");
+    private static readonly int NumTopLevelBvhNodes = Shader.PropertyToID("_NumTopLevelBvhNodes");
+    private static readonly int NumShadowBvhNodes = Shader.PropertyToID("_NumShadowBvhNodes");
+    private static readonly int HasTransparentShadowBlockers = Shader.PropertyToID("_HasTransparentShadowBlockers");
+    private static readonly int FocusQueryResult = Shader.PropertyToID("_FocusQueryResult");
+    private static readonly int Spheres = Shader.PropertyToID("_Spheres");
+    private static readonly int Lights = Shader.PropertyToID("_Lights");
+    private static readonly int Triangles = Shader.PropertyToID("_Triangles");
+    private static readonly int Meshes = Shader.PropertyToID("_Meshes");
+    private static readonly int BvhNodes = Shader.PropertyToID("_BvhNodes");
+    private static readonly int TopLevelBvhNodes = Shader.PropertyToID("_TopLevelBvhNodes");
+    private static readonly int ShadowBvhNodes = Shader.PropertyToID("_ShadowBvhNodes");
+    private static readonly int MeshLightTriangleCdf = Shader.PropertyToID("_MeshLightTriangleCdf");
 
     private const int SphereStride = 92;
     private const int LightStride = 88;
@@ -655,7 +707,7 @@ public class GameManager : MonoBehaviour
     internal void GenerateCausticPreservationMaskInternal(int threadGroupsX, int threadGroupsY) => GenerateCausticPreservationMask(threadGroupsX, threadGroupsY);
     internal void RunSpatialDenoiserInternal(RenderTexture source, RenderTexture variance) => RunSpatialDenoiser(source, variance);
     internal bool IsFogEnabledInternal() => IsFogEnabled();
-    internal float GetCameraApertureRadiusInternal() => GetCameraApertureRadius();
+    internal float GetCameraApertureRadiusInternal() => CameraManager.GetApertureRadius();
 
     private void EnsureSpatialDenoiserShader()
     {
@@ -1481,7 +1533,7 @@ public class GameManager : MonoBehaviour
             return;
         }
 
-        int stateHash = CalculateCausticPhotonStateHash();
+        int stateHash = CalculatePhotonStateHash();
         bool stateChanged = !_causticsManager.HasPhotonStateHash || stateHash != _causticsManager.PhotonStateHash;
         if (stateChanged)
         {
@@ -1514,10 +1566,10 @@ public class GameManager : MonoBehaviour
         int clearGridKernel = shader.FindKernel("ClearCausticGrid");
         int buildGridKernel = shader.FindKernel("BuildCausticGrid");
         SetPhotonTraceSceneParameters(traceKernel);
-        SetCausticShaderParameters(clearKernel);
-        SetCausticShaderParameters(traceKernel);
-        SetCausticShaderParameters(clearGridKernel);
-        SetCausticShaderParameters(buildGridKernel);
+        _causticsManager.SetShaderParameters(shader, clearKernel, numBounces);
+        _causticsManager.SetShaderParameters(shader, traceKernel, numBounces);
+        _causticsManager.SetShaderParameters(shader, clearGridKernel, numBounces);
+        _causticsManager.SetShaderParameters(shader, buildGridKernel, numBounces);
         SetSceneBuffers(traceKernel);
         shader.Dispatch(clearKernel, 1, 1, 1);
         shader.Dispatch(traceKernel, Mathf.CeilToInt(Mathf.Max(1, causticPhotonCount) / (float)CausticTraceThreadCount), 1, 1);
@@ -1645,14 +1697,17 @@ public class GameManager : MonoBehaviour
         }
 
         long firstFramePreparationStart = _startupProfilePending ? Stopwatch.GetTimestamp() : 0;
-        UpdateTrackedFocusPoint();
+        CameraManager.UpdateTrackedFocusPoint();
         _temporalDynamicSceneChanged = false;
         _temporalDenoisingManager.SetDynamicSceneChanged(false);
         UpdateSpheres();
         UpdateTriangles();
         UpdateTopLevelBvh();
         UpdateShadowBvh();
-        UpdateAutoFocus();
+        CameraManager.UpdateAutoFocus(
+            numberOfPasses,
+            WaterManager.CalculateAutoFocusStateHash(),
+            GetNearestIntersectionDistanceForAutoFocus);
         CameraManager.AutoFocusSceneChanged = false;
         UpdateCausticPhotonMap();
 
@@ -1823,7 +1878,7 @@ public class GameManager : MonoBehaviour
         int kernel = shader.FindKernel("CSFocusQuery");
         SetShaderParameters(kernel);
         shader.SetVector("_FocusQueryUv", CameraManager.PendingFocusQueryUv);
-        shader.SetBuffer(kernel, "_FocusQueryResult", CameraManager.FocusQueryBuffer);
+        shader.SetBuffer(kernel, FocusQueryResult, CameraManager.FocusQueryBuffer);
         shader.Dispatch(kernel, 1, 1, 1);
 
         CameraManager.FocusQueryPending = false;
@@ -1874,40 +1929,8 @@ public class GameManager : MonoBehaviour
         CameraManager.PreviousFocalDistance = CameraManager.cameraFocalDistance;
         CameraManager.ClickedFocusPoint = hitPosition;
         CameraManager.HasClickedFocusPoint = CameraManager.enableClickToFocus && CameraManager.trackClickedFocusPoint;
-        UpdateTrackedFocusPoint();
+        CameraManager.UpdateTrackedFocusPoint();
         ResetFrameAccumulation();
-    }
-
-    private void UpdateTrackedFocusPoint()
-    {
-        if (!CameraManager.enableClickToFocus || !CameraManager.trackClickedFocusPoint || !CameraManager.HasClickedFocusPoint || renderTextureCamera == null)
-        {
-            CameraManager.HasClickedFocusPoint = false;
-            CameraManager.ClickedFocusPointInFrustum = false;
-            return;
-        }
-
-        Vector3 viewportPoint = renderTextureCamera.WorldToViewportPoint(CameraManager.ClickedFocusPoint);
-        CameraManager.ClickedFocusPointInFrustum = viewportPoint.z >= renderTextureCamera.nearClipPlane
-            && viewportPoint.z <= renderTextureCamera.farClipPlane
-            && viewportPoint.x >= 0.0f && viewportPoint.x <= 1.0f
-            && viewportPoint.y >= 0.0f && viewportPoint.y <= 1.0f;
-
-        if (CameraManager.ClickedFocusPointInFrustum)
-        {
-            if (CameraManager.cameraBehavior == CameraBehavior.OrbitFocusPoint)
-            {
-                CameraManager.cameraFocalDistance = CameraManager.DefaultOrbitZoom;
-                CameraManager.PreviousFocalDistance = CameraManager.cameraFocalDistance;
-                return;
-            }
-            CameraManager.cameraFocalDistance = Mathf.Max(
-                0.1f,
-                Vector3.Dot(
-                    CameraManager.ClickedFocusPoint - renderTextureCamera.transform.position,
-                    renderTextureCamera.transform.forward));
-            CameraManager.PreviousFocalDistance = CameraManager.cameraFocalDistance;
-        }
     }
 
     private void UpdateSpheres()
@@ -3931,13 +3954,13 @@ public class GameManager : MonoBehaviour
 
     public void UnregisterDirectionalLight(RayDirectionalLight directionalLight)
     {
-        int directionalIndex = _directionalLights.IndexOf(directionalLight);
+        var directionalIndex = _directionalLights.IndexOf(directionalLight);
         if (directionalIndex < 0)
         {
             return;
         }
 
-        int lightIndex = _lightObjects.Count + directionalIndex * 2;
+        var lightIndex = _lightObjects.Count + directionalIndex * 2;
         _directionalLights.RemoveAt(directionalIndex);
         _lights.RemoveAt(lightIndex);
         _lights.RemoveAt(lightIndex);
@@ -3957,12 +3980,12 @@ public class GameManager : MonoBehaviour
 
     private static void UpdateVirtualSunTriangles(RayDirectionalLight directionalLight, ref Light first, out Light second)
     {
-        Vector3 lightDirection = directionalLight.transform.forward.normalized;
-        Vector3 center = -lightDirection * VirtualSunDistance;
-        float radius = VirtualSunDistance * Mathf.Tan(Mathf.Clamp(directionalLight.AngularRadius, 0.0f, 10.0f) * Mathf.Deg2Rad);
-        Vector3 tangent = Vector3.Cross(Mathf.Abs(lightDirection.y) < 0.999f ? Vector3.up : Vector3.right, lightDirection).normalized * radius;
-        Vector3 bitangent = Vector3.Cross(lightDirection, tangent).normalized * radius;
-        Vector3 emission = directionalLight.Color.ToVector3() * Mathf.Max(0.0f, directionalLight.Intensity);
+        var lightDirection = directionalLight.transform.forward.normalized;
+        var center = -lightDirection * VirtualSunDistance;
+        var radius = VirtualSunDistance * Mathf.Tan(Mathf.Clamp(directionalLight.AngularRadius, 0.0f, 10.0f) * Mathf.Deg2Rad);
+        var tangent = Vector3.Cross(Mathf.Abs(lightDirection.y) < 0.999f ? Vector3.up : Vector3.right, lightDirection).normalized * radius;
+        var bitangent = Vector3.Cross(lightDirection, tangent).normalized * radius;
+        var emission = directionalLight.Color.ToVector3() * Mathf.Max(0.0f, directionalLight.Intensity);
         // The emitter's front face points back toward the scene; rays travel from this virtual
         // disc along transform.forward toward shaded points.
         first = CreateVirtualSunTriangle(center - tangent - bitangent, tangent * 2.0f, bitangent * 2.0f, lightDirection, emission);
@@ -4056,128 +4079,40 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    private void SetComputeBuffer(string name, ComputeBuffer buffer, int kernelHandle)
+    private void SetComputeBuffer(int nameId, ComputeBuffer buffer, int kernelHandle)
     {
         if (buffer != null)
         {
-            shader.SetBuffer(kernelHandle, name, buffer);
+            shader.SetBuffer(kernelHandle, nameId, buffer);
         }
     }
 
     private void SetSceneBuffers(int kernelHandle)
     {
-        SetComputeBuffer("_Spheres", _sphereBuffer, kernelHandle);
-        SetComputeBuffer("_Lights", _lightBuffer, kernelHandle);
-        SetComputeBuffer("_Triangles", _triangleBuffer, kernelHandle);
-        SetComputeBuffer("_Meshes", _meshBuffer, kernelHandle);
-        SetComputeBuffer("_BvhNodes", _bvhNodeBuffer, kernelHandle);
-        SetComputeBuffer("_TopLevelBvhNodes", _topLevelBvhNodeBuffer, kernelHandle);
-        SetComputeBuffer("_ShadowBvhNodes", _shadowBvhNodeBuffer, kernelHandle);
-        SetComputeBuffer("_MeshLightTriangleCdf", _meshLightTriangleCdfBuffer, kernelHandle);
-    }
-
-    private void SetCausticShaderParameters(int kernelHandle)
-    {
-        shader.SetInt("_CausticPhotonCapacity", Mathf.Max(1, causticPhotonCount));
-        shader.SetInt("_CausticPhotonAttemptCount", Mathf.Max(1, causticPhotonCount));
-        shader.SetInt("_CausticMaxBounces", Mathf.Clamp(numBounces, 1, 16));
-        shader.SetInt("_CausticSeed", causticSeed);
-        shader.SetInt("_CausticFrameIndex", _causticsManager.FrameIndex);
-        shader.SetFloat("_CausticGatherRadius", Mathf.Max(0.001f, causticGatherRadius));
-        shader.SetFloat("_CausticIntensity", Mathf.Max(0.0f, causticIntensity));
-        shader.SetVector("_CausticGridMin", _causticsManager.GridMin);
-        shader.SetFloat("_CausticGridCellSize", _causticsManager.GridCellSize);
-        shader.SetInts("_CausticGridDimensions", _causticsManager.GridDimensions.x, _causticsManager.GridDimensions.y, _causticsManager.GridDimensions.z);
-        shader.SetInt("_CausticGridCellCount", _causticsManager.GridCellCount);
-        shader.SetInt("_NumCausticTargetPairs", _causticsManager.TargetPairs.Count);
-        SetComputeBuffer("_CausticPhotons", _causticsManager.PhotonBuffer, kernelHandle);
-        SetComputeBuffer("_CausticPhotonMetadata", _causticsManager.PhotonMetadataBuffer, kernelHandle);
-        SetComputeBuffer("_CausticGridCellHeads", _causticsManager.GridCellHeadBuffer, kernelHandle);
-        SetComputeBuffer("_CausticPhotonNext", _causticsManager.PhotonNextBuffer, kernelHandle);
-        SetComputeBuffer("_CausticTargetPairs", _causticsManager.TargetPairBuffer, kernelHandle);
-        SetComputeBuffer("_CausticTargetTriangles", _causticsManager.TargetTriangleBuffer, kernelHandle);
+        SetComputeBuffer(Spheres, _sphereBuffer, kernelHandle);
+        SetComputeBuffer(Lights, _lightBuffer, kernelHandle);
+        SetComputeBuffer(Triangles, _triangleBuffer, kernelHandle);
+        SetComputeBuffer(Meshes, _meshBuffer, kernelHandle);
+        SetComputeBuffer(BvhNodes, _bvhNodeBuffer, kernelHandle);
+        SetComputeBuffer(TopLevelBvhNodes, _topLevelBvhNodeBuffer, kernelHandle);
+        SetComputeBuffer(ShadowBvhNodes, _shadowBvhNodeBuffer, kernelHandle);
+        SetComputeBuffer(MeshLightTriangleCdf, _meshLightTriangleCdfBuffer, kernelHandle);
     }
 
     private static float GetWorldSphereRadius(SphereCollider sphereCollider, Transform sphereTransform)
     {
         var scale = sphereTransform.lossyScale;
-        float largestAxisScale = Mathf.Max(Mathf.Abs(scale.x), Mathf.Abs(scale.y), Mathf.Abs(scale.z));
+        var largestAxisScale = Mathf.Max(Mathf.Abs(scale.x), Mathf.Abs(scale.y), Mathf.Abs(scale.z));
         return sphereCollider.radius * largestAxisScale;
     }
 
-    private void UpdateAutoFocus()
-    {
-        if (!CameraManager.cameraAutoFocus)
-        {
-            CameraManager.HasAutoFocusState = false;
-            return;
-        }
-
-        int waterStateHash = CalculateAutoFocusWaterStateHash();
-        Transform cameraTransform = renderTextureCamera.transform;
-        bool inputsChanged = !CameraManager.HasAutoFocusState
-            || CameraManager.AutoFocusSceneChanged
-            || CameraManager.LastAutoFocusCameraPosition != cameraTransform.position
-            || CameraManager.LastAutoFocusCameraRotation != cameraTransform.rotation
-            || CameraManager.LastAutoFocusNumberOfPasses != numberOfPasses
-            || CameraManager.LastAutoFocusWaterStateHash != waterStateHash;
-
-        if (inputsChanged)
-        {
-            CameraManager.AutoFocusTargetDistance = GetNearestIntersectionDistanceForAutoFocus(
-                new Ray(cameraTransform.position, cameraTransform.forward));
-            if (CameraManager.AutoFocusTargetDistance < 1.0f)
-            {
-                float modifier = Mathf.Lerp(1.75f, 1.0f, CameraManager.AutoFocusTargetDistance);
-                CameraManager.AutoFocusTargetDistance = Mathf.Max(CameraManager.AutoFocusTargetDistance * modifier, 0.1f);
-            }
-
-            CameraManager.LastAutoFocusCameraPosition = cameraTransform.position;
-            CameraManager.LastAutoFocusCameraRotation = cameraTransform.rotation;
-            CameraManager.LastAutoFocusNumberOfPasses = numberOfPasses;
-            CameraManager.LastAutoFocusWaterStateHash = waterStateHash;
-            CameraManager.HasAutoFocusState = true;
-        }
-
-        CameraManager.cameraFocalDistance = Mathf.Lerp(
-            CameraManager.PreviousFocalDistance,
-            CameraManager.AutoFocusTargetDistance,
-            Mathf.SmoothStep(0.0f, 1.0f, CameraManager.TimeSincePreviousFocusDistance));
-
-        if (Mathf.Abs(CameraManager.cameraFocalDistance - CameraManager.AutoFocusTargetDistance) < 0.05f)
-        {
-            CameraManager.PreviousFocalDistance = CameraManager.cameraFocalDistance;
-            CameraManager.TimeSincePreviousFocusDistance = 0.0f;
-        }
-        else
-        {
-            CameraManager.TimeSincePreviousFocusDistance += Time.unscaledDeltaTime;
-        }
-    }
-
-    private int CalculateAutoFocusWaterStateHash()
-    {
-        unchecked
-        {
-            int hash = WaterInternal != null ? WaterInternal.GetInstanceID() : 0;
-            if (WaterInternal != null)
-            {
-                hash = AddHash(hash, WaterInternal.TopCenter);
-                hash = AddHash(hash, WaterInternal.Size);
-                hash = AddHash(hash, WaterInternal.Opacity);
-            }
-
-            return hash;
-        }
-    }
-    
     private float GetNearestIntersectionDistanceForAutoFocus(Ray ray)
     {
         // This is a distance that allows things in the mid-distance to still get sub-pixel jitter, which
         // allows better anti-aliasing. Beyond this distance the focus changes are even more of a sub-pixel
         // and barely noticeable. We increase the jitter a bit if there is more super-sampling (passes) to get
         // more anti-aliasing.
-        float nearestDistance = 12 - Math.Min(8.0f, numberOfPasses * 1.75f);
+        var nearestDistance = 12 - Math.Min(8.0f, numberOfPasses * 1.75f);
 
         foreach (var sphere in _spheres)
         {
@@ -4224,41 +4159,41 @@ public class GameManager : MonoBehaviour
     
     private void SetShaderParameters(int kernelHandle)
     {
-        shader.SetTexture(kernelHandle, "_SkyboxTexture", skyboxTexture);
+        shader.SetTexture(kernelHandle, SkyboxTexture, skyboxTexture);
         EnsureMeshTextureArrays();
-        shader.SetTexture(kernelHandle, "_MeshAlbedoTextures", _meshAlbedoTextureArray);
-        shader.SetTexture(kernelHandle, "_MeshMetallicRoughnessTextures", _meshMetallicRoughnessTextureArray);
-        shader.SetTexture(kernelHandle, "_MeshNormalTextures", _meshNormalTextureArray);
-        shader.SetTexture(kernelHandle, "_MeshParallaxTextures", _meshParallaxTextureArray);
+        shader.SetTexture(kernelHandle, MeshAlbedoTextures, _meshAlbedoTextureArray);
+        shader.SetTexture(kernelHandle, MeshMetallicRoughnessTextures, _meshMetallicRoughnessTextureArray);
+        shader.SetTexture(kernelHandle, MeshNormalTextures, _meshNormalTextureArray);
+        shader.SetTexture(kernelHandle, MeshParallaxTextures, _meshParallaxTextureArray);
 
-        shader.SetMatrix("_CameraToWorld", renderTextureCamera.cameraToWorldMatrix);
-        shader.SetMatrix("_CameraInverseProjection", renderTextureCamera.projectionMatrix.inverse);
-        Vector2 temporalJitter = _temporalDenoisingManager.CurrentJitterNdc;
-        shader.SetVector("_FrameJitterNdc", new Vector4(temporalJitter.x, temporalJitter.y, 0.0f, 0.0f));
-        shader.SetInt("_UseTemporalJitter", ShouldRunTemporalDenoiser() ? 1 : 0);
+        shader.SetMatrix(CameraToWorld, renderTextureCamera.cameraToWorldMatrix);
+        shader.SetMatrix(CameraInverseProjection, renderTextureCamera.projectionMatrix.inverse);
+        var temporalJitter = _temporalDenoisingManager.CurrentJitterNdc;
+        shader.SetVector(FrameJitterNdc, new Vector4(temporalJitter.x, temporalJitter.y, 0.0f, 0.0f));
+        shader.SetInt(UseTemporalJitter, ShouldRunTemporalDenoiser() ? 1 : 0);
 
         _skyboxLightColorAsVector = new Vector4(_skyboxLightColor.r / 255f, _skyboxLightColor.g / 255f, _skyboxLightColor.b / 255f, 1.0f);
-        shader.SetVector("_SkyboxLight", _skyboxLightColorAsVector);
+        shader.SetVector(SkyboxLight, _skyboxLightColorAsVector);
 
         if (randomNoise)
         {
-            shader.SetInt("_Seed", UnityEngine.Random.Range(1, int.MaxValue));
+            shader.SetInt(Seed, UnityEngine.Random.Range(1, int.MaxValue));
         }
         else
         {
-            shader.SetInt("_Seed", 1);
+            shader.SetInt(Seed, 1);
         }
 
-        shader.SetInt("_NumberOfPasses", numberOfPasses);
-        shader.SetFloat("_SubpixelJitterScale", subpixelJitterScale);
-        shader.SetInt("_NumBounces", numBounces);
+        shader.SetInt(NumberOfPasses, numberOfPasses);
+        shader.SetFloat(SubpixelJitterScale, subpixelJitterScale);
+        shader.SetInt(NumBounces, numBounces);
         // Temporal modes are presented by RayTracingSpatialDenoiser after CSMain. Keep CSMain
         // on its normal HDR beauty path so an out-of-range renderer debug value cannot write
         // an untonemapped fallback before the temporal presentation pass runs.
-        shader.SetInt("_DebugRenderMode", IsTemporalDebugMode() ? (int)DebugRenderMode.FinalColor : (int)debugRenderMode);
-        shader.SetInt("_UseFrameAccumulation", ShouldUseFrameAccumulation() ? 1 : 0);
-        shader.SetInt("_AccumulatedFrameCount", _accumulatedFrameCount);
-        shader.SetInt("_SampleOffset", CalculateSampleOffset());
+        shader.SetInt(Mode, IsTemporalDebugMode() ? (int)DebugRenderMode.FinalColor : (int)debugRenderMode);
+        shader.SetInt(UseFrameAccumulation, ShouldUseFrameAccumulation() ? 1 : 0);
+        shader.SetInt(FrameCount, _accumulatedFrameCount);
+        shader.SetInt(SampleOffset, CalculateSampleOffset());
 
         // The shader splits its debug render path behind the DEBUG_RENDER keyword so the default
         // final-color variant compiles without any debug intersection/scatter code (a large shader
@@ -4275,7 +4210,7 @@ public class GameManager : MonoBehaviour
         if (enableCaustics)
         {
             shader.EnableKeyword("CAUSTICS_ENABLED");
-            SetCausticShaderParameters(kernelHandle);
+            _causticsManager.SetShaderParameters(shader, kernelHandle, numBounces);
         }
         else
         {
@@ -4289,9 +4224,9 @@ public class GameManager : MonoBehaviour
         {
             shader.DisableKeyword("FOG_ENABLED");
         }
-        shader.SetInt("_MaxLightSamples", maxLightSamples);
-        shader.SetInt("_LightSamplingStrategy", (int)lightSamplingStrategy);
-        shader.SetInt("_LightSampleCount", lightSampleCount);
+        shader.SetInt(MaxLightSamples, maxLightSamples);
+        shader.SetInt(SamplingStrategy, (int)lightSamplingStrategy);
+        shader.SetInt(LightSampleCount, lightSampleCount);
 
         // Importance sampling can only weight up to MaxImportanceLights; warn once when the
         // scene exceeds that so the dropped lights are not a silent surprise.
@@ -4312,44 +4247,44 @@ public class GameManager : MonoBehaviour
         {
             _warnedImportanceLightOverflow = false;
         }
-        shader.SetInt("_ShadowQuality", shadowQuality);
-        shader.SetFloat("_ShadowRandomness", shadowRandomness);
-        shader.SetFloat("_ParallaxMaximumStrengthCosine", Mathf.Cos(Mathf.Clamp(parallaxMaximumStrengthAngle, 0.0f, 90.0f) * Mathf.Deg2Rad));
-        shader.SetFloat("_LightFalloffScale", lightFalloffScale);
-        shader.SetFloat("_FocalDistance", CameraManager.cameraFocalDistance);
-        shader.SetFloat("_ApertureRadius", GetCameraApertureRadius());
-        shader.SetInt("_ApertureBladeCount", CameraManager.cameraApertureBladeCount >= 3 ? CameraManager.cameraApertureBladeCount : 0);
-        shader.SetFloat("_ApertureBladeRotation", CameraManager.cameraApertureBladeRotation * Mathf.Deg2Rad);
-        shader.SetFloat("_AnamorphicRatio", Mathf.Clamp(CameraManager.cameraAnamorphicRatio, 0.25f, 4.0f));
-        shader.SetFloat("_Exposure", exposure);
-        shader.SetFloat("_FireflyClamp", Mathf.Max(0.0f, fireflyClamp));
+        shader.SetInt(Quality, shadowQuality);
+        shader.SetFloat(ShadowRandomness, shadowRandomness);
+        shader.SetFloat(ParallaxMaximumStrengthCosine, Mathf.Cos(Mathf.Clamp(parallaxMaximumStrengthAngle, 0.0f, 90.0f) * Mathf.Deg2Rad));
+        shader.SetFloat(LightFalloffScale, lightFalloffScale);
+        shader.SetFloat(FocalDistance, CameraManager.cameraFocalDistance);
+        shader.SetFloat(ApertureRadius, CameraManager.GetApertureRadius());
+        shader.SetInt(ApertureBladeCount, CameraManager.cameraApertureBladeCount >= 3 ? CameraManager.cameraApertureBladeCount : 0);
+        shader.SetFloat(ApertureBladeRotation, CameraManager.cameraApertureBladeRotation * Mathf.Deg2Rad);
+        shader.SetFloat(AnamorphicRatio, Mathf.Clamp(CameraManager.cameraAnamorphicRatio, 0.25f, 4.0f));
+        shader.SetFloat(Exposure, exposure);
+        shader.SetFloat(FireflyClamp, Mathf.Max(0.0f, fireflyClamp));
         WaterManager.SetShaderParameters(shader, Application.isPlaying ? GetRenderTime() : 0.0f);
         SetTerrainShaderParameters(kernelHandle);
         bool fogEnabled = IsFogEnabled();
         Vector3 fogCenter = fogEnabled ? _fogVolume.Center : Vector3.zero;
         Vector3 fogSize = fogEnabled ? _fogVolume.Size : Vector3.one;
         Color fogAlbedo = fogEnabled ? _fogVolume.ScatteringAlbedo : Color.black;
-        shader.SetInt("_FogEnabled", fogEnabled ? 1 : 0);
+        shader.SetInt(FogEnabled, fogEnabled ? 1 : 0);
         Vector3 fogBoundsMin = fogCenter - fogSize * 0.5f;
         Vector3 fogBoundsMax = fogCenter + fogSize * 0.5f;
-        shader.SetVector("_FogBoundsMin", new Vector4(fogBoundsMin.x, fogBoundsMin.y, fogBoundsMin.z, 0.0f));
-        shader.SetVector("_FogBoundsMax", new Vector4(fogBoundsMax.x, fogBoundsMax.y, fogBoundsMax.z, 0.0f));
-        shader.SetVector("_FogScatteringAlbedo", new Vector4(
+        shader.SetVector(FogBoundsMin, new Vector4(fogBoundsMin.x, fogBoundsMin.y, fogBoundsMin.z, 0.0f));
+        shader.SetVector(FogBoundsMax, new Vector4(fogBoundsMax.x, fogBoundsMax.y, fogBoundsMax.z, 0.0f));
+        shader.SetVector(FogScatteringAlbedo, new Vector4(
             Mathf.Clamp01(fogAlbedo.r * fogScatteringScale),
             Mathf.Clamp01(fogAlbedo.g * fogScatteringScale),
             Mathf.Clamp01(fogAlbedo.b * fogScatteringScale),
             0.0f));
-        shader.SetFloat("_FogDensity", fogEnabled ? EffectiveFogDensity : 0.0f);
-        shader.SetFloat("_FogInScatteringIntensity", Mathf.Max(0.0f, fogInScatteringIntensity));
-        shader.SetInt("_FogMultipleScattering", enableFogMultipleScattering ? 1 : 0);
-        shader.SetInt("_NumLights", _lights.Count);
-        shader.SetInt("_NumTopLevelBvhNodes", _topLevelBvhNodes.Count);
-        shader.SetInt("_NumShadowBvhNodes", _shadowBvhNodes.Count);
+        shader.SetFloat(FogDensity, fogEnabled ? EffectiveFogDensity : 0.0f);
+        shader.SetFloat(FogInScatteringIntensity, Mathf.Max(0.0f, fogInScatteringIntensity));
+        shader.SetInt(FogMultipleScattering, enableFogMultipleScattering ? 1 : 0);
+        shader.SetInt(NumLights, _lights.Count);
+        shader.SetInt(NumTopLevelBvhNodes, _topLevelBvhNodes.Count);
+        shader.SetInt(NumShadowBvhNodes, _shadowBvhNodes.Count);
 
         // When no shadow-casting blocker is transparent, the shader can use a cheaper
         // pure-occlusion shadow path that early-outs on the first opaque blocker.
-        bool hasTransparentShadowBlockers = _hasTransparentSphereBlockers || _hasTransparentMeshBlockers;
-        shader.SetInt("_HasTransparentShadowBlockers", hasTransparentShadowBlockers ? 1 : 0);
+        var hasTransparentShadowBlockers = _hasTransparentSphereBlockers || _hasTransparentMeshBlockers;
+        shader.SetInt(HasTransparentShadowBlockers, hasTransparentShadowBlockers ? 1 : 0);
         SetSceneBuffers(kernelHandle);
     }
 
@@ -4377,36 +4312,11 @@ public class GameManager : MonoBehaviour
         return (int)Math.Min(int.MaxValue, sampleOffset);
     }
 
-    private float GetCameraApertureRadius()
-    {
-        if (CameraManager.cameraApertureMode == CameraApertureMode.Pinhole || IsTrackedFocusPointOutsideFrustum())
-        {
-            return 0.0f;
-        }
-
-        if (CameraManager.cameraApertureMode == CameraApertureMode.LensRadius)
-        {
-            return Mathf.Max(0.0f, CameraManager.cameraApertureRadius);
-        }
-
-        var focalLengthInWorldUnits = Mathf.Max(0.0f, renderTextureCamera.focalLength) * 0.001f;
-        return focalLengthInWorldUnits / (2.0f * Mathf.Max(0.1f, CameraManager.cameraFStop))
-            * Mathf.Max(0.0f, CameraManager.cameraApertureScale);
-    }
-
-    private bool IsTrackedFocusPointOutsideFrustum()
-    {
-        return CameraManager.enableClickToFocus
-            && CameraManager.trackClickedFocusPoint
-            && CameraManager.HasClickedFocusPoint
-            && !CameraManager.ClickedFocusPointInFrustum;
-    }
-
     private int CalculateAccumulationStateHash()
     {
         unchecked
         {
-            int hash = 17;
+            var hash = 17;
             hash = AddHash(hash, _textureSize.x);
             hash = AddHash(hash, _textureSize.y);
             hash = AddHash(hash, numberOfPasses);
@@ -4421,16 +4331,9 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, shadowRandomness);
             hash = AddHash(hash, parallaxMaximumStrengthAngle);
             hash = AddHash(hash, lightFalloffScale);
-            hash = CameraManager.AddAccumulationStateHash(hash, IsTrackedFocusPointOutsideFrustum());
+            hash = CameraManager.AddAccumulationStateHash(hash, CameraManager.IsTrackedFocusPointOutsideFrustum());
             hash = AddHash(hash, fireflyClamp);
-            if (enableCaustics)
-            {
-                hash = AddHash(hash, causticPhotonCount);
-                hash = AddHash(hash, causticGatherRadius);
-                hash = AddHash(hash, causticSeed);
-                hash = AddHash(hash, causticIntensity);
-                hash = AddHash(hash, _causticsManager.PhotonStateHash);
-            }
+            hash = _causticsManager.AddAccumulationStateHash(hash, enableCaustics);
             hash = WaterManager.AddAccumulationStateHash(hash);
             hash = AddHash(hash, enableVolumetricFog ? 1 : 0);
             hash = AddHash(hash, fogDensityScale);
@@ -4469,15 +4372,11 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    private int CalculateCausticPhotonStateHash()
+    private int CalculatePhotonStateHash()
     {
         unchecked
         {
-            var hash = 17;
-            hash = AddHash(hash, 5); // Progressive, low-discrepancy photon-map algorithm version.
-            hash = AddHash(hash, causticPhotonCount);
-            hash = AddHash(hash, causticGatherRadius);
-            hash = AddHash(hash, causticSeed);
+            var hash = _causticsManager.CalculatePhotonStateHash(17);
             hash = AddHash(hash, numBounces);
             hash = AddHash(hash, _spheres.Count);
             for (var i = 0; i < _spheres.Count; i++)
@@ -4497,8 +4396,8 @@ public class GameManager : MonoBehaviour
             {
                 hash = _meshObjects[i].AddHash(hash);
             }
-            hash = WaterManager.AddCausticPhotonStateHash(hash, _singleFrame, GetRenderTime());
-            return hash;
+
+            return WaterManager.AddCausticPhotonStateHash(hash, _singleFrame, GetRenderTime());
         }
     }
 
@@ -4530,7 +4429,7 @@ public class GameManager : MonoBehaviour
 
     internal static int AddHash(int hash, Matrix4x4 value)
     {
-        for (int i = 0; i < 16; i++)
+        for (var i = 0; i < 16; i++)
         {
             hash = AddHash(hash, value[i]);
         }

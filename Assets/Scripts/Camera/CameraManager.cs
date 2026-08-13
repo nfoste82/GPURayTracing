@@ -1,3 +1,4 @@
+using System;
 using PathTracing.Camera;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -167,14 +168,104 @@ public sealed class CameraManager : MonoBehaviour
 
     public float GetApertureRadius()
     {
-        if (cameraApertureMode == CameraApertureMode.Pinhole) return 0.0f;
+        if (cameraApertureMode == CameraApertureMode.Pinhole || IsTrackedFocusPointOutsideFrustum()) return 0.0f;
         
         if (cameraApertureMode == CameraApertureMode.LensRadius) return Mathf.Max(0.0f, cameraApertureRadius);
         
         if (renderTextureCamera == null) return 0.0f;
         
         var focalLength = Mathf.Max(0.0f, renderTextureCamera.focalLength) * 0.001f;
-        return focalLength / (2.0f * Mathf.Max(0.7f, cameraFStop)) * Mathf.Max(0.0f, cameraApertureScale);
+        return focalLength / (2.0f * Mathf.Max(0.1f, cameraFStop)) * Mathf.Max(0.0f, cameraApertureScale);
+    }
+
+    public void UpdateTrackedFocusPoint()
+    {
+        if (!enableClickToFocus || !trackClickedFocusPoint || !HasClickedFocusPoint || renderTextureCamera == null)
+        {
+            HasClickedFocusPoint = false;
+            ClickedFocusPointInFrustum = false;
+            return;
+        }
+
+        Vector3 viewportPoint = renderTextureCamera.WorldToViewportPoint(ClickedFocusPoint);
+        ClickedFocusPointInFrustum = viewportPoint.z >= renderTextureCamera.nearClipPlane
+            && viewportPoint.z <= renderTextureCamera.farClipPlane
+            && viewportPoint.x >= 0.0f && viewportPoint.x <= 1.0f
+            && viewportPoint.y >= 0.0f && viewportPoint.y <= 1.0f;
+
+        if (!ClickedFocusPointInFrustum)
+        {
+            return;
+        }
+
+        if (cameraBehavior == CameraBehavior.OrbitFocusPoint)
+        {
+            cameraFocalDistance = DefaultOrbitZoom;
+            PreviousFocalDistance = cameraFocalDistance;
+            return;
+        }
+
+        cameraFocalDistance = Mathf.Max(
+            0.1f,
+            Vector3.Dot(ClickedFocusPoint - renderTextureCamera.transform.position, renderTextureCamera.transform.forward));
+        PreviousFocalDistance = cameraFocalDistance;
+    }
+
+    public void UpdateAutoFocus(int numberOfPasses, int waterStateHash, Func<Ray, float> nearestIntersectionDistance)
+    {
+        if (!cameraAutoFocus)
+        {
+            HasAutoFocusState = false;
+            return;
+        }
+
+        Transform cameraTransform = renderTextureCamera.transform;
+        bool inputsChanged = !HasAutoFocusState
+            || AutoFocusSceneChanged
+            || LastAutoFocusCameraPosition != cameraTransform.position
+            || LastAutoFocusCameraRotation != cameraTransform.rotation
+            || LastAutoFocusNumberOfPasses != numberOfPasses
+            || LastAutoFocusWaterStateHash != waterStateHash;
+
+        if (inputsChanged)
+        {
+            AutoFocusTargetDistance = nearestIntersectionDistance(
+                new Ray(cameraTransform.position, cameraTransform.forward));
+            if (AutoFocusTargetDistance < 1.0f)
+            {
+                float modifier = Mathf.Lerp(1.75f, 1.0f, AutoFocusTargetDistance);
+                AutoFocusTargetDistance = Mathf.Max(AutoFocusTargetDistance * modifier, 0.1f);
+            }
+
+            LastAutoFocusCameraPosition = cameraTransform.position;
+            LastAutoFocusCameraRotation = cameraTransform.rotation;
+            LastAutoFocusNumberOfPasses = numberOfPasses;
+            LastAutoFocusWaterStateHash = waterStateHash;
+            HasAutoFocusState = true;
+        }
+
+        cameraFocalDistance = Mathf.Lerp(
+            PreviousFocalDistance,
+            AutoFocusTargetDistance,
+            Mathf.SmoothStep(0.0f, 1.0f, TimeSincePreviousFocusDistance));
+
+        if (Mathf.Abs(cameraFocalDistance - AutoFocusTargetDistance) < 0.05f)
+        {
+            PreviousFocalDistance = cameraFocalDistance;
+            TimeSincePreviousFocusDistance = 0.0f;
+        }
+        else
+        {
+            TimeSincePreviousFocusDistance += Time.unscaledDeltaTime;
+        }
+    }
+
+    public bool IsTrackedFocusPointOutsideFrustum()
+    {
+        return enableClickToFocus
+            && trackClickedFocusPoint
+            && HasClickedFocusPoint
+            && !ClickedFocusPointInFrustum;
     }
 
     internal int AddAccumulationStateHash(int hash, bool trackedFocusPointOutsideFrustum)

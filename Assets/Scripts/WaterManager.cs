@@ -126,6 +126,22 @@ public sealed class WaterManager : MonoBehaviour
         return hash;
     }
 
+    public int CalculateAutoFocusStateHash()
+    {
+        unchecked
+        {
+            int hash = _water != null ? _water.GetInstanceID() : 0;
+            if (_water != null)
+            {
+                hash = GameManager.AddHash(hash, _water.TopCenter);
+                hash = GameManager.AddHash(hash, _water.Size);
+                hash = GameManager.AddHash(hash, _water.Opacity);
+            }
+
+            return hash;
+        }
+    }
+
     public bool TryGetAutoFocusHit(Ray ray, float nearestDistance, out float hitDistance)
     {
         hitDistance = nearestDistance;

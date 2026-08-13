@@ -1,16 +1,36 @@
 using System.Collections.Generic;
 using UnityEngine;
+using Light = PathTracing.Lighting.Light;
 
 namespace PathTracing.Caustics
 {
     /// <summary>
     /// Owns the GPU and CPU state used by the photon-mapped caustics path.
-    /// GameManager remains the owner of the serialized settings and scene buffers.
+    /// GameManager remains the owner of the scene data and GPU scene buffers.
     /// </summary>
     [System.Serializable]
     public sealed class CausticsManager
     {
-        [SerializeField, Range(64, 4194200)]
+        private static readonly int CausticPhotonCapacity = Shader.PropertyToID("_CausticPhotonCapacity");
+        private static readonly int CausticPhotonAttemptCount = Shader.PropertyToID("_CausticPhotonAttemptCount");
+        private static readonly int CausticMaxBounces = Shader.PropertyToID("_CausticMaxBounces");
+        private static readonly int CausticSeed = Shader.PropertyToID("_CausticSeed");
+        private static readonly int CausticFrameIndex = Shader.PropertyToID("_CausticFrameIndex");
+        private static readonly int CausticGatherRadius = Shader.PropertyToID("_CausticGatherRadius");
+        private static readonly int CausticIntensity = Shader.PropertyToID("_CausticIntensity");
+        private static readonly int CausticGridMin = Shader.PropertyToID("_CausticGridMin");
+        private static readonly int CausticGridCellSize = Shader.PropertyToID("_CausticGridCellSize");
+        private static readonly int CausticGridDimensions = Shader.PropertyToID("_CausticGridDimensions");
+        private static readonly int CausticGridCellCount = Shader.PropertyToID("_CausticGridCellCount");
+        private static readonly int NumCausticTargetPairs = Shader.PropertyToID("_NumCausticTargetPairs");
+        private static readonly int CausticPhotons = Shader.PropertyToID("_CausticPhotons");
+        private static readonly int CausticPhotonMetadata = Shader.PropertyToID("_CausticPhotonMetadata");
+        private static readonly int CausticGridCellHeads = Shader.PropertyToID("_CausticGridCellHeads");
+        private static readonly int CausticPhotonNext = Shader.PropertyToID("_CausticPhotonNext");
+        private static readonly int CausticTargetPairs = Shader.PropertyToID("_CausticTargetPairs");
+        private static readonly int CausticTargetTriangles = Shader.PropertyToID("_CausticTargetTriangles");
+
+        [SerializeField, Range(64, 2097252)]
         [Tooltip("Photon attempts traced for each rendered frame. Independent batches are averaged by final-color frame accumulation.")]
         private int _photonCount = 65536;
 
@@ -28,8 +48,8 @@ namespace PathTracing.Caustics
         public int Seed { get => _seed; set => _seed = value; }
         public float Intensity { get => _intensity; set => _intensity = value; }
 
-        internal readonly List<CausticTargetPair> TargetPairs = new List<CausticTargetPair>();
-        internal readonly List<CausticTargetTriangle> TargetTriangles = new List<CausticTargetTriangle>();
+        internal readonly List<CausticTargetPair> TargetPairs = new ();
+        internal readonly List<CausticTargetTriangle> TargetTriangles = new ();
 
         internal Vector3 GridMin;
         internal Vector3Int GridDimensions;
@@ -66,6 +86,62 @@ namespace PathTracing.Caustics
         public int GridPhotonCount => GridPhotonCountValue;
         public int GridOutOfBoundsCount => GridOutOfBoundsCountValue;
         public int TargetPairCount => TargetPairs.Count;
+
+        internal int CalculatePhotonStateHash(int hash)
+        {
+            unchecked
+            {
+                hash = GameManager.AddHash(hash, 5); // Progressive, low-discrepancy photon-map algorithm version.
+                hash = GameManager.AddHash(hash, PhotonCount);
+                hash = GameManager.AddHash(hash, GatherRadius);
+                hash = GameManager.AddHash(hash, Seed);
+                return hash;
+            }
+        }
+
+        internal int AddAccumulationStateHash(int hash, bool enabled)
+        {
+            if (!enabled)
+            {
+                return hash;
+            }
+
+            hash = GameManager.AddHash(hash, PhotonCount);
+            hash = GameManager.AddHash(hash, GatherRadius);
+            hash = GameManager.AddHash(hash, Seed);
+            hash = GameManager.AddHash(hash, Intensity);
+            return GameManager.AddHash(hash, PhotonStateHash);
+        }
+
+        internal void SetShaderParameters(ComputeShader shader, int kernelHandle, int maxBounces)
+        {
+            shader.SetInt(CausticPhotonCapacity, Mathf.Max(1, PhotonCount));
+            shader.SetInt(CausticPhotonAttemptCount, Mathf.Max(1, PhotonCount));
+            shader.SetInt(CausticMaxBounces, Mathf.Clamp(maxBounces, 1, 16));
+            shader.SetInt(CausticSeed, Seed);
+            shader.SetInt(CausticFrameIndex, FrameIndex);
+            shader.SetFloat(CausticGatherRadius, Mathf.Max(0.001f, GatherRadius));
+            shader.SetFloat(CausticIntensity, Mathf.Max(0.0f, Intensity));
+            shader.SetVector(CausticGridMin, GridMin);
+            shader.SetFloat(CausticGridCellSize, GridCellSize);
+            shader.SetInts(CausticGridDimensions, GridDimensions.x, GridDimensions.y, GridDimensions.z);
+            shader.SetInt(CausticGridCellCount, GridCellCount);
+            shader.SetInt(NumCausticTargetPairs, TargetPairs.Count);
+            SetBuffer(shader, kernelHandle, CausticPhotons, PhotonBuffer);
+            SetBuffer(shader, kernelHandle, CausticPhotonMetadata, PhotonMetadataBuffer);
+            SetBuffer(shader, kernelHandle, CausticGridCellHeads, GridCellHeadBuffer);
+            SetBuffer(shader, kernelHandle, CausticPhotonNext, PhotonNextBuffer);
+            SetBuffer(shader, kernelHandle, CausticTargetPairs, TargetPairBuffer);
+            SetBuffer(shader, kernelHandle, CausticTargetTriangles, TargetTriangleBuffer);
+        }
+
+        private static void SetBuffer(ComputeShader shader, int kernelHandle, int nameId, ComputeBuffer buffer)
+        {
+            if (buffer != null)
+            {
+                shader.SetBuffer(kernelHandle, nameId, buffer);
+            }
+        }
 
         internal void EnsureResources(int photonCount)
         {
