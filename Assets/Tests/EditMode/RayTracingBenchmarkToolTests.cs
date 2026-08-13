@@ -444,8 +444,36 @@ public class RayTracingBenchmarkToolTests
         FieldInfo field = component.GetType().GetField(
             fieldName,
             BindingFlags.Instance | BindingFlags.NonPublic);
-        Assert.That(field, Is.Not.Null, $"Could not find {component.GetType().Name}.{fieldName}");
-        return (ICollection)field.GetValue(component);
+        if (field != null)
+        {
+            return (ICollection)field.GetValue(component);
+        }
+
+        if (fieldName is "_lights" or "_lightObjects" or "_directionalLights")
+        {
+            PropertyInfo lightingProperty = component.GetType().GetProperty(
+                "Lighting",
+                BindingFlags.Instance | BindingFlags.Public);
+            Assert.That(lightingProperty, Is.Not.Null, $"Could not find {component.GetType().Name}.Lighting");
+            object lighting = lightingProperty.GetValue(component);
+            string propertyName = fieldName switch
+            {
+                "_lights" => "Lights",
+                "_lightObjects" => "LightObjects",
+                _ => "DirectionalLights"
+            };
+            PropertyInfo collectionProperty = lighting.GetType().GetProperty(
+                propertyName,
+                BindingFlags.Instance | BindingFlags.Public);
+            Assert.That(collectionProperty, Is.Not.Null, $"Could not find {lighting.GetType().Name}.{propertyName}");
+            return (ICollection)collectionProperty.GetValue(lighting);
+        }
+
+        PropertyInfo property = component.GetType().GetProperty(
+            fieldName.TrimStart('_'),
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        Assert.That(property, Is.Not.Null, $"Could not find {component.GetType().Name}.{fieldName}");
+        return (ICollection)property.GetValue(component);
     }
 
     private static Mesh CreateTwoTriangleMesh()

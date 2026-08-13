@@ -322,26 +322,26 @@ namespace GPURayTracing.Tests
                 cameraManagerType.GetField("trackClickedFocusPoint").SetValue(cameraManager, true);
                 cameraManagerType.GetField("cameraApertureRadius").SetValue(cameraManager, 0.02f);
 
-                MethodInfo updateFocusMethod = managerType.GetMethod("UpdateTrackedFocusPoint", BindingFlags.Instance | BindingFlags.NonPublic);
-                MethodInfo apertureMethod = managerType.GetMethod("GetCameraApertureRadius", BindingFlags.Instance | BindingFlags.NonPublic);
+                MethodInfo updateFocusMethod = cameraManagerType.GetMethod("UpdateTrackedFocusPoint", BindingFlags.Instance | BindingFlags.Public);
+                MethodInfo apertureMethod = cameraManagerType.GetMethod("GetApertureRadius", BindingFlags.Instance | BindingFlags.Public);
                 Assert.That(updateFocusMethod, Is.Not.Null);
                 Assert.That(apertureMethod, Is.Not.Null);
 
                 cameraManagerType.GetField("ClickedFocusPoint", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(cameraManager, new Vector3(0.0f, 0.0f, 10.0f));
                 cameraManagerType.GetField("HasClickedFocusPoint", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(cameraManager, true);
-                updateFocusMethod.Invoke(manager, null);
+                updateFocusMethod.Invoke(cameraManager, null);
 
                 Assert.That(cameraManagerType.GetField("cameraFocalDistance").GetValue(cameraManager), Is.EqualTo(10.0f));
-                Assert.That(apertureMethod.Invoke(manager, null), Is.EqualTo(0.02f));
+                Assert.That(apertureMethod.Invoke(cameraManager, null), Is.EqualTo(0.02f));
 
                 camera.transform.rotation = Quaternion.Euler(0.0f, 180.0f, 0.0f);
-                updateFocusMethod.Invoke(manager, null);
+                updateFocusMethod.Invoke(cameraManager, null);
 
-                Assert.That(apertureMethod.Invoke(manager, null), Is.EqualTo(0.0f));
+                Assert.That(apertureMethod.Invoke(cameraManager, null), Is.EqualTo(0.0f));
                 Assert.That(cameraManagerType.GetField("cameraApertureMode").GetValue(cameraManager).ToString(), Is.EqualTo("LensRadius"));
 
                 cameraManagerType.GetField("enableClickToFocus").SetValue(cameraManager, false);
-                Assert.That(apertureMethod.Invoke(manager, null), Is.EqualTo(0.02f));
+                Assert.That(apertureMethod.Invoke(cameraManager, null), Is.EqualTo(0.02f));
             }
             finally
             {
@@ -466,11 +466,14 @@ namespace GPURayTracing.Tests
                     "_causticsManager", BindingFlags.Instance | BindingFlags.NonPublic);
                 object causticsManager = causticsManagerField.GetValue(manager);
                 Type causticsManagerType = causticsManager.GetType();
-                MethodInfo ensureMethod = managerType.GetMethod(
-                    "EnsureCausticResources",
+                MethodInfo layoutMethod = managerType.GetMethod(
+                    "CalculateCausticGridLayout",
                     BindingFlags.Instance | BindingFlags.NonPublic);
                 MethodInfo releaseMethod = managerType.GetMethod(
                     "ReleaseCausticResources",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                MethodInfo ensureMethod = causticsManagerType.GetMethod(
+                    "EnsureResources",
                     BindingFlags.Instance | BindingFlags.NonPublic);
                 PropertyInfo resourcesProperty = causticsManagerType.GetProperty(
                     "HasResources", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
@@ -478,12 +481,14 @@ namespace GPURayTracing.Tests
                     "GridCellCountValue", BindingFlags.Instance | BindingFlags.NonPublic);
 
                 Assert.That(causticsManagerField, Is.Not.Null);
-                Assert.That(ensureMethod, Is.Not.Null);
+                Assert.That(layoutMethod, Is.Not.Null);
                 Assert.That(releaseMethod, Is.Not.Null);
+                Assert.That(ensureMethod, Is.Not.Null);
                 Assert.That(resourcesProperty, Is.Not.Null);
                 Assert.That(cellCountField, Is.Not.Null);
 
-                ensureMethod.Invoke(manager, null);
+                layoutMethod.Invoke(manager, null);
+                ensureMethod.Invoke(causticsManager, new object[] { 64 });
 
                 Assert.That(resourcesProperty.GetValue(causticsManager), Is.True);
                 Assert.That(cellCountField.GetValue(causticsManager), Is.GreaterThan(0));

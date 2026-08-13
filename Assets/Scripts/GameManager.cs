@@ -266,9 +266,6 @@ public class GameManager : MonoBehaviour
     [SerializeField]
     private TemporalDenoisingManager _temporalDenoisingManager = new TemporalDenoisingManager();
     private bool _temporalDynamicSceneChanged;
-    private bool _hasRenderedCameraState;
-    private Vector3 _lastRenderedCameraPosition;
-    private Quaternion _lastRenderedCameraRotation;
     private Vector2Int _textureSize;
     private Vector2Int _displayTextureSize;
     private int _accumulatedFrameCount;
@@ -1187,134 +1184,6 @@ public class GameManager : MonoBehaviour
         _temporalDenoisingManager.Run(debugRenderMode);
     }
 
-    #if false
-    private void RunTemporalDenoiserLegacy()
-    {
-        EnsureTemporalDenoiserResources();
-        if (_spatialDenoiserShader == null || _motionVectorTexture == null)
-        {
-            return;
-        }
-
-        int threadGroupsX = Mathf.CeilToInt(_textureSize.x / 8.0f);
-        int threadGroupsY = Mathf.CeilToInt(_textureSize.y / 8.0f);
-        int motionKernel = _spatialDenoiserShader.FindKernel("CSGenerateCameraMotion");
-        _spatialDenoiserShader.SetTexture(motionKernel, "FeatureDepth", _featureDepthTexture);
-        _spatialDenoiserShader.SetTexture(motionKernel, "FeatureValidity", _featureValidityTexture);
-        _spatialDenoiserShader.SetTexture(motionKernel, "GeneratedMotionVectors", _motionVectorTexture);
-        _spatialDenoiserShader.SetMatrix("_CurrentUnjitteredViewProjection", _currentUnjitteredViewProjection);
-        _spatialDenoiserShader.SetMatrix("_PreviousUnjitteredViewProjection", _previousUnjitteredViewProjection);
-        _spatialDenoiserShader.SetMatrix("_CameraToWorld", renderTextureCamera.cameraToWorldMatrix);
-        _spatialDenoiserShader.SetMatrix("_CameraInverseProjection", renderTextureCamera.projectionMatrix.inverse);
-        _spatialDenoiserShader.Dispatch(motionKernel, threadGroupsX, threadGroupsY, 1);
-
-        RenderTexture previousRadiance = _temporalHistoryReadIsA ? _temporalRadianceHistoryA : _temporalRadianceHistoryB;
-        RenderTexture nextRadiance = _temporalHistoryReadIsA ? _temporalRadianceHistoryB : _temporalRadianceHistoryA;
-        RenderTexture previousNormal = _temporalHistoryReadIsA ? _temporalNormalHistoryA : _temporalNormalHistoryB;
-        RenderTexture nextNormal = _temporalHistoryReadIsA ? _temporalNormalHistoryB : _temporalNormalHistoryA;
-        RenderTexture previousDepth = _temporalHistoryReadIsA ? _temporalDepthHistoryA : _temporalDepthHistoryB;
-        RenderTexture nextDepth = _temporalHistoryReadIsA ? _temporalDepthHistoryB : _temporalDepthHistoryA;
-        RenderTexture previousIdentity = _temporalHistoryReadIsA ? _temporalIdentityHistoryA : _temporalIdentityHistoryB;
-        RenderTexture nextIdentity = _temporalHistoryReadIsA ? _temporalIdentityHistoryB : _temporalIdentityHistoryA;
-        RenderTexture previousValidity = _temporalHistoryReadIsA ? _temporalValidityHistoryA : _temporalValidityHistoryB;
-        RenderTexture nextValidity = _temporalHistoryReadIsA ? _temporalValidityHistoryB : _temporalValidityHistoryA;
-        RenderTexture previousHistoryLength = _temporalHistoryReadIsA ? _temporalHistoryLengthA : _temporalHistoryLengthB;
-        RenderTexture nextHistoryLength = _temporalHistoryReadIsA ? _temporalHistoryLengthB : _temporalHistoryLengthA;
-        RenderTexture previousMoments = _temporalHistoryReadIsA ? _temporalMomentsA : _temporalMomentsB;
-        RenderTexture nextMoments = _temporalHistoryReadIsA ? _temporalMomentsB : _temporalMomentsA;
-        int validationKernel = _spatialDenoiserShader.FindKernel("CSTemporalReprojectValidate");
-        _spatialDenoiserShader.SetTexture(validationKernel, "Beauty", _beautyTexture);
-        _spatialDenoiserShader.SetTexture(validationKernel, "FeatureNormal", _featureNormalTexture);
-        _spatialDenoiserShader.SetTexture(validationKernel, "FeatureDepth", _featureDepthTexture);
-        _spatialDenoiserShader.SetTexture(validationKernel, "FeatureIdentity", _featureIdentityTexture);
-        _spatialDenoiserShader.SetTexture(validationKernel, "FeatureValidity", _featureValidityTexture);
-        _spatialDenoiserShader.SetTexture(validationKernel, "MotionVectors", _motionVectorTexture);
-        _spatialDenoiserShader.SetTexture(validationKernel, "PreviousRadiance", previousRadiance);
-        _spatialDenoiserShader.SetTexture(validationKernel, "PreviousNormal", previousNormal);
-        _spatialDenoiserShader.SetTexture(validationKernel, "PreviousDepth", previousDepth);
-        _spatialDenoiserShader.SetTexture(validationKernel, "PreviousIdentity", previousIdentity);
-        _spatialDenoiserShader.SetTexture(validationKernel, "PreviousValidity", previousValidity);
-        _spatialDenoiserShader.SetTexture(validationKernel, "PreviousHistoryLength", previousHistoryLength);
-        _spatialDenoiserShader.SetTexture(validationKernel, "ReprojectedRadiance", _temporalReprojectedRadianceTexture);
-        _spatialDenoiserShader.SetTexture(validationKernel, "NextRadiance", nextRadiance);
-        _spatialDenoiserShader.SetTexture(validationKernel, "NextNormal", nextNormal);
-        _spatialDenoiserShader.SetTexture(validationKernel, "NextDepth", nextDepth);
-        _spatialDenoiserShader.SetTexture(validationKernel, "NextIdentity", nextIdentity);
-        _spatialDenoiserShader.SetTexture(validationKernel, "NextValidity", nextValidity);
-        _spatialDenoiserShader.SetTexture(validationKernel, "NextHistoryLength", nextHistoryLength);
-        _spatialDenoiserShader.SetTexture(validationKernel, "TemporalDiagnostics", _temporalDiagnosticsTexture);
-        _spatialDenoiserShader.SetInt("_TemporalHistoryValid", _temporalHistoryValid ? 1 : 0);
-        _spatialDenoiserShader.SetInt("_TemporalUnsupported", IsTemporalPathUnsupported() ? 1 : 0);
-        _spatialDenoiserShader.SetFloat("_TemporalDepthThreshold", _temporalDenoisingManager.temporalDepthThreshold);
-        _spatialDenoiserShader.SetFloat("_TemporalNormalThreshold", _temporalDenoisingManager.temporalNormalThreshold);
-        _spatialDenoiserShader.SetInt("_TemporalMaxHistoryLength", _temporalDenoisingManager.temporalMaxHistoryLength);
-        _spatialDenoiserShader.SetFloat("_TemporalCameraRotationDelta", _hasRenderedCameraState
-            ? Quaternion.Angle(renderTextureCamera.transform.rotation, _lastRenderedCameraRotation) : 0.0f);
-        _spatialDenoiserShader.Dispatch(validationKernel, threadGroupsX, threadGroupsY, 1);
-
-        int momentsKernel = _spatialDenoiserShader.FindKernel("CSUpdateTemporalMoments");
-        _spatialDenoiserShader.SetTexture(momentsKernel, "Beauty", _beautyTexture);
-        _spatialDenoiserShader.SetTexture(momentsKernel, "MotionVectors", _motionVectorTexture);
-        _spatialDenoiserShader.SetTexture(momentsKernel, "HistoryLength", nextHistoryLength);
-        _spatialDenoiserShader.SetTexture(momentsKernel, "TemporalDiagnostics", _temporalDiagnosticsTexture);
-        _spatialDenoiserShader.SetTexture(momentsKernel, "PreviousMoments", previousMoments);
-        _spatialDenoiserShader.SetTexture(momentsKernel, "NextMoments", nextMoments);
-        _spatialDenoiserShader.SetTexture(momentsKernel, "NextVariance", _temporalVarianceTexture);
-        _spatialDenoiserShader.SetFloat("_TemporalCameraRotationDelta", _hasRenderedCameraState
-            ? Quaternion.Angle(renderTextureCamera.transform.rotation, _lastRenderedCameraRotation) : 0.0f);
-        _spatialDenoiserShader.Dispatch(momentsKernel, threadGroupsX, threadGroupsY, 1);
-
-        if (enableCaustics || IsCausticPreservationDebugMode())
-        {
-            GenerateCausticPreservationMask(threadGroupsX, threadGroupsY);
-        }
-
-        if (IsTemporalDebugMode())
-        {
-            int debugMode = debugRenderMode == DebugRenderMode.MotionVectors ? 1
-                : debugRenderMode == DebugRenderMode.TemporalReprojectedRadiance ? 2
-                : debugRenderMode == DebugRenderMode.TemporalHistoryAcceptance ? 3
-                : debugRenderMode == DebugRenderMode.TemporalRejectionReason ? 4
-                : debugRenderMode == DebugRenderMode.TemporalDenoised ? 5
-                : debugRenderMode == DebugRenderMode.TemporalHistoryLength ? 6
-                : debugRenderMode == DebugRenderMode.TemporalDenoisedTint ? 7
-                : debugRenderMode == DebugRenderMode.TemporalVariance ? 8 : 9;
-            int visualizeKernel = _spatialDenoiserShader.FindKernel("CSVisualizeTemporal");
-            _spatialDenoiserShader.SetTexture(visualizeKernel, "MotionVectors", _motionVectorTexture);
-            _spatialDenoiserShader.SetTexture(visualizeKernel, "ReprojectedRadiance", _temporalReprojectedRadianceTexture);
-            _spatialDenoiserShader.SetTexture(visualizeKernel, "NextRadiance", nextRadiance);
-            _spatialDenoiserShader.SetTexture(visualizeKernel, "TemporalDiagnostics", _temporalDiagnosticsTexture);
-            _spatialDenoiserShader.SetTexture(visualizeKernel, "HistoryLength", nextHistoryLength);
-            _spatialDenoiserShader.SetTexture(visualizeKernel, "Variance", _temporalVarianceTexture);
-            _spatialDenoiserShader.SetTexture(visualizeKernel, "PreservationMask", _causticPreservationMaskTexture);
-            _spatialDenoiserShader.SetTexture(visualizeKernel, "PresentationResult", _outputTexture);
-            _spatialDenoiserShader.SetInt("_TemporalDebugMode", debugMode);
-            _spatialDenoiserShader.SetFloat("_Exposure", exposure);
-            _spatialDenoiserShader.SetInt("_TemporalMaxHistoryLength", _temporalDenoisingManager.temporalMaxHistoryLength);
-            _spatialDenoiserShader.Dispatch(visualizeKernel, threadGroupsX, threadGroupsY, 1);
-        }
-        else if (ShouldUseTemporalAccumulation())
-        {
-            if (_temporalDenoisingManager.temporalVarianceGuidedFiltering)
-            {
-                RunSpatialDenoiser(nextRadiance, _temporalVarianceTexture);
-            }
-            else
-            {
-                int presentKernel = _spatialDenoiserShader.FindKernel("CSPresent");
-                _spatialDenoiserShader.SetTexture(presentKernel, "InputBeauty", nextRadiance);
-                _spatialDenoiserShader.SetTexture(presentKernel, "PresentationResult", _outputTexture);
-                _spatialDenoiserShader.SetFloat("_Exposure", exposure);
-                _spatialDenoiserShader.Dispatch(presentKernel, threadGroupsX, threadGroupsY, 1);
-            }
-        }
-
-        _temporalHistoryReadIsA = !_temporalHistoryReadIsA;
-        _temporalHistoryValid = true;
-    }
-
-    #endif
-
     private void PresentCausticPreservationMask()
     {
         EnsureSpatialDenoiserResources();
@@ -1661,17 +1530,6 @@ public class GameManager : MonoBehaviour
     private float GetRenderTime()
     {
         return _singleFrame ? _singleFrameRenderTime : Time.time;
-    }
-
-    private int GetActiveLightCountForSampling()
-    {
-        int activeLightCount = _lights.Count;
-        if (maxLightSamples > 0)
-        {
-            activeLightCount = Mathf.Min(activeLightCount, maxLightSamples);
-        }
-
-        return Mathf.Max(0, activeLightCount);
     }
 
     public void RenderImage(RenderTexture src, RenderTexture dest)
@@ -2183,50 +2041,17 @@ public class GameManager : MonoBehaviour
         for (int i = 0; i < _meshObjects.Count; i++)
         {
             var meshObject = _meshObjects[i];
-            var material = meshObject.material;
-            var light = meshObject.light;
             var localToWorld = meshObject.transform.localToWorldMatrix;
-            var color = material != null ? material.Color.ToVector3() : Vector3.one;
-            var emission = light != null ? light.Color.ToVector3() * Mathf.Max(0.0f, light.Intensity) : Vector3.zero;
-            var smoothness = material != null ? material.Smoothness : 0.0f;
-            var metallic = material != null ? GetEffectiveMetallic(material) : 0.0f;
-            var opacity = material != null ? Mathf.Clamp01(material.Opacity) : 1.0f;
-            var refraction = material != null ? material.RefractionIndex : 1.0f;
-            var specular = material != null ? Mathf.Clamp01(material.Specular) : 0.0f;
-            var transmission = material != null ? Mathf.Clamp01(material.Transmission) : 1.0f;
-            var materialType = light != null ? 3 : (int)material.Type;
-            var albedoTexture = material != null ? material.AlbedoTexture : null;
-            var metallicRoughnessTexture = material != null ? material.MetallicRoughnessTexture : null;
-            var normalTexture = material != null ? material.NormalTexture : null;
-            var parallaxTexture = material != null ? material.ParallaxTexture : null;
-            var textureUvScale = material != null ? material.TextureUvScale : Vector2.one;
-            float parallaxStrength = material != null ? material.ParallaxStrength : 0.0f;
-            float minimumParallaxStrength = material != null ? Mathf.Min(material.MinimumParallaxStrength, parallaxStrength) : 0.0f;
-            bool interpolateNormals = material != null && material.InterpolateNormals;
+            var snapshot = RayMaterialSnapshot.Create(meshObject.material, meshObject.light);
 
-            if (opacity < ShadowBlockerOpaqueThreshold)
+            if (snapshot.opacity < ShadowBlockerOpaqueThreshold)
             {
                 _hasTransparentMeshBlockers = true;
             }
 
             bool meshGeometryChanged = meshObject.previousLocalToWorld != localToWorld
-                || meshObject.previousInterpolateNormals != interpolateNormals;
-            bool meshMaterialChanged = meshObject.previousColor != color
-                || meshObject.previousEmission != emission
-                || !Mathf.Approximately(meshObject.previousSmoothness, smoothness)
-                || !Mathf.Approximately(meshObject.previousMetallic, metallic)
-                || !Mathf.Approximately(meshObject.previousOpacity, opacity)
-                || !Mathf.Approximately(meshObject.previousRefraction, refraction)
-                || !Mathf.Approximately(meshObject.previousSpecular, specular)
-                || !Mathf.Approximately(meshObject.previousTransmission, transmission)
-                || meshObject.previousMaterialType != materialType
-                || meshObject.previousAlbedoTexture != albedoTexture
-                || meshObject.previousMetallicRoughnessTexture != metallicRoughnessTexture
-                || meshObject.previousNormalTexture != normalTexture
-                || meshObject.previousParallaxTexture != parallaxTexture
-                || meshObject.previousTextureUvScale != textureUvScale
-                || !Mathf.Approximately(meshObject.previousParallaxStrength, parallaxStrength)
-                || !Mathf.Approximately(meshObject.previousMinimumParallaxStrength, minimumParallaxStrength);
+                || meshObject.previousInterpolateNormals != snapshot.interpolateNormals;
+            bool meshMaterialChanged = snapshot.DiffersFrom(meshObject);
 
             geometryChanged |= meshGeometryChanged;
             materialChanged |= meshMaterialChanged;
@@ -2237,23 +2062,7 @@ public class GameManager : MonoBehaviour
             }
 
             meshObject.previousLocalToWorld = localToWorld;
-            meshObject.previousColor = color;
-            meshObject.previousEmission = emission;
-            meshObject.previousSmoothness = smoothness;
-            meshObject.previousMetallic = metallic;
-            meshObject.previousOpacity = opacity;
-            meshObject.previousRefraction = refraction;
-            meshObject.previousSpecular = specular;
-            meshObject.previousTransmission = transmission;
-            meshObject.previousMaterialType = materialType;
-            meshObject.previousAlbedoTexture = albedoTexture;
-            meshObject.previousMetallicRoughnessTexture = metallicRoughnessTexture;
-            meshObject.previousNormalTexture = normalTexture;
-            meshObject.previousParallaxTexture = parallaxTexture;
-            meshObject.previousTextureUvScale = textureUvScale;
-            meshObject.previousParallaxStrength = parallaxStrength;
-            meshObject.previousMinimumParallaxStrength = minimumParallaxStrength;
-            meshObject.previousInterpolateNormals = interpolateNormals;
+            snapshot.StoreIn(ref meshObject);
             _meshObjects[i] = meshObject;
         }
     }
@@ -2268,22 +2077,12 @@ public class GameManager : MonoBehaviour
         for (int meshIndex = 0; meshIndex < _meshObjects.Count; meshIndex++)
         {
             var meshObject = _meshObjects[meshIndex];
-            var material = meshObject.material;
-            var light = meshObject.light;
-            bool isLight = light != null;
-            var color = material != null ? material.Color.ToVector3() : Vector3.one;
-            var emission = isLight ? light.Color.ToVector3() * Mathf.Max(0.0f, light.Intensity) : Vector3.zero;
-            float smoothness = material != null ? material.Smoothness : 0.0f;
-            float metallic = material != null ? GetEffectiveMetallic(material) : 0.0f;
-            float opacity = material != null ? Mathf.Clamp01(material.Opacity) : 1.0f;
-            float refraction = material != null ? material.RefractionIndex : 1.0f;
-            float specular = material != null ? Mathf.Clamp01(material.Specular) : 0.0f;
-            float transmission = material != null ? Mathf.Clamp01(material.Transmission) : 1.0f;
-            int materialType = isLight ? 3 : (int)material.Type;
-            int textureIndex = material != null ? GetMeshAlbedoTextureIndex(material.AlbedoTexture) : -1;
-            int metallicRoughnessTextureIndex = material != null ? GetMeshTextureIndex(material.MetallicRoughnessTexture, _meshMetallicRoughnessTextures) : -1;
-            int normalTextureIndex = material != null ? GetMeshTextureIndex(material.NormalTexture, _meshNormalTextures) : -1;
-            int parallaxTextureIndex = material != null ? GetMeshTextureIndex(material.ParallaxTexture, _meshParallaxTextures) : -1;
+            var snapshot = RayMaterialSnapshot.Create(meshObject.material, meshObject.light);
+            bool isLight = meshObject.light != null;
+            int textureIndex = GetMeshAlbedoTextureIndex(snapshot.albedoTexture);
+            int metallicRoughnessTextureIndex = GetMeshTextureIndex(snapshot.metallicRoughnessTexture, _meshMetallicRoughnessTextures);
+            int normalTextureIndex = GetMeshTextureIndex(snapshot.normalTexture, _meshNormalTextures);
+            int parallaxTextureIndex = GetMeshTextureIndex(snapshot.parallaxTexture, _meshParallaxTextures);
 
             int triangleStart = 0;
             int triangleEnd = 0;
@@ -2304,22 +2103,11 @@ public class GameManager : MonoBehaviour
             for (int triangleIndex = triangleStart; triangleIndex < triangleEnd; triangleIndex++)
             {
                 var triangle = _triangles[triangleIndex];
-                triangle.color = color;
-                triangle.emission = emission;
-                triangle.smoothness = smoothness;
-                triangle.metallic = metallic;
-                triangle.opacity = opacity;
-                triangle.refraction = refraction;
-                triangle.specular = specular;
-                triangle.transmission = transmission;
-                triangle.materialType = materialType;
+                snapshot.ApplyTo(ref triangle);
                 triangle.textureIndex = textureIndex;
                 triangle.metallicRoughnessTextureIndex = metallicRoughnessTextureIndex;
                 triangle.normalTextureIndex = normalTextureIndex;
                 triangle.parallaxTextureIndex = parallaxTextureIndex;
-                triangle.textureUvScale = material != null ? material.TextureUvScale : Vector2.one;
-                triangle.parallaxStrength = material != null ? material.ParallaxStrength : 0.0f;
-                triangle.minimumParallaxStrength = material != null ? Mathf.Min(material.MinimumParallaxStrength, material.ParallaxStrength) : 0.0f;
                 _triangles[triangleIndex] = triangle;
 
             }
@@ -2327,7 +2115,7 @@ public class GameManager : MonoBehaviour
             if (isLight && lightIndex >= 0 && lightIndex < _lights.Count)
             {
                 var meshLight = _lights[lightIndex];
-                meshLight.emission = emission;
+                meshLight.emission = snapshot.emission;
                 _lights[lightIndex] = meshLight;
             }
         }
@@ -2377,23 +2165,13 @@ public class GameManager : MonoBehaviour
 
             var localToWorld = meshObject.transform.localToWorldMatrix;
             var normalToWorld = localToWorld.inverse.transpose;
-            var material = meshObject.material;
-            var light = meshObject.light;
-            bool isLight = light != null;
-            var color = material != null ? material.Color.ToVector3() : Vector3.one;
-            var emission = isLight ? light.Color.ToVector3() * Mathf.Max(0.0f, light.Intensity) : Vector3.zero;
-            var smoothness = material != null ? material.Smoothness : 0.0f;
-            var metallic = material != null ? GetEffectiveMetallic(material) : 0.0f;
-            var opacity = material != null ? Mathf.Clamp01(material.Opacity) : 1.0f;
-            var refraction = material != null ? material.RefractionIndex : 1.0f;
-            var specular = material != null ? Mathf.Clamp01(material.Specular) : 0.0f;
-            var transmission = material != null ? Mathf.Clamp01(material.Transmission) : 1.0f;
-            int materialType = isLight ? 3 : (int)material.Type;
-            int textureIndex = material != null ? GetMeshAlbedoTextureIndex(material.AlbedoTexture) : -1;
-            int metallicRoughnessTextureIndex = material != null ? GetMeshTextureIndex(material.MetallicRoughnessTexture, _meshMetallicRoughnessTextures) : -1;
-            int normalTextureIndex = material != null ? GetMeshTextureIndex(material.NormalTexture, _meshNormalTextures) : -1;
-            int parallaxTextureIndex = material != null ? GetMeshTextureIndex(material.ParallaxTexture, _meshParallaxTextures) : -1;
-            bool interpolateNormals = material != null && material.InterpolateNormals;
+            var snapshot = RayMaterialSnapshot.Create(meshObject.material, meshObject.light);
+            bool isLight = meshObject.light != null;
+            int textureIndex = GetMeshAlbedoTextureIndex(snapshot.albedoTexture);
+            int metallicRoughnessTextureIndex = GetMeshTextureIndex(snapshot.metallicRoughnessTexture, _meshMetallicRoughnessTextures);
+            int normalTextureIndex = GetMeshTextureIndex(snapshot.normalTexture, _meshNormalTextures);
+            int parallaxTextureIndex = GetMeshTextureIndex(snapshot.parallaxTexture, _meshParallaxTextures);
+            bool interpolateNormals = snapshot.interpolateNormals;
             MeshBvhTemplate template = GetOrBuildMeshBvhTemplate(mesh, interpolateNormals);
             int triangleStart = _triangles.Count;
             int nodeStart = _bvhNodes.Count;
@@ -2404,23 +2182,12 @@ public class GameManager : MonoBehaviour
             for (int i = 0; i < template.triangles.Count; i++)
             {
                 Triangle triangle = TransformTemplateTriangle(template.triangles[i], localToWorld, normalToWorld);
-                triangle.color = color;
-                triangle.emission = emission;
-                triangle.smoothness = smoothness;
-                triangle.metallic = metallic;
-                triangle.opacity = opacity;
-                triangle.refraction = refraction;
-                triangle.specular = specular;
-                triangle.transmission = transmission;
-                triangle.materialType = materialType;
+                snapshot.ApplyTo(ref triangle);
                 triangle.meshIndex = meshIndex;
                 triangle.textureIndex = textureIndex;
                 triangle.metallicRoughnessTextureIndex = metallicRoughnessTextureIndex;
                 triangle.normalTextureIndex = normalTextureIndex;
                 triangle.parallaxTextureIndex = parallaxTextureIndex;
-                triangle.textureUvScale = material != null ? material.TextureUvScale : Vector2.one;
-                triangle.parallaxStrength = material != null ? material.ParallaxStrength : 0.0f;
-                triangle.minimumParallaxStrength = material != null ? Mathf.Min(material.MinimumParallaxStrength, material.ParallaxStrength) : 0.0f;
                 triangle.interpolateNormals = interpolateNormals ? 1 : 0;
                 triangle.lightIndex = lightIndex;
                 _triangles.Add(triangle);
@@ -2478,7 +2245,7 @@ public class GameManager : MonoBehaviour
                 _lights.Add(new Light
                 {
                     position = areaWeightedLightPosition / totalLightArea,
-                    emission = emission,
+                    emission = snapshot.emission,
                     type = (int)PathTracedLightType.Mesh,
                     triangleStart = triangleStart,
                     triangleCount = _triangles.Count - triangleStart,
@@ -3009,6 +2776,107 @@ public class GameManager : MonoBehaviour
         return triangle;
     }
 
+    private readonly struct RayMaterialSnapshot
+    {
+        public readonly Vector3 color;
+        public readonly Vector3 emission;
+        public readonly float smoothness;
+        public readonly float metallic;
+        public readonly float opacity;
+        public readonly float refraction;
+        public readonly float specular;
+        public readonly float transmission;
+        public readonly int materialType;
+        public readonly Texture2D albedoTexture;
+        public readonly Texture2D metallicRoughnessTexture;
+        public readonly Texture2D normalTexture;
+        public readonly Texture2D parallaxTexture;
+        public readonly Vector2 textureUvScale;
+        public readonly float parallaxStrength;
+        public readonly float minimumParallaxStrength;
+        public readonly bool interpolateNormals;
+
+        private RayMaterialSnapshot(RayMaterial material, RayLight light)
+        {
+            color = material != null ? material.Color.ToVector3() : Vector3.one;
+            emission = light != null ? light.Color.ToVector3() * Mathf.Max(0.0f, light.Intensity) : Vector3.zero;
+            smoothness = material != null ? material.Smoothness : 0.0f;
+            metallic = material != null ? GetEffectiveMetallic(material) : 0.0f;
+            opacity = material != null ? Mathf.Clamp01(material.Opacity) : 1.0f;
+            refraction = material != null ? material.RefractionIndex : 1.0f;
+            specular = material != null ? Mathf.Clamp01(material.Specular) : 0.0f;
+            transmission = material != null ? Mathf.Clamp01(material.Transmission) : 1.0f;
+            materialType = light != null ? 3 : (int)material.Type;
+            albedoTexture = material != null ? material.AlbedoTexture : null;
+            metallicRoughnessTexture = material != null ? material.MetallicRoughnessTexture : null;
+            normalTexture = material != null ? material.NormalTexture : null;
+            parallaxTexture = material != null ? material.ParallaxTexture : null;
+            textureUvScale = material != null ? material.TextureUvScale : Vector2.one;
+            parallaxStrength = material != null ? material.ParallaxStrength : 0.0f;
+            minimumParallaxStrength = material != null ? Mathf.Min(material.MinimumParallaxStrength, parallaxStrength) : 0.0f;
+            interpolateNormals = material != null && material.InterpolateNormals;
+        }
+
+        public static RayMaterialSnapshot Create(RayMaterial material, RayLight light) => new(material, light);
+
+        public bool DiffersFrom(PathTracedMesh mesh)
+        {
+            return mesh.previousColor != color
+                || mesh.previousEmission != emission
+                || !Mathf.Approximately(mesh.previousSmoothness, smoothness)
+                || !Mathf.Approximately(mesh.previousMetallic, metallic)
+                || !Mathf.Approximately(mesh.previousOpacity, opacity)
+                || !Mathf.Approximately(mesh.previousRefraction, refraction)
+                || !Mathf.Approximately(mesh.previousSpecular, specular)
+                || !Mathf.Approximately(mesh.previousTransmission, transmission)
+                || mesh.previousMaterialType != materialType
+                || mesh.previousAlbedoTexture != albedoTexture
+                || mesh.previousMetallicRoughnessTexture != metallicRoughnessTexture
+                || mesh.previousNormalTexture != normalTexture
+                || mesh.previousParallaxTexture != parallaxTexture
+                || mesh.previousTextureUvScale != textureUvScale
+                || !Mathf.Approximately(mesh.previousParallaxStrength, parallaxStrength)
+                || !Mathf.Approximately(mesh.previousMinimumParallaxStrength, minimumParallaxStrength);
+        }
+
+        public void StoreIn(ref PathTracedMesh mesh)
+        {
+            mesh.previousColor = color;
+            mesh.previousEmission = emission;
+            mesh.previousSmoothness = smoothness;
+            mesh.previousMetallic = metallic;
+            mesh.previousOpacity = opacity;
+            mesh.previousRefraction = refraction;
+            mesh.previousSpecular = specular;
+            mesh.previousTransmission = transmission;
+            mesh.previousMaterialType = materialType;
+            mesh.previousAlbedoTexture = albedoTexture;
+            mesh.previousMetallicRoughnessTexture = metallicRoughnessTexture;
+            mesh.previousNormalTexture = normalTexture;
+            mesh.previousParallaxTexture = parallaxTexture;
+            mesh.previousTextureUvScale = textureUvScale;
+            mesh.previousParallaxStrength = parallaxStrength;
+            mesh.previousMinimumParallaxStrength = minimumParallaxStrength;
+            mesh.previousInterpolateNormals = interpolateNormals;
+        }
+
+        public void ApplyTo(ref Triangle triangle)
+        {
+            triangle.color = color;
+            triangle.emission = emission;
+            triangle.smoothness = smoothness;
+            triangle.metallic = metallic;
+            triangle.opacity = opacity;
+            triangle.refraction = refraction;
+            triangle.specular = specular;
+            triangle.transmission = transmission;
+            triangle.materialType = materialType;
+            triangle.textureUvScale = textureUvScale;
+            triangle.parallaxStrength = parallaxStrength;
+            triangle.minimumParallaxStrength = minimumParallaxStrength;
+        }
+    }
+
     private static void TransformBounds(Vector3 sourceMin, Vector3 sourceMax, Matrix4x4 matrix, out Vector3 boundsMin, out Vector3 boundsMax)
     {
         Vector3 center = (sourceMin + sourceMax) * 0.5f;
@@ -3124,92 +2992,7 @@ public class GameManager : MonoBehaviour
 
     private static Texture2DArray BuildMeshTextureArray(List<Texture2D> textures, Texture2D fallback, string arrayName, Color fallbackColor, bool linear)
     {
-        int textureCount = Mathf.Max(1, textures.Count);
-        int width = 1;
-        int height = 1;
-        for (int i = 0; i < textures.Count; i++)
-        {
-            if (textures[i] == null)
-            {
-                continue;
-            }
-
-            width = Mathf.Max(width, textures[i].width);
-            height = Mathf.Max(height, textures[i].height);
-        }
-
-        var result = new Texture2DArray(width, height, textureCount, TextureFormat.RGBA32, false, linear)
-        {
-            name = arrayName,
-            wrapMode = TextureWrapMode.Repeat,
-            filterMode = FilterMode.Bilinear
-        };
-
-        for (int i = 0; i < textureCount; i++)
-        {
-            Texture2D source = i < textures.Count ? textures[i] : fallback;
-            CopyTextureToArraySlice(source, result, i, fallbackColor);
-        }
-
-        result.Apply(false, false);
-        return result;
-    }
-
-    private static void CopyTextureToArraySlice(Texture2D source, Texture2DArray destination, int slice, Color fallbackColor)
-    {
-        int width = destination.width;
-        int height = destination.height;
-        var pixels = new Color32[width * height];
-        if (source == null)
-        {
-            for (int i = 0; i < pixels.Length; i++)
-            {
-                pixels[i] = fallbackColor;
-            }
-        }
-        else if (source.isReadable && source.width == width && source.height == height)
-        {
-            pixels = source.GetPixels32();
-        }
-        else if (source.isReadable)
-        {
-            for (int y = 0; y < height; y++)
-            {
-                float v = (y + 0.5f) / height;
-                for (int x = 0; x < width; x++)
-                {
-                    float u = (x + 0.5f) / width;
-                    pixels[y * width + x] = source.GetPixelBilinear(u, v);
-                }
-            }
-        }
-        else
-        {
-            RenderTexture previousRenderTexture = RenderTexture.active;
-            RenderTexture temporaryRenderTexture = RenderTexture.GetTemporary(
-                width,
-                height,
-                0,
-                RenderTextureFormat.ARGB32,
-                destination.isDataSRGB ? RenderTextureReadWrite.sRGB : RenderTextureReadWrite.Linear);
-            var readableTexture = new Texture2D(width, height, TextureFormat.RGBA32, false, !destination.isDataSRGB);
-            try
-            {
-                Graphics.Blit(source, temporaryRenderTexture);
-                RenderTexture.active = temporaryRenderTexture;
-                readableTexture.ReadPixels(new Rect(0, 0, width, height), 0, 0, false);
-                readableTexture.Apply(false, false);
-                pixels = readableTexture.GetPixels32();
-            }
-            finally
-            {
-                RenderTexture.active = previousRenderTexture;
-                RenderTexture.ReleaseTemporary(temporaryRenderTexture);
-                DestroyRuntimeObject(readableTexture);
-            }
-        }
-
-        destination.SetPixels32(pixels, slice);
+        return MeshTextureArrayBuilder.Build(textures, fallback, arrayName, fallbackColor, linear);
     }
 
     private void RebuildTopLevelBvh()
