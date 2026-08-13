@@ -209,7 +209,7 @@ public class RayObjectPreview : MonoBehaviour
     private Color GetPreviewAmbientColor()
     {
         var manager = GetComponentInParent<GameManager>();
-        return manager != null ? manager._skyboxLightColor : RenderSettings.ambientSkyColor;
+        return manager != null ? manager.Lighting.SkyboxLightColor : RenderSettings.ambientSkyColor;
     }
 
     private static void SetColor(Material material, string propertyName, Color value)

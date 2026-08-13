@@ -354,12 +354,15 @@ public class RayTracingBenchmarkToolTests
             Component rayTracingObject = lightObject.AddComponent(rayTracingObjectType);
             managerType.GetMethod("RegisterObject").Invoke(manager, new object[] { rayTracingObject });
 
-            SetField(manager, "_topLevelBvhDirty", false);
-            lightType.GetField("Intensity").SetValue(light, 2.0f);
+            object sceneBvhs = GetField<object>(manager, "_sceneBvhs");
+            PropertyInfo isTopLevelDirty = sceneBvhs.GetType().GetProperty("IsTopLevelDirty");
+            Assert.That(isTopLevelDirty, Is.Not.Null);
+            bool wasDirty = (bool)isTopLevelDirty.GetValue(sceneBvhs);
 
+            lightType.GetField("Intensity").SetValue(light, 2.0f);
             InvokePrivate(manager, "UpdateSpheres");
 
-            Assert.That(GetField<bool>(manager, "_topLevelBvhDirty"), Is.False,
+            Assert.That((bool)isTopLevelDirty.GetValue(sceneBvhs), Is.EqualTo(wasDirty),
                 "Changing light radiance must update the light buffer without rebuilding the TLAS.");
         }
         finally
@@ -449,7 +452,7 @@ public class RayTracingBenchmarkToolTests
             return (ICollection)field.GetValue(component);
         }
 
-        if (fieldName is "_lights" or "_lightObjects" or "_directionalLights")
+        if (fieldName is "_lights" or "_lightObjects" or "_directionalLights" or "_meshLightTriangleCdf")
         {
             PropertyInfo lightingProperty = component.GetType().GetProperty(
                 "Lighting",
@@ -460,7 +463,8 @@ public class RayTracingBenchmarkToolTests
             {
                 "_lights" => "Lights",
                 "_lightObjects" => "LightObjects",
-                _ => "DirectionalLights"
+                "_directionalLights" => "DirectionalLights",
+                _ => "MeshLightTriangleCdf"
             };
             PropertyInfo collectionProperty = lighting.GetType().GetProperty(
                 propertyName,

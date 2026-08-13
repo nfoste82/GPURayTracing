@@ -61,7 +61,7 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
     private IEnumerator RunBenchmark()
     {
         bool originalCausticsEnabled = gameManager.enableCaustics;
-        int originalPhotonCount = gameManager.causticPhotonCount;
+        int originalPhotonCount = gameManager.Caustics.PhotonCount;
         int originalTargetFrameRate = Application.targetFrameRate;
         int originalVSyncCount = QualitySettings.vSyncCount;
 
@@ -97,7 +97,7 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
         finally
         {
             gameManager.enableCaustics = originalCausticsEnabled;
-            gameManager.causticPhotonCount = originalPhotonCount;
+            gameManager.Caustics.PhotonCount = originalPhotonCount;
             Application.targetFrameRate = originalTargetFrameRate;
             QualitySettings.vSyncCount = originalVSyncCount;
             _benchmarkCoroutine = null;
@@ -109,7 +109,7 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
         gameManager.enableCaustics = causticsEnabled;
         if (causticsEnabled)
         {
-            gameManager.causticPhotonCount = photonCount;
+            gameManager.Caustics.PhotonCount = photonCount;
         }
 
         string label = sweepCausticPhotonCounts
@@ -219,21 +219,21 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
         AppendSetting(builder, "num_bounces", gameManager.numBounces);
         AppendSetting(builder, "shadow_quality", gameManager.shadowQuality);
         AppendSetting(builder, "shadow_randomness", gameManager.shadowRandomness);
-        AppendSetting(builder, "light_sampling_strategy", gameManager.lightSamplingStrategy);
-        AppendSetting(builder, "light_sample_count", gameManager.lightSampleCount);
+        AppendSetting(builder, "light_sampling_strategy", gameManager.Lighting.LightSamplingStrategy);
+        AppendSetting(builder, "light_sample_count", gameManager.Lighting.LightSampleCount);
         AppendSetting(builder, "max_light_samples", gameManager.maxLightSamples);
         AppendSetting(builder, "frame_accumulation", gameManager.enableFrameAccumulation);
         AppendSetting(builder, "debug_render_mode", gameManager.debugRenderMode);
         AppendSetting(builder, "random_noise", gameManager.randomNoise);
         AppendSetting(builder, "camera_autofocus", gameManager.CameraManager.cameraAutoFocus);
         AppendSetting(builder, "camera_focal_distance", gameManager.CameraManager.cameraFocalDistance);
-        AppendSetting(builder, "light_falloff_scale", gameManager.lightFalloffScale);
+        AppendSetting(builder, "light_falloff_scale", gameManager.Lighting.LightFalloffScale);
         AppendSetting(builder, "exposure", gameManager.exposure);
         AppendSetting(builder, "firefly_clamp", gameManager.fireflyClamp);
         AppendSetting(builder, "caustics_enabled", gameManager.enableCaustics);
-        AppendSetting(builder, "caustic_photon_count", gameManager.enableCaustics ? gameManager.causticPhotonCount : 0);
-        AppendSetting(builder, "caustic_gather_radius", gameManager.causticGatherRadius);
-        AppendSetting(builder, "caustic_intensity", gameManager.causticIntensity);
+        AppendSetting(builder, "caustic_photon_count", gameManager.enableCaustics ? gameManager.Caustics.PhotonCount : 0);
+        AppendSetting(builder, "caustic_gather_radius", gameManager.Caustics.GatherRadius);
+        AppendSetting(builder, "caustic_intensity", gameManager.Caustics.Intensity);
         AppendSetting(builder, "fog_enabled", gameManager.IsVolumetricFogActive);
         AppendSetting(builder, "fog_density", gameManager.EffectiveFogDensity);
         AppendSetting(builder, "fog_density_scale", gameManager.fogDensityScale);

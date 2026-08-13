@@ -787,9 +787,18 @@ namespace GPURayTracing.Tests
             Assert.That(nextMethodStart, Is.GreaterThan(methodStart));
             string method = managerSource.Substring(methodStart, nextMethodStart - methodStart);
             Assert.That(method, Does.Contain("EnsureMeshTextureArrays()"));
-            Assert.That(method, Does.Contain("\"_MeshAlbedoTextures\""));
-            Assert.That(method, Does.Contain("\"_MeshMetallicRoughnessTextures\""));
-            Assert.That(method, Does.Contain("\"_MeshNormalTextures\""));
+            Assert.That(method, Does.Contain("MeshAlbedoTextures"));
+            Assert.That(method, Does.Contain("MeshMetallicRoughnessTextures"));
+            Assert.That(method, Does.Contain("MeshNormalTextures"));
+            Assert.That(method, Does.Contain("MeshParallaxTextures"));
+            Assert.That(managerSource, Does.Contain(
+                "private static readonly int MeshAlbedoTextures = Shader.PropertyToID"));
+            Assert.That(managerSource, Does.Contain(
+                "private static readonly int MeshMetallicRoughnessTextures = Shader.PropertyToID"));
+            Assert.That(managerSource, Does.Contain(
+                "private static readonly int MeshNormalTextures = Shader.PropertyToID"));
+            Assert.That(managerSource, Does.Contain(
+                "private static readonly int MeshParallaxTextures = Shader.PropertyToID"));
         }
 
         [Test]

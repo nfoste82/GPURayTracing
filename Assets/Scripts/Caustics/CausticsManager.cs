@@ -1,5 +1,8 @@
 using System.Collections.Generic;
+using PathTracing.Lighting;
+using PathTracing.Shapes;
 using UnityEngine;
+using UnityEngine.Rendering;
 using Light = PathTracing.Lighting.Light;
 
 namespace PathTracing.Caustics
@@ -86,6 +89,126 @@ namespace PathTracing.Caustics
         public int GridPhotonCount => GridPhotonCountValue;
         public int GridOutOfBoundsCount => GridOutOfBoundsCountValue;
         public int TargetPairCount => TargetPairs.Count;
+
+        public void BuildSamplingDistribution(IReadOnlyList<Light> lights, List<Sphere> spheres,
+            List<MeshInfo> meshes, List<Triangle> triangles, Water water)
+        {
+            TargetPairs.Clear();
+            TargetTriangles.Clear();
+
+            var meshTriangleRanges = new Dictionary<int, Vector2Int>();
+            for (var meshIndex = 0; meshIndex < meshes.Count; meshIndex++)
+            {
+                var mesh = meshes[meshIndex];
+                if (!CausticsLogic.IsCausticRefractor(mesh, triangles)) continue;
+
+                var triangleStart = TargetTriangles.Count;
+                var totalArea = 0.0f;
+                for (var triangleOffset = 0; triangleOffset < mesh.triangleCount; triangleOffset++)
+                {
+                    var triangle = triangles[mesh.triangleStart + triangleOffset];
+                    totalArea += 0.5f * Vector3.Cross(
+                        triangle.vertex1 - triangle.vertex0,
+                        triangle.vertex2 - triangle.vertex0).magnitude;
+                    TargetTriangles.Add(new CausticTargetTriangle
+                    {
+                        triangleIndex = mesh.triangleStart + triangleOffset,
+                        cumulativeProbability = totalArea
+                    });
+                }
+
+                if (totalArea <= 1e-8f)
+                {
+                    TargetTriangles.RemoveRange(triangleStart, TargetTriangles.Count - triangleStart);
+                    continue;
+                }
+
+                var lastTriangleIndex = TargetTriangles.Count - 1;
+                var previousCdf = 0.0f;
+                for (var triangleIndex = triangleStart; triangleIndex < TargetTriangles.Count; triangleIndex++)
+                {
+                    var target = TargetTriangles[triangleIndex];
+                    var normalizedCdf = target.cumulativeProbability / totalArea;
+                    target.selectionProbability = normalizedCdf - previousCdf;
+                    target.cumulativeProbability = triangleIndex == lastTriangleIndex ? 1.0f : normalizedCdf;
+                    previousCdf = normalizedCdf;
+                    TargetTriangles[triangleIndex] = target;
+                }
+                meshTriangleRanges.Add(meshIndex, new Vector2Int(
+                    triangleStart, TargetTriangles.Count - triangleStart));
+            }
+
+            var pairWeights = new List<float>();
+            var maximumWeight = 0.0f;
+            for (var lightIndex = 0; lightIndex < lights.Count; lightIndex++)
+            {
+                var light = lights[lightIndex];
+                if (!CausticsLogic.IsCausticLight(light)) continue;
+
+                for (var sphereIndex = 0; sphereIndex < spheres.Count; sphereIndex++)
+                {
+                    var sphere = spheres[sphereIndex];
+                    if (CausticsLogic.IsCausticRefractor(sphere))
+                    {
+                        AddTargetPair(lightIndex, 0, sphereIndex, 0, 0,
+                            CausticsLogic.GetCausticPairWeight(light, sphere.position, sphere.radius),
+                            pairWeights, ref maximumWeight);
+                    }
+                }
+
+                foreach (var meshRange in meshTriangleRanges)
+                {
+                    var mesh = meshes[meshRange.Key];
+                    AddTargetPair(lightIndex, 1, meshRange.Key, meshRange.Value.x, meshRange.Value.y,
+                        CausticsLogic.GetCausticPairWeight(light, (mesh.boundsMin + mesh.boundsMax) * 0.5f,
+                            (mesh.boundsMax - mesh.boundsMin).magnitude * 0.5f),
+                        pairWeights, ref maximumWeight);
+                }
+
+                if (CausticsLogic.IsCausticRefractor(water))
+                {
+                    var waterSize = water.Size;
+                    AddTargetPair(lightIndex, 2, -1, 0, 0,
+                        CausticsLogic.GetCausticPairWeight(light, water.TopCenter,
+                            new Vector3(waterSize.x, 0.0f, waterSize.y).magnitude * 0.5f),
+                        pairWeights, ref maximumWeight);
+                }
+            }
+
+            if (TargetPairs.Count == 0) return;
+            var totalWeight = 0.0f;
+            var minimumWeight = Mathf.Max(1e-8f, maximumWeight * 1e-4f);
+            for (var i = 0; i < pairWeights.Count; i++)
+            {
+                pairWeights[i] = Mathf.Max(minimumWeight, pairWeights[i]);
+                totalWeight += pairWeights[i];
+            }
+
+            var cumulativeProbability = 0.0f;
+            for (var i = 0; i < TargetPairs.Count; i++)
+            {
+                var pair = TargetPairs[i];
+                pair.selectionProbability = pairWeights[i] / totalWeight;
+                cumulativeProbability += pair.selectionProbability;
+                pair.cumulativeProbability = i == TargetPairs.Count - 1 ? 1.0f : cumulativeProbability;
+                TargetPairs[i] = pair;
+            }
+        }
+
+        private void AddTargetPair(int lightIndex, int refractorType, int refractorIndex,
+            int triangleStart, int triangleCount, float weight, List<float> weights, ref float maximumWeight)
+        {
+            TargetPairs.Add(new CausticTargetPair
+            {
+                lightIndex = lightIndex,
+                refractorType = refractorType,
+                refractorIndex = refractorIndex,
+                triangleStart = triangleStart,
+                triangleCount = triangleCount
+            });
+            weights.Add(weight);
+            maximumWeight = Mathf.Max(maximumWeight, weight);
+        }
 
         internal int CalculatePhotonStateHash(int hash)
         {
@@ -197,6 +320,41 @@ namespace PathTracing.Caustics
         {
             TargetPairBuffer.SetData(TargetPairs.Count > 0 ? TargetPairs : new List<CausticTargetPair> { default });
             TargetTriangleBuffer.SetData(TargetTriangles.Count > 0 ? TargetTriangles : new List<CausticTargetTriangle> { default });
+        }
+
+        internal void RequestMetadataReadback()
+        {
+            if (MetadataReadbackInFlight || PhotonMetadataBuffer == null)
+            {
+                return;
+            }
+
+            MetadataReadbackInFlight = true;
+            var generation = MetadataReadbackGeneration;
+            AsyncGPUReadback.Request(PhotonMetadataBuffer,
+                request => CompleteMetadataReadback(request, generation));
+        }
+
+        private void CompleteMetadataReadback(AsyncGPUReadbackRequest request, int generation)
+        {
+            if (generation != MetadataReadbackGeneration)
+            {
+                return;
+            }
+
+            MetadataReadbackInFlight = false;
+            if (request.hasError)
+            {
+                Debug.LogWarning("Caustic metadata GPU readback failed.");
+                return;
+            }
+
+            var metadata = request.GetData<uint>();
+            if (metadata.Length >= MetadataCount)
+            {
+                GridOutOfBoundsCountValue = (int)metadata[4];
+                GridPhotonCountValue = (int)metadata[5];
+            }
         }
 
         private static Vector3Int CalculateGridDimensions(Vector3 size, float cellSize)

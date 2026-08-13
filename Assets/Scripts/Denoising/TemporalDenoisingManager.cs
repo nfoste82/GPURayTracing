@@ -6,6 +6,9 @@ namespace PathTracing.TemporalDenoising
     [Serializable]
     public sealed class TemporalDenoisingManager
     {
+        [Tooltip("Uses camera-only temporal reprojection and bounded HDR accumulation while the camera moves, then allows progressive still accumulation when it stops.")]
+        public bool enabled;
+
         [Range(1, 64)]
         [Tooltip("Maximum effective temporal samples per pixel. Higher values reduce noise but respond more slowly to valid lighting changes.")]
         public int temporalMaxHistoryLength = 16;
@@ -73,6 +76,8 @@ namespace PathTracing.TemporalDenoising
         private static readonly int TemporalDebugMode = Shader.PropertyToID("_TemporalDebugMode");
         private static readonly int Exposure = Shader.PropertyToID("_Exposure");
         private static readonly int InputBeauty = Shader.PropertyToID("InputBeauty");
+        private static readonly int FrameJitterNdc = Shader.PropertyToID("_FrameJitterNdc");
+        private static readonly int UseTemporalJitter = Shader.PropertyToID("_UseTemporalJitter");
         
         private GameManager _gameManager;
         private RenderTexture _motionVectorTexture;
@@ -142,42 +147,48 @@ namespace PathTracing.TemporalDenoising
 
         public bool ShouldRun(DebugRenderMode mode)
         {
-            return _gameManager.enableTemporalDenoising || IsDebugMode(mode);
+            return enabled || IsDebugMode(mode);
         }
 
         public bool ShouldUseAccumulation(DebugRenderMode mode)
         {
-            return _gameManager.enableTemporalDenoising
+            return enabled
                    && mode == DebugRenderMode.FinalColor
                    && IsCameraMoving();
         }
 
+        public void SetRayTracingShaderParameters(ComputeShader shader, DebugRenderMode mode)
+        {
+            shader.SetVector(FrameJitterNdc, new Vector4(_currentJitterNdc.x, _currentJitterNdc.y, 0.0f, 0.0f));
+            shader.SetInt(UseTemporalJitter, ShouldRun(mode) ? 1 : 0);
+        }
+
         public void EnsureResources()
         {
-            _gameManager.EnsureSpatialDenoiserResourcesInternal();
-            if (_gameManager.SpatialDenoiserShader == null || HasResources)
+            _gameManager.SpatialDenoising.EnsureResources(_gameManager.TextureSize);
+            if (_gameManager.SpatialDenoising.Shader == null || HasResources)
             {
                 return;
             }
 
-            _motionVectorTexture = _gameManager.CreateFeatureTextureInternal(RenderTextureFormat.RGHalf);
-            _radianceHistoryA = _gameManager.CreateFeatureTextureInternal(RenderTextureFormat.ARGBHalf);
-            _radianceHistoryB = _gameManager.CreateFeatureTextureInternal(RenderTextureFormat.ARGBHalf);
-            _normalHistoryA = _gameManager.CreateFeatureTextureInternal(RenderTextureFormat.ARGBHalf);
-            _normalHistoryB = _gameManager.CreateFeatureTextureInternal(RenderTextureFormat.ARGBHalf);
-            _depthHistoryA = _gameManager.CreateFeatureTextureInternal(RenderTextureFormat.RHalf);
-            _depthHistoryB = _gameManager.CreateFeatureTextureInternal(RenderTextureFormat.RHalf);
-            _identityHistoryA = _gameManager.CreateFeatureTextureInternal(RenderTextureFormat.RFloat);
-            _identityHistoryB = _gameManager.CreateFeatureTextureInternal(RenderTextureFormat.RFloat);
-            _validityHistoryA = _gameManager.CreateFeatureTextureInternal(RenderTextureFormat.RHalf);
-            _validityHistoryB = _gameManager.CreateFeatureTextureInternal(RenderTextureFormat.RHalf);
-            _historyLengthA = _gameManager.CreateFeatureTextureInternal(RenderTextureFormat.RHalf);
-            _historyLengthB = _gameManager.CreateFeatureTextureInternal(RenderTextureFormat.RHalf);
-            _momentsA = _gameManager.CreateFeatureTextureInternal(RenderTextureFormat.RGHalf);
-            _momentsB = _gameManager.CreateFeatureTextureInternal(RenderTextureFormat.RGHalf);
-            _varianceTexture = _gameManager.CreateFeatureTextureInternal(RenderTextureFormat.RHalf);
-            _reprojectedRadianceTexture = _gameManager.CreateFeatureTextureInternal(RenderTextureFormat.ARGBHalf);
-            _diagnosticsTexture = _gameManager.CreateFeatureTextureInternal(RenderTextureFormat.RGHalf);
+            _motionVectorTexture = CreateTexture(RenderTextureFormat.RGHalf);
+            _radianceHistoryA = CreateTexture(RenderTextureFormat.ARGBHalf);
+            _radianceHistoryB = CreateTexture(RenderTextureFormat.ARGBHalf);
+            _normalHistoryA = CreateTexture(RenderTextureFormat.ARGBHalf);
+            _normalHistoryB = CreateTexture(RenderTextureFormat.ARGBHalf);
+            _depthHistoryA = CreateTexture(RenderTextureFormat.RHalf);
+            _depthHistoryB = CreateTexture(RenderTextureFormat.RHalf);
+            _identityHistoryA = CreateTexture(RenderTextureFormat.RFloat);
+            _identityHistoryB = CreateTexture(RenderTextureFormat.RFloat);
+            _validityHistoryA = CreateTexture(RenderTextureFormat.RHalf);
+            _validityHistoryB = CreateTexture(RenderTextureFormat.RHalf);
+            _historyLengthA = CreateTexture(RenderTextureFormat.RHalf);
+            _historyLengthB = CreateTexture(RenderTextureFormat.RHalf);
+            _momentsA = CreateTexture(RenderTextureFormat.RGHalf);
+            _momentsB = CreateTexture(RenderTextureFormat.RGHalf);
+            _varianceTexture = CreateTexture(RenderTextureFormat.RHalf);
+            _reprojectedRadianceTexture = CreateTexture(RenderTextureFormat.ARGBHalf);
+            _diagnosticsTexture = CreateTexture(RenderTextureFormat.RGHalf);
         }
 
         public void ReleaseResources()
@@ -273,10 +284,12 @@ namespace PathTracing.TemporalDenoising
             DynamicSceneChanged = changed;
         }
 
+        public void MarkDynamicSceneChanged() => DynamicSceneChanged = true;
+
         public void Run(DebugRenderMode debugMode)
         {
             EnsureResources();
-            var shader = _gameManager.SpatialDenoiserShader;
+            var shader = _gameManager.SpatialDenoising.Shader;
             if (shader == null || _motionVectorTexture == null)
             {
                 return;
@@ -353,7 +366,9 @@ namespace PathTracing.TemporalDenoising
 
             if (_gameManager.enableCaustics || debugMode == DebugRenderMode.CausticPreservationMask)
             {
-                _gameManager.GenerateCausticPreservationMaskInternal(groupsX, groupsY);
+                _gameManager.SpatialDenoising.GenerateCausticPreservationMask(
+                    _gameManager.BeautyTexture, _gameManager.FeatureValidityTexture, _gameManager.TextureSize,
+                    _gameManager.causticPreservationThreshold, _gameManager.enableCaustics);
             }
 
             if (IsDebugMode(debugMode))
@@ -372,7 +387,7 @@ namespace PathTracing.TemporalDenoising
                 shader.SetTexture(visualizeKernel, TemporalDiagnostics, _diagnosticsTexture);
                 shader.SetTexture(visualizeKernel, HistoryLength, nextLength);
                 shader.SetTexture(visualizeKernel, Variance, _varianceTexture);
-                shader.SetTexture(visualizeKernel, PreservationMask, _gameManager.CausticPreservationMaskTexture);
+                shader.SetTexture(visualizeKernel, PreservationMask, _gameManager.SpatialDenoising.CausticPreservationMask);
                 shader.SetTexture(visualizeKernel, PresentationResult, _gameManager.OutputTexture);
                 shader.SetInt(TemporalDebugMode, temporalDebugMode);
                 shader.SetFloat(Exposure, _gameManager.exposure);
@@ -383,7 +398,11 @@ namespace PathTracing.TemporalDenoising
             {
                 if (temporalVarianceGuidedFiltering)
                 {
-                    _gameManager.RunSpatialDenoiserInternal(nextRadiance, _varianceTexture);
+                    _gameManager.SetPresentationSource(_gameManager.SpatialDenoising.Filter(nextRadiance, _varianceTexture,
+                        _gameManager.FeatureNormalTexture, _gameManager.FeatureAlbedoTexture,
+                        _gameManager.FeatureDepthTexture, _gameManager.FeatureIdentityTexture,
+                        _gameManager.FeatureValidityTexture, debugMode, _gameManager.TextureSize,
+                        _gameManager.enableCaustics, _gameManager.causticPreservationThreshold));
                 }
                 else
                 {
@@ -427,8 +446,8 @@ namespace PathTracing.TemporalDenoising
                 hash = AddHash(hash, _gameManager.numberOfPasses);
                 hash = AddHash(hash, _gameManager.numBounces);
                 hash = AddHash(hash, _gameManager.shadowQuality);
-                hash = AddHash(hash, _gameManager.lightSamplingStrategy.GetHashCode());
-                hash = AddHash(hash, _gameManager.lightSampleCount);
+                hash = AddHash(hash, _gameManager.Lighting.LightSamplingStrategy.GetHashCode());
+                hash = AddHash(hash, _gameManager.Lighting.LightSampleCount);
                 hash = AddHash(hash, _gameManager.maxLightSamples);
                 hash = AddHash(hash, _gameManager.GetCameraApertureRadiusInternal());
                 hash = AddHash(hash, _gameManager.enableCaustics ? 1 : 0);
@@ -471,6 +490,18 @@ namespace PathTracing.TemporalDenoising
             {
                 texture.Release();
             }
+        }
+
+        private RenderTexture CreateTexture(RenderTextureFormat format)
+        {
+            var size = _gameManager.TextureSize;
+            var texture = new RenderTexture(size.x, size.y, 0, format)
+            {
+                enableRandomWrite = true,
+                filterMode = FilterMode.Point
+            };
+            texture.Create();
+            return texture;
         }
     }
 }

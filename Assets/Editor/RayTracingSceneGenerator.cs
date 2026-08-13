@@ -340,9 +340,9 @@ public static class RayTracingSceneGenerator
         manager.InitSceneSettings(settings);
         manager.skyboxTexture = AssetDatabase.LoadAssetAtPath<Texture>(SkyboxPath);
         
-        manager.enableSpatialDenoising = settings.EnableSpatialDenoising;
-        manager.spatialDenoiserIterations = settings.DenoiserIterations;
-        manager.spatialDenoiserLuminanceSigma = settings.DenoiserLuminanceSigma;
+        manager.SpatialDenoising.enabled = settings.EnableSpatialDenoising;
+        manager.SpatialDenoising.iterations = settings.DenoiserIterations;
+        manager.SpatialDenoising.luminanceSigma = settings.DenoiserLuminanceSigma;
 
         var renderer = cameraObject.AddComponent<RayTracingCameraRenderer>();
         renderer.GameManager = manager;

@@ -4,6 +4,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using PathTracing.Camera;
+using PathTracing.AccelerationStructures;
 using PathTracing.Lighting;
 using UnityEditor;
 using UnityEngine;
@@ -219,21 +220,22 @@ public sealed class GameManagerEditor : Editor
 
     private void DrawDenoising()
     {
-        DrawProperty("enableSpatialDenoising");
-        using (new EditorGUI.DisabledScope(!serializedObject.FindProperty("enableSpatialDenoising").boolValue))
+        SerializedProperty spatialManager = serializedObject.FindProperty("_spatialDenoisingManager");
+        EditorGUILayout.PropertyField(spatialManager.FindPropertyRelative("enabled"), new GUIContent("Enable Spatial Denoising"));
+        using (new EditorGUI.DisabledScope(!spatialManager.FindPropertyRelative("enabled").boolValue))
         {
-            DrawProperty("spatialDenoiserIterations");
-            DrawProperty("spatialDenoiserDepthSigma");
-            DrawProperty("spatialDenoiserNormalPower");
-            DrawProperty("spatialDenoiserAlbedoSigma");
-            DrawProperty("spatialDenoiserLuminanceSigma");
+            EditorGUILayout.PropertyField(spatialManager.FindPropertyRelative("iterations"));
+            EditorGUILayout.PropertyField(spatialManager.FindPropertyRelative("depthSigma"));
+            EditorGUILayout.PropertyField(spatialManager.FindPropertyRelative("normalPower"));
+            EditorGUILayout.PropertyField(spatialManager.FindPropertyRelative("albedoSigma"));
+            EditorGUILayout.PropertyField(spatialManager.FindPropertyRelative("luminanceSigma"));
         }
 
         EditorGUILayout.Space();
-        DrawProperty("enableTemporalDenoising");
-        using (new EditorGUI.DisabledScope(!serializedObject.FindProperty("enableTemporalDenoising").boolValue))
+        SerializedProperty temporalManager = serializedObject.FindProperty("_temporalDenoisingManager");
+        EditorGUILayout.PropertyField(temporalManager.FindPropertyRelative("enabled"), new GUIContent("Enable Temporal Denoising"));
+        using (new EditorGUI.DisabledScope(!temporalManager.FindPropertyRelative("enabled").boolValue))
         {
-            SerializedProperty temporalManager = serializedObject.FindProperty("_temporalDenoisingManager");
             EditorGUILayout.PropertyField(temporalManager.FindPropertyRelative("temporalMaxHistoryLength"));
             EditorGUILayout.PropertyField(temporalManager.FindPropertyRelative("temporalMotionDistance"));
             EditorGUILayout.PropertyField(temporalManager.FindPropertyRelative("temporalMotionAngle"));
@@ -244,8 +246,8 @@ public sealed class GameManagerEditor : Editor
             EditorGUILayout.PropertyField(temporalManager.FindPropertyRelative("temporalVarianceGuidedFiltering"));
         }
 
-        if (serializedObject.FindProperty("enableSpatialDenoising").boolValue
-            || serializedObject.FindProperty("enableTemporalDenoising").boolValue)
+        if (spatialManager.FindPropertyRelative("enabled").boolValue
+            || temporalManager.FindPropertyRelative("enabled").boolValue)
         {
             EditorGUILayout.Space();
             DrawProperty("causticPreservationThreshold");
@@ -487,7 +489,7 @@ public sealed class GameManagerEditor : Editor
             return BakeStatus.NotBaked;
         }
 
-        return bake.formatVersion == GameManager.BvhBakeFormatVersion
+        return bake.formatVersion == SceneBvhManager.BakeFormatVersion
             && bake.sceneSignature == signature
             && RayTracingBvhBakeUtility.IsBakeBinaryUsable(bake)
             ? BakeStatus.Baked
@@ -555,7 +557,7 @@ public static class RayTracingBvhBakeUtility
     public static string CalculateSignature(List<RayTracingBvhBakeAsset.MeshEntry> entries)
     {
         var source = new StringBuilder(entries.Count * 80);
-        source.Append(GameManager.BvhBakeFormatVersion).Append('|');
+        source.Append(SceneBvhManager.BakeFormatVersion).Append('|');
         foreach (var entry in entries)
         {
             source.Append(entry.meshIdentity).Append('|');
@@ -588,7 +590,7 @@ public static class RayTracingBvhBakeUtility
         {
             return false;
         }
-        return bake.formatVersion == GameManager.BvhBakeFormatVersion
+        return bake.formatVersion == SceneBvhManager.BakeFormatVersion
             && bake.sceneSignature == CalculateSignature(entries)
             && IsBakeBinaryUsable(bake);
     }
@@ -650,7 +652,7 @@ public static class RayTracingBvhBakeUtility
             entries[i] = entry;
         }
 
-        bake.formatVersion = GameManager.BvhBakeFormatVersion;
+        bake.formatVersion = SceneBvhManager.BakeFormatVersion;
         bake.sceneSignature = signature;
         bake.streamingAssetsRelativePath = $"RayTracingBvhBakes/{fileStem}.bytes";
         bake.meshes = entries;

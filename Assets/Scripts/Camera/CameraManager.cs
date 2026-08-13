@@ -11,7 +11,17 @@ using UnityEngine.Rendering;
 public sealed class CameraManager : MonoBehaviour
 {
     private const float MaxCameraPitch = 89.0f;
-    public const float DefaultOrbitZoom = 2.0f;
+    private const float DefaultOrbitZoom = 2.0f;
+    
+    private static readonly int CameraToWorld = Shader.PropertyToID("_CameraToWorld");
+    private static readonly int CameraInverseProjection = Shader.PropertyToID("_CameraInverseProjection");
+    private static readonly int FocalDistance = Shader.PropertyToID("_FocalDistance");
+    private static readonly int ApertureRadius = Shader.PropertyToID("_ApertureRadius");
+    private static readonly int ApertureBladeCount = Shader.PropertyToID("_ApertureBladeCount");
+    private static readonly int ApertureBladeRotation = Shader.PropertyToID("_ApertureBladeRotation");
+    private static readonly int AnamorphicRatio = Shader.PropertyToID("_AnamorphicRatio");
+    private static readonly int FocusQueryUv = Shader.PropertyToID("_FocusQueryUv");
+    private static readonly int FocusQueryResult = Shader.PropertyToID("_FocusQueryResult");
 
     public Camera renderTextureCamera;
 
@@ -70,26 +80,26 @@ public sealed class CameraManager : MonoBehaviour
     private float _orbitPitch;
     private float _orbitDistance = DefaultOrbitZoom;
 
-    internal float PreviousFocalDistance = 100f;
-    internal bool HasAutoFocusState;
+    private float PreviousFocalDistance = 100f;
+    private bool HasAutoFocusState;
     internal bool AutoFocusSceneChanged;
-    internal Vector3 LastAutoFocusCameraPosition;
-    internal Quaternion LastAutoFocusCameraRotation;
-    internal int LastAutoFocusNumberOfPasses;
-    internal int LastAutoFocusWaterStateHash;
-    internal float AutoFocusTargetDistance;
-    internal float TimeSincePreviousFocusDistance = 1f;
+    private Vector3 LastAutoFocusCameraPosition;
+    private Quaternion LastAutoFocusCameraRotation;
+    private int LastAutoFocusNumberOfPasses;
+    private int LastAutoFocusWaterStateHash;
+    private float AutoFocusTargetDistance;
+    private float TimeSincePreviousFocusDistance = 1f;
     internal bool FocusQueryPending;
     internal bool FocusQueryInFlight;
-    internal bool HasClickedFocusPoint;
+    private bool HasClickedFocusPoint;
     internal Vector2 PendingFocusQueryUv;
-    internal Vector3 FocusQueryCameraPosition;
-    internal Vector3 FocusQueryCameraForward;
-    internal Vector3 ClickedFocusPoint;
-    internal bool ClickedFocusPointInFrustum;
-    internal int FocusQueryGeneration;
-    internal ComputeBuffer FocusQueryBuffer;
-    internal AsyncGPUReadbackRequest FocusReadbackRequest;
+    private Vector3 FocusQueryCameraPosition;
+    private Vector3 FocusQueryCameraForward;
+    private Vector3 ClickedFocusPoint;
+    private bool ClickedFocusPointInFrustum;
+    private int FocusQueryGeneration;
+    private ComputeBuffer FocusQueryBuffer;
+    private AsyncGPUReadbackRequest FocusReadbackRequest;
 
     public void InitSceneSettings(SceneSettings settings)
     {
@@ -104,15 +114,27 @@ public sealed class CameraManager : MonoBehaviour
         cameraBehavior = settings.CameraBehavior;
         cameraFocusPosition = settings.CameraFocusPosition;
 
-        if (cameraBehavior == CameraBehavior.OrbitFocusPoint && renderTextureCamera != null)
+        if (cameraBehavior == CameraBehavior.OrbitFocusPoint)
         {
             InitializeOrbitFromSceneSettings(settings);
         }
     }
 
+    private void OnDestroy()
+    {
+        if (FocusQueryInFlight)
+        {
+            FocusReadbackRequest.WaitForCompletion();
+        }
+        FocusQueryGeneration++;
+        
+        FocusQueryBuffer?.Release();
+        FocusQueryBuffer = null;
+    }
+
     public void HandleInput()
     {
-        Camera camera = renderTextureCamera;
+        var camera = renderTextureCamera;
         
         if (camera == null) return;
         
@@ -127,16 +149,28 @@ public sealed class CameraManager : MonoBehaviour
             return;
         }
 
-        float delta = Time.unscaledDeltaTime;
+        var delta = Time.unscaledDeltaTime;
         
-        if (Input.GetKey(KeyCode.W)) camera.transform.position += camera.transform.forward * delta * cameraMovementSpeed;
-        else if (Input.GetKey(KeyCode.S)) camera.transform.position -= camera.transform.forward * delta * cameraMovementSpeed;
+        if (Input.GetKey(KeyCode.W))
+        {
+            camera.transform.position += camera.transform.forward * delta * cameraMovementSpeed;
+        }
+        else if (Input.GetKey(KeyCode.S))
+        {
+            camera.transform.position -= camera.transform.forward * delta * cameraMovementSpeed;
+        }
         
-        if (Input.GetKey(KeyCode.A)) camera.transform.position -= camera.transform.right * delta * cameraMovementSpeed;
-        else if (Input.GetKey(KeyCode.D)) camera.transform.position += camera.transform.right * delta * cameraMovementSpeed;
+        if (Input.GetKey(KeyCode.A))
+        {
+            camera.transform.position -= camera.transform.right * delta * cameraMovementSpeed;
+        }
+        else if (Input.GetKey(KeyCode.D))
+        {
+            camera.transform.position += camera.transform.right * delta * cameraMovementSpeed;
+        }
 
-        float yaw = Input.GetKey(KeyCode.LeftArrow) ? -delta * 50.0f : Input.GetKey(KeyCode.RightArrow) ? delta * 50.0f : 0.0f;
-        float pitch = Input.GetKey(KeyCode.UpArrow) ? delta * 50.0f : Input.GetKey(KeyCode.DownArrow) ? -delta * 50.0f : 0.0f;
+        var yaw = Input.GetKey(KeyCode.LeftArrow) ? -delta * 50.0f : Input.GetKey(KeyCode.RightArrow) ? delta * 50.0f : 0.0f;
+        var pitch = Input.GetKey(KeyCode.UpArrow) ? delta * 50.0f : Input.GetKey(KeyCode.DownArrow) ? -delta * 50.0f : 0.0f;
         
         if (yaw != 0.0f || pitch != 0.0f)
         {
@@ -151,31 +185,51 @@ public sealed class CameraManager : MonoBehaviour
             return;
         }
 
-        Rect pixelRect = renderTextureCamera.pixelRect;
-        Vector2 mousePosition = Input.mousePosition;
+        var pixelRect = renderTextureCamera.pixelRect;
+        var mousePosition = Input.mousePosition;
+        
         if (!pixelRect.Contains(mousePosition) || pixelRect.width <= 0.0f || pixelRect.height <= 0.0f)
         {
             return;
         }
 
-        // The query itself remains in GameManager because it needs the renderer's scene buffers.
         FocusRequested?.Invoke(new Vector2(
             (mousePosition.x - pixelRect.x) / pixelRect.width,
             (mousePosition.y - pixelRect.y) / pixelRect.height) * 2.0f - Vector2.one);
     }
 
-    public event System.Action<Vector2> FocusRequested;
+    public event Action<Vector2> FocusRequested;
 
     public float GetApertureRadius()
     {
-        if (cameraApertureMode == CameraApertureMode.Pinhole || IsTrackedFocusPointOutsideFrustum()) return 0.0f;
+        if (cameraApertureMode == CameraApertureMode.Pinhole || IsTrackedFocusPointOutsideFrustum())
+        {
+            return 0.0f;
+        }
         
-        if (cameraApertureMode == CameraApertureMode.LensRadius) return Mathf.Max(0.0f, cameraApertureRadius);
+        if (cameraApertureMode == CameraApertureMode.LensRadius)
+        {
+            return Mathf.Max(0.0f, cameraApertureRadius);
+        }
         
-        if (renderTextureCamera == null) return 0.0f;
+        if (renderTextureCamera == null)
+        {
+            return 0.0f;
+        }
         
         var focalLength = Mathf.Max(0.0f, renderTextureCamera.focalLength) * 0.001f;
         return focalLength / (2.0f * Mathf.Max(0.1f, cameraFStop)) * Mathf.Max(0.0f, cameraApertureScale);
+    }
+
+    public void SetShaderParameters(ComputeShader shader)
+    {
+        shader.SetMatrix(CameraToWorld, renderTextureCamera.cameraToWorldMatrix);
+        shader.SetMatrix(CameraInverseProjection, renderTextureCamera.projectionMatrix.inverse);
+        shader.SetFloat(FocalDistance, cameraFocalDistance);
+        shader.SetFloat(ApertureRadius, GetApertureRadius());
+        shader.SetInt(ApertureBladeCount, cameraApertureBladeCount >= 3 ? cameraApertureBladeCount : 0);
+        shader.SetFloat(ApertureBladeRotation, cameraApertureBladeRotation * Mathf.Deg2Rad);
+        shader.SetFloat(AnamorphicRatio, Mathf.Clamp(cameraAnamorphicRatio, 0.25f, 4.0f));
     }
 
     public void UpdateTrackedFocusPoint()
@@ -187,7 +241,8 @@ public sealed class CameraManager : MonoBehaviour
             return;
         }
 
-        Vector3 viewportPoint = renderTextureCamera.WorldToViewportPoint(ClickedFocusPoint);
+        var viewportPoint = renderTextureCamera.WorldToViewportPoint(ClickedFocusPoint);
+        
         ClickedFocusPointInFrustum = viewportPoint.z >= renderTextureCamera.nearClipPlane
             && viewportPoint.z <= renderTextureCamera.farClipPlane
             && viewportPoint.x >= 0.0f && viewportPoint.x <= 1.0f
@@ -219,13 +274,13 @@ public sealed class CameraManager : MonoBehaviour
             return;
         }
 
-        Transform cameraTransform = renderTextureCamera.transform;
-        bool inputsChanged = !HasAutoFocusState
-            || AutoFocusSceneChanged
-            || LastAutoFocusCameraPosition != cameraTransform.position
-            || LastAutoFocusCameraRotation != cameraTransform.rotation
-            || LastAutoFocusNumberOfPasses != numberOfPasses
-            || LastAutoFocusWaterStateHash != waterStateHash;
+        var cameraTransform = renderTextureCamera.transform;
+        var inputsChanged = !HasAutoFocusState
+                            || AutoFocusSceneChanged
+                            || LastAutoFocusCameraPosition != cameraTransform.position
+                            || LastAutoFocusCameraRotation != cameraTransform.rotation
+                            || LastAutoFocusNumberOfPasses != numberOfPasses
+                            || LastAutoFocusWaterStateHash != waterStateHash;
 
         if (inputsChanged)
         {
@@ -233,7 +288,7 @@ public sealed class CameraManager : MonoBehaviour
                 new Ray(cameraTransform.position, cameraTransform.forward));
             if (AutoFocusTargetDistance < 1.0f)
             {
-                float modifier = Mathf.Lerp(1.75f, 1.0f, AutoFocusTargetDistance);
+                var modifier = Mathf.Lerp(1.75f, 1.0f, AutoFocusTargetDistance);
                 AutoFocusTargetDistance = Mathf.Max(AutoFocusTargetDistance * modifier, 0.1f);
             }
 
@@ -267,6 +322,11 @@ public sealed class CameraManager : MonoBehaviour
             && HasClickedFocusPoint
             && !ClickedFocusPointInFrustum;
     }
+    
+    public void SetAspect(float aspect)
+    {
+        if (renderTextureCamera != null) renderTextureCamera.aspect = aspect;
+    }
 
     internal int AddAccumulationStateHash(int hash, bool trackedFocusPointOutsideFrustum)
     {
@@ -282,24 +342,91 @@ public sealed class CameraManager : MonoBehaviour
         hash = GameManager.AddHash(hash, renderTextureCamera.cameraToWorldMatrix);
         return GameManager.AddHash(hash, renderTextureCamera.projectionMatrix);
     }
-
-    public void SetAspect(float aspect)
+    
+    internal void DispatchPendingFocusQuery(ComputeShader shader, Action<int> setShaderParameters, Action resetFrameAccumulation)
     {
-        if (renderTextureCamera != null) renderTextureCamera.aspect = aspect;
+        if (!FocusQueryPending || FocusQueryInFlight)
+        {
+            return;
+        }
+
+        FocusQueryBuffer ??= new ComputeBuffer(1, sizeof(float) * 4);
+
+        var kernel = shader.FindKernel("CSFocusQuery");
+        setShaderParameters(kernel);
+        
+        shader.SetVector(FocusQueryUv, PendingFocusQueryUv);
+        shader.SetBuffer(kernel, FocusQueryResult, FocusQueryBuffer);
+        shader.Dispatch(kernel, 1, 1, 1);
+
+        FocusQueryPending = false;
+        FocusQueryInFlight = true;
+        FocusQueryCameraPosition = renderTextureCamera.transform.position;
+        FocusQueryCameraForward = renderTextureCamera.transform.forward;
+
+        var generation = FocusQueryGeneration;
+        FocusReadbackRequest = AsyncGPUReadback.Request(
+            FocusQueryBuffer,
+            request => CompleteFocusQuery(request, generation, resetFrameAccumulation));
     }
 
-    public void InitializeOrbitFromSceneSettings(SceneSettings settings)
+    private void CompleteFocusQuery(AsyncGPUReadbackRequest request, int generation, Action resetFrameAccumulation)
     {
-        if (renderTextureCamera == null) return;
+        if (generation != FocusQueryGeneration)
+        {
+            return;
+        }
+
+        FocusQueryInFlight = false;
+        if (request.hasError)
+        {
+            Debug.LogWarning("GPU click-to-focus readback failed.", this);
+            return;
+        }
+
+        var result = request.GetData<Vector4>()[0];
+        if (result.w < 0.5f)
+        {
+            return;
+        }
+
+        var hitPosition = new Vector3(result.x, result.y, result.z);
+        var focusDistance = Vector3.Dot(hitPosition - FocusQueryCameraPosition, FocusQueryCameraForward);
+        if (focusDistance <= 0.0f)
+        {
+            return;
+        }
+
+        cameraAutoFocus = false;
+        if (cameraBehavior == CameraBehavior.OrbitFocusPoint)
+        {
+            SetOrbitFocus(hitPosition);
+        }
+        cameraFocalDistance = cameraBehavior == CameraBehavior.OrbitFocusPoint
+            ? DefaultOrbitZoom
+            : Mathf.Max(0.1f, focusDistance);
+        PreviousFocalDistance = cameraFocalDistance;
+        ClickedFocusPoint = hitPosition;
+        HasClickedFocusPoint = enableClickToFocus && trackClickedFocusPoint;
+        UpdateTrackedFocusPoint();
+        resetFrameAccumulation();
+    }
+
+    private void InitializeOrbitFromSceneSettings(SceneSettings settings)
+    {
+        if (renderTextureCamera == null)
+        {
+            return;
+        }
         
-        bool hasPosition = settings.CameraPosition != Vector3.zero;
-        bool hasZoom = settings.CameraOrbitZoom > 0.0f;
+        var hasPosition = settings.CameraPosition != Vector3.zero;
+        var hasZoom = settings.CameraOrbitZoom > 0.0f;
         
         if (hasPosition)
         {
             renderTextureCamera.transform.position = settings.CameraPosition;
             
-            Vector3 forward = cameraFocusPosition - settings.CameraPosition;
+            var forward = cameraFocusPosition - settings.CameraPosition;
             if (forward.sqrMagnitude > 0.0001f)
             {
                 renderTextureCamera.transform.rotation = Quaternion.LookRotation(forward.normalized, Vector3.up);
@@ -321,7 +448,7 @@ public sealed class CameraManager : MonoBehaviour
         cameraFocalDistance = _orbitDistance;
     }
 
-    public void SetOrbitFocus(Vector3 focusPosition)
+    private void SetOrbitFocus(Vector3 focusPosition)
     {
         cameraFocusPosition = focusPosition;
         _orbitDistance = DefaultOrbitZoom;
@@ -343,12 +470,12 @@ public sealed class CameraManager : MonoBehaviour
         }
     }
 
-    private void InitializeOrbit(Camera camera)
+    private void InitializeOrbit(Camera rayCamera)
     {
-        Vector3 offset = camera.transform.position - cameraFocusPosition;
+        var offset = rayCamera.transform.position - cameraFocusPosition;
         if (offset.sqrMagnitude < 0.0001f)
         {
-            offset = -camera.transform.forward * DefaultOrbitZoom;
+            offset = -rayCamera.transform.forward * DefaultOrbitZoom;
         }
         _orbitDistance = Mathf.Max(0.1f, cameraOrbitZoom);
         _orbitYaw = Mathf.Atan2(offset.x, offset.z) * Mathf.Rad2Deg;
@@ -357,9 +484,9 @@ public sealed class CameraManager : MonoBehaviour
 
     private void HandleOrbitInput(Camera camera)
     {
-        float delta = Time.unscaledDeltaTime;
-        float scale = Mathf.Max(0.0f, cameraMovementSpeed);
-        float angle = delta * 20.0f * scale;
+        var delta = Time.unscaledDeltaTime;
+        var scale = Mathf.Max(0.0f, cameraMovementSpeed);
+        var angle = delta * 20.0f * scale;
         
         if (Input.GetKey(KeyCode.A)) _orbitYaw -= angle;
         if (Input.GetKey(KeyCode.D)) _orbitYaw += angle;

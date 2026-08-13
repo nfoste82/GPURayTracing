@@ -158,7 +158,7 @@ public sealed class VideoCaptureManager
         _previousSingleFrame = _gameManager._singleFrame;
         _previousSingleFrameRenderTime = _gameManager._singleFrameRenderTime;
         _previousFrameAccumulation = _gameManager.enableFrameAccumulation;
-        _previousTemporalDenoising = _gameManager.enableTemporalDenoising;
+        _previousTemporalDenoising = _gameManager.TemporalDenoising.enabled;
         _previousNumberOfPasses = _gameManager.numberOfPasses;
         _previousTargetFrameRate = Application.targetFrameRate;
         _previousVSyncCount = QualitySettings.vSyncCount;
@@ -174,7 +174,7 @@ public sealed class VideoCaptureManager
         _gameManager._previousSingleFrame = true;
         _gameManager._singleFrameRenderTime = Time.time;
         _gameManager.enableFrameAccumulation = true;
-        _gameManager.enableTemporalDenoising = false;
+        _gameManager.TemporalDenoising.enabled = false;
         _gameManager.numberOfPasses = samplesPerDispatch;
         QualitySettings.vSyncCount = 0;
         Application.targetFrameRate = 1000;
@@ -303,7 +303,7 @@ public sealed class VideoCaptureManager
         _gameManager._previousSingleFrame = _previousSingleFrame;
         _gameManager._singleFrameRenderTime = _previousSingleFrameRenderTime;
         _gameManager.enableFrameAccumulation = _previousFrameAccumulation;
-        _gameManager.enableTemporalDenoising = _previousTemporalDenoising;
+        _gameManager.TemporalDenoising.enabled = _previousTemporalDenoising;
         _gameManager.numberOfPasses = _previousNumberOfPasses;
         Application.targetFrameRate = _previousTargetFrameRate;
         QualitySettings.vSyncCount = _previousVSyncCount;
