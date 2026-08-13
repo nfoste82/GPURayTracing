@@ -426,8 +426,8 @@ public class GameManager : MonoBehaviour
         ? _fogVolume.ScatteringAlbedo * Mathf.Max(0.0f, fogScatteringScale)
         : Color.black;
 
-    private static bool _buffersNeedRebuilding = false;
-    private static readonly List<PathTracingObject> _rayTracingObjects = new ();
+    private bool _buffersNeedRebuilding;
+    private readonly HashSet<PathTracingObject> _rayTracingObjects = new ();
     private static readonly int SkyboxTexture = Shader.PropertyToID("_SkyboxTexture");
     private static readonly int MeshAlbedoTextures = Shader.PropertyToID("_MeshAlbedoTextures");
     private static readonly int MeshMetallicRoughnessTextures = Shader.PropertyToID("_MeshMetallicRoughnessTextures");
@@ -486,7 +486,6 @@ public class GameManager : MonoBehaviour
 
     private const int SphereStride = 92;
     private const int LightStride = 88;
-    private const int MaxNumberOfPasses = 32;
     private const int TriangleStride = 252;
     private const int MeshInfoStride = 48;
     private const int BvhNodeStride = 48;
@@ -1377,25 +1376,7 @@ public class GameManager : MonoBehaviour
             boundsMax = new Vector3(10.0f, 10.0f, 10.0f);
         }
 
-        var padding = Mathf.Max(0.01f, causticGatherRadius);
-        boundsMin -= Vector3.one * padding;
-        boundsMax += Vector3.one * padding;
-        
-        var size = Vector3.Max(boundsMax - boundsMin, Vector3.one * padding);
-        var cellSize = padding;
-        var dimensions = CausticsLogic.CalculateCausticGridDimensions(size, cellSize);
-        
-        while ((long)dimensions.x * dimensions.y * dimensions.z > MaxCausticGridCells)
-        {
-            cellSize *= 1.25f;
-            dimensions = CausticsLogic.CalculateCausticGridDimensions(size, cellSize);
-        }
-
-        _causticsManager.GridMin = boundsMin;
-        _causticsManager.GridCellSize = cellSize;
-        _causticsManager.GridDimensions = dimensions;
-        long gridCellCount = (long)dimensions.x * dimensions.y * dimensions.z;
-        _causticsManager.GridCellCountValue = Mathf.Max(1, (int)Mathf.Min(int.MaxValue, gridCellCount));
+        _causticsManager.ConfigureGrid(boundsMin, boundsMax, causticGatherRadius, MaxCausticGridCells);
     }
     
 
@@ -1427,12 +1408,7 @@ public class GameManager : MonoBehaviour
         _causticsManager.EnsureResources(causticPhotonCount);
         if (stateChanged)
         {
-            _causticsManager.TargetPairBuffer.SetData(_causticsManager.TargetPairs.Count > 0
-                ? _causticsManager.TargetPairs
-                : new List<CausticTargetPair> { default });
-            _causticsManager.TargetTriangleBuffer.SetData(_causticsManager.TargetTriangles.Count > 0
-                ? _causticsManager.TargetTriangles
-                : new List<CausticTargetTriangle> { default });
+            _causticsManager.UploadSamplingDistribution();
             _causticsManager.PhotonStateHash = stateHash;
             _causticsManager.HasPhotonStateHash = true;
             _causticsManager.FrameIndex = 0;
@@ -1536,138 +1512,100 @@ public class GameManager : MonoBehaviour
     public void RenderImage(RenderTexture src, RenderTexture dest)
     {
         EnsureOutputTextureSize(src.width, src.height);
-        if (_startupInitializationPending)
+        if (TryPresentStartupFrame(src, dest) || TryDeferShaderVariantWarmup(dest, out var frame))
         {
-            Graphics.Blit(src, dest);
             return;
         }
         _videoCaptureManager.PrepareRender();
-        if (!ShouldRunTemporalDenoiser() && _temporalDenoisingManager.HasResources)
-        {
-            ReleaseTemporalDenoiserResources();
-            _temporalDenoisingManager.ResetHistory();
-        }
+        PrepareRenderFrame(ref frame);
+        DispatchRenderFrame(ref frame);
+        FinalizeRenderFrame(ref frame);
+        _videoCaptureManager.CompleteRender();
+        Graphics.Blit(debugRenderMode == DebugRenderMode.FinalColor && !frame.useDedicatedCausticsDebugKernel
+            ? _presentationTexture : _outputTexture, dest);
+    }
 
-        // Detect a switch to a debug variant that has not been compiled yet. The first Dispatch of
-        // a new variant blocks the main thread while the GPU backend compiles it. To avoid an
-        // apparently frozen app, we defer that blocking dispatch by one frame: this frame we set the
-        // overlay flag and re-show the previous output (no heavy dispatch), so OnGUI can paint the
-        // "Compiling shader variant" message; next frame we run the stalling dispatch with that
-        // message already on screen.
-        bool fogEnabled = IsFogEnabled();
-        bool useDedicatedCausticsDebugKernel = enableCaustics && debugRenderMode == DebugRenderMode.Caustics;
-        int requestedVariant = GetShaderVariantKey(debugRenderMode, enableCaustics, fogEnabled);
-        bool shaderVariantChanged = debugRenderMode != _appliedDebugRenderMode
-            || enableCaustics != _appliedCausticsEnabled
-            || fogEnabled != _appliedFogEnabled;
-        if (!_pendingVariantWarmup
-            && shaderVariantChanged
-            && !_warmedShaderVariants.Contains(requestedVariant))
-        {
-            _pendingVariantWarmup = true;
-            Graphics.Blit(_presentationTexture != null ? _presentationTexture : _outputTexture, dest);
-            return;
-        }
+    private struct RenderFrame
+    {
+        public bool fogEnabled;
+        public bool useDedicatedCausticsDebugKernel;
+        public int requestedVariant;
+        public bool useFrameAccumulation;
+        public int kernelHandle;
+        public long preparationStart;
+    }
 
-        long firstFramePreparationStart = _startupProfilePending ? Stopwatch.GetTimestamp() : 0;
+    private bool TryPresentStartupFrame(RenderTexture src, RenderTexture dest)
+    {
+        if (!_startupInitializationPending) return false;
+        Graphics.Blit(src, dest);
+        return true;
+    }
+
+    private bool TryDeferShaderVariantWarmup(RenderTexture dest, out RenderFrame frame)
+    {
+        frame = new RenderFrame
+        {
+            fogEnabled = IsFogEnabled(),
+            useDedicatedCausticsDebugKernel = enableCaustics && debugRenderMode == DebugRenderMode.Caustics
+        };
+        frame.requestedVariant = GetShaderVariantKey(debugRenderMode, enableCaustics, frame.fogEnabled);
+        bool changed = debugRenderMode != _appliedDebugRenderMode || enableCaustics != _appliedCausticsEnabled || frame.fogEnabled != _appliedFogEnabled;
+        if (_pendingVariantWarmup || !changed || _warmedShaderVariants.Contains(frame.requestedVariant)) return false;
+        _pendingVariantWarmup = true;
+        Graphics.Blit(_presentationTexture != null ? _presentationTexture : _outputTexture, dest);
+        return true;
+    }
+
+    private void PrepareRenderFrame(ref RenderFrame frame)
+    {
+        if (!ShouldRunTemporalDenoiser() && _temporalDenoisingManager.HasResources) { ReleaseTemporalDenoiserResources(); _temporalDenoisingManager.ResetHistory(); }
+        frame.preparationStart = _startupProfilePending ? Stopwatch.GetTimestamp() : 0;
         CameraManager.UpdateTrackedFocusPoint();
         _temporalDynamicSceneChanged = false;
         _temporalDenoisingManager.SetDynamicSceneChanged(false);
-        UpdateSpheres();
-        UpdateTriangles();
-        UpdateTopLevelBvh();
-        UpdateShadowBvh();
-        CameraManager.UpdateAutoFocus(
-            numberOfPasses,
-            WaterManager.CalculateAutoFocusStateHash(),
-            GetNearestIntersectionDistanceForAutoFocus);
+        UpdateSpheres(); UpdateTriangles(); UpdateTopLevelBvh(); UpdateShadowBvh();
+        CameraManager.UpdateAutoFocus(numberOfPasses, WaterManager.CalculateAutoFocusStateHash(), GetNearestIntersectionDistanceForAutoFocus);
         CameraManager.AutoFocusSceneChanged = false;
         UpdateCausticPhotonMap();
-
-        if (ShouldRunTemporalDenoiser())
-        {
-            _temporalDenoisingManager.PrepareCameraState();
-        }
-
-        bool useFrameAccumulation = ShouldUseFrameAccumulation();
-        if (useFrameAccumulation)
+        if (ShouldRunTemporalDenoiser()) _temporalDenoisingManager.PrepareCameraState();
+        frame.useFrameAccumulation = ShouldUseFrameAccumulation();
+        if (frame.useFrameAccumulation)
         {
             int stateHash = CalculateAccumulationStateHash();
-            if (!_hasAccumulationStateHash || stateHash != _accumulationStateHash)
-            {
-                _accumulatedFrameCount = 0;
-                _accumulationStateHash = stateHash;
-                _hasAccumulationStateHash = true;
-            }
+            if (!_hasAccumulationStateHash || stateHash != _accumulationStateHash) { _accumulatedFrameCount = 0; _accumulationStateHash = stateHash; _hasAccumulationStateHash = true; }
         }
-        else
-        {
-            ResetFrameAccumulation();
-        }
+        else ResetFrameAccumulation();
+        frame.kernelHandle = shader.FindKernel(frame.useDedicatedCausticsDebugKernel ? "CSCausticsDebug" : "CSMain");
+    }
 
-        var kernelHandle = shader.FindKernel(useDedicatedCausticsDebugKernel ? "CSCausticsDebug" : "CSMain");
-
-        SetShaderParameters(kernelHandle);
+    private void DispatchRenderFrame(ref RenderFrame frame)
+    {
+        SetShaderParameters(frame.kernelHandle);
         DispatchPendingFocusQuery();
-        if (_startupProfilePending)
-        {
-            AddStartupProfilePhase("first-frame CPU preparation", firstFramePreparationStart);
-        }
+        if (_startupProfilePending) AddStartupProfilePhase("first-frame CPU preparation", frame.preparationStart);
         long dispatchStart = _startupProfilePending ? Stopwatch.GetTimestamp() : 0;
-        UpdateTextureFromCompute(kernelHandle);
+        UpdateTextureFromCompute(frame.kernelHandle);
         _presentationSource = _beautyTexture;
-        if (!useDedicatedCausticsDebugKernel && (ShouldRunSpatialDenoiser() || ShouldRunTemporalDenoiser() || IsFeatureDebugMode() || IsCausticPreservationDebugMode()))
-        {
-            UpdateFeaturesFromCompute();
-        }
-        if (!useDedicatedCausticsDebugKernel && IsFeatureDebugMode())
-        {
-            PresentFeatureDebugMode();
-        }
-        if (!useDedicatedCausticsDebugKernel && ShouldRunTemporalDenoiser())
-        {
-            RunTemporalDenoiser();
-            _temporalDenoisingManager.CommitCameraState();
-        }
-        else if (!useDedicatedCausticsDebugKernel && IsCausticPreservationDebugMode())
-        {
-            PresentCausticPreservationMask();
-        }
-        if (!useDedicatedCausticsDebugKernel && ShouldRunSpatialDenoiser() && !IsTemporalDebugMode()
-            && !ShouldUseTemporalAccumulation())
-        {
-            RunSpatialDenoiser();
-        }
-        if (!useDedicatedCausticsDebugKernel && debugRenderMode == DebugRenderMode.FinalColor)
-        {
-            PresentFinalColor();
-        }
-        if (_startupProfilePending)
-        {
-            AddStartupProfilePhase("first compute dispatch (includes shader compilation)", dispatchStart);
-            LogStartupProfile();
-        }
+        if (!frame.useDedicatedCausticsDebugKernel && (ShouldRunSpatialDenoiser() || ShouldRunTemporalDenoiser() || IsFeatureDebugMode() || IsCausticPreservationDebugMode())) UpdateFeaturesFromCompute();
+        if (!frame.useDedicatedCausticsDebugKernel && IsFeatureDebugMode()) PresentFeatureDebugMode();
+        if (!frame.useDedicatedCausticsDebugKernel && ShouldRunTemporalDenoiser()) { RunTemporalDenoiser(); _temporalDenoisingManager.CommitCameraState(); }
+        else if (!frame.useDedicatedCausticsDebugKernel && IsCausticPreservationDebugMode()) PresentCausticPreservationMask();
+        if (!frame.useDedicatedCausticsDebugKernel && ShouldRunSpatialDenoiser() && !IsTemporalDebugMode() && !ShouldUseTemporalAccumulation()) RunSpatialDenoiser();
+        if (!frame.useDedicatedCausticsDebugKernel && debugRenderMode == DebugRenderMode.FinalColor) PresentFinalColor();
+        if (_startupProfilePending) { AddStartupProfilePhase("first compute dispatch (includes shader compilation)", dispatchStart); LogStartupProfile(); }
+    }
+
+    private void FinalizeRenderFrame(ref RenderFrame frame)
+    {
         _renderedFrameCount++;
-
-        if (useFrameAccumulation && !useDedicatedCausticsDebugKernel)
-        {
-            _accumulatedFrameCount++;
-        }
+        if (frame.useFrameAccumulation && !frame.useDedicatedCausticsDebugKernel) _accumulatedFrameCount++;
         _temporalDenoisingManager.CommitRenderedCameraState();
-
-        // The dispatch above triggered (and blocked on) any first-time variant compile. Record
-        // that this debug mode is now warm so future switches to it are instant, and clear the
-        // overlay flag.
-        _warmedShaderVariants.Add(requestedVariant);
+        _warmedShaderVariants.Add(frame.requestedVariant);
         _appliedDebugRenderMode = debugRenderMode;
         _appliedCausticsEnabled = enableCaustics;
-        _appliedFogEnabled = fogEnabled;
+        _appliedFogEnabled = frame.fogEnabled;
         _pendingVariantWarmup = false;
-
-        _videoCaptureManager.CompleteRender();
-
-        Graphics.Blit(debugRenderMode == DebugRenderMode.FinalColor && !useDedicatedCausticsDebugKernel
-            ? _presentationTexture : _outputTexture, dest);
     }
 
     public void ExportCurrentRenderPng(string path)
@@ -3815,13 +3753,24 @@ public class GameManager : MonoBehaviour
     
     private void SetShaderParameters(int kernelHandle)
     {
+        BindShaderTextures(kernelHandle);
+        BindShaderCameraAndSamplingParameters();
+        BindShaderKeywordsAndLightingParameters(kernelHandle);
+        BindShaderEnvironmentAndSceneParameters(kernelHandle);
+    }
+
+    private void BindShaderTextures(int kernelHandle)
+    {
         shader.SetTexture(kernelHandle, SkyboxTexture, skyboxTexture);
         EnsureMeshTextureArrays();
         shader.SetTexture(kernelHandle, MeshAlbedoTextures, _meshAlbedoTextureArray);
         shader.SetTexture(kernelHandle, MeshMetallicRoughnessTextures, _meshMetallicRoughnessTextureArray);
         shader.SetTexture(kernelHandle, MeshNormalTextures, _meshNormalTextureArray);
         shader.SetTexture(kernelHandle, MeshParallaxTextures, _meshParallaxTextureArray);
+    }
 
+    private void BindShaderCameraAndSamplingParameters()
+    {
         shader.SetMatrix(CameraToWorld, renderTextureCamera.cameraToWorldMatrix);
         shader.SetMatrix(CameraInverseProjection, renderTextureCamera.projectionMatrix.inverse);
         var temporalJitter = _temporalDenoisingManager.CurrentJitterNdc;
@@ -3850,7 +3799,10 @@ public class GameManager : MonoBehaviour
         shader.SetInt(UseFrameAccumulation, ShouldUseFrameAccumulation() ? 1 : 0);
         shader.SetInt(FrameCount, _accumulatedFrameCount);
         shader.SetInt(SampleOffset, CalculateSampleOffset());
+    }
 
+    private void BindShaderKeywordsAndLightingParameters(int kernelHandle)
+    {
         // The shader splits its debug render path behind the DEBUG_RENDER keyword so the default
         // final-color variant compiles without any debug intersection/scatter code (a large shader
         // compile-time saving). Only enable the debug variant when a debug mode is actually active.
@@ -3907,6 +3859,10 @@ public class GameManager : MonoBehaviour
         shader.SetFloat(ShadowRandomness, shadowRandomness);
         shader.SetFloat(ParallaxMaximumStrengthCosine, Mathf.Cos(Mathf.Clamp(parallaxMaximumStrengthAngle, 0.0f, 90.0f) * Mathf.Deg2Rad));
         shader.SetFloat(LightFalloffScale, lightFalloffScale);
+    }
+
+    private void BindShaderEnvironmentAndSceneParameters(int kernelHandle)
+    {
         shader.SetFloat(FocalDistance, CameraManager.cameraFocalDistance);
         shader.SetFloat(ApertureRadius, CameraManager.GetApertureRadius());
         shader.SetInt(ApertureBladeCount, CameraManager.cameraApertureBladeCount >= 3 ? CameraManager.cameraApertureBladeCount : 0);

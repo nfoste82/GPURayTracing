@@ -3,6 +3,8 @@ using UnityEngine;
 [ExecuteAlways]
 public class PathTracingObject : MonoBehaviour
 {
+    private GameManager _registeredManager;
+
     private void OnEnable()
     {
         if (GetComponent<RayObjectPreview>() == null)
@@ -18,7 +20,11 @@ public class PathTracingObject : MonoBehaviour
 
         if (Application.isPlaying)
         {
-            GetComponentInParent<GameManager>().RegisterObject(this);
+            _registeredManager = GetComponentInParent<GameManager>();
+            if (_registeredManager != null)
+            {
+                _registeredManager.RegisterObject(this);
+            }
         }
     }
 
@@ -26,10 +32,10 @@ public class PathTracingObject : MonoBehaviour
     {
         if (Application.isPlaying)
         {
-            var gameManager = GetComponentInParent<GameManager>();
-            if (gameManager != null)
+            if (_registeredManager != null)
             {
-                gameManager.UnregisterObject(this);
+                _registeredManager.UnregisterObject(this);
+                _registeredManager = null;
             }
         }
     }

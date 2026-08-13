@@ -172,6 +172,41 @@ namespace PathTracing.Caustics
             HasPhotonStateHash = false;
         }
 
+        internal void ConfigureGrid(Vector3 boundsMin, Vector3 boundsMax, float gatherRadius, int maximumCellCount)
+        {
+            float padding = Mathf.Max(0.01f, gatherRadius);
+            boundsMin -= Vector3.one * padding;
+            boundsMax += Vector3.one * padding;
+            Vector3 size = Vector3.Max(boundsMax - boundsMin, Vector3.one * padding);
+            float cellSize = padding;
+            Vector3Int dimensions = CalculateGridDimensions(size, cellSize);
+            while ((long)dimensions.x * dimensions.y * dimensions.z > maximumCellCount)
+            {
+                cellSize *= 1.25f;
+                dimensions = CalculateGridDimensions(size, cellSize);
+            }
+
+            GridMin = boundsMin;
+            GridCellSize = cellSize;
+            GridDimensions = dimensions;
+            long cellCount = (long)dimensions.x * dimensions.y * dimensions.z;
+            GridCellCountValue = Mathf.Max(1, (int)Mathf.Min(int.MaxValue, cellCount));
+        }
+
+        internal void UploadSamplingDistribution()
+        {
+            TargetPairBuffer.SetData(TargetPairs.Count > 0 ? TargetPairs : new List<CausticTargetPair> { default });
+            TargetTriangleBuffer.SetData(TargetTriangles.Count > 0 ? TargetTriangles : new List<CausticTargetTriangle> { default });
+        }
+
+        private static Vector3Int CalculateGridDimensions(Vector3 size, float cellSize)
+        {
+            return new Vector3Int(
+                Mathf.Max(1, Mathf.CeilToInt(size.x / cellSize)),
+                Mathf.Max(1, Mathf.CeilToInt(size.y / cellSize)),
+                Mathf.Max(1, Mathf.CeilToInt(size.z / cellSize)));
+        }
+
         private static ComputeBuffer CreateComputeBuffer<T>(List<T> data, int stride) where T : struct
         {
             return new ComputeBuffer(Mathf.Max(1, data.Count), stride);
