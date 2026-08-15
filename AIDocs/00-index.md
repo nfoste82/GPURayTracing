@@ -36,4 +36,4 @@ Use this folder as focused context for LLM-assisted work on the Unity GPU ray tr
 - To implement or continue the GPU-native A-trous/SVGF denoiser, read `14-svgf-implementation-plan.md` and `13-denoising-and-upscaling.md`, then the relevant renderer/shader documents.
 - To understand the project quickly before making broad changes, read `01-project-overview.md` first.
 - To change terrain layer textures, weights, or elevation/slope banding, read `15-terrain-rendering.md`; declare rules in rank/degree space via `TerrainLayerPainter` and verify with `Tools > Ray Tracing > Report Terrain Coverage`.
-- To regenerate generated scenes after changing generator code, use `Tools > Ray Tracing > Regenerate Scenes (Overwrite All)`; plain `Generate Scenes` skips scenes that already exist.
+- To regenerate generated scenes after changing generator code, use `Tools > Ray Tracing > Regenerate Scenes (Delete Existing Scenes)`; plain `Generate Scenes` skips scenes that already exist.

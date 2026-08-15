@@ -10,43 +10,51 @@ namespace PathTracing.AccelerationStructures
         public static MeshBvhTemplate Build(Mesh mesh, bool interpolateNormals, int leafTriangleCount, int stackSize, float boundsPadding)
         {
             var vertices = mesh.vertices;
-            var indices = mesh.triangles;
             var uvs = mesh.uv;
             var normals = mesh.normals;
             var tangents = mesh.tangents;
             bool useInterpolatedNormals = interpolateNormals && normals.Length == vertices.Length;
             bool hasTangents = tangents.Length == vertices.Length;
-            var sourceTriangles = new List<Triangle>(indices.Length / 3);
+            var sourceTriangles = new List<Triangle>();
 
-            for (int i = 0; i + 2 < indices.Length; i += 3)
+            for (int submeshIndex = 0; submeshIndex < mesh.subMeshCount; submeshIndex++)
             {
-                int index0 = indices[i];
-                int index1 = indices[i + 1];
-                int index2 = indices[i + 2];
-                Vector3 vertex0 = vertices[index0];
-                Vector3 vertex1 = vertices[index1];
-                Vector3 vertex2 = vertices[index2];
-                Vector3 normal = Vector3.Cross(vertex1 - vertex0, vertex2 - vertex0).normalized;
-                Vector3 normal0 = useInterpolatedNormals ? normals[index0].normalized : normal;
-                Vector3 normal1 = useInterpolatedNormals ? normals[index1].normalized : normal;
-                Vector3 normal2 = useInterpolatedNormals ? normals[index2].normalized : normal;
-                sourceTriangles.Add(new Triangle
+                if (mesh.GetTopology(submeshIndex) != MeshTopology.Triangles)
                 {
-                    vertex0 = vertex0,
-                    vertex1 = vertex1,
-                    vertex2 = vertex2,
-                    normal = normal,
-                    normal0 = normal0,
-                    normal1 = normal1,
-                    normal2 = normal2,
-                    tangent0 = GetLocalTangent(tangents, index0, normal0, hasTangents),
-                    tangent1 = GetLocalTangent(tangents, index1, normal1, hasTangents),
-                    tangent2 = GetLocalTangent(tangents, index2, normal2, hasTangents),
-                    uv0 = GetUv(uvs, index0),
-                    uv1 = GetUv(uvs, index1),
-                    uv2 = GetUv(uvs, index2),
-                    interpolateNormals = useInterpolatedNormals ? 1 : 0
-                });
+                    continue;
+                }
+
+                int[] indices = mesh.GetIndices(submeshIndex);
+                for (int i = 0; i + 2 < indices.Length; i += 3)
+                {
+                    int index0 = indices[i];
+                    int index1 = indices[i + 1];
+                    int index2 = indices[i + 2];
+                    Vector3 vertex0 = vertices[index0];
+                    Vector3 vertex1 = vertices[index1];
+                    Vector3 vertex2 = vertices[index2];
+                    Vector3 normal = Vector3.Cross(vertex1 - vertex0, vertex2 - vertex0).normalized;
+                    Vector3 normal0 = useInterpolatedNormals ? normals[index0].normalized : normal;
+                    Vector3 normal1 = useInterpolatedNormals ? normals[index1].normalized : normal;
+                    Vector3 normal2 = useInterpolatedNormals ? normals[index2].normalized : normal;
+                    sourceTriangles.Add(new Triangle
+                    {
+                        vertex0 = vertex0,
+                        vertex1 = vertex1,
+                        vertex2 = vertex2,
+                        normal = normal,
+                        normal0 = normal0,
+                        normal1 = normal1,
+                        normal2 = normal2,
+                        tangent0 = GetLocalTangent(tangents, index0, normal0, hasTangents),
+                        tangent1 = GetLocalTangent(tangents, index1, normal1, hasTangents),
+                        tangent2 = GetLocalTangent(tangents, index2, normal2, hasTangents),
+                        uv0 = GetUv(uvs, index0),
+                        uv1 = GetUv(uvs, index1),
+                        uv2 = GetUv(uvs, index2),
+                        interpolateNormals = useInterpolatedNormals ? 1 : 0
+                    });
+                }
             }
 
             var template = new MeshBvhTemplate();

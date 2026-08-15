@@ -20,7 +20,12 @@ public static class RayTracingSceneGenerator
     private const string TeapotBaseModelPath = "Assets/Models/Teapot/Mesh000.obj";
     private const string TeapotBodyModelPath = "Assets/Models/Teapot/Mesh001.obj";
     private const string DefaultCheckerGrayTexturePath = "Default-Checker-Gray.png";
-    private const string MaterialBallGltfUrl = "https://raw.githubusercontent.com/gkjohnson/3d-demo-data/main/models/usd-shader-ball/usd-shaderball-scene.glb";
+    private const string MaterialBallRoomPrefabPath = "Assets/Prefabs/Material_Ball_Room.prefab";
+    // Captured from the promoted material-ball scene after its embedded glTF camera was applied.
+    // The source root carries a coordinate conversion, so a generic front-facing room camera
+    // points outside the actual imported room.
+    private static readonly Vector3 MaterialBallRoomCameraPosition = new Vector3(-6.5315404f, 19.5f, 17.948502f);
+    private static readonly Vector3 MaterialBallRoomFocusPosition = new Vector3(0.008921146f, 3.3969116f, -0.021280289f);
     private const string RenderManTextureFolder = "Assets/Textures/RenderManSwatch";
     private const string MetalPlateTextureFolder = "Assets/Textures";
     private const string TerrainPreviewMaterialPath = GeneratedAssetFolder + "/TerrainPreview.mat";
@@ -61,7 +66,7 @@ public static class RayTracingSceneGenerator
     /// Use this after changing generator code: plain "Generate Scenes" skips scenes that already
     /// exist, so edits appear to have no effect until the scene file is deleted by hand.
     /// </summary>
-    [MenuItem("Tools/Ray Tracing/Regenerate Scenes (Overwrite All)")]
+    [MenuItem("Tools/Ray Tracing/Regenerate Scenes (Delete Existing Scenes)")]
     public static void RegenerateScenes()
     {
         bool confirmed = EditorUtility.DisplayDialog(
@@ -79,7 +84,6 @@ public static class RayTracingSceneGenerator
         Debug.Log($"Regenerated all scenes in {GeneratedSceneFolder}.");
     }
 
-    [MenuItem("Tools/Ray Tracing/Regenerate Terrain Scene")]
     public static void RegenerateTerrainScene()
     {
         GenerateScenes(new[] { GetScenePath("Terrain") }, true);
@@ -117,7 +121,7 @@ public static class RayTracingSceneGenerator
             CreateTerrainScene();
             CreateTeapotMaterialScene();
             CreateParallaxMappingScene();
-            CreateRemoteMaterialBallScene();
+            CreateKhronosGltfBrowserScene();
 
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
@@ -210,10 +214,9 @@ public static class RayTracingSceneGenerator
         Save(context.Scene, sceneName);
     }
 
-    [MenuItem("Tools/Ray Tracing/Generate Remote Material Ball Scene")]
-    public static void CreateRemoteMaterialBallScene()
+    public static void CreateKhronosGltfBrowserScene()
     {
-        const string sceneName = "RemoteMaterialBall";
+        const string sceneName = "KhronosGltfBrowser";
         if (ShouldSkipExistingScene(sceneName))
         {
             return;
@@ -222,35 +225,60 @@ public static class RayTracingSceneGenerator
         var context = CreateBaseScene(new SceneSettings
         {
             SceneName = sceneName,
-            CameraPosition = Vector3.zero,
-            CameraEuler = new Vector3(0.0f, 0.0f, 0.0f),
+            CameraPosition = MaterialBallRoomCameraPosition,
+            CameraEuler = Vector3.zero,
+            CameraBehavior = CameraBehavior.OrbitFocusPoint,
+            CameraFocusPosition = MaterialBallRoomFocusPosition,
+            CameraOrbitZoom = Vector3.Distance(MaterialBallRoomCameraPosition, MaterialBallRoomFocusPosition),
             FieldOfView = 45.0f,
             NumBounces = 10,
-            Exposure = 1.46f,
-            LightFalloffScale = 0.008f,
-            SkyboxLightColor = new Color32(16, 16, 16, 255),
-            DirectionalLightIntensity = 0.0f,
+            Exposure = 1.0f,
+            FireflyClamp = 0.0f,
+            // The material-ball room contains its own calibrated mesh area lights.
+            LightFalloffScale = 0.005f,
+            SkyboxLightColor = new Color32(0, 0, 0, 255),
+            // No directional light for this enclosed scene
+            DirectionalLightIntensity = 0f,
             TopLevelBvhMinObjectCount = 0,
             ShadowBvhMinObjectCount = 0,
             CameraApertureMode = CameraApertureMode.Pinhole,
-            FireflyClamp = 0,
+            // The lighting for this scene is such that caustics would spread out too much to have any impact
+            EnableCaustics = false,
         });
 
-        var assetObject = new GameObject("USD Material Ball Remote Asset");
-        assetObject.transform.SetParent(context.Root, false);
-        assetObject.transform.localScale = Vector3.one;
-        assetObject.AddComponent<RayTracingQuickControls>();
-        var remoteAsset = assetObject.AddComponent<RemoteGltfRayTracingAsset>();
-        remoteAsset.Url = MaterialBallGltfUrl;
-        assetObject.AddComponent<MaterialBallSceneController>();
+        GameObject roomPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(MaterialBallRoomPrefabPath);
+        if (roomPrefab == null)
+        {
+            Debug.LogError($"Khronos glTF Browser requires the display-room prefab at {MaterialBallRoomPrefabPath}.");
+            return;
+        }
 
+        // Parent during instantiation so each PathTracingObject registers with the GameManager
+        // from its OnEnable callback instead of becoming an unregistered raster-only preview.
+        GameObject room = PrefabUtility.InstantiatePrefab(roomPrefab, context.Root) as GameObject;
+        if (room == null)
+        {
+            Debug.LogError($"Could not instantiate display-room prefab at {MaterialBallRoomPrefabPath}.");
+            return;
+        }
+        room.name = "Material Ball Room";
+        room.AddComponent<MaterialBallRoomRuntimeSetup>();
+        context.Manager.CameraManager.SetOrbitState(MaterialBallRoomFocusPosition, MaterialBallRoomCameraPosition);
+
+        var browserObject = new GameObject("Khronos glTF Model Browser");
+        browserObject.transform.SetParent(context.Root, false);
+        browserObject.AddComponent<RemoteGltfRayTracingAsset>();
+        var browser = browserObject.AddComponent<KhronosGltfModelBrowser>();
+        browser.initialRoomCameraPosition = MaterialBallRoomCameraPosition;
+        browser.initialRoomFocusPosition = MaterialBallRoomFocusPosition;
+        var debugOptions = context.Root.gameObject.AddComponent<RayTracingSceneDebugOptions>();
+        debugOptions.keepRasterPreviewRenderersInPlayMode = true;
         Save(context.Scene, sceneName);
     }
 
-    [MenuItem("Tools/Ray Tracing/Regenerate Remote Material Ball Scene")]
-    public static void RegenerateRemoteMaterialBallScene()
+    public static void RegenerateKhronosGltfBrowserScene()
     {
-        GenerateScenes(new[] { GetScenePath("RemoteMaterialBall") }, true);
+        GenerateScenes(new[] { GetScenePath("KhronosGltfBrowser") }, true);
     }
 
     private static void ConfigureSurfaceMaps(GameObject obj, Texture2D albedo, Texture2D normal, Texture2D height, Texture2D roughness, float parallaxStrength, Vector2 uvScale)
@@ -265,7 +293,6 @@ public static class RayTracingSceneGenerator
         material.TextureUvScale = uvScale;
     }
 
-    [MenuItem("Tools/Ray Tracing/Generate Teapot Material Scene")]
     public static void CreateTeapotMaterialScene()
     {
         const string sceneName = "Benchmark_TeapotMaterials";
@@ -473,7 +500,6 @@ public static class RayTracingSceneGenerator
         Save(context.Scene, sceneName);
     }
 
-    [MenuItem("Tools/Ray Tracing/Regenerate Aperture Bokeh Scene")]
     public static void RegenerateApertureBokehScene()
     {
         GenerateScenes(new[] { GetScenePath("ApertureBokeh") }, true);
@@ -2569,8 +2595,7 @@ public static class RayTracingSceneGenerator
 
         Debug.LogWarning(
             $"Skipping existing generated scene: {path}. Generator changes will NOT appear until it is " +
-            "regenerated. Use Tools > Ray Tracing > Regenerate Scenes (Overwrite All), or " +
-            "Regenerate Terrain Scene for terrain only.");
+            "regenerated. Use Tools > Ray Tracing > Regenerate Scenes (Delete Existing Scenes).");
         return true;
     }
 

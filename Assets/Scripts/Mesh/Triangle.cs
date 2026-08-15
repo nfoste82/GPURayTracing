@@ -30,8 +30,10 @@ namespace PathTracing.Shapes
         public int textureIndex;
         public int metallicRoughnessTextureIndex;
         public int normalTextureIndex;
+        public float normalStrength;
         public int parallaxTextureIndex;
         public Vector2 textureUvScale;
+        public float textureUvRotation;
         public float parallaxStrength;
         public float minimumParallaxStrength;
         public int interpolateNormals;

@@ -16,7 +16,7 @@ Terrain currently receives shadows from spheres and meshes but does not cast ter
 
 `Tools > Ray Tracing > Generate Scenes` creates `Assets/Scenes/Generated/Terrain.unity`. The terrain heightmap is deterministically generated from seed `481516`, stored in `RayTracingTerrain.Seed`, and serialized as `GeneratedAssets/SeededTerrain.asset`. It represents a 1 km x 1 km area with approximately 96 m of relief. Regenerating the selected scene uses the same seed and produces the same terrain.
 
-`Generate Scenes` skips any generated scene whose `.unity` file already exists, so generator edits do not appear until the scene is regenerated; the skip now logs a warning naming the regeneration commands. Use `Tools > Ray Tracing > Regenerate Scenes (Overwrite All)` to rebuild every generated scene after confirmation, or `Tools > Ray Tracing > Regenerate Terrain Scene` for terrain only.
+`Generate Scenes` skips any generated scene whose `.unity` file already exists, so generator edits do not appear until the scene is regenerated. Use `Tools > Ray Tracing > Regenerate Scenes (Delete Existing Scenes)` to rebuild every generated scene after confirmation.
 
 ## Layer Weight Painting
 

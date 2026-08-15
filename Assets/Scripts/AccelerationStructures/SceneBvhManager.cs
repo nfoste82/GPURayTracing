@@ -11,7 +11,7 @@ namespace PathTracing.AccelerationStructures
         public const int LeafTriangleCount = 4;
         public const int StackSize = 32;
         public const int BakeFormatVersion = 2;
-        public const float BoundsPadding = 0.0001f;
+        public const float BoundsPadding = 0.001f;
         private static readonly int NumTopLevelBvhNodes = Shader.PropertyToID("_NumTopLevelBvhNodes");
         private static readonly int NumShadowBvhNodes = Shader.PropertyToID("_NumShadowBvhNodes");
         private static readonly int TopLevelBvhNodes = Shader.PropertyToID("_TopLevelBvhNodes");

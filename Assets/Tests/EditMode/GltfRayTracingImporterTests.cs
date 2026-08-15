@@ -37,7 +37,7 @@ namespace GPURayTracing.Tests
             {
                 Type.GetType("GltfRayTracingSetup, Assembly-CSharp")
                     .GetMethod("ConfigureHierarchy")
-                    .Invoke(null, new object[] { root });
+                    .Invoke(null, new object[] { root, false, null });
 
                 Component rayMaterial = meshObject.GetComponent("RayMaterial");
                 Assert.That(rayMaterial, Is.Not.Null);
@@ -66,7 +66,7 @@ namespace GPURayTracing.Tests
             {
                 Type.GetType("GltfRayTracingSetup, Assembly-CSharp")
                     .GetMethod("ConfigureHierarchy")
-                    .Invoke(null, new object[] { root });
+                    .Invoke(null, new object[] { root, false, null });
 
                 Assert.That(meshObject.GetComponent("RayMaterial"), Is.Not.Null);
                 Assert.That(meshObject.GetComponent("PathTracingObject"), Is.Not.Null);
@@ -76,6 +76,78 @@ namespace GPURayTracing.Tests
             {
                 UnityEngine.Object.DestroyImmediate(root);
             }
+        }
+
+        [Test]
+        public void ConfigureHierarchy_IgnoresNonTriangleMeshPrimitives()
+        {
+            var root = new GameObject("glTF Root");
+            var meshObject = new GameObject("Line Primitive");
+            meshObject.transform.SetParent(root.transform);
+            var mesh = new Mesh();
+            mesh.vertices = new[] { Vector3.zero, Vector3.right };
+            mesh.SetIndices(new[] { 0, 1 }, MeshTopology.Lines, 0);
+            meshObject.AddComponent<MeshFilter>().sharedMesh = mesh;
+
+            try
+            {
+                Type.GetType("GltfRayTracingSetup, Assembly-CSharp")
+                    .GetMethod("ConfigureHierarchy")
+                    .Invoke(null, new object[] { root, false, null });
+
+                Assert.That(meshObject.GetComponent("RayMaterial"), Is.Null);
+                Assert.That(meshObject.GetComponent("PathTracingObject"), Is.Null);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(root);
+            }
+        }
+
+        [Test]
+        public void MeshBvhBuilder_ProcessesOnlyTriangleSubmeshes()
+        {
+            string source = System.IO.File.ReadAllText("Assets/Scripts/AccelerationStructures/MeshBvhBuilder.cs");
+
+            Assert.That(source, Does.Contain("mesh.GetTopology(submeshIndex) != MeshTopology.Triangles"));
+            Assert.That(source, Does.Contain("mesh.GetIndices(submeshIndex)"));
+        }
+
+        [Test]
+        public void GltfTransmission_DoesNotForceOpacityBelowOne()
+        {
+            string source = System.IO.File.ReadAllText("Assets/Scripts/GltfRayTracingSetup.cs");
+
+            Assert.That(source, Does.Contain("rayMaterial.Opacity = 1.0f"));
+            Assert.That(source, Does.Not.Contain("rayMaterial.Opacity = 0.0f"));
+        }
+
+        [Test]
+        public void TransformedMeshBvhBounds_RetainWorldSpacePadding()
+        {
+            string source = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+
+            Assert.That(source, Does.Contain("Vector3 padding = Vector3.one * SceneBvhManager.BoundsPadding"));
+            Assert.That(source, Does.Contain("boundsMin -= padding"));
+            Assert.That(source, Does.Contain("boundsMax += padding"));
+        }
+
+        [Test]
+        public void ApplyMaterial_MapsGltfTransmissionAndIorToGlass()
+        {
+            string source = System.IO.File.ReadAllText("Assets/Scripts/GltfRayTracingSetup.cs");
+
+            Assert.That(source, Does.Contain("KHR_materials_transmission?.transmissionFactor"));
+            Assert.That(source, Does.Contain("rayMaterial.Type = RayMaterial.MaterialType.Glass"));
+            Assert.That(source, Does.Contain("rayMaterial.Transmission = Mathf.Clamp01(transmission)"));
+            Assert.That(source, Does.Not.Contain("rayMaterial.Opacity = 0.0f"));
+            Assert.That(source, Does.Contain("KHR_materials_ior?.ior ?? 1.5f"));
+            Assert.That(source, Does.Contain("rayMaterial.Smoothness = Mathf.Clamp01(1.0f - pbr.roughnessFactor)"));
+            Assert.That(source, Does.Contain("rayMaterial.Metallic = Mathf.Clamp01(pbr.metallicFactor)"));
+            Assert.That(source, Does.Contain("GetGltfTexture(gltfImport, pbr.baseColorTexture?.index ?? -1)"));
+            Assert.That(source, Does.Contain("rayMaterial.NormalStrength = Mathf.Clamp(gltfMaterial.normalTexture?.scale ?? 1.0f, 0.0f, 2.0f)"));
+            Assert.That(source, Does.Contain("rayMaterial.TextureUvScale = new Vector2(scale[0], scale[1])"));
+            Assert.That(source, Does.Contain("TextureUvRotation = textureInfo?.Extensions?.KHR_texture_transform?.rotation * Mathf.Rad2Deg"));
         }
 
 

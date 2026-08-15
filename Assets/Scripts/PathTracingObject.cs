@@ -40,6 +40,28 @@ public class PathTracingObject : MonoBehaviour
         }
     }
 
+    // Components such as RayLight can be added or removed while rendering. Re-register so the
+    // GameManager replaces the cached material object with its light representation immediately.
+    public void RefreshRegistration()
+    {
+        if (!Application.isPlaying)
+        {
+            return;
+        }
+
+        if (_registeredManager != null)
+        {
+            _registeredManager.UnregisterObject(this);
+            _registeredManager = null;
+        }
+
+        _registeredManager = GetComponentInParent<GameManager>();
+        if (_registeredManager != null && isActiveAndEnabled)
+        {
+            _registeredManager.RegisterObject(this);
+        }
+    }
+
     private void OnDrawGizmos()
     {
         var sphereCollider = GetComponent<SphereCollider>();

@@ -5,6 +5,14 @@ namespace GPURayTracing.Tests
 {
     public class RemoteGltfRayTracingAssetTests
     {
+        [Test]
+        public void RemoteAsset_ExposesDetachedLoadedAssetMethod()
+        {
+            Type componentType = Type.GetType("RemoteGltfRayTracingAsset, Assembly-CSharp");
+
+            Assert.That(componentType.GetMethod("DetachLoadedAsset"), Is.Not.Null);
+        }
+
         [TestCase("https://assets.example.com/models/helmet.glb", true)]
         [TestCase("http://assets.example.com/models/helmet.gltf", true)]
         [TestCase("file:///tmp/helmet.glb", false)]
@@ -24,6 +32,13 @@ namespace GPURayTracing.Tests
             Assert.That(componentType.GetProperty("ImportedCameraPosition"), Is.Not.Null);
             Assert.That(componentType.GetProperty("ImportedCameraRotation"), Is.Not.Null);
             Assert.That(componentType.GetProperty("ImportedCameraFieldOfView"), Is.Not.Null);
+        }
+
+        [Test]
+        public void RemoteAsset_ExposesPreviewVisibilitySetting()
+        {
+            Type componentType = Type.GetType("RemoteGltfRayTracingAsset, Assembly-CSharp");
+            Assert.That(componentType.GetField("ShowPreviewsInPlayMode"), Is.Not.Null);
         }
 
         [Test]

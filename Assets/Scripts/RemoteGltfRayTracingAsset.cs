@@ -18,6 +18,9 @@ public class RemoteGltfRayTracingAsset : MonoBehaviour
     [Tooltip("Caches self-contained .glb downloads in Application.persistentDataPath and loads the cached copy first.")]
     public bool UseDiskCache = true;
 
+    [Tooltip("Keeps imported Unity mesh renderers visible alongside the ray-traced result.")]
+    public bool ShowPreviewsInPlayMode = true;
+
     public bool IsLoading { get; private set; }
     public bool IsLoaded { get; private set; }
     public string Error { get; private set; }
@@ -77,7 +80,7 @@ public class RemoteGltfRayTracingAsset : MonoBehaviour
                 return false;
             }
 
-            GltfRayTracingSetup.ConfigureHierarchy(_contentRoot, showPreviewsInPlayMode: true);
+            GltfRayTracingSetup.ConfigureHierarchy(_contentRoot, ShowPreviewsInPlayMode, _gltfAsset.Importer);
             ExtractAndRemoveImportedCameras();
             IsLoaded = true;
             Loaded?.Invoke(_contentRoot);
@@ -102,6 +105,17 @@ public class RemoteGltfRayTracingAsset : MonoBehaviour
         _gltfAsset = null;
         HasImportedCameraPose = false;
         LoadedFromCache = false;
+    }
+
+    public GameObject DetachLoadedAsset()
+    {
+        GameObject contentRoot = _contentRoot;
+        _contentRoot = null;
+        _gltfAsset = null;
+        IsLoaded = false;
+        HasImportedCameraPose = false;
+        LoadedFromCache = false;
+        return contentRoot;
     }
 
     private void ExtractAndRemoveImportedCameras()
@@ -184,6 +198,10 @@ public class RemoteGltfRayTracingAsset : MonoBehaviour
             return null;
         }
 
+        if (File.Exists(cachePath))
+        {
+            File.Delete(cachePath);
+        }
         File.Move(temporaryPath, cachePath);
         return new Uri(cachePath).AbsoluteUri;
     }

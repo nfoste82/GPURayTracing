@@ -17,8 +17,10 @@ internal readonly struct RayMaterialSnapshot
     public readonly Texture2D albedoTexture;
     public readonly Texture2D metallicRoughnessTexture;
     public readonly Texture2D normalTexture;
+    public readonly float normalStrength;
     public readonly Texture2D parallaxTexture;
     public readonly Vector2 textureUvScale;
+    public readonly float textureUvRotation;
     public readonly float parallaxStrength;
     public readonly float minimumParallaxStrength;
     public readonly bool interpolateNormals;
@@ -37,8 +39,10 @@ internal readonly struct RayMaterialSnapshot
         albedoTexture = material != null ? material.AlbedoTexture : null;
         metallicRoughnessTexture = material != null ? material.MetallicRoughnessTexture : null;
         normalTexture = material != null ? material.NormalTexture : null;
+        normalStrength = material != null ? material.NormalStrength : 1.0f;
         parallaxTexture = material != null ? material.ParallaxTexture : null;
         textureUvScale = material != null ? material.TextureUvScale : Vector2.one;
+        textureUvRotation = material != null ? material.TextureUvRotation : 0.0f;
         parallaxStrength = material != null ? material.ParallaxStrength : 0.0f;
         minimumParallaxStrength = material != null ? Mathf.Min(material.MinimumParallaxStrength, parallaxStrength) : 0.0f;
         interpolateNormals = material != null && material.InterpolateNormals;
@@ -60,8 +64,10 @@ internal readonly struct RayMaterialSnapshot
             || mesh.previousAlbedoTexture != albedoTexture
             || mesh.previousMetallicRoughnessTexture != metallicRoughnessTexture
             || mesh.previousNormalTexture != normalTexture
+            || !Mathf.Approximately(mesh.previousNormalStrength, normalStrength)
             || mesh.previousParallaxTexture != parallaxTexture
             || mesh.previousTextureUvScale != textureUvScale
+            || !Mathf.Approximately(mesh.previousTextureUvRotation, textureUvRotation)
             || !Mathf.Approximately(mesh.previousParallaxStrength, parallaxStrength)
             || !Mathf.Approximately(mesh.previousMinimumParallaxStrength, minimumParallaxStrength);
     }
@@ -80,8 +86,10 @@ internal readonly struct RayMaterialSnapshot
         mesh.previousAlbedoTexture = albedoTexture;
         mesh.previousMetallicRoughnessTexture = metallicRoughnessTexture;
         mesh.previousNormalTexture = normalTexture;
+        mesh.previousNormalStrength = normalStrength;
         mesh.previousParallaxTexture = parallaxTexture;
         mesh.previousTextureUvScale = textureUvScale;
+        mesh.previousTextureUvRotation = textureUvRotation;
         mesh.previousParallaxStrength = parallaxStrength;
         mesh.previousMinimumParallaxStrength = minimumParallaxStrength;
         mesh.previousInterpolateNormals = interpolateNormals;
@@ -97,8 +105,10 @@ internal readonly struct RayMaterialSnapshot
         triangle.refraction = refraction;
         triangle.specular = specular;
         triangle.transmission = transmission;
+        triangle.normalStrength = normalStrength;
         triangle.materialType = materialType;
         triangle.textureUvScale = textureUvScale;
+        triangle.textureUvRotation = textureUvRotation;
         triangle.parallaxStrength = parallaxStrength;
         triangle.minimumParallaxStrength = minimumParallaxStrength;
     }

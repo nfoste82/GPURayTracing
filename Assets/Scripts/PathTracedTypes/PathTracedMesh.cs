@@ -22,8 +22,10 @@ namespace PathTracing.PathTracedTypes
         public Texture2D previousAlbedoTexture;
         public Texture2D previousMetallicRoughnessTexture;
         public Texture2D previousNormalTexture;
+        public float previousNormalStrength;
         public Texture2D previousParallaxTexture;
         public Vector2 previousTextureUvScale;
+        public float previousTextureUvRotation;
         public float previousParallaxStrength;
         public float previousMinimumParallaxStrength;
         public bool previousInterpolateNormals;
@@ -42,9 +44,11 @@ namespace PathTracing.PathTracedTypes
             hash = GameManager.AddHash(hash, previousMaterialType);
             hash = GameManager.AddHash(hash, previousAlbedoTexture != null ? previousAlbedoTexture.GetInstanceID() : 0);
             hash = GameManager.AddHash(hash, previousMetallicRoughnessTexture != null ? previousMetallicRoughnessTexture.GetInstanceID() : 0);
-            hash = GameManager.AddHash(hash, previousNormalTexture != null ? previousNormalTexture.GetInstanceID() : 0);
+        hash = GameManager.AddHash(hash, previousNormalTexture != null ? previousNormalTexture.GetInstanceID() : 0);
+        hash = GameManager.AddHash(hash, previousNormalStrength);
             hash = GameManager.AddHash(hash, previousParallaxTexture != null ? previousParallaxTexture.GetInstanceID() : 0);
-            hash = GameManager.AddHash(hash, previousTextureUvScale);
+        hash = GameManager.AddHash(hash, previousTextureUvScale);
+        hash = GameManager.AddHash(hash, previousTextureUvRotation);
             hash = GameManager.AddHash(hash, previousParallaxStrength);
             hash = GameManager.AddHash(hash, previousMinimumParallaxStrength);
             return GameManager.AddHash(hash, previousInterpolateNormals ? 1 : 0);

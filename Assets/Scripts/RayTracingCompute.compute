@@ -353,8 +353,10 @@ struct MeshTriangle
     int textureIndex;
     int metallicRoughnessTextureIndex;
     int normalTextureIndex;
+    float normalStrength;
     int parallaxTextureIndex;
     float2 textureUvScale;
+    float textureUvRotation;
     float parallaxStrength;
     float minimumParallaxStrength;
     int interpolateNormals;
@@ -1780,6 +1782,8 @@ float3 GetTriangleOpticalNormal(MeshTriangle meshTriangle, float3 geometricNorma
         sampler_MeshNormalTextures,
         float3(frac(uv), meshTriangle.normalTextureIndex),
         0).xyz * 2.0f - 1.0f;
+    tangentNormal.xy *= meshTriangle.normalStrength;
+    tangentNormal.z = sqrt(saturate(1.0f - dot(tangentNormal.xy, tangentNormal.xy)));
     float3 mappedNormal = normalize(tangent * tangentNormal.x + bitangent * tangentNormal.y + opticalNormal * tangentNormal.z);
     return dot(mappedNormal, geometricNormal) < 0.0f ? -mappedNormal : mappedNormal;
 }
@@ -1865,6 +1869,10 @@ RayHit IntersectTriangle(Ray ray, RayHit currentHit, MeshTriangle meshTriangle, 
             + meshTriangle.uv2 * barycentric.y;
         float3 viewDirection = normalize(-ray.direction);
         uv *= meshTriangle.textureUvScale;
+        float sine;
+        float cosine;
+        sincos(meshTriangle.textureUvRotation, sine, cosine);
+        uv = float2(cosine * uv.x - sine * uv.y, sine * uv.x + cosine * uv.y);
         uv = ApplySimpleParallax(meshTriangle, geometricNormal, barycentric, uv, viewDirection);
         normal = GetTriangleOpticalNormal(meshTriangle, geometricNormal, barycentric, uv);
 

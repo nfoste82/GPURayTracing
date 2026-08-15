@@ -6,7 +6,8 @@ public class RayMaterial : MonoBehaviour
     {
         Diffuse = 0,
         Metal = 1,
-        Glass = 2
+        Glass = 2,
+        Emissive = 3
     }
 
     public MaterialType Type = MaterialType.Metal;
@@ -26,11 +27,18 @@ public class RayMaterial : MonoBehaviour
     [Tooltip("Optional tangent-space mesh normal texture. Imported mesh tangents are used when available.")]
     public Texture2D NormalTexture;
 
+    [Range(0f, 2f)]
+    [Tooltip("Strength applied to tangent-space normal-map X and Y components.")]
+    public float NormalStrength = 1f;
+
     [Tooltip("Optional linear height map for simple parallax mapping. The red channel is sampled in tangent space.")]
     public Texture2D ParallaxTexture;
 
     [Tooltip("Shared UV scale applied to all material textures. Values above one make the texture pattern repeat more often.")]
     public Vector2 TextureUvScale = Vector2.one;
+
+    [Tooltip("Counter-clockwise UV rotation in degrees, applied after UV scaling.")]
+    public float TextureUvRotation;
 
     [Range(0f, 0.2f)]
     [Tooltip("Simple parallax UV displacement scale. This is not parallax occlusion mapping.")]

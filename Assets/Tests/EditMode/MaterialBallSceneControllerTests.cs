@@ -76,6 +76,30 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void MaterialBallAreaLights_RepairExistingLightWithoutAMesh()
+        {
+            var root = new GameObject("Room");
+            var anchor = new GameObject("light");
+            anchor.transform.SetParent(root.transform);
+            var areaLight = new GameObject("Area Light");
+            areaLight.transform.SetParent(anchor.transform);
+            areaLight.AddComponent<MeshFilter>();
+            areaLight.AddComponent(Type.GetType("RayLight, Assembly-CSharp"));
+            areaLight.AddComponent(Type.GetType("PathTracingObject, Assembly-CSharp"));
+
+            try
+            {
+                Type controllerType = Type.GetType("MaterialBallSceneController, Assembly-CSharp");
+                controllerType.GetMethod("EnsureAreaLights").Invoke(null, new object[] { root });
+                Assert.That(areaLight.GetComponent<MeshFilter>().sharedMesh, Is.Not.Null);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(root);
+            }
+        }
+
+        [Test]
         public void MaterialBallController_UsesTheThreeJsForwardOrbitTargetDistance()
         {
             string source = System.IO.File.ReadAllText("Assets/Scripts/MaterialBallSceneController.cs");

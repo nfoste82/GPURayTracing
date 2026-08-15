@@ -38,6 +38,10 @@ public sealed class CameraManager : MonoBehaviour
     [Tooltip("Distance from the orbit focus point.")]
     [Min(0.1f)] 
     public float cameraOrbitZoom = DefaultOrbitZoom;
+
+    [Tooltip("World-space orbit dolly speed. Set by model browsers to match the loaded model size.")]
+    [Min(0.01f)]
+    public float cameraOrbitZoomSpeed = 1.0f;
     
     [Tooltip("Continuously focuses the center of the image.")]
     public bool cameraAutoFocus = true;
@@ -506,8 +510,9 @@ public sealed class CameraManager : MonoBehaviour
             _orbitDistance = Mathf.Max(0.1f, cameraOrbitZoom);
         }
         
-        if (Input.GetKey(KeyCode.UpArrow) || Input.GetKey(KeyCode.E)) _orbitDistance = Mathf.Max(0.1f, _orbitDistance - delta * scale);
-        if (Input.GetKey(KeyCode.DownArrow) || Input.GetKey(KeyCode.Q)) _orbitDistance += delta * scale;
+        float dollySpeed = Mathf.Max(0.01f, cameraOrbitZoomSpeed);
+        if (Input.GetKey(KeyCode.UpArrow) || Input.GetKey(KeyCode.E)) _orbitDistance = Mathf.Max(0.1f, _orbitDistance - delta * dollySpeed);
+        if (Input.GetKey(KeyCode.DownArrow) || Input.GetKey(KeyCode.Q)) _orbitDistance += delta * dollySpeed;
         float scroll = Input.mouseScrollDelta.y;
         if (!Mathf.Approximately(scroll, 0.0f))
         {

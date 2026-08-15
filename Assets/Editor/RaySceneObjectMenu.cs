@@ -32,6 +32,10 @@ public static class RaySceneObjectMenu
         var light = gameObject.AddComponent<RayLight>();
         light.Color = Color.white;
 
+        var unityLight = gameObject.AddComponent<Light>();
+        unityLight.type = LightType.Point;
+        unityLight.color = light.Color;
+
         gameObject.AddComponent<PathTracingObject>();
 
         FinishCreate(gameObject, "Create Ray Traced Light");

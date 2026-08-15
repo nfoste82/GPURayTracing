@@ -34,6 +34,25 @@ public class MaterialBallSceneController : MonoBehaviour
         ConfigureQuickControls(root);
     }
 
+    public static void ConfigureEditableScene(GameObject root, GameManager manager, RayTracingQuickControls controls)
+    {
+        Camera sourceCamera = root.GetComponentInChildren<Camera>(true);
+        if (sourceCamera != null && manager != null && manager.renderTextureCamera != null)
+        {
+            var targetCamera = manager.renderTextureCamera;
+            targetCamera.transform.SetPositionAndRotation(sourceCamera.transform.position, sourceCamera.transform.rotation);
+            targetCamera.fieldOfView = sourceCamera.fieldOfView * 2.0f;
+            var orbitFocus = sourceCamera.transform.position + sourceCamera.transform.forward * 25.0f;
+            manager.CameraManager.SetOrbitState(orbitFocus, sourceCamera.transform.position);
+            manager.ResetFrameAccumulation();
+        }
+
+        RemoveSourceCameraNode(root);
+        ConfigureMaterial(root);
+        AddAreaLights(root);
+        ConfigureQuickControls(root, controls);
+    }
+
     private static void ConfigureMaterial(GameObject root)
     {
         Transform surface = FindChild(root.transform, MaterialSurfaceName);
@@ -53,6 +72,11 @@ public class MaterialBallSceneController : MonoBehaviour
 
     private static void AddAreaLights(GameObject root)
     {
+        EnsureAreaLights(root);
+    }
+
+    public static void EnsureAreaLights(GameObject root)
+    {
         AddAreaLight(root.transform, "light", 15.0f, 6327.84f);
         for (int i = 0; i < 4; i++)
         {
@@ -69,20 +93,36 @@ public class MaterialBallSceneController : MonoBehaviour
             return;
         }
 
-        var lightObject = new GameObject("Area Light");
-        lightObject.transform.SetParent(anchor, false);
-        lightObject.AddComponent<MeshFilter>().sharedMesh = CreateRectAreaLightQuad(size);
-        var light = lightObject.AddComponent<RayLight>();
+        Transform existing = FindChild(anchor, "Area Light");
+        var lightObject = existing != null ? existing.gameObject : new GameObject("Area Light");
+        if (existing == null)
+        {
+            lightObject.transform.SetParent(anchor, false);
+        }
+
+        var meshFilter = lightObject.GetComponent<MeshFilter>() ?? lightObject.AddComponent<MeshFilter>();
+        if (meshFilter.sharedMesh == null)
+        {
+            meshFilter.sharedMesh = CreateRectAreaLightQuad(size);
+        }
+        var light = lightObject.GetComponent<RayLight>() ?? lightObject.AddComponent<RayLight>();
         light.Color = Color.white;
         // Match the source's watts-to-luminance conversion, then scale into this renderer's
         // emitter units. The 24.36-unit ceiling panels evaluate to approximately 7.0.
         light.Intensity = watts * LumensPerWatt / (size * size * 4.0f * Mathf.PI) * AreaLightRadianceScale;
-        lightObject.AddComponent<PathTracingObject>();
+        if (lightObject.GetComponent<PathTracingObject>() == null)
+        {
+            lightObject.AddComponent<PathTracingObject>();
+        }
     }
 
     private void ConfigureQuickControls(GameObject root)
     {
-        var controls = GetComponent<RayTracingQuickControls>();
+        ConfigureQuickControls(root, GetComponent<RayTracingQuickControls>());
+    }
+
+    private static void ConfigureQuickControls(GameObject root, RayTracingQuickControls controls)
+    {
         if (controls == null)
         {
             return;
@@ -98,6 +138,10 @@ public class MaterialBallSceneController : MonoBehaviour
         }
         foreach (RayLight light in root.GetComponentsInChildren<RayLight>(true))
         {
+            if (light.GetComponent<RayMaterial>() != null)
+            {
+                continue;
+            }
             entries.Add(RayTracingQuickControls.CreateEntry("Light: " + light.transform.parent.name, light, "Color", "Intensity"));
         }
         controls.SetEntries(entries);
@@ -131,7 +175,14 @@ public class MaterialBallSceneController : MonoBehaviour
         var cameraNode = FindChild(root.transform, CameraNodeName);
         if (cameraNode != null)
         {
-            Destroy(cameraNode.gameObject);
+            if (Application.isPlaying)
+            {
+                Destroy(cameraNode.gameObject);
+            }
+            else
+            {
+                DestroyImmediate(cameraNode.gameObject);
+            }
         }
     }
 

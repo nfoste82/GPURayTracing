@@ -558,8 +558,7 @@ namespace GPURayTracing.Tests
                     Assert.That(dominantFraction, Is.GreaterThan(0.02f),
                         $"Terrain layer {layer} should be the strongest layer somewhere; a layer that is " +
                         "never dominant is effectively invisible. Adjust its elevation ranks or slope " +
-                        "degrees in RayTracingSceneGenerator, then use " +
-                        "Tools > Ray Tracing > Regenerate Terrain Scene.");
+                        "degrees in RayTracingSceneGenerator, then regenerate all generated scenes.");
                 }
 
                 // No single layer may swamp the terrain; that is the uniform-texture failure mode.
@@ -799,6 +798,8 @@ namespace GPURayTracing.Tests
                 "private static readonly int MeshNormalTextures = Shader.PropertyToID"));
             Assert.That(managerSource, Does.Contain(
                 "private static readonly int MeshParallaxTextures = Shader.PropertyToID"));
+            string shaderSource = System.IO.File.ReadAllText("Assets/Scripts/RayTracingCompute.compute");
+            Assert.That(shaderSource, Does.Contain("tangentNormal.xy *= meshTriangle.normalStrength"));
         }
 
         [Test]

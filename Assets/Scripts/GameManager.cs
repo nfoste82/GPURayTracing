@@ -373,7 +373,7 @@ public class GameManager : MonoBehaviour
     private static readonly int Rotation = Shader.PropertyToID("_Rotation");
 
     private const int SphereStride = 92;
-    private const int TriangleStride = 252;
+    private const int TriangleStride = 260;
     private const int MeshInfoStride = 48;
     private const int BvhNodeStride = 48;
     // The photon transport kernel carries a medium stack and intersection state. A 32-thread
@@ -1116,6 +1116,13 @@ public class GameManager : MonoBehaviour
 
     private void PrepareRenderFrame(ref RenderFrame frame)
     {
+        // Runtime glTF imports can register meshes after Update has processed the normal deferred
+        // rebuild. Resize buffers before their first render-frame upload.
+        if (_buffersNeedRebuilding)
+        {
+            RebuildBuffers();
+        }
+
         if (!ShouldRunTemporalDenoiser() && _temporalDenoisingManager.HasResources)
         {
             ReleaseTemporalDenoiserResources(); 
@@ -1857,6 +1864,12 @@ public class GameManager : MonoBehaviour
                 }
             }
         }
+
+        // glTF nodes often carry a 0.01 unit-conversion scale. Keep a minimum world-space
+        // tolerance so floating-point error cannot discard thin or nearly planar BVH leaves.
+        Vector3 padding = Vector3.one * SceneBvhManager.BoundsPadding;
+        boundsMin -= padding;
+        boundsMax += padding;
     }
 
     private int GetMeshAlbedoTextureIndex(Texture2D texture)
@@ -2156,6 +2169,17 @@ public class GameManager : MonoBehaviour
         var rayLight = obj.GetComponent<RayLight>();
         var sphereCollider = obj.GetComponent<SphereCollider>();
 
+        // RayObjectPreview adds a MeshFilter to collider-backed lights for Scene-view display.
+        // Prefer their analytic collider representation so that preview geometry cannot turn one
+        // sphere light into an emissive triangle mesh.
+        if (rayLight != null && sphereCollider != null)
+        {
+            var radius = GetWorldSphereRadius(sphereCollider, obj.transform);
+            _lightingManager.RegisterSphereLight(obj, obj.transform, rayLight, sphereCollider, _triangles, radius,
+                MarkLightingSceneChanged);
+            return;
+        }
+
         if (material != null && sphereCollider != null)
         {
             var sphere = new Sphere
@@ -2184,17 +2208,6 @@ public class GameManager : MonoBehaviour
             return;
         }
 
-        // RayObjectPreview adds a MeshFilter to collider-backed lights for Scene-view display.
-        // Prefer their analytic collider representation so that preview geometry cannot turn one
-        // sphere light into an emissive triangle mesh.
-        if (rayLight != null && sphereCollider != null)
-        {
-            var radius = GetWorldSphereRadius(sphereCollider, obj.transform);
-            _lightingManager.RegisterSphereLight(obj, obj.transform, rayLight, sphereCollider, _triangles, radius,
-                MarkLightingSceneChanged);
-            return;
-        }
-
         var meshFilter = obj.GetComponent<MeshFilter>();
         if ((material != null || rayLight != null) && meshFilter != null && meshFilter.sharedMesh != null)
         {
@@ -2218,6 +2231,8 @@ public class GameManager : MonoBehaviour
                 previousAlbedoTexture = material != null ? material.AlbedoTexture : null,
                 previousMetallicRoughnessTexture = material != null ? material.MetallicRoughnessTexture : null,
                 previousNormalTexture = material != null ? material.NormalTexture : null,
+                previousNormalStrength = material != null ? material.NormalStrength : 1.0f,
+                previousTextureUvRotation = material != null ? material.TextureUvRotation : 0.0f,
                 previousInterpolateNormals = material != null && material.InterpolateNormals
             });
             return;

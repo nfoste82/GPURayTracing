@@ -7,7 +7,6 @@ public static class RayMeshAssetGenerator
     private const string MeshFolder = "Assets/Meshes";
     private const string TexturedPlanePath = MeshFolder + "/TexturedPlane.asset";
 
-    [MenuItem("Tools/Ray Tracing/Generate Textured Plane Mesh")]
     public static void GenerateTexturedPlaneMesh()
     {
         Mesh plane = GetOrCreateTexturedPlaneMesh();

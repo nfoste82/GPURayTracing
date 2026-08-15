@@ -82,7 +82,7 @@ Graphics.Blit(_outputTexture, dest);
 
 The separate light buffer uses stride `88`. Its `Light` layout stores position, emission, two triangle edges, radius, area, normal, type, and optional mesh-light triangle range/total area. Sphere lights and directional lights leave mesh fields unused. An emissive mesh contributes one global light record whose triangle range indexes a parallel area CDF; directional lights store travel direction in `position` and angular radius in `radius`.
 
-`RebuildBuffers()` also releases and recreates triangle, mesh-info, per-mesh BVH-node, and top-level BVH-node buffers. The triangle buffer uses stride `224`, matching the HLSL `MeshTriangle` struct layout. In addition to positions, geometric and interpolated normals, UVs, and the established material data, each triangle stores three imported tangents, a continuous metallic value, independent albedo/metallic-roughness/normal texture indices, the smooth-normal flag, and its emissive light identity.
+`RebuildBuffers()` also releases and recreates triangle, mesh-info, per-mesh BVH-node, and top-level BVH-node buffers. The triangle buffer uses stride `260`, matching the HLSL `MeshTriangle` struct layout. In addition to positions, geometric and interpolated normals, UVs, and the established material data, each triangle stores three imported tangents, a continuous metallic value, independent albedo/metallic-roughness/normal texture indices, normal-map strength, UV scale/rotation, the smooth-normal flag, and its emissive light identity.
 
 - `float3 vertex0`
 - `float3 vertex1`

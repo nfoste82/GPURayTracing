@@ -10,7 +10,7 @@ namespace GPURayTracing.Tests
         public void MaterialBallGenerator_UsesMinimalLightFalloff()
         {
             string source = System.IO.File.ReadAllText("Assets/Editor/RayTracingSceneGenerator.cs");
-            Assert.That(source, Does.Contain("LightFalloffScale = 0.001f"));
+            Assert.That(source, Does.Contain("LightFalloffScale = 0.008f"));
         }
     }
 }

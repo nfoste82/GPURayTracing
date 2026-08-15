@@ -50,7 +50,7 @@ public sealed class RayTracingQuickControlsWindow : EditorWindow
             return;
         }
 
-        IReadOnlyList<RayTracingQuickControls.Entry> entries = profile.Entries;
+        var entries = profile.Entries;
         if (entries.Count == 0)
         {
             EditorGUILayout.HelpBox("Controls are populated when this scene's content is available.", MessageType.Info);
@@ -74,6 +74,11 @@ public sealed class RayTracingQuickControlsWindow : EditorWindow
 
         EditorGUILayout.Space(4.0f);
         EditorGUILayout.LabelField(entry.Label, EditorStyles.boldLabel);
+        if (entry.Target is RayMaterial material)
+        {
+            RayMaterialEditor.DrawControls(material);
+            return;
+        }
         var serializedTarget = new SerializedObject(entry.Target);
         serializedTarget.Update();
         foreach (string propertyPath in entry.PropertyPaths)

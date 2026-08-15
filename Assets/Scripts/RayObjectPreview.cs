@@ -3,6 +3,9 @@ using UnityEngine;
 [ExecuteAlways]
 public class RayObjectPreview : MonoBehaviour
 {
+    [Tooltip("Global scene debugging override. Keeps all ray-object raster previews visible in Play mode.")]
+    public static bool KeepRenderersEnabledInPlayMode;
+
     [SerializeField]
     private bool hideRendererInPlayMode = true;
 
@@ -82,7 +85,7 @@ public class RayObjectPreview : MonoBehaviour
         }
 
         SyncMaterial();
-        _meshRenderer.enabled = !Application.isPlaying || !hideRendererInPlayMode;
+        _meshRenderer.enabled = !Application.isPlaying || KeepRenderersEnabledInPlayMode || !hideRendererInPlayMode;
         SyncLight();
     }
 
