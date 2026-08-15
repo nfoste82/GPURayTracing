@@ -1184,12 +1184,14 @@ public static class RayTracingSceneGenerator
             CausticIntensity = 1.3f,
             EnableSpatialDenoising = true,
             DenoiserIterations = 1,
-            DenoiserLuminanceSigma = 0.04f,
+            DenoiserLuminanceSigma = 0.02f,
             TopLevelBvhMinObjectCount = 1024, 
             ShadowBvhMinObjectCount = 1024,
             LightSamplingStrategy = LightSamplingStrategy.ImportanceSampled, 
-            SkyboxLightColor = new Color32(111, 109, 98, 255),
-            FieldOfView = 29.6f
+            SkyboxLightColor = new Color32(248, 221, 212, 255),
+            FieldOfView = 29.6f,
+            DirectionalLightIntensity = 2.5f,
+            CameraApertureMode = CameraApertureMode.Pinhole
         });
 
         var texturedPlane = RayMeshAssetGenerator.GetOrCreateTexturedPlaneMesh();
@@ -1200,12 +1202,17 @@ public static class RayTracingSceneGenerator
             Color.white, RayMaterial.MaterialType.Diffuse,
             0.5f, 1.0f, 1.0f, albedoTexture: defaultCheckerGray);
 
-        AddPrimitiveMesh(context.Root, "Glass Dodecahedron", RayMeshPrimitive.PrimitiveType.Dodecahedron, 
+        AddPrimitiveMesh(context.Root, "Green Glass Dodecahedron", RayMeshPrimitive.PrimitiveType.Dodecahedron, 
             new Vector3(0.3f, 1.13f, 3.55f), Vector3.zero, Vector3.one, 
             new Color32(57, 255, 83, 255), RayMaterial.MaterialType.Glass, 
             1.0f, 0.816f, 1.5f, 0.1f, 0.7f);
+        
+        AddPrimitiveMesh(context.Root, "Red Glass Pyramid", RayMeshPrimitive.PrimitiveType.Dodecahedron, 
+            new Vector3(0.3f, 1.13f, 3.55f), Vector3.zero, Vector3.one, 
+            new Color32(255, 0, 10, 255), RayMaterial.MaterialType.Glass, 
+            1.0f, 0.816f, 1.5f, 0.0f, 0.8f);
 
-        var dragon = AddRayMesh(context.Root, "Stanford Dragon", dragonMesh, 
+        var dragon = AddRayMesh(context.Root, "Blue Glass Dragon", dragonMesh, 
             Vector3.zero, new Vector3(0.0f, 148.0f, 0.0f), Vector3.one * 3.0f,
             new Color32(0, 65, 255, 255), RayMaterial.MaterialType.Glass,
             1.0f, 0.62f, 1.5f, 0.1f, 0.7f);
