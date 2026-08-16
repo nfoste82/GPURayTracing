@@ -10,21 +10,21 @@ During `RenderImage()`, `GameManager` calls `EnsureOutputTextureSize(src.width, 
 
 ## Object Registration
 
-`RayTracingObject.OnEnable()` calls:
+`PathTracingObject.OnEnable()` resolves its owning `GameManager` and calls:
 
 ```csharp
-GetComponentInParent<GameManager>().RegisterObject(this);
+manager.RegisterObject(this);
 ```
 
-If the object has `RayMeshPrimitive`, `RayTracingObject.OnEnable()` first calls `RayMeshPrimitive.EnsureMesh()` so the procedural mesh exists before registration.
+It prefers a `GameManager` in the parent hierarchy. If the object is a scene root and exactly one active manager exists, it uses that manager so prefabs dragged into the Hierarchy during Play mode register immediately. With multiple managers, hierarchy ownership remains required. Parent changes trigger re-registration. If the object has `RayMeshPrimitive`, `PathTracingObject.OnEnable()` first calls `RayMeshPrimitive.EnsureMesh()` so the procedural mesh exists before registration.
 
-`RegisterObject()` classifies the object by rendering components. Registration only updates the CPU object caches and marks buffers dirty; mesh triangle data and BVHs are rebuilt once by the deferred `RebuildBuffers()` call rather than after each object registers:
+`RegisterObject()` classifies the object by rendering components. An incomplete object is not retained in the registration set, so it can be retried after a missing mesh or component is supplied. Registration only updates the CPU object caches and marks buffers dirty; mesh triangle data and BVHs are rebuilt once by the deferred `RebuildBuffers()` call rather than after each object registers:
 
 - If it has `RayMaterial` and `SphereCollider`, it becomes a ray-traced sphere in `_spheres` and `_sphereObjects`.
 - If it has `RayMaterial` and `MeshFilter`, but no `SphereCollider`, it becomes a triangle mesh in `_triangles`, `_meshInfos`, `_bvhNodes`, and `_meshObjects`.
 - If it has `RayLight` and `SphereCollider`, it becomes an emissive sphere light in `_lights` and `_lightObjects`, even when `RayObjectPreview` has added a Scene-view `MeshFilter`.
 - If it has `RayLight` and `MeshFilter`, but no `SphereCollider`, it becomes an emissive mesh light: its triangles are uploaded to `_triangles`, and each triangle also contributes an entry to `_lights` for direct-light sampling.
-- `RayDirectionalLight` registers directly with `GameManager` rather than through `RayTracingObject`. It adds an analytic directional entry to `_lights`, with transform-forward direction, HDR radiance, and angular cone radius; it has no scene geometry or BVH entry.
+- `RayDirectionalLight` registers directly with `GameManager` rather than through `PathTracingObject`. It uses the same parent-first, sole-manager fallback and parent-change handling. It adds an analytic directional entry to `_lights`, with transform-forward direction, HDR radiance, and angular cone radius; it has no scene geometry or BVH entry.
 
 Sphere objects and sphere lights require a `SphereCollider`. The collider center is transformed to world space for the ray-traced sphere position, and the collider radius is scaled by the largest absolute axis of the object's lossy scale for the ray-traced sphere radius. Mesh objects and mesh lights require a `MeshFilter`; the shared mesh triangles are transformed to world space, sorted into a per-mesh BVH, and uploaded with mesh and BVH node metadata.
 
@@ -115,7 +115,7 @@ On `Start()`, `GameManager` ensures that the generic benchmark runner and live p
 
 `RayTracingObject.OnDrawGizmos()` draws sphere/light-sphere gizmos using the world-space collider center and scaled radius. Sphere gizmo alpha follows `RayMaterial.Opacity`; light-sphere gizmos use full opacity because `RayLight` has no opacity field.
 
-`RayTracingObject` executes in Edit mode so it can automatically attach `RayObjectPreview` to existing scene objects without regenerating scenes; registration with `GameManager` remains Play-mode-only. The preview supplies raster sphere geometry when the object is collider-defined, synchronizes ray-material color and albedo texture through the project-owned `Hidden/RayTracing/ScenePreview` shader, and adds an optional point-light preview to ray lights. It uses the source mesh winding with standard back-face culling. Opaque preview materials render in the geometry queue and write depth, while transparent ray materials stay in the transparent queue without depth writes. Its `MeshRenderer` is visible outside Play mode and hidden during Play mode by default, so the Game view remains compute-rendered.
+`PathTracingObject` executes in Edit mode so it can automatically attach `RayObjectPreview` to existing scene objects without regenerating scenes; registration with `GameManager` remains Play-mode-only. The preview supplies raster sphere geometry when the object is collider-defined, synchronizes ray-material color and albedo texture through the project-owned `Hidden/RayTracing/ScenePreview` shader, and adds an optional point-light preview to ray lights. It uses the source mesh winding with standard back-face culling. Opaque preview materials render in the geometry queue and write depth, while transparent ray materials stay in the transparent queue without depth writes. Its `MeshRenderer` remains visible in Editor Play mode because the Scene view does not run the compute renderer; standalone players retain the compute-only default.
 
 ## Shader Parameters
 

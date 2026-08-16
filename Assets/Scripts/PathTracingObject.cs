@@ -5,6 +5,20 @@ public class PathTracingObject : MonoBehaviour
 {
     private GameManager _registeredManager;
 
+    private static GameManager ResolveManager(Transform objectTransform)
+    {
+        var manager = objectTransform.GetComponentInParent<GameManager>();
+        if (manager != null)
+        {
+            return manager;
+        }
+
+        // Runtime-instantiated prefabs commonly enter the scene as roots. Support that workflow
+        // when there is one unambiguous renderer, while preserving hierarchy scoping otherwise.
+        var managers = FindObjectsByType<GameManager>(FindObjectsSortMode.None);
+        return managers.Length == 1 ? managers[0] : null;
+    }
+
     private void OnEnable()
     {
         if (GetComponent<RayObjectPreview>() == null)
@@ -20,7 +34,7 @@ public class PathTracingObject : MonoBehaviour
 
         if (Application.isPlaying)
         {
-            _registeredManager = GetComponentInParent<GameManager>();
+            _registeredManager = ResolveManager(transform);
             if (_registeredManager != null)
             {
                 _registeredManager.RegisterObject(this);
@@ -55,10 +69,18 @@ public class PathTracingObject : MonoBehaviour
             _registeredManager = null;
         }
 
-        _registeredManager = GetComponentInParent<GameManager>();
+        _registeredManager = ResolveManager(transform);
         if (_registeredManager != null && isActiveAndEnabled)
         {
             _registeredManager.RegisterObject(this);
+        }
+    }
+
+    private void OnTransformParentChanged()
+    {
+        if (Application.isPlaying)
+        {
+            RefreshRegistration();
         }
     }
 

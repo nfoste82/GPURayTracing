@@ -14,6 +14,7 @@ public sealed class SceneSettings
     public float FieldOfView = 60.0f;
 
     public int NumberOfPasses = 1;
+    public float SubpixelJitterScale = 1.4f;
     public bool EnableFrameAccumulation = true;
     public int NumBounces = 6;
     public int ShadowQuality = 0;

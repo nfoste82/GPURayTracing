@@ -5,6 +5,8 @@ using UnityEngine;
 /// </summary>
 public class RayDirectionalLight : MonoBehaviour
 {
+    private GameManager _registeredManager;
+
     public Color32 Color = new Color32(255, 255, 255, 255);
 
     [Min(0.0f)]
@@ -19,10 +21,10 @@ public class RayDirectionalLight : MonoBehaviour
     {
         if (Application.isPlaying)
         {
-            var manager = GetComponentInParent<GameManager>();
-            if (manager != null)
+            _registeredManager = ResolveManager();
+            if (_registeredManager != null)
             {
-                manager.RegisterDirectionalLight(this);
+                _registeredManager.RegisterDirectionalLight(this);
             }
         }
     }
@@ -31,12 +33,43 @@ public class RayDirectionalLight : MonoBehaviour
     {
         if (Application.isPlaying)
         {
-            var manager = GetComponentInParent<GameManager>();
-            if (manager != null)
+            if (_registeredManager != null)
             {
-                manager.UnregisterDirectionalLight(this);
+                _registeredManager.UnregisterDirectionalLight(this);
+                _registeredManager = null;
             }
         }
+    }
+
+    private void OnTransformParentChanged()
+    {
+        if (!Application.isPlaying || !isActiveAndEnabled)
+        {
+            return;
+        }
+
+        if (_registeredManager != null)
+        {
+            _registeredManager.UnregisterDirectionalLight(this);
+        }
+
+        _registeredManager = ResolveManager();
+        if (_registeredManager != null)
+        {
+            _registeredManager.RegisterDirectionalLight(this);
+        }
+    }
+
+    private GameManager ResolveManager()
+    {
+        var manager = GetComponentInParent<GameManager>();
+        if (manager != null)
+        {
+            return manager;
+        }
+
+        var managers = FindObjectsByType<GameManager>(FindObjectsSortMode.None);
+        return managers.Length == 1 ? managers[0] : null;
     }
 
     private void OnDrawGizmos()

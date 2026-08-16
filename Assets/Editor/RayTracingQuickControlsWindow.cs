@@ -8,6 +8,8 @@ public sealed class RayTracingQuickControlsWindow : EditorWindow
 {
     private const string WindowTitle = "Ray Tracing Controls";
     private Vector2 _scrollPosition;
+    private Editor _gameManagerEditor;
+    private GameManager _inspectedManager;
 
     [MenuItem("Window/Ray Tracing/Quick Controls")]
     public static void Open()
@@ -34,6 +36,7 @@ public sealed class RayTracingQuickControlsWindow : EditorWindow
     {
         EditorApplication.hierarchyChanged -= Repaint;
         EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
+        DestroyGameManagerEditor();
     }
 
     private void OnPlayModeStateChanged(PlayModeStateChange _)
@@ -43,26 +46,63 @@ public sealed class RayTracingQuickControlsWindow : EditorWindow
 
     private void OnGUI()
     {
-        RayTracingQuickControls profile = FindProfile(SceneManager.GetActiveScene());
-        if (profile == null)
+        Scene scene = SceneManager.GetActiveScene();
+        GameManager manager = FindGameManager(scene);
+        if (manager == null)
         {
-            EditorGUILayout.HelpBox("The active scene has no Ray Tracing Quick Controls profile.", MessageType.Info);
-            return;
-        }
-
-        var entries = profile.Entries;
-        if (entries.Count == 0)
-        {
-            EditorGUILayout.HelpBox("Controls are populated when this scene's content is available.", MessageType.Info);
+            EditorGUILayout.HelpBox("The active scene has no GameManager.", MessageType.Info);
             return;
         }
 
         _scrollPosition = EditorGUILayout.BeginScrollView(_scrollPosition);
-        foreach (RayTracingQuickControls.Entry entry in entries)
+        DrawGameManagerControls(manager);
+
+        RayTracingQuickControls profile = FindProfile(scene);
+        if (profile != null && profile.Entries.Count > 0)
         {
-            DrawEntry(entry);
+            EditorGUILayout.Space(10.0f);
+            EditorGUILayout.LabelField("Scene Controls", EditorStyles.boldLabel);
+            foreach (RayTracingQuickControls.Entry entry in profile.Entries)
+            {
+                DrawEntry(entry);
+            }
         }
         EditorGUILayout.EndScrollView();
+    }
+
+    private void DrawGameManagerControls(GameManager manager)
+    {
+        if (manager == null)
+        {
+            DestroyGameManagerEditor();
+            return;
+        }
+
+        if (_inspectedManager != manager || _gameManagerEditor == null)
+        {
+            DestroyGameManagerEditor();
+            _inspectedManager = manager;
+            _gameManagerEditor = Editor.CreateEditor(manager, typeof(GameManagerEditor));
+        }
+
+        if (_gameManagerEditor == null || _gameManagerEditor.target == null)
+        {
+            DestroyGameManagerEditor();
+            return;
+        }
+
+        EditorGUILayout.LabelField("Ray Tracing Settings", EditorStyles.boldLabel);
+        _gameManagerEditor.OnInspectorGUI();
+    }
+
+    private void DestroyGameManagerEditor()
+    {
+        if (_gameManagerEditor != null)
+        {
+            DestroyImmediate(_gameManagerEditor);
+            _gameManagerEditor = null;
+        }
+        _inspectedManager = null;
     }
 
     private static void DrawEntry(RayTracingQuickControls.Entry entry)
@@ -112,6 +152,24 @@ public sealed class RayTracingQuickControlsWindow : EditorWindow
             if (profile != null)
             {
                 return profile;
+            }
+        }
+        return null;
+    }
+
+    private static GameManager FindGameManager(Scene scene)
+    {
+        if (!scene.IsValid() || !scene.isLoaded)
+        {
+            return null;
+        }
+
+        foreach (GameObject root in scene.GetRootGameObjects())
+        {
+            GameManager manager = root.GetComponentInChildren<GameManager>(true);
+            if (manager != null)
+            {
+                return manager;
             }
         }
         return null;

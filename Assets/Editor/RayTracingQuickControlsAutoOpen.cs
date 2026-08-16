@@ -7,7 +7,7 @@ public static class RayTracingQuickControlsAutoOpen
     static RayTracingQuickControlsAutoOpen()
     {
         EditorSceneManager.sceneOpened += OnSceneOpened;
-        EditorApplication.delayCall += OpenForActiveScene;
+        EditorApplication.delayCall += OpenProjectWindows;
     }
 
     private static void OnSceneOpened(UnityEngine.SceneManagement.Scene scene, OpenSceneMode _)
@@ -18,5 +18,11 @@ public static class RayTracingQuickControlsAutoOpen
     private static void OpenForActiveScene()
     {
         RayTracingQuickControlsWindow.OpenForScene(UnityEngine.SceneManagement.SceneManager.GetActiveScene());
+    }
+
+    private static void OpenProjectWindows()
+    {
+        RayTracingSceneGalleryWindow.Open();
+        OpenForActiveScene();
     }
 }

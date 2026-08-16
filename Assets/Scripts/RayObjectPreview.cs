@@ -85,7 +85,10 @@ public class RayObjectPreview : MonoBehaviour
         }
 
         SyncMaterial();
-        _meshRenderer.enabled = !Application.isPlaying || KeepRenderersEnabledInPlayMode || !hideRendererInPlayMode;
+        // The Scene view does not run the compute renderer, so editor Play mode still needs the
+        // raster preview. Standalone players retain the compute-only default.
+        _meshRenderer.enabled = !Application.isPlaying || Application.isEditor ||
+            KeepRenderersEnabledInPlayMode || !hideRendererInPlayMode;
         SyncLight();
     }
 

@@ -35,8 +35,12 @@ public sealed class GameManagerEditor : Editor
 
     public override void OnInspectorGUI()
     {
+        if (target is not GameManager manager || manager == null)
+        {
+            return;
+        }
+
         serializedObject.Update();
-        var manager = (GameManager)target;
 
         DrawSection(manager, "Render Quality", true, () =>
         {
@@ -194,6 +198,11 @@ public sealed class GameManagerEditor : Editor
 
     private static void DrawDirectionalLighting(GameManager manager)
     {
+        if (manager == null)
+        {
+            return;
+        }
+
         RayDirectionalLight[] directionalLights = manager.GetComponentsInChildren<RayDirectionalLight>(true);
         EditorGUILayout.Space();
         EditorGUILayout.LabelField("Directional Lighting", EditorStyles.boldLabel);

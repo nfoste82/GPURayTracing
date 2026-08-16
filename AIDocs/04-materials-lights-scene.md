@@ -4,9 +4,9 @@ The compute renderer does not use Unity materials, mesh renderers, or built-in l
 
 ## Ray-Traced Objects
 
-Any object with `RayTracingObject` registers with `GameManager` when enabled.
+Any object with `PathTracingObject` registers with `GameManager` when enabled. Parent hierarchy determines ownership when available; a root-level object uses the sole active manager when exactly one exists.
 
-`RayTracingObject` can represent a sphere, light sphere, triangle mesh, or mesh light depending on attached components.
+`PathTracingObject` can represent a sphere, light sphere, triangle mesh, or mesh light depending on attached components.
 
 Sphere objects and sphere lights use a `SphereCollider`; the collider center is transformed to world space for the ray-traced sphere center, and the collider radius is scaled by the largest absolute object scale axis for the ray-traced radius.
 
@@ -48,7 +48,7 @@ Material behavior:
 
 `RayMeshPrimitive` procedurally generates simple mesh test objects for triangle rendering. It supports cube, pyramid, and dodecahedron shapes. It also ensures a `MeshCollider` exists and points at the generated mesh, so these primitives participate in Unity physics as static collision geometry by default.
 
-Editor menu entries under `GameObject > Ray Tracing` create these primitives with `MeshFilter`, `MeshRenderer`, `MeshCollider`, `RayMaterial`, `RayMeshPrimitive`, and `RayTracingObject` components. They are visible in Scene view through the normal `MeshRenderer`, but `RayMeshPrimitive.HideRasterizedRendererInPlayMode` disables the rasterized renderer in Play mode by default so the Game view uses the compute ray tracer only.
+Editor menu entries under `GameObject > Ray Tracing` create these primitives with `MeshFilter`, `MeshRenderer`, `MeshCollider`, `RayMaterial`, `RayMeshPrimitive`, and `PathTracingObject` components. They are visible in Scene view through the normal `MeshRenderer`. `RayMeshPrimitive.HideRasterizedRendererInPlayMode` requests compute-only runtime rendering, while `RayObjectPreview` keeps the renderer visible during Editor Play mode so mesh objects remain composable in Scene view.
 
 The generated primitive material defaults are intended for glass/refraction testing: `Glass`, opacity `0.5`, smoothness `1.0`, and refraction index `1.5`.
 
@@ -56,7 +56,7 @@ The generated primitive material defaults are intended for glass/refraction test
 
 `RayTracingObject.OnDrawGizmos()` draws Scene view gizmos for sphere and light-sphere objects. Regular sphere gizmo color comes from `RayMaterial.Color` and alpha comes from `RayMaterial.Opacity`. Light-sphere gizmo color comes from `RayLight.Color` and uses full alpha because lights do not expose opacity.
 
-`RayObjectPreview` is automatically added to every `RayTracingObject`. For sphere and light-sphere objects, it creates a raster sphere mesh from the collider; for mesh objects and lights it reuses the existing mesh. It synchronizes a transient material using the project-owned, double-sided `Hidden/RayTracing/ScenePreview` shader. The shader applies a deliberately sub-unit fixed directional key light and a scaled ambient fill color from the nearest `GameManager._skyboxLightColor`, preserving lighting headroom so white geometry remains visibly shaded. It does not enumerate Unity/ray-traced lights, render shadows, or use GI. It shows `RayMaterial` color and albedo without depending on render-pipeline shaders, and maps `RayMaterial.Opacity` to standard raster alpha blending for Scene-view transparency. Double-sided preview rendering keeps generated planes visible from either side, matching the compute renderer's intersection behavior. Ray lights receive an optional Unity point light and scale their preview emission by `Intensity`. The preview renderer is hidden in Play mode by default, so these editor/Unity-scene aids never participate in compute-shader shading. Metallic-roughness, normal mapping, glass, and other path-traced responses remain Game-view-only approximations.
+`RayObjectPreview` is automatically added to every `PathTracingObject`. For sphere and light-sphere objects, it creates a raster sphere mesh from the collider; for mesh objects and lights it reuses the existing mesh. It synchronizes a transient material using the project-owned, double-sided `Hidden/RayTracing/ScenePreview` shader. The shader applies a deliberately sub-unit fixed directional key light and a scaled ambient fill color from the nearest `GameManager._skyboxLightColor`, preserving lighting headroom so white geometry remains visibly shaded. It does not enumerate Unity/ray-traced lights, render shadows, or use GI. It shows `RayMaterial` color and albedo without depending on render-pipeline shaders, and maps `RayMaterial.Opacity` to standard raster alpha blending for Scene-view transparency. Double-sided preview rendering keeps generated planes visible from either side, matching the compute renderer's intersection behavior. Ray lights receive an optional Unity point light and scale their preview emission by `Intensity`. The preview renderer remains visible during Editor Play mode because the Scene view has no compute-rendered representation; it stays hidden by default in standalone Play mode. Metallic-roughness, normal mapping, glass, and other path-traced responses remain Game-view-only approximations.
 
 `GameObject > Ray Tracing > Sphere` and `GameObject > Ray Tracing > Light Sphere` create ray-tracing components; the preview is attached automatically when the object is enabled.
 

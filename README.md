@@ -1,6 +1,46 @@
 # Realtime Path Tracing
 Realtime 3D path-tracer running in a GPU compute shader in Unity. Full disclosure that LLMs were used to assist during the later work on this project.
 
+## Quick Start
+
+1. Install Unity `6000.3.18f1` through Unity Hub.
+2. Open this repository as a Unity project and wait for package import to complete.
+3. Run `Tools > Ray Tracing > Generate Getting Started Scene`, then open `Assets/Scenes/Generated/GettingStarted.unity`.
+4. Run `Tools > Ray Tracing > Precompile Compute Shader` before entering Play mode. The first shader compile can take a minute or more, depending on the GPU and graphics backend.
+5. Enter Play mode and view the **Game** tab. The Getting Started scene opens the **Ray Tracing Controls** panel, which keeps renderer settings available while you inspect other objects.
+
+The project has been tested on macOS. It requires a Unity editor session with compute-shader support; GPU rendering and GPU tests cannot run with a Null graphics device such as `-nographics`.
+
+## Controls
+
+| Control | Action |
+| --- | --- |
+| `W` / `A` / `S` / `D` | Move the free camera |
+| Arrow keys | Look around |
+| Left click | Focus at the cursor when click-to-focus is enabled |
+| `Space` | Toggle paused refinement mode |
+| `Z` | Toggle the live performance and renderer diagnostics overlay |
+| `X` | Toggle benchmark controls |
+| `B` | Run the benchmark while benchmark controls are visible |
+| `H` | Hide or show the Getting Started help overlay |
+
+Use `Window > Ray Tracing > Quick Controls` to reopen the persistent controls panel. It contains all `GameManager` renderer categories first, followed by scene-specific material and light controls when the active scene provides them. `Window > Ray Tracing > Scene Gallery` opens a dockable tab alongside those controls with curated showcase scenes, expected costs, and Open Scene / Open And Play actions.
+
+## Scenes
+
+`GettingStarted.unity` is the recommended first scene: it is a compact diffuse, metal, and glass showcase configured for a quick first render. Generate it once from `Tools > Ray Tracing > Generate Getting Started Scene`. The remaining checked-in scenes in `Assets/Scenes/Generated/` demonstrate individual features and performance workloads. They are already included in the repository; generating scenes is only necessary after changing the scene generator.
+
+Useful next scenes include:
+
+| Scene | Demonstrates |
+| --- | --- |
+| `Glass.unity` | Reflection, refraction, and absorption |
+| `CornellBox.unity` | Enclosed indirect lighting and recursive reflections |
+| `Water.unity` | Animated water reflection, refraction, and absorption |
+| `VolumetricFog.unity` | Homogeneous volumetric fog |
+| `Terrain.unity` | Ray-traced Unity terrain |
+| `ManySpheres.unity`, `ManyMeshes.unity`, `ManyLights.unity` | Stress and benchmark workloads |
+
 ## Features:
 * GPU compute-shader path tracing for spheres and registered triangle meshes
 * Emissive sphere and mesh lights with direct-light and sampling

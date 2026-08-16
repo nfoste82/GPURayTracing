@@ -31,6 +31,28 @@ public class RayTracingBenchmarkToolTests
         }
     }
 
+    [Test]
+    public void GettingStartedControls_MoveBelowVisibleBenchmarkOverlay()
+    {
+        var gameObject = new GameObject("Getting Started overlay test");
+        try
+        {
+            Type overlayType = GetRuntimeType("GettingStartedControlsOverlay");
+            Type benchmarkOverlayType = GetRuntimeType("RayTracingBenchmarkOverlay");
+            Component benchmarkOverlay = gameObject.AddComponent(benchmarkOverlayType);
+            var controlsOverlay = gameObject.AddComponent(overlayType);
+
+            Assert.That(GetControlsPanelTop(controlsOverlay), Is.EqualTo(16.0f));
+
+            SetField(benchmarkOverlay, "showOverlay", true);
+            Assert.That(GetControlsPanelTop(controlsOverlay), Is.EqualTo(354.0f));
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(gameObject);
+        }
+    }
+
     [TestCase(5.0f, 1.0f / 30.0f, 150)]
     [TestCase(5.0f, 1.0f / 60.0f, 300)]
     [TestCase(1.01f, 0.5f, 3)]
@@ -172,6 +194,45 @@ public class RayTracingBenchmarkToolTests
 
             Assert.That(GetCollectionCount(manager, "_triangles"), Is.EqualTo(1));
             Assert.That(rayTracingObject, Is.Not.Null);
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(meshObject);
+            UnityEngine.Object.DestroyImmediate(root);
+            UnityEngine.Object.DestroyImmediate(mesh);
+        }
+    }
+
+    [Test]
+    public void GameManager_AllowsRegistrationRetryAfterMissingMeshIsAssigned()
+    {
+        var root = new GameObject("Game Manager registration retry test");
+        var meshObject = new GameObject("Initially incomplete mesh");
+        Mesh mesh = null;
+        try
+        {
+            Type managerType = GetRuntimeType("GameManager");
+            Type materialType = GetRuntimeType("RayMaterial");
+            Type rayTracingObjectType = GetRuntimeType("PathTracingObject");
+            Component manager = root.AddComponent(managerType);
+            meshObject.transform.SetParent(root.transform);
+            var meshFilter = meshObject.AddComponent<MeshFilter>();
+            meshObject.AddComponent(materialType);
+            Component rayTracingObject = meshObject.AddComponent(rayTracingObjectType);
+            MethodInfo registerMethod = managerType.GetMethod("RegisterObject");
+
+            registerMethod.Invoke(manager, new object[] { rayTracingObject });
+            Assert.That(GetCollectionCount(manager, "_meshObjects"), Is.Zero);
+
+            mesh = new Mesh
+            {
+                vertices = new[] { Vector3.zero, Vector3.right, Vector3.up },
+                triangles = new[] { 0, 1, 2 }
+            };
+            meshFilter.sharedMesh = mesh;
+            registerMethod.Invoke(manager, new object[] { rayTracingObject });
+
+            Assert.That(GetCollectionCount(manager, "_meshObjects"), Is.EqualTo(1));
         }
         finally
         {
@@ -507,5 +568,14 @@ public class RayTracingBenchmarkToolTests
         MethodInfo method = component.GetType().GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.That(method, Is.Not.Null);
         method.Invoke(component, null);
+    }
+
+    private static float GetControlsPanelTop(Component controlsOverlay)
+    {
+        MethodInfo method = controlsOverlay.GetType().GetMethod(
+            "GetPanelTop",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.That(method, Is.Not.Null);
+        return (float)method.Invoke(controlsOverlay, null);
     }
 }

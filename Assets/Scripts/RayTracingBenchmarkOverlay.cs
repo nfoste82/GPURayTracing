@@ -3,6 +3,11 @@ using UnityEngine;
 
 public class RayTracingBenchmarkOverlay : MonoBehaviour
 {
+    public const float PanelLeft = 12.0f;
+    public const float PanelTop = 12.0f;
+    public const float PanelWidth = 580.0f;
+    public const float PanelHeight = 330.0f;
+
     public GameManager gameManager;
     public bool showOverlay = false;
     public int averageFrameCount = 120;
@@ -116,6 +121,6 @@ public class RayTracingBenchmarkOverlay : MonoBehaviour
             .Append("  Threshold: ").AppendLine(gameManager.shadowBvhMinObjectCount.ToString());
         _builder.Append("Toggle: ").Append(toggleKey);
 
-        GUI.Box(new Rect(12, 12, 580, 330), _builder.ToString(), _style);
+        GUI.Box(new Rect(PanelLeft, PanelTop, PanelWidth, PanelHeight), _builder.ToString(), _style);
     }
 }

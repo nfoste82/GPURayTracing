@@ -1833,6 +1833,7 @@ GameObject:
   m_Component:
   - component: {fileID: 2369517416383685828}
   - component: {fileID: 7411517123534166377}
+  - component: {fileID: 8874310826847834211}
   m_Layer: 0
   m_Name: Material_Ball_Room
   m_TagString: Untagged
@@ -2026,6 +2027,18 @@ MonoBehaviour:
     PropertyPaths:
     - Color
     - Intensity
+--- !u!114 &8874310826847834211
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5400690808114802242}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 105959a0761f4d5d9fcd25122ca4bb85, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::MaterialBallRoomRuntimeSetup
 --- !u!1 &6604878595066219306
 GameObject:
   m_ObjectHideFlags: 0

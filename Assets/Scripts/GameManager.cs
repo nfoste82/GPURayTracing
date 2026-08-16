@@ -134,7 +134,7 @@ public class GameManager : MonoBehaviour
     public float exposure = 1.0f;
 
     [Tooltip("Maximum HDR luminance of one path sample before averaging. Lower positive values clamp fireflies more strongly; 0 disables the clamp.")]
-    [Range(0.0f, 8.0f)]
+    [Range(0.0f, 20.0f)]
     public float fireflyClamp = 1.0f;
 
     public bool randomNoise = false;
@@ -400,6 +400,7 @@ public class GameManager : MonoBehaviour
     public void InitSceneSettings(SceneSettings settings)
     {
         numberOfPasses = settings.NumberOfPasses;
+        subpixelJitterScale = settings.SubpixelJitterScale;
         enableFrameAccumulation = settings.EnableFrameAccumulation;
         numBounces = settings.NumBounces;
         shadowQuality = settings.ShadowQuality;
@@ -408,6 +409,9 @@ public class GameManager : MonoBehaviour
         shadowRandomness = settings.ShadowRandomness;
         Lighting.LightSamplingStrategy = settings.LightSamplingStrategy;
         Lighting.LightSampleCount = settings.LightSampleCount;
+        SpatialDenoising.enabled = settings.EnableSpatialDenoising;
+        SpatialDenoising.iterations = settings.DenoiserIterations;
+        SpatialDenoising.luminanceSigma = settings.DenoiserLuminanceSigma;
         enableCaustics = settings.EnableCaustics;
         Caustics.PhotonCount = settings.CausticPhotonCount;
         Caustics.GatherRadius = settings.CausticGatherRadius;
@@ -2156,14 +2160,10 @@ public class GameManager : MonoBehaviour
 
     public void RegisterObject(PathTracingObject obj)
     {
-        if (!_rayTracingObjects.Add(obj))
+        if (_rayTracingObjects.Contains(obj))
         {
             return;
         }
-
-        _buffersNeedRebuilding = true;
-        CameraManager.AutoFocusSceneChanged = true;
-        ResetFrameAccumulation();
 
         var material = obj.GetComponent<RayMaterial>();
         var rayLight = obj.GetComponent<RayLight>();
@@ -2174,6 +2174,7 @@ public class GameManager : MonoBehaviour
         // sphere light into an emissive triangle mesh.
         if (rayLight != null && sphereCollider != null)
         {
+            MarkObjectRegistered(obj);
             var radius = GetWorldSphereRadius(sphereCollider, obj.transform);
             _lightingManager.RegisterSphereLight(obj, obj.transform, rayLight, sphereCollider, _triangles, radius,
                 MarkLightingSceneChanged);
@@ -2182,6 +2183,7 @@ public class GameManager : MonoBehaviour
 
         if (material != null && sphereCollider != null)
         {
+            MarkObjectRegistered(obj);
             var sphere = new Sphere
             {
                 position = obj.transform.TransformPoint(sphereCollider.center),
@@ -2211,6 +2213,7 @@ public class GameManager : MonoBehaviour
         var meshFilter = obj.GetComponent<MeshFilter>();
         if ((material != null || rayLight != null) && meshFilter != null && meshFilter.sharedMesh != null)
         {
+            MarkObjectRegistered(obj);
             _meshObjects.Add(new PathTracedMesh
             {
                 obj = obj,
@@ -2239,6 +2242,14 @@ public class GameManager : MonoBehaviour
         }
 
         Debug.LogWarning($"RayTracingObject '{obj.name}' needs RayMaterial with SphereCollider or MeshFilter, or RayLight with SphereCollider or MeshFilter.", obj);
+    }
+
+    private void MarkObjectRegistered(PathTracingObject obj)
+    {
+        _rayTracingObjects.Add(obj);
+        _buffersNeedRebuilding = true;
+        CameraManager.AutoFocusSceneChanged = true;
+        ResetFrameAccumulation();
     }
 
     public void RegisterDirectionalLight(RayDirectionalLight directionalLight)
@@ -2758,5 +2769,56 @@ public class GameManager : MonoBehaviour
         var path = $"Assets/Generated/RayTracingBvhBakes/{sceneGuid}_{managerId}.asset";
         return UnityEditor.AssetDatabase.LoadAssetAtPath<RayTracingBvhBakeAsset>(path);
 #endif
+    }
+}
+
+/// <summary>
+/// Scene-local onboarding overlay. Attach this only to the Getting Started scene so other scenes
+/// remain free of instructional UI.
+/// </summary>
+public sealed class GettingStartedControlsOverlay : MonoBehaviour
+{
+    private const float PanelLeft = 16.0f;
+    private const float PanelTop = 16.0f;
+    private const float PanelWidth = 390.0f;
+    private const float PanelHeight = 170.0f;
+    private const float PanelSpacing = 12.0f;
+
+    private bool _visible = true;
+
+    private void Update()
+    {
+        if (Input.GetKeyDown(KeyCode.H))
+        {
+            _visible = !_visible;
+        }
+    }
+
+    private void OnGUI()
+    {
+        if (!_visible)
+        {
+            return;
+        }
+
+        GUILayout.BeginArea(new Rect(PanelLeft, GetPanelTop(), PanelWidth, PanelHeight), GUIContent.none, GUI.skin.window);
+        GUILayout.Label("Getting Started", GUI.skin.label);
+        GUILayout.Space(4.0f);
+        GUILayout.Label("WASD: move    Arrow keys: look");
+        GUILayout.Label("Click: focus at cursor");
+        GUILayout.Label("Space: toggle paused refinement");
+        GUILayout.Label("Z: performance diagnostics");
+        GUILayout.Label("H: hide or show this help");
+        GUILayout.Space(6.0f);
+        GUILayout.Label("Edit renderer settings in Window > Ray Tracing > Quick Controls.", GUI.skin.label);
+        GUILayout.EndArea();
+    }
+
+    private float GetPanelTop()
+    {
+        var benchmarkOverlay = GetComponent<RayTracingBenchmarkOverlay>();
+        return benchmarkOverlay != null && benchmarkOverlay.showOverlay
+            ? RayTracingBenchmarkOverlay.PanelTop + RayTracingBenchmarkOverlay.PanelHeight + PanelSpacing
+            : PanelTop;
     }
 }
