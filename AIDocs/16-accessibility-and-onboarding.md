@@ -58,7 +58,7 @@ Likely files:
 - `Assets/Editor/RayTracingQuickControlsWindow.cs`
 - New small preset type if a reusable representation is needed.
 
-### 3. Build A Curated Scene Gallery
+### 3. Build A Curated Scene Gallery (Completed)
 
 The generated scene directory contains both showcase scenes and stress fixtures. A gallery should make that distinction explicit.
 
@@ -70,7 +70,7 @@ Add an editor window with:
 - Special requirements, such as network access for the Khronos browser.
 - Open Scene and Open And Play actions.
 
-Implemented: `Window > Ray Tracing > Scene Gallery` is a dockable editor tab that opens beside the Inspector, matching Quick Controls. It provides curated showcase and stress sections, Unity scene-preview/icon thumbnails, descriptions, expected cost, special requirements, and Open Scene / Open And Play actions. Captured render thumbnails remain a future refinement.
+Implemented: `Window > Ray Tracing > Scene Gallery` is a dockable editor tab that opens beside the Inspector, matching Quick Controls. It provides curated showcase and stress sections, repeatable render thumbnails, descriptions, expected cost, special requirements, and Open Scene / Open And Play actions.
 
 Suggested ordering:
 
@@ -83,7 +83,7 @@ Suggested ordering:
 7. Terrain
 8. Benchmarks and stress fixtures in a separate section
 
-Use `RayTracingSceneCapture` to create repeatable thumbnails rather than hand-maintaining editor screenshots.
+`RayTracingSceneCapture` creates repeatable thumbnails rather than relying on hand-maintained editor screenshots.
 
 Likely files:
 

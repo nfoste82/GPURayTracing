@@ -2781,7 +2781,7 @@ public sealed class GettingStartedControlsOverlay : MonoBehaviour
     private const float PanelLeft = 16.0f;
     private const float PanelTop = 16.0f;
     private const float PanelWidth = 390.0f;
-    private const float PanelHeight = 170.0f;
+    private const float PanelHeight = 205.0f;
     private const float PanelSpacing = 12.0f;
 
     private bool _visible = true;
@@ -2810,7 +2810,8 @@ public sealed class GettingStartedControlsOverlay : MonoBehaviour
         GUILayout.Label("Z: performance diagnostics");
         GUILayout.Label("H: hide or show this help");
         GUILayout.Space(6.0f);
-        GUILayout.Label("Edit renderer settings in Window > Ray Tracing > Quick Controls.", GUI.skin.label);
+        GUILayout.Label("Open the Ray Tracing Controls tab: Window > Ray Tracing > Quick Controls.", GUI.skin.label);
+        GUILayout.Label("Open the Ray Tracing Gallery tab: Window > Ray Tracing > Scene Gallery.", GUI.skin.label);
         GUILayout.EndArea();
     }
 
