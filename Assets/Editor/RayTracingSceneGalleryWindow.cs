@@ -13,7 +13,9 @@ public sealed class RayTracingSceneGalleryWindow : EditorWindow
         new ("Getting Started", "GettingStarted", "A compact room for evaluating diffuse, metal, and glass materials.", "Low", null),
         new ("Glass", "Glass", "Reflection, refraction, and transparent-material absorption.", "Medium", null),
         new ("Cornell Box", "CornellBox", "Enclosed indirect lighting and recursive reflections.", "Medium", null),
-        new ("Teapot Materials", "TeapotMaterials", "A ray-traced mesh with a range of material responses.", "Medium", null),
+        new ("Caustics", "Caustics", "Photon-mapped caustics through refractive objects.", "High", null),
+        new ("Parallax Mapping", "ParallaxMapping", "Material parallax, normal maps, and textured surfaces.", "High", null),
+        new ("Teapot Materials", "TeapotMaterials", "A ray-traced mesh with a range of material responses.", "High", null),
         new ("Water", "Water", "Animated water reflection, refraction (with caustics), and absorption.", "High", null),
         new ("Volumetric Fog", "VolumetricFog", "Homogeneous volumetric fog.", "High", null),
         new ("Khronos glTF Browser", "KhronosGltfBrowser", "Imports and browses Khronos glTF assets.", "Variable", "Requires network access."),
@@ -25,6 +27,14 @@ public sealed class RayTracingSceneGalleryWindow : EditorWindow
         new ("Many Spheres", "ManySpheres", "Sphere-count stress and benchmark workload.", "Stress test", null),
         new ("Many Meshes", "ManyMeshes", "Mesh-count stress and benchmark workload.", "Stress test", null),
         new ("Many Lights", "ManyLights", "Light-count stress and benchmark workload.", "Stress test", null),
+    };
+
+    private static readonly GalleryEntry[] TestScenes =
+    {
+        new ("Demofox Glossy Reflections", "DemofoxGlossyReflections", "Glossy metal reflections across a smoothness range.", "Medium", null),
+        new ("Demofox Refraction Index", "DemofoxRefractionIndex", "Glass refraction distortion across increasing IOR values.", "Medium", null),
+        new ("Demofox Rough Refraction", "DemofoxRoughRefraction", "Frosted glass refraction across a smoothness range.", "Medium", null),
+        new ("Demofox Absorption", "DemofoxAbsorption", "Distance-based RGB glass absorption comparisons.", "Medium", null)
     };
 
     private Vector2 _scrollPosition;
@@ -45,9 +55,13 @@ public sealed class RayTracingSceneGalleryWindow : EditorWindow
 
     public static string[] GetThumbnailScenePaths()
     {
-        var paths = new string[ShowcaseScenes.Length + StressScenes.Length];
+        var paths = new string[ShowcaseScenes.Length + TestScenes.Length + StressScenes.Length];
         int index = 0;
         foreach (GalleryEntry entry in ShowcaseScenes)
+        {
+            paths[index++] = entry.Path;
+        }
+        foreach (GalleryEntry entry in TestScenes)
         {
             paths[index++] = entry.Path;
         }
@@ -65,6 +79,8 @@ public sealed class RayTracingSceneGalleryWindow : EditorWindow
 
         _scrollPosition = EditorGUILayout.BeginScrollView(_scrollPosition);
         DrawSection("Start Here And Showcases", ShowcaseScenes);
+        EditorGUILayout.Space(10.0f);
+        DrawSection("Test Scenes", TestScenes);
         EditorGUILayout.Space(10.0f);
         DrawSection("Benchmarks And Stress Fixtures", StressScenes);
         EditorGUILayout.EndScrollView();

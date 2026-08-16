@@ -435,7 +435,8 @@ public static class RayTracingSceneGenerator
             DirectionalLightIntensity = 3.3f,
             DirectionalLightRotation = new Vector3(70.0f, -30.0f, 0.0f),
             DirectionalLightAngularRadius = 8.43f,
-            CausticIntensity = 0.53f
+            CausticIntensity = 0.53f,
+            FireflyClamp = 4f,
         });
         
         var defaultCheckerGray = AssetDatabase.GetBuiltinExtraResource<Texture2D>(DefaultCheckerGrayTexturePath);
@@ -1314,10 +1315,10 @@ public static class RayTracingSceneGenerator
             new Color32(57, 255, 83, 255), RayMaterial.MaterialType.Glass, 
             1.0f, 0.816f, 1.5f, 0.1f, 0.7f);
         
-        AddPrimitiveMesh(context.Root, "Red Glass Pyramid", RayMeshPrimitive.PrimitiveType.Dodecahedron, 
-            new Vector3(0.3f, 1.13f, 3.55f), Vector3.zero, Vector3.one, 
+        AddPrimitiveMesh(context.Root, "Red Glass Pyramid", RayMeshPrimitive.PrimitiveType.Pyramid,
+            new Vector3(-1.6f, 1.15f, 2.6f), Vector3.zero, Vector3.one,
             new Color32(255, 0, 10, 255), RayMaterial.MaterialType.Glass, 
-            1.0f, 0.816f, 1.5f, 0.0f, 0.8f);
+            1.0f, 0.816f, 1.5f, 0.1f, 0.7f);
 
         var dragon = AddRayMesh(context.Root, "Blue Glass Dragon", dragonMesh, 
             Vector3.zero, new Vector3(0.0f, 148.0f, 0.0f), Vector3.one * 3.0f,
@@ -1618,11 +1619,12 @@ public static class RayTracingSceneGenerator
             CameraEuler = Vector3.zero,
             NumBounces = 8,
             CameraFocalDistance = 13.5f,
-            LightFalloffScale = 0.03f,
+            LightFalloffScale = 0.005f,
             TopLevelBvhMinObjectCount = 0,
             ShadowBvhMinObjectCount = 0,
-            SkyboxLightColor = new Color32(110, 110, 120, 255),
-            CameraApertureMode = CameraApertureMode.Pinhole
+            SkyboxLightColor = new Color32(173, 155, 148, 255),
+            CameraApertureMode = CameraApertureMode.Pinhole,
+            DirectionalLightIntensity = 0f
         });
 
         const float roomWidth = 7.0f;
@@ -1647,11 +1649,11 @@ public static class RayTracingSceneGenerator
 
         var sphereRadius = 0.85f;
         var sidePadding = 0.17f;
-        var yellowDielectric = AddSphere(context.Root, "Yellow Dielectric", new Vector3(-(roomWidth * 0.5f) + sphereRadius + sidePadding, sphereRadius, roomDepth - sphereRadius), sphereRadius, new Color32(180, 170, 50, 255), RayMaterial.MaterialType.Diffuse, 0.8f);
+        var yellowDielectric = AddSphere(context.Root, "Yellow Dielectric", new Vector3(-(roomWidth * 0.5f) + sphereRadius + sidePadding, sphereRadius, roomDepth - sphereRadius), sphereRadius, new Color32(180, 170, 50, 255), RayMaterial.MaterialType.Diffuse, 0.95f);
         yellowDielectric.GetComponent<RayMaterial>().Metallic = 0.1f;
-        var pinkDielectric = AddSphere(context.Root, "Pink Dielectric", new Vector3(0.0f, sphereRadius, roomDepth - sphereRadius), sphereRadius, new Color32(220, 115, 172, 255), RayMaterial.MaterialType.Diffuse, 0.8f);
+        var pinkDielectric = AddSphere(context.Root, "Pink Dielectric", new Vector3(0.0f, sphereRadius, roomDepth - sphereRadius), sphereRadius, new Color32(220, 115, 172, 255), RayMaterial.MaterialType.Diffuse, 0.95f);
         pinkDielectric.GetComponent<RayMaterial>().Metallic = 0.3f;
-        AddSphere(context.Root, "Blue Magenta Metal", new Vector3((roomWidth * 0.5f) - sphereRadius - sidePadding, sphereRadius, roomDepth - sphereRadius), sphereRadius, new Color32(42, 36, 210, 255), RayMaterial.MaterialType.Metal, 0.5f);
+        AddSphere(context.Root, "Blue Magenta Metal", new Vector3((roomWidth * 0.5f) - sphereRadius - sidePadding, sphereRadius, roomDepth - sphereRadius), sphereRadius, new Color32(42, 36, 210, 255), RayMaterial.MaterialType.Metal, 0.9f);
 
         Save(context.Scene, sceneName);
     }

@@ -9,7 +9,7 @@ using UnityEngine;
 [InitializeOnLoad]
 public static class RayTracingSceneCapture
 {
-    private const int DefaultSamplesPerScene = 200;
+    private const int DefaultSamplesPerScene = 300;
     private const int DefaultCaptureWidth = 512;
     private const int DefaultCaptureHeight = 512;
     private const string DefaultOutputFolder = "RayTracingSceneCaptures";
