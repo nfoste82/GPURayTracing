@@ -1169,6 +1169,8 @@ public static class RayTracingSceneGenerator
             DirectionalLightIntensity = 1.5f,
             DirectionalLightAngularRadius = 1.5f,
             DirectionalLightRotation = new Vector3(67.0f, -45.0f, 0.0f),
+            SkyboxLightColor = Color.white,
+            Exposure = 1.2f
         });
         
         var defaultCheckerGray = AssetDatabase.GetBuiltinExtraResource<Texture2D>(DefaultCheckerGrayTexturePath);
@@ -1176,7 +1178,7 @@ public static class RayTracingSceneGenerator
         var checkerboardFloor = AddPrimitiveMesh(context.Root, "Checkerboard Floor", RayMeshPrimitive.PrimitiveType.Cube,
             new Vector3(0.0f, 0.05f, 3.0f), Vector3.zero, new Vector3(16.0f, 0.1f, 16.0f),
             Color.white, RayMaterial.MaterialType.Diffuse,
-            0.5f, 1.0f);
+            0.65f, 1.0f);
         
         ConfigureSurfaceMaps(checkerboardFloor, defaultCheckerGray, null, null, null, 0.0f, new Vector2(5f, 5f));
         
