@@ -133,6 +133,21 @@ public class GameManager : MonoBehaviour
     [Range(0.0f, 8.0f)]
     public float exposure = 1.0f;
 
+    [Tooltip("Redistributes bright HDR radiance into a camera/eye-like glare halo before exposure and ACES tone mapping.")]
+    public bool enableGlare = false;
+
+    [Tooltip("Linear HDR luminance at which glare begins. Lower values spread more of the image into the halo.")]
+    [Range(0.0f, 16.0f)]
+    public float glareThreshold = 1.0f;
+
+    [Tooltip("Smooths the glare threshold transition. Zero is a hard threshold.")]
+    [Range(0.0f, 1.0f)]
+    public float glareSoftKnee = 0.5f;
+
+    [Tooltip("Strength of the HDR glare halo.")]
+    [Range(0.0f, 4.0f)]
+    public float glareIntensity = 1.0f;
+
     [Tooltip("Maximum HDR luminance of one path sample before averaging. Lower positive values clamp fireflies more strongly; 0 disables the clamp.")]
     [Range(0.0f, 20.0f)]
     public float fireflyClamp = 1.0f;
@@ -423,6 +438,10 @@ public class GameManager : MonoBehaviour
         enableFogMultipleScattering = settings.EnableFogMultipleScattering;
         Lighting.LightFalloffScale = settings.LightFalloffScale;
         exposure = settings.Exposure;
+        enableGlare = settings.EnableGlare;
+        glareThreshold = settings.GlareThreshold;
+        glareSoftKnee = settings.GlareSoftKnee;
+        glareIntensity = settings.GlareIntensity;
         fireflyClamp = settings.FireflyClamp;
         randomNoise = settings.RandomNoise;
         Lighting.SkyboxLightColor = settings.SkyboxLightColor;
@@ -847,7 +866,8 @@ public class GameManager : MonoBehaviour
 
     private void PresentFinalColor()
     {
-        _spatialDenoisingManager.Present(_presentationSource ?? _beautyTexture, _presentationTexture, exposure);
+        _spatialDenoisingManager.Present(_presentationSource ?? _beautyTexture, _presentationTexture, exposure,
+            enableGlare, glareThreshold, glareSoftKnee, glareIntensity);
     }
 
     private void PresentLinearTexture(RenderTexture source, RenderTexture destination)

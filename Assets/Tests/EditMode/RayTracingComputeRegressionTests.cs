@@ -173,9 +173,85 @@ namespace GPURayTracing.Tests
             Assert.That(denoiser.HasKernel("CSGeneratePreservationMask"), Is.True);
             Assert.That(denoiser.HasKernel("CSVisualizeTemporal"), Is.True);
             Assert.That(denoiser.HasKernel("CSVisualizeFeature"), Is.True);
+            Assert.That(denoiser.HasKernel("CSGlarePrefilter"), Is.True);
+            Assert.That(denoiser.HasKernel("CSGlareDownsample"), Is.True);
 
             ComputeShader renderer = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
             Assert.That(renderer.HasKernel("CSFeatures"), Is.True);
+        }
+
+        [Test]
+        public void SpatialDenoiser_GlareAddsHaloWithoutChangingDisabledPresentation()
+        {
+            if (!SystemInfo.supportsComputeShaders || SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
+            {
+                Assert.Ignore("Glare presentation requires an active compute graphics device.");
+            }
+
+            var sourcePixels = new Texture2D(32, 32, TextureFormat.RGBAFloat, false, true);
+            var source = CreateRandomWriteTexture(32, 32, RenderTextureFormat.ARGBFloat);
+            var withoutGlare = CreateRandomWriteTexture(32, 32, RenderTextureFormat.ARGBFloat);
+            var withGlare = CreateRandomWriteTexture(32, 32, RenderTextureFormat.ARGBFloat);
+            Type denoiserType = Type.GetType("PathTracing.Denoising.SpatialDenoisingManager, Assembly-CSharp");
+            Assert.That(denoiserType, Is.Not.Null, "Could not load the spatial denoising manager.");
+            object denoiser = Activator.CreateInstance(denoiserType);
+            MethodInfo present = denoiserType.GetMethod("Present");
+            MethodInfo releaseResources = denoiserType.GetMethod("ReleaseResources");
+            Assert.That(present, Is.Not.Null);
+            Assert.That(releaseResources, Is.Not.Null);
+            try
+            {
+                sourcePixels.SetPixel(16, 16, new Color(32.0f, 32.0f, 32.0f, 1.0f));
+                sourcePixels.Apply(false, false);
+                Graphics.Blit(sourcePixels, source);
+
+                present.Invoke(denoiser, new object[] { source, withoutGlare, 1.0f, false, 1.0f, 0.5f, 1.0f });
+                present.Invoke(denoiser, new object[] { source, withGlare, 1.0f, true, 1.0f, 0.5f, 1.0f });
+
+                Color disabledPixel = ReadPixel(withoutGlare, 20, 16);
+                Color glarePixel = ReadPixel(withGlare, 20, 16);
+                Assert.That(glarePixel.r, Is.GreaterThan(disabledPixel.r + 0.005f),
+                    "Bright HDR pixels should spread visible radiance beyond their source pixel.");
+                Assert.That(ReadPixel(withGlare, 21, 16).r, Is.LessThanOrEqualTo(glarePixel.r + Epsilon),
+                    "Glare should decay smoothly away from a point source instead of forming a repeated pixel block.");
+
+                present.Invoke(denoiser, new object[] { source, withoutGlare, 1.0f, false, 0.0f, 1.0f, 4.0f });
+                Assert.That(ReadPixel(withoutGlare, 20, 16).r, Is.EqualTo(disabledPixel.r).Within(Epsilon),
+                    "Disabled glare must not change the existing presentation output.");
+            }
+            finally
+            {
+                releaseResources.Invoke(denoiser, null);
+                source.Release();
+                withoutGlare.Release();
+                withGlare.Release();
+                UnityEngine.Object.DestroyImmediate(sourcePixels);
+            }
+        }
+
+        private static RenderTexture CreateRandomWriteTexture(int width, int height, RenderTextureFormat format)
+        {
+            var texture = new RenderTexture(width, height, 0, format) { enableRandomWrite = true };
+            texture.Create();
+            return texture;
+        }
+
+        private static Color ReadPixel(RenderTexture texture, int x, int y)
+        {
+            RenderTexture previous = RenderTexture.active;
+            RenderTexture.active = texture;
+            var image = new Texture2D(texture.width, texture.height, TextureFormat.RGBAFloat, false, true);
+            try
+            {
+                image.ReadPixels(new Rect(0, 0, texture.width, texture.height), 0, 0);
+                image.Apply(false, false);
+                return image.GetPixel(x, y);
+            }
+            finally
+            {
+                RenderTexture.active = previous;
+                UnityEngine.Object.DestroyImmediate(image);
+            }
         }
 
         [Test]

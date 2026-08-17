@@ -410,6 +410,11 @@ namespace PathTracing.TemporalDenoising
                     shader.SetTexture(presentKernel, InputBeauty, nextRadiance);
                     shader.SetTexture(presentKernel, PresentationResult, _gameManager.OutputTexture);
                     shader.SetFloat(Exposure, _gameManager.exposure);
+                    shader.SetInt("_EnableGlare", 0);
+                    shader.SetTexture(presentKernel, "GlareMip0", nextRadiance);
+                    shader.SetTexture(presentKernel, "GlareMip1", nextRadiance);
+                    shader.SetTexture(presentKernel, "GlareMip2", nextRadiance);
+                    shader.SetTexture(presentKernel, "GlareMip3", nextRadiance);
                     shader.Dispatch(presentKernel, groupsX, groupsY, 1);
                 }
             }

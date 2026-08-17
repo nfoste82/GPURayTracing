@@ -39,7 +39,7 @@ Registration caches the `Transform`, `SphereCollider`, shared `Mesh`, and either
 Each render callback:
 
 1. Ensures `_outputTexture` matches the current source render target dimensions.
-2. Derives the internal tracing size from the source target and `renderResolutionPercent` (`25-100%`), recreating ray-tracing, accumulation, feature, and denoiser textures if it changes. Linear HDR beauty is Catmull-Rom reconstructed into a full-size presentation texture, then exposure and ACES tone mapping are applied; the camera aspect remains based on the display target rather than the reduced internal size.
+2. Derives the internal tracing size from the source target and `renderResolutionPercent` (`25-100%`), recreating ray-tracing, accumulation, feature, and denoiser textures if it changes. Linear HDR beauty is Catmull-Rom reconstructed into a full-size presentation texture. When enabled, HDR glare is extracted through a four-level bright-pass pyramid and composited before exposure and ACES tone mapping; the camera aspect remains based on the display target rather than the reduced internal size.
 3. Calls `UpdateSpheres()` to refresh CPU sphere/light structs from cached Unity object references.
 4. Calls `UpdateTriangles()` to refresh registered mesh triangle data only if a cached mesh transform or material value changed.
 5. Calls `UpdateSceneBvhs()`, which delegates the general top-level and shadow-only structures to `SceneBvhManager`. They rebuild/upload only when object bounds or membership changed, or when their runtime threshold changed; static scenes retain the existing GPU trees.

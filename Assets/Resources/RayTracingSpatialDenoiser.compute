@@ -1,5 +1,7 @@
 #pragma kernel CSAtrous
 #pragma kernel CSPresent
+#pragma kernel CSGlarePrefilter
+#pragma kernel CSGlareDownsample
 #pragma kernel CSGenerateCameraMotion
 #pragma kernel CSTemporalReprojectValidate
 #pragma kernel CSUpdateTemporalMoments
@@ -8,6 +10,10 @@
 #pragma kernel CSVisualizeFeature
 
 Texture2D<float4> InputBeauty;
+Texture2D<float4> GlareMip0;
+Texture2D<float4> GlareMip1;
+Texture2D<float4> GlareMip2;
+Texture2D<float4> GlareMip3;
 Texture2D<float4> Beauty;
 Texture2D<float4> FeatureNormal;
 Texture2D<float4> FeatureAlbedo;
@@ -16,6 +22,7 @@ Texture2D<float> FeatureIdentity;
 Texture2D<float> FeatureValidity;
 RWTexture2D<float4> FilteredBeauty;
 RWTexture2D<float4> PresentationResult;
+RWTexture2D<float4> GlareResult;
 Texture2D<float4> PreviousRadiance;
 Texture2D<float4> PreviousNormal;
 Texture2D<float> PreviousDepth;
@@ -56,6 +63,10 @@ float _NormalPower;
 float _AlbedoSigma;
 float _LuminanceSigma;
 float _Exposure;
+float _GlareThreshold;
+float _GlareSoftKnee;
+float _GlareIntensity;
+int _EnableGlare;
 float _CausticPreservationThreshold;
 int _EnableCausticPreservation;
 
@@ -160,6 +171,47 @@ float4 SampleCatmullRom(Texture2D<float4> source, float2 uv)
         + source.Load(int3(clamp(int2(offsets2.x, offsets3.y), int2(0, 0), maximumPixel), 0)) * weights2.x
         + source.Load(int3(clamp(int2(offsets3.x, offsets3.y), int2(0, 0), maximumPixel), 0)) * weights3.x;
     return row0 * weights0.y + row1 * weights1.y + row2 * weights2.y + row3 * weights3.y;
+}
+
+float4 SampleBilinear(Texture2D<float4> source, float2 uv)
+{
+    uint width, height;
+    source.GetDimensions(width, height);
+    float2 samplePosition = saturate(uv) * float2(width, height) - 0.5f;
+    int2 basePosition = int2(floor(samplePosition));
+    float2 fraction = frac(samplePosition);
+    int2 maximumPixel = int2(width - 1, height - 1);
+    float4 top = lerp(
+        source.Load(int3(clamp(basePosition, int2(0, 0), maximumPixel), 0)),
+        source.Load(int3(clamp(basePosition + int2(1, 0), int2(0, 0), maximumPixel), 0)),
+        fraction.x);
+    float4 bottom = lerp(
+        source.Load(int3(clamp(basePosition + int2(0, 1), int2(0, 0), maximumPixel), 0)),
+        source.Load(int3(clamp(basePosition + int2(1, 1), int2(0, 0), maximumPixel), 0)),
+        fraction.x);
+    return lerp(top, bottom, fraction.y);
+}
+
+float3 FilterGlareDownsample(Texture2D<float4> source, float2 uv)
+{
+    uint width, height;
+    source.GetDimensions(width, height);
+    float2 texel = 1.0f / float2(width, height);
+
+    // A tent filter removes pixel-grid structure before each 2x reduction. This deliberately
+    // avoids Catmull-Rom's sharpening/ringing, which is useful for beauty reconstruction but not glare.
+    float3 color = 0.0f;
+    [unroll]
+    for (int y = -1; y <= 1; y++)
+    {
+        [unroll]
+        for (int x = -1; x <= 1; x++)
+        {
+            float weight = (x == 0 ? 2.0f : 1.0f) * (y == 0 ? 2.0f : 1.0f);
+            color += SampleBilinear(source, uv + float2(x, y) * texel).rgb * weight;
+        }
+    }
+    return color * (1.0f / 16.0f);
 }
 
 [numthreads(8, 8, 1)]
@@ -293,7 +345,50 @@ void CSPresent(uint3 id : SV_DispatchThreadID)
     }
 
     float2 uv = (float2(id.xy) + 0.5f) / float2(width, height);
-    PresentationResult[id.xy] = float4(ACESFilmicToneMap(max(0.0f, SampleCatmullRom(InputBeauty, uv).rgb) * _Exposure), 1.0f);
+    float3 color = max(0.0f, SampleCatmullRom(InputBeauty, uv).rgb);
+    if (_EnableGlare != 0)
+    {
+        // Each progressively smaller level represents a wider portion of the glare PSF.
+        float3 glare = SampleBilinear(GlareMip0, uv).rgb * 0.25f
+            + SampleBilinear(GlareMip1, uv).rgb * 0.25f
+            + SampleBilinear(GlareMip2, uv).rgb * 0.25f
+            + SampleBilinear(GlareMip3, uv).rgb * 0.25f;
+        color += glare * _GlareIntensity;
+    }
+    PresentationResult[id.xy] = float4(ACESFilmicToneMap(color * _Exposure), 1.0f);
+}
+
+[numthreads(8, 8, 1)]
+void CSGlarePrefilter(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    GlareResult.GetDimensions(width, height);
+    if (id.x >= width || id.y >= height)
+    {
+        return;
+    }
+
+    float2 uv = (float2(id.xy) + 0.5f) / float2(width, height);
+    float3 color = max(0.0f, FilterGlareDownsample(InputBeauty, uv));
+    float luminance = Luminance(color);
+    float knee = max(0.0001f, _GlareThreshold * _GlareSoftKnee);
+    float soft = saturate((luminance - _GlareThreshold + knee) / (2.0f * knee));
+    float contribution = max(luminance - _GlareThreshold, 0.0f) + soft * soft * knee;
+    GlareResult[id.xy] = float4(color * (contribution / max(luminance, 0.00001f)), 1.0f);
+}
+
+[numthreads(8, 8, 1)]
+void CSGlareDownsample(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    GlareResult.GetDimensions(width, height);
+    if (id.x >= width || id.y >= height)
+    {
+        return;
+    }
+
+    float2 uv = (float2(id.xy) + 0.5f) / float2(width, height);
+    GlareResult[id.xy] = float4(max(0.0f, FilterGlareDownsample(InputBeauty, uv)), 1.0f);
 }
 
 float2 ClipToUv(float4 clip)

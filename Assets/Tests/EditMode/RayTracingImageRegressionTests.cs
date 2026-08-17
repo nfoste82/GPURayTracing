@@ -886,6 +886,11 @@ namespace GPURayTracing.Tests
                     denoiser.SetTexture(presentKernel, "InputBeauty", beauty);
                     denoiser.SetTexture(presentKernel, "PresentationResult", result);
                     denoiser.SetFloat("_Exposure", 1.0f);
+                    denoiser.SetInt("_EnableGlare", 0);
+                    denoiser.SetTexture(presentKernel, "GlareMip0", beauty);
+                    denoiser.SetTexture(presentKernel, "GlareMip1", beauty);
+                    denoiser.SetTexture(presentKernel, "GlareMip2", beauty);
+                    denoiser.SetTexture(presentKernel, "GlareMip3", beauty);
                     denoiser.Dispatch(presentKernel, Mathf.CeilToInt(width / 8.0f), Mathf.CeilToInt(height / 8.0f), 1);
                 }
                 return ReadSignature(result, width, height, probes, includePeak);

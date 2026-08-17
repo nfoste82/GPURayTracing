@@ -22,6 +22,7 @@ namespace PathTracing.Denoising
         private RenderTexture _iteration2;
         private RenderTexture _iteration3;
         private RenderTexture _causticPreservationMask;
+        private readonly RenderTexture[] _glareMips = new RenderTexture[4];
 
         public ComputeShader Shader => _shader;
         public RenderTexture CausticPreservationMask => _causticPreservationMask;
@@ -56,16 +57,43 @@ namespace PathTracing.Denoising
         {
             Release(_ping); Release(_pong); Release(_iteration1); Release(_iteration2); Release(_iteration3); Release(_causticPreservationMask);
             _ping = _pong = _iteration1 = _iteration2 = _iteration3 = _causticPreservationMask = null;
+            for (int i = 0; i < _glareMips.Length; i++)
+            {
+                Release(_glareMips[i]);
+                _glareMips[i] = null;
+            }
         }
 
-        public void Present(RenderTexture source, RenderTexture destination, float exposure)
+        public void Present(RenderTexture source, RenderTexture destination, float exposure, bool enableGlare = false,
+            float glareThreshold = 1.0f, float glareSoftKnee = 0.5f, float glareIntensity = 1.0f)
         {
             EnsureShader();
             if (_shader == null || source == null || destination == null) return;
             int kernel = _shader.FindKernel("CSPresent");
+            if (enableGlare)
+            {
+                DispatchGlare(source, destination, glareThreshold, glareSoftKnee);
+            }
             _shader.SetTexture(kernel, "InputBeauty", source);
             _shader.SetTexture(kernel, "PresentationResult", destination);
             _shader.SetFloat("_Exposure", exposure);
+            _shader.SetInt("_EnableGlare", enableGlare ? 1 : 0);
+            _shader.SetFloat("_GlareIntensity", glareIntensity);
+            if (enableGlare)
+            {
+                _shader.SetTexture(kernel, "GlareMip0", _glareMips[0]);
+                _shader.SetTexture(kernel, "GlareMip1", _glareMips[1]);
+                _shader.SetTexture(kernel, "GlareMip2", _glareMips[2]);
+                _shader.SetTexture(kernel, "GlareMip3", _glareMips[3]);
+            }
+            else
+            {
+                // Unity requires every declared texture input to be bound, even in a disabled branch.
+                _shader.SetTexture(kernel, "GlareMip0", source);
+                _shader.SetTexture(kernel, "GlareMip1", source);
+                _shader.SetTexture(kernel, "GlareMip2", source);
+                _shader.SetTexture(kernel, "GlareMip3", source);
+            }
             _shader.Dispatch(kernel, Mathf.CeilToInt(destination.width / 8.0f), Mathf.CeilToInt(destination.height / 8.0f), 1);
         }
 
@@ -159,6 +187,50 @@ namespace PathTracing.Denoising
             }
             if (_iteration3 == null) _iteration3 = CreateTextureInternal(size, RenderTextureFormat.ARGBHalf);
             return _iteration3;
+        }
+
+        private void DispatchGlare(RenderTexture source, RenderTexture destination, float threshold, float softKnee)
+        {
+            EnsureGlareResources(destination.width, destination.height);
+            if (_glareMips[0] == null) return;
+
+            int prefilter = _shader.FindKernel("CSGlarePrefilter");
+            _shader.SetTexture(prefilter, "InputBeauty", source);
+            _shader.SetTexture(prefilter, "GlareResult", _glareMips[0]);
+            _shader.SetFloat("_GlareThreshold", Mathf.Max(0.0f, threshold));
+            _shader.SetFloat("_GlareSoftKnee", Mathf.Clamp01(softKnee));
+            Dispatch(prefilter, _glareMips[0]);
+
+            int downsample = _shader.FindKernel("CSGlareDownsample");
+            for (int i = 1; i < _glareMips.Length; i++)
+            {
+                _shader.SetTexture(downsample, "InputBeauty", _glareMips[i - 1]);
+                _shader.SetTexture(downsample, "GlareResult", _glareMips[i]);
+                Dispatch(downsample, _glareMips[i]);
+            }
+        }
+
+        private void EnsureGlareResources(int width, int height)
+        {
+            // Keep the smallest-radius glare at presentation resolution. Starting at half
+            // resolution made high-intensity halos reveal the reduced pixel grid around emitters.
+            int mipWidth = width;
+            int mipHeight = height;
+            for (int i = 0; i < _glareMips.Length; i++)
+            {
+                if (_glareMips[i] == null || _glareMips[i].width != mipWidth || _glareMips[i].height != mipHeight)
+                {
+                    Release(_glareMips[i]);
+                    _glareMips[i] = CreateTextureInternal(new Vector2Int(mipWidth, mipHeight), RenderTextureFormat.ARGBHalf);
+                }
+                mipWidth = Mathf.Max(1, mipWidth / 2);
+                mipHeight = Mathf.Max(1, mipHeight / 2);
+            }
+        }
+
+        private void Dispatch(int kernel, RenderTexture target)
+        {
+            _shader.Dispatch(kernel, Mathf.CeilToInt(target.width / 8.0f), Mathf.CeilToInt(target.height / 8.0f), 1);
         }
 
         private static RenderTexture CreateTextureInternal(Vector2Int size, RenderTextureFormat format)

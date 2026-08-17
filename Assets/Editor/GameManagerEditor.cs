@@ -69,6 +69,13 @@ public sealed class GameManagerEditor : Editor
         DrawSection(manager, "Image and Environment", true, () =>
         {
             DrawProperty("exposure");
+            DrawProperty("enableGlare", "HDR Glare");
+            if (serializedObject.FindProperty("enableGlare").boolValue)
+            {
+                DrawProperty("glareThreshold", "Glare Threshold");
+                DrawProperty("glareSoftKnee", "Glare Soft Knee");
+                DrawProperty("glareIntensity", "Glare Intensity");
+            }
             DrawLightingProperty("skyboxLightColor", "Skybox Light Color");
             DrawProperty("skyboxTexture");
         });

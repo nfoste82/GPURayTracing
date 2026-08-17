@@ -239,7 +239,9 @@ public static class RayTracingSceneGenerator
             ShadowBvhMinObjectCount = 1024,
             LightFalloffScale = 0.525f,
             CameraApertureRadius = 0.002f,
-            SkyboxLightColor = new Color32(18, 18, 18, 255),
+            SkyboxLightColor = new Color32(70, 70, 70, 255),
+            GlareIntensity = 2.3f,
+            GlareSoftKnee = 0.15f,
         });
         
         AddFloor(context.Root, new Vector2(0.0f, 5.0f), new Vector2(18.0f, 24.0f), 0.32f, "Display Floor");
@@ -1301,7 +1303,8 @@ public static class RayTracingSceneGenerator
             SkyboxLightColor = new Color32(248, 221, 212, 255),
             FieldOfView = 29.6f,
             DirectionalLightIntensity = 2.5f,
-            CameraApertureMode = CameraApertureMode.Pinhole
+            CameraApertureMode = CameraApertureMode.Pinhole,
+            GlareIntensity = 0.45f,
         });
 
         var texturedPlane = RayMeshAssetGenerator.GetOrCreateTexturedPlaneMesh();
@@ -1424,16 +1427,26 @@ public static class RayTracingSceneGenerator
 
         var context = CreateBaseScene(new SceneSettings
         {
-            SceneName = sceneName, CameraPosition = new Vector3(-8.8f, 7.75f, 12.37f), CameraEuler = new Vector3(36.35f, 81.9f, 0.0f),
+            SceneName = sceneName, CameraPosition = new Vector3(-8.58f, 6.79f, 12.4f), CameraEuler = new Vector3(34.73f, 99.35f, 0.0f),
             NumBounces = 8, 
             ShadowQuality = 0,
             LightFalloffScale = 0.021f, 
-            Exposure = 1.6f,
-            DirectionalLightIntensity = 1.5f, DirectionalLightAngularRadius = 2.74f, DirectionalLightRotation = new Vector3(90.0f, -30.0f, 0.0f),
+            Exposure = 1.5f,
+            FireflyClamp = 3f,
+            DirectionalLightIntensity = 1f, 
+            DirectionalLightAngularRadius = 1.02f,
+            DirectionalLightRotation = new Vector3(90.0f, -30.0f, 0.0f),
             TopLevelBvhMinObjectCount = 0, 
             ShadowBvhMinObjectCount = 0, 
             SkyboxLightColor = new Color32(221, 221, 221, 255),
+            GlareThreshold = 0.7f,
+            GlareSoftKnee = 0.64f,
+            GlareIntensity = 0.5f,
+            CausticPhotonCount = 183000,
+            CausticGatherRadius = 0.015f,
+            CausticIntensity = 1f,
         });
+        context.Manager._singleFrame = true;    // Start the scene paused because moving water will prevent frame accumulation
         
         var waterObject = new GameObject("Water Volume");
         waterObject.transform.SetParent(context.Root, false);
@@ -1445,17 +1458,17 @@ public static class RayTracingSceneGenerator
         water.Opacity = 0.08f;
         water.AbsorptionStrength = 0.55f;
         water.RefractionIndex = 1.33f;
-        water.WaveAmplitude = 0.32f;
-        water.WaveScale = 0.7f;
+        water.WaveAmplitude = 0.3f;
+        water.WaveScale = 0.79f;
         water.WaveSpeed = 0.85f;
         water.MarchSteps = 36;
         water.RefinementSteps = 6;
 
         //AddLight(context.Root, "Low Sun Reflection Light", new Vector3(-5.0f, 4.0f, -5.5f), 1.2f, new Color32(255, 226, 188, 255));
-        AddLight(context.Root, "Cool Sky Fill", 
-            new Vector3(8.0f, 15f, 8.0f), 
-            1.8f, 
-            new Color32(255, 253, 155, 255));
+        // AddLight(context.Root, "Cool Sky Fill", 
+        //     new Vector3(8.0f, 15f, 8.0f), 
+        //     1.8f, 
+        //     new Color32(255, 253, 155, 255));
 
         AddPrimitiveMesh(context.Root, "Ground Plane", 
             RayMeshPrimitive.PrimitiveType.Cube, 
@@ -1626,7 +1639,10 @@ public static class RayTracingSceneGenerator
             ShadowBvhMinObjectCount = 0,
             SkyboxLightColor = new Color32(173, 155, 148, 255),
             CameraApertureMode = CameraApertureMode.Pinhole,
-            DirectionalLightIntensity = 0f
+            DirectionalLightIntensity = 0f,
+            GlareIntensity = 1.54f,
+            GlareSoftKnee = 0.397f,
+            Exposure = 1.36f,
         });
 
         const float roomWidth = 7.0f;

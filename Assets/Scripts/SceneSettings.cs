@@ -46,12 +46,18 @@ public sealed class SceneSettings
     public int CameraApertureBladeCount = 0;
     public float CameraApertureBladeRotation = 0.0f;
     public float CameraAnamorphicRatio = 1.0f;
+    
     public float CameraMovementSpeed = 3.0f;
     public float LightFalloffScale = 0.08f;
     public float Exposure = 1.0f;
     public float FireflyClamp = 0.0f; // 0 (none), 1 (fully clamped)
     public bool RandomNoise = false;
     public Color32 SkyboxLightColor = new (95, 95, 105, 255);
+    
+    public bool EnableGlare = true;
+    public float GlareThreshold = 1.0f;
+    public float GlareSoftKnee = 0.1f;
+    public float GlareIntensity = 1.0f;
     
     public float DirectionalLightIntensity = 1.0f;
     public float DirectionalLightAngularRadius = 0.27f;
