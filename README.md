@@ -9,7 +9,7 @@ Full disclosure that LLMs were used to assist during the later work on this proj
 * Reflection/refraction, distance-based absorption, and colored transparent shadows
 * Photon-mapped caustics
 * Mesh UV/albedo/metallic/normal texturing
-* Optional animated procedural water with reflection, refraction, and underwater RGB absorption
+* Animated procedural water with reflection, refraction, caustics, and underwater RGB absorption
 * Depth of field, variable camera aperture, different aperture types, ability to focus on a point in the scene even while camera is in motion
 * Frame accumulation, debug views, and example scenes
 * Volumetric fog (homogeneous fog)
@@ -23,7 +23,7 @@ Full disclosure that LLMs were used to assist during the later work on this proj
 * Spectral refractions (different wavelengths of light refract differently), current lighting system does not handle wavelengths
 * Temporal denoising is a work-in-progress
 * Considering adding the option for machine-learning-based upscaling and denoising, and when rendering in real time, possibly even frame insertion to improve frame rate
-* Fog that isn't homogenous
+* Heterogeneous fog
 * Subsurface scattering
 * Shader compilation can take quite a while, I'd like to optimize this
 * Environment mapped lighting instead of just direct sky reflections
