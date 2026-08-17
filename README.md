@@ -28,7 +28,7 @@ Full disclosure that LLMs were used to assist during the later work on this proj
 * Shader compilation can take quite a while, I'd like to optimize this
 * Environment mapped lighting instead of just direct sky reflections
 
-There are multiple quality settings on the GameManager object in the root scene. Depending on the scene and quality, and your hardware, your frame rate may vary by quite a bit. Realtime can look decent on the right hardware with the right scene and settings. Some features like water and caustics are too expensive to look good in realtime currently.
+Depending on the scene and quality, and your hardware, your frame rate may vary by quite a bit. Realtime can look decent on the right hardware with the right scene and settings. Some features like water and caustics are too expensive to look good in realtime currently.
 
 Project has only been tested for MacOS, but all code should be OS-agnostic, so if it works in Unity then you should be able to run it.
 
