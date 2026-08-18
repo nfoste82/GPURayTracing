@@ -1,5 +1,6 @@
 # Realtime Path Tracing
-Realtime 3D path-tracer running in a GPU compute shader in Unity. Full disclosure that LLMs were used to assist during the later work on this project.
+Realtime 3D path-tracer running in a GPU compute shader in Unity, it does **not** require RT hardware (DXR/RT cores) or CUDA.
+Full disclosure that LLMs were used to assist during the later work on this project.
 
 ## Features:
 * GPU compute-shader path tracing for spheres and registered triangle meshes
@@ -8,7 +9,7 @@ Realtime 3D path-tracer running in a GPU compute shader in Unity. Full disclosur
 * Reflection/refraction, distance-based absorption, and colored transparent shadows
 * Photon-mapped caustics
 * Mesh UV/albedo/metallic/normal texturing
-* Optional animated procedural water with reflection, refraction, and underwater RGB absorption
+* Animated procedural water with reflection, refraction, caustics, and underwater RGB absorption
 * Depth of field, variable camera aperture, different aperture types, ability to focus on a point in the scene even while camera is in motion
 * Frame accumulation, debug views, and example scenes
 * Volumetric fog (homogeneous fog)
@@ -22,12 +23,12 @@ Realtime 3D path-tracer running in a GPU compute shader in Unity. Full disclosur
 * Spectral refractions (different wavelengths of light refract differently), current lighting system does not handle wavelengths
 * Temporal denoising is a work-in-progress
 * Considering adding the option for machine-learning-based upscaling and denoising, and when rendering in real time, possibly even frame insertion to improve frame rate
-* Fog that isn't homogenous
+* Heterogeneous fog
 * Subsurface scattering
 * Shader compilation can take quite a while, I'd like to optimize this
 * Environment mapped lighting instead of just direct sky reflections
 
-There are multiple quality settings on the GameManager object in the root scene. Depending on the scene and quality, and your hardware, your frame rate may vary by quite a bit. Realtime can look decent on the right hardware with the right scene and settings. Some features like water and caustics are too expensive to look good in realtime currently.
+Depending on the scene and quality, and your hardware, your frame rate may vary by quite a bit. Realtime can look decent on the right hardware with the right scene and settings. Some features like water and caustics are too expensive to look good in realtime currently.
 
 Project has only been tested for MacOS, but all code should be OS-agnostic, so if it works in Unity then you should be able to run it.
 
