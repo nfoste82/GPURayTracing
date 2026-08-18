@@ -491,9 +491,9 @@ public class RayTracingBenchmarkToolTests
 
     private static void SetField(Component component, string fieldName, object value)
     {
-        FieldInfo field = component.GetType().GetField(
-            fieldName,
-            BindingFlags.Instance | BindingFlags.NonPublic);
+            FieldInfo field = component.GetType().GetField(
+                fieldName,
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         Assert.That(field, Is.Not.Null, $"Could not find {component.GetType().Name}.{fieldName}");
         field.SetValue(component, value);
     }

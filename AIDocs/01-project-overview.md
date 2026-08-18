@@ -21,7 +21,7 @@ The renderer currently ray traces spheres, emissive sphere and mesh lights, regi
 - `Assets/Editor/RayMeshPrimitiveMenu.cs`: Adds `GameObject > Ray Tracing` menu entries for creating ray-traced mesh primitive test objects in the hierarchy.
 - `Assets/Editor/RaySceneObjectMenu.cs`: Adds `GameObject > Ray Tracing` menu entries for ray-traced spheres and light spheres.
 - `Assets/Editor/RayTracingSceneGenerator.cs`: Adds `Tools > Ray Tracing > Generate Scenes` for creating focused performance and image-quality scenes.
-- `Assets/Editor/RayTracingShaderPrecompiler.cs`: Adds `Tools > Ray Tracing > Precompile Compute Shader`. Forces the compute shader to compile and dispatch once from edit mode (with timing and surfaced compile messages) so a slow or failing kernel shows up here instead of stalling Unity on first Play. Unity compiles compute kernels lazily on first `Dispatch`, which is why pathological kernels previously only hung when entering Play mode.
+- `Assets/Editor/RayTracingShaderPrecompiler.cs`: Adds `Tools > Ray Tracing > Precompile Compute Shader`. Forces the bounded `CSMain` debug/fog/terrain variant matrix to compile and dispatch from edit mode, with per-variant timing and surfaced compile messages, so slow or failing kernels show up there instead of stalling Unity on first Play. Unity compiles compute kernels lazily on first `Dispatch`, which is why pathological kernels previously only hung when entering Play mode.
 - `Assets/Scenes/Root.unity`: Main scene with the camera, game manager, ray-traced spheres, light spheres, physics objects, and visual scene geometry.
 - `Assets/Scenes/Generated/*.unity`: Generated scenes for stressing specific renderer paths and validating image quality.
 

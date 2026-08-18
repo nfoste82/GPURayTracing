@@ -15,7 +15,9 @@ public static class RayTracingSceneGenerator
     private const string GeneratedAssetFolder = "Assets/Scenes/Generated/GeneratedAssets";
     private const string ComputeShaderPath = "Assets/Scripts/RayTracingCompute.compute";
     private const string SkyboxPath = "Assets/Textures/Skyboxes/skyboxOcean.jpg";
+    private const string AutumnFieldSkyboxPath = "Assets/Textures/Skyboxes/autumn_field_puresky_4k.hdr";
     private const string StanfordDragonModelPath = "Assets/Models/Dragon/stanford-dragon-pbr.fbx";
+    private const string StanfordBunnyModelPath = "Assets/Models/Bunny/stanford-bunny-69451.obj";
     private const string WolfensteinTextureAtlasPath = "Assets/wolf3d_textures.png";
     private const string TeapotBaseModelPath = "Assets/Models/Teapot/Mesh000.obj";
     private const string TeapotBodyModelPath = "Assets/Models/Teapot/Mesh001.obj";
@@ -59,13 +61,6 @@ public static class RayTracingSceneGenerator
     public static void GenerateScenes()
     {
         GenerateScenes(null, false);
-    }
-
-    [MenuItem("Tools/Ray Tracing/Generate Getting Started Scene")]
-    public static void GenerateGettingStartedScene()
-    {
-        GenerateScenes(new[] { GetScenePath("GettingStarted") }, true);
-        Debug.Log($"Generated {GetScenePath("GettingStarted")}.");
     }
 
     /// <summary>
@@ -123,6 +118,7 @@ public static class RayTracingSceneGenerator
             CreateDemofoxAbsorptionScene();
             CreateDragonCornellBoxScene();
             CreateEmissiveDragonScene();
+            CreateEnvironmentMappingTest();
             CreateWolfensteinScene();
             CreateVolumetricFogScene();
             CreateApertureBokehScene();
@@ -152,22 +148,24 @@ public static class RayTracingSceneGenerator
         var context = CreateBaseScene(new SceneSettings
         {
             SceneName = sceneName,
-            CameraPosition = new Vector3(0.0f, 2.1f, -5.3f),
-            CameraEuler = new Vector3(4.5f, 0.0f, 0.0f),
+            CameraPosition = new Vector3(0.0f, 15f, -49.952f),
+            CameraEuler = new Vector3(13f, 0.0f, 0.0f),
             CameraBehavior = CameraBehavior.Free,
             CameraFocusPosition = MaterialBallRoomFocusPosition,
             CameraOrbitZoom = Vector3.Distance(MaterialBallRoomCameraPosition, MaterialBallRoomFocusPosition),
-            FieldOfView = 48.0f,
+            FieldOfView = 10.3f,
             NumberOfPasses = 1,
-            NumBounces = 5,
+            NumBounces = 8,
             EnableSpatialDenoising = true,
             EnableCaustics = false,
             DirectionalLightIntensity = 0.0f,
-            LightFalloffScale = 0.06f,
-            Exposure = 1.05f,
-            CameraFocalDistance = 10.0f,
-            CameraApertureMode = CameraApertureMode.Pinhole,
-            FireflyClamp = 4.0f,
+            LightFalloffScale = 0.08f,
+            Exposure = 1.0f,
+            CameraFocalDistance = 52.6f,
+            CameraApertureMode = CameraApertureMode.LensRadius,
+            CameraApertureRadius = 0.12f,
+            FireflyClamp = 16.0f,
+            GlareIntensity = 0.65f,
         });
 
         context.Manager.renderResolutionPercent = 75.0f;
@@ -175,35 +173,80 @@ public static class RayTracingSceneGenerator
         context.Manager.gameObject.AddComponent<GettingStartedControlsOverlay>();
         var quickControls = context.Manager.gameObject.AddComponent<RayTracingQuickControls>();
 
-        GameObject roomPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(MaterialBallRoomPrefabPath);
+        var roomPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(MaterialBallRoomPrefabPath);
         if (roomPrefab == null)
         {
             Debug.LogError($"Getting Started requires the display-room prefab at {MaterialBallRoomPrefabPath}.");
             return;
         }
 
-        GameObject room = PrefabUtility.InstantiatePrefab(roomPrefab, context.Root) as GameObject;
+        var room = PrefabUtility.InstantiatePrefab(roomPrefab, context.Root) as GameObject;
         if (room == null)
         {
             Debug.LogError($"Could not instantiate display-room prefab at {MaterialBallRoomPrefabPath}.");
             return;
         }
+        
+        room.transform.SetPositionAndRotation(new Vector3(0.0f, -0.04f, -2.0f), Quaternion.identity);
 
         if (room.GetComponent<MaterialBallRoomRuntimeSetup>() == null)
         {
             room.AddComponent<MaterialBallRoomRuntimeSetup>();
         }
 
-        var diffuseSphere = AddSphere(context.Root, "Diffuse Sphere", new Vector3(-3.5f, 1.5f, 1.7f), 1.1f, new Color32(71, 151, 218, 255), RayMaterial.MaterialType.Diffuse, 0.18f);
-        var metalSphere = AddSphere(context.Root, "Metal Sphere", new Vector3(0.0f, 1.5f, 1.7f), 1.1f, new Color32(220, 168, 67, 255), RayMaterial.MaterialType.Metal, 0.9f);
-        var glassSphere = AddSphere(context.Root, "Glass Sphere", new Vector3(3.5f, 1.5f, 1.7f), 1.1f, new Color32(135, 220, 196, 255), RayMaterial.MaterialType.Glass, 0.92f, 0.22f, 1.5f, 0.06f, 0.92f);
+        var colors = new Color32[]
+            { new (71, 151, 218, 255), 
+                new (200, 55, 55, 255), 
+                new (55, 200, 55, 255),
+                new (250, 240, 55, 255),
+                new (255, 255, 255, 255),
+            };
 
-        quickControls.SetEntries(new[]
+        var radius = 0.9f;
+        
+        for (var i = 0; i < 4; ++i)
         {
-            RayTracingQuickControls.CreateEntry("Diffuse Sphere", diffuseSphere.GetComponent<RayMaterial>(), "Color", "Smoothness"),
-            RayTracingQuickControls.CreateEntry("Metal Sphere", metalSphere.GetComponent<RayMaterial>(), "Color", "Smoothness"),
-            RayTracingQuickControls.CreateEntry("Glass Sphere", glassSphere.GetComponent<RayMaterial>(), "Color", "Smoothness", "Opacity", "Transmission", "RefractionIndex")
-        });
+            var zPos = 1.7f + (i * 10.0f);
+            
+            var diffuseSphere = AddSphere(context.Root, $"Diffuse Sphere {i + 1}", new Vector3(-7.5f, radius, zPos), radius,
+                new Color32(71, 151, 218, 255), RayMaterial.MaterialType.Diffuse, 1.0f - (i * 0.333f));
+            
+            var metalSphere = AddSphere(context.Root, $"Metal Sphere {i + 1}", new Vector3(-5.0f, radius, zPos), radius,
+                new Color32(220, 168, 67, 255), RayMaterial.MaterialType.Metal, 1.0f - (i * 0.333f));
+            
+            var emissiveSphere = AddLight(context.Root, $"Emissive Sphere {i + 1}", new Vector3(-2.5f, radius, zPos), radius,
+                new Color32(220, 168, 67, 255), 2.0f * (i + 1));
+            
+            var smoothnessSphere = AddSphere(context.Root, $"Glass (Smoothness) Sphere {i + 1}", new Vector3(0.0f, radius, zPos), radius,
+                new Color32(0, 255, 183, 255), RayMaterial.MaterialType.Glass, 1.0f - (i * 0.333f), 0.4f, 1.5f, 0.06f, 0.92f);
+            
+            var opacitySphere = AddSphere(context.Root, $"Glass (Opacity) Sphere {i + 1}", new Vector3(2.5f, radius, zPos), radius,
+                new Color32(0, 255, 183, 255), RayMaterial.MaterialType.Glass, 0.92f, 0.0f + (i * 0.333f), 1.5f, 0.06f, 0.92f);
+            
+            var IORSphere = AddSphere(context.Root, $"Glass (Refraction) Sphere {i + 1}", new Vector3(5.0f, radius, zPos), radius,
+                new Color32(0, 255, 183, 255), RayMaterial.MaterialType.Glass, 0.92f, 0.4f, 1.0f + (i * 0.333f), 0.06f, 0.92f);
+            
+            var transmissionSphere = AddSphere(context.Root, $"Glass (Transmission) Sphere {i + 1}", new Vector3(7.5f, radius, zPos), radius,
+                new Color32(0, 255, 183, 255), RayMaterial.MaterialType.Glass, 0.92f, 0.4f, 1.5f, 0.06f, 1.0f - (i * 0.333f));
+            
+            quickControls.SetEntries(new[]
+            {
+                RayTracingQuickControls.CreateEntry($"Diffuse Sphere {i + 1}", diffuseSphere.GetComponent<RayMaterial>(),
+                    "Color", "Smoothness"),
+                RayTracingQuickControls.CreateEntry($"Metal Sphere {i + 1}", metalSphere.GetComponent<RayMaterial>(), "Color",
+                    "Smoothness"),
+                RayTracingQuickControls.CreateEntry($"Emissive Sphere {i + 1}", emissiveSphere.GetComponent<RayLight>(), "Color",
+                    "Intensity"),
+                RayTracingQuickControls.CreateEntry($"Glass (Opacity) Sphere {i + 1}", opacitySphere.GetComponent<RayMaterial>(), "Color",
+                    "Smoothness", "Opacity", "Transmission", "RefractionIndex"),
+                RayTracingQuickControls.CreateEntry($"Glass (Refraction) Sphere {i + 1}", IORSphere.GetComponent<RayMaterial>(), "Color",
+                    "Smoothness", "Opacity", "Transmission", "RefractionIndex"),
+                RayTracingQuickControls.CreateEntry($"Glass (Transmission) Sphere {i + 1}", transmissionSphere.GetComponent<RayMaterial>(), "Color",
+                    "Smoothness", "Opacity", "Transmission", "RefractionIndex"),
+                RayTracingQuickControls.CreateEntry($"Glass (Smoothness) Sphere {i + 1}", smoothnessSphere.GetComponent<RayMaterial>(), "Color",
+                "Smoothness", "Opacity", "Transmission", "RefractionIndex"),
+            });
+        }
 
         Save(context.Scene, sceneName);
     }
@@ -523,6 +566,7 @@ public static class RayTracingSceneGenerator
             SceneName = sceneName, 
             CameraPosition = new Vector3(0.0f, 3.17f, -16.36f), CameraEuler = new Vector3(-2.98f, 0.0f, 0.0f),
             LightSamplingStrategy = LightSamplingStrategy.ImportanceSampled,
+            EnableVolumetricFog = true,
             FogDensityScale = 0.71f, 
             FogScatteringScale = 1.03f, 
             FogInScatteringIntensity = 19.7f,
@@ -1921,6 +1965,71 @@ public static class RayTracingSceneGenerator
         Save(context.Scene, sceneName);
     }
 
+    private static void CreateEnvironmentMappingTest()
+    {
+        const string sceneName = "Benchmark_Environment_Mapping";
+        const float sceneScale = 10.0f;
+        if (ShouldSkipExistingScene(sceneName))
+        {
+            return;
+        }
+
+        // This is a persistent `.asset`, not a transient scene mesh. Regeneration recreates it
+        // when missing, then saves the scene with the correct asset reference.
+        var bunnyMesh = RayMeshAssetGenerator.GetOrCreateStanfordBunnyMesh();
+        if (bunnyMesh == null)
+        {
+            Debug.LogWarning($"Skipping {sceneName}: no mesh found at {StanfordBunnyModelPath}.");
+            return;
+        }
+
+        var context = CreateBaseScene(new SceneSettings
+        {
+            SceneName = sceneName,
+            CameraPosition = new Vector3(-1.505f, 1.616f, 1.322f) * sceneScale,
+            CameraEuler = new Vector3(21f, 129.24f, 0.0f),
+            NumberOfPasses = 1,
+            NumBounces = 8,
+            ShadowQuality = 0,
+            EnableCaustics = false,
+            CameraApertureMode = CameraApertureMode.Pinhole,
+            LightFalloffScale = 0.035f,
+            Exposure = 1.2f,
+            FireflyClamp = 8.0f,
+            SkyboxLightColor = Color.white,
+            EnvironmentHighlightThreshold = 1.0f,
+            EnvironmentHighlightSoftKnee = 0.215f,
+            EnvironmentHighlightIntensity = 4.2f,
+            DirectionalLightIntensity = 0.0f,
+            TopLevelBvhMinObjectCount = 0,
+            ShadowBvhMinObjectCount = 0
+        });
+
+        ConfigureReadableEnvironmentTexture(AutumnFieldSkyboxPath);
+        var autumnField = AssetDatabase.LoadAssetAtPath<Texture2D>(AutumnFieldSkyboxPath);
+        if (autumnField == null)
+        {
+            Debug.LogWarning($"Skipping {sceneName}: HDRI is missing at {AutumnFieldSkyboxPath}.");
+            return;
+        }
+        context.Manager.skyboxTexture = autumnField;
+        // CreateBaseScene supplies a directional-light authoring object for most fixtures.
+        // Remove it entirely so this scene has no analytic or emissive scene lights.
+        var directionalLight = context.Root.Find("Directional Light");
+        if (directionalLight != null)
+        {
+            Object.DestroyImmediate(directionalLight.gameObject);
+        }
+        AddFloor(context.Root, new Vector2(0.0f, 0.0f), new Vector2(30.0f, 30.0f) * sceneScale, 0.25f, "Neutral Ground Plane");
+
+        var bunny = AddRayMesh(context.Root, "Copper Stanford Bunny", bunnyMesh,
+            new Vector3(0.0f, -3.34f, 0.0f), new Vector3(0.0f, 0.0f, 0.0f), new Vector3(-0.1f, 0.1f, 0.1f), // Negative X scale for the bunny to flip it over the X-axis
+            new Color32(242, 163, 138, 255), RayMaterial.MaterialType.Metal, 0.88f);
+        bunny.GetComponent<RayMaterial>().InterpolateNormals = true;
+
+        Save(context.Scene, sceneName);
+    }
+
     private static void CreateWolfensteinScene()
     {
         const string sceneName = "Benchmark_Wolfenstein";
@@ -2200,6 +2309,18 @@ public static class RayTracingSceneGenerator
     private static void EnsureReadableModel(string path)
     {
         var importer = AssetImporter.GetAtPath(path) as ModelImporter;
+        if (importer == null || importer.isReadable)
+        {
+            return;
+        }
+
+        importer.isReadable = true;
+        importer.SaveAndReimport();
+    }
+
+    private static void ConfigureReadableEnvironmentTexture(string path)
+    {
+        var importer = AssetImporter.GetAtPath(path) as TextureImporter;
         if (importer == null || importer.isReadable)
         {
             return;

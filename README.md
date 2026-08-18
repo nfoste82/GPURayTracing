@@ -72,7 +72,7 @@ Note: These video were rendered offline, at around 45-75 seconds per frame.
 5. Enter Play mode and view the **Game** tab. The Getting Started scene opens the **Ray Tracing Controls** panel, which keeps renderer settings available while you inspect other objects.
 
 > [!WARNING]
-> **The first compute-shader compilation can take several minutes.** Unity may appear to be frozen or show a spinning cursor while it compiles synchronously. On an Apple M3 Max, a cold compile has taken 3-5 minutes. Leave Unity running until the precompile operation completes; subsequent runs are normally much faster unless the shader or its variants change.
+> **The first compute-shader compilation can take several minutes.** Unity may appear to be frozen or show a spinning cursor while it compiles synchronously. Historical measurements on an Apple M3 Max range from 3-5 minutes for a cold compile, with a recent enlarged shader superset reaching approximately 12 minutes before feature variants were isolated. `Tools > Ray Tracing > Precompile Compute Shader` warms the eight common debug/fog/terrain combinations; subsequent runs are normally much faster unless the shader or its variants change.
 
 The project has been tested on macOS. It requires a Unity editor session with compute-shader support; GPU rendering and GPU tests cannot run with a Null graphics device such as `-nographics`.
 

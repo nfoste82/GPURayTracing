@@ -146,6 +146,33 @@ namespace GPURayTracing.Tests
             AssertVector(transmittance, new Vector3(0.17212175f, 0.39543194f, 0.64325213f), 0.00002f);
         }
 
+        [Test]
+        public void EnvironmentDistribution_UniformImageHasUniformTexelMass()
+        {
+            float[] weights = BuildEnvironmentDistribution(new[,] { { 1.0f, 1.0f }, { 1.0f, 1.0f } });
+
+            Assert.That(weights, Is.EqualTo(new[] { 0.25f, 0.25f, 0.25f, 0.25f }).Within(Epsilon));
+        }
+
+        [Test]
+        public void EnvironmentDistribution_BrightTexelReceivesHigherProbability()
+        {
+            float[] weights = BuildEnvironmentDistribution(new[,] { { 1.0f, 8.0f }, { 1.0f, 1.0f } });
+
+            Assert.That(weights[1], Is.GreaterThan(weights[0]));
+            Assert.That(weights[1], Is.GreaterThan(weights[2]));
+            Assert.That(weights[1], Is.GreaterThan(weights[3]));
+            Assert.That(weights[0] + weights[1] + weights[2] + weights[3], Is.EqualTo(1.0f).Within(Epsilon));
+        }
+
+        [Test]
+        public void EnvironmentHighlightBoost_LeavesAmbientAndAmplifiesHighlights()
+        {
+            Assert.That(ApplyEnvironmentHighlightBoost(1.0f, 2.0f, 0.5f, 4.0f), Is.EqualTo(1.0f).Within(Epsilon));
+            Assert.That(ApplyEnvironmentHighlightBoost(4.0f, 2.0f, 0.0f, 3.0f), Is.EqualTo(10.0f).Within(Epsilon));
+            Assert.That(ApplyEnvironmentHighlightBoost(4.0f, 2.0f, 0.5f, 3.0f), Is.GreaterThan(4.0f).And.LessThan(10.0f));
+        }
+
         private static float IntersectSphere(Vector3 rayOrigin, Vector3 rayDirection, Vector3 center, float radius)
         {
             Vector3 direction = rayDirection.normalized;
@@ -167,6 +194,45 @@ namespace GPURayTracing.Tests
             float p2 = Mathf.Sqrt(p2Squared);
             float distance = p1 - p2 > 0.0f ? p1 - p2 : p1 + p2;
             return distance > 0.0f ? distance : -1.0f;
+        }
+
+        private static float[] BuildEnvironmentDistribution(float[,] luminance)
+        {
+            int height = luminance.GetLength(0);
+            int width = luminance.GetLength(1);
+            var weights = new float[width * height];
+            float total = 0.0f;
+            for (int y = 0; y < height; y++)
+            {
+                float sineTheta = Mathf.Sin(Mathf.PI * ((y + 0.5f) / height));
+                for (int x = 0; x < width; x++)
+                {
+                    int index = y * width + x;
+                    weights[index] = luminance[y, x] * sineTheta;
+                    total += weights[index];
+                }
+            }
+            for (int i = 0; i < weights.Length; i++)
+            {
+                weights[i] /= total;
+            }
+            return weights;
+        }
+
+        private static float ApplyEnvironmentHighlightBoost(float luminance, float threshold, float softKnee, float intensity)
+        {
+            if (threshold <= 0.0f || intensity <= 0.0f)
+            {
+                return luminance;
+            }
+
+            float excess = Mathf.Max(0.0f, luminance - threshold);
+            float knee = Mathf.Max(0.0f, threshold * softKnee);
+            if (knee > 0.0f)
+            {
+                excess *= excess / (excess + knee);
+            }
+            return luminance + excess * intensity;
         }
 
         private static bool IntersectTriangle(

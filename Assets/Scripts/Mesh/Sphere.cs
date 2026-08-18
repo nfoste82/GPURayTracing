@@ -2,7 +2,7 @@ using UnityEngine;
 
 namespace PathTracing.Shapes
 {
-    public struct Sphere
+    public struct Sphere : System.IEquatable<Sphere>
     {
         public Vector3 position;
         public Vector3 color;
@@ -39,6 +39,54 @@ namespace PathTracing.Shapes
             hash = GameManager.AddHash(hash, textureUvScale);
             hash = GameManager.AddHash(hash, parallaxStrength);
             return GameManager.AddHash(hash, minimumParallaxStrength);
+        }
+
+        public bool Equals(Sphere other)
+        {
+            return position == other.position
+                && color == other.color
+                && emission == other.emission
+                && radius == other.radius
+                && smoothness == other.smoothness
+                && opacity == other.opacity
+                && refraction == other.refraction
+                && specular == other.specular
+                && transmission == other.transmission
+                && materialType == other.materialType
+                && textureIndex == other.textureIndex
+                && normalTextureIndex == other.normalTextureIndex
+                && parallaxTextureIndex == other.parallaxTextureIndex
+                && textureUvScale == other.textureUvScale
+                && parallaxStrength == other.parallaxStrength
+                && minimumParallaxStrength == other.minimumParallaxStrength;
+        }
+
+        public override bool Equals(object obj)
+        {
+            return obj is Sphere other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                var hash = position.GetHashCode();
+                hash = hash * 31 + color.GetHashCode();
+                hash = hash * 31 + emission.GetHashCode();
+                hash = hash * 31 + radius.GetHashCode();
+                hash = hash * 31 + smoothness.GetHashCode();
+                hash = hash * 31 + opacity.GetHashCode();
+                hash = hash * 31 + refraction.GetHashCode();
+                hash = hash * 31 + specular.GetHashCode();
+                hash = hash * 31 + transmission.GetHashCode();
+                hash = hash * 31 + materialType;
+                hash = hash * 31 + textureIndex;
+                hash = hash * 31 + normalTextureIndex;
+                hash = hash * 31 + parallaxTextureIndex;
+                hash = hash * 31 + textureUvScale.GetHashCode();
+                hash = hash * 31 + parallaxStrength.GetHashCode();
+                return hash * 31 + minimumParallaxStrength.GetHashCode();
+            }
         }
         
         public float Intersect(Vector3 origin, Vector3 direction)

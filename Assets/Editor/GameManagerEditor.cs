@@ -78,6 +78,19 @@ public sealed class GameManagerEditor : Editor
             }
             DrawLightingProperty("skyboxLightColor", "Skybox Light Color");
             DrawProperty("skyboxTexture");
+            DrawProperty("enableEnvironmentLighting", "Enable Environment Lighting");
+            if (serializedObject.FindProperty("enableEnvironmentLighting").boolValue)
+            {
+                DrawProperty("environmentLightSampleCount", "Environment Light Sample Count");
+                DrawProperty("environmentHighlightThreshold", "Environment Highlight Threshold");
+                if (serializedObject.FindProperty("environmentHighlightThreshold").floatValue > 0.0f)
+                {
+                    DrawProperty("environmentHighlightSoftKnee", "Environment Highlight Soft Knee");
+                    DrawProperty("environmentHighlightIntensity", "Environment Highlight Intensity");
+                }
+                DrawProperty("environmentImportanceWidth", "Environment Importance Width");
+                DrawProperty("environmentImportanceHeight", "Environment Importance Height");
+            }
         });
         DrawSection(manager, "Camera", true, () => DrawCameraSettings(manager));
         DrawSection(manager, "Denoising", false, DrawDenoising);

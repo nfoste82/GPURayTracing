@@ -50,14 +50,14 @@ Each render callback:
 10. When caustics and final-color frame accumulation are enabled, clears and rebuilds an independent fixed-size photon batch and spatial grid. Relevant scene changes also rebuild compact light/refractor and mesh-target CDF buffers; photon threads binary-search these distributions instead of scanning all scene candidates. Stable frames advance a caustic-only sequence index without invalidating HDR accumulation; relevant scene/settings changes reset both sequences. Without accumulation, the current batch remains fixed.
 11. Dispatches beauty through `UpdateTextureFromCompute()`, then runs the separate five-UAV `CSFeatures` kernel when spatial or temporal denoising needs stable primary features. This split keeps the main renderer and temporal kernels within Metal's eight-UAV limit.
 12. Increments `AccumulatedFrameCount` when accumulation is active.
-13. Marks the active `debugRenderMode` as warmed and clears the variant-warmup flag.
+13. Marks the active debug/fog/terrain shader variant as warmed and clears the variant-warmup flag.
 14. In single-frame mode, keeps dispatching at the reduced single-frame presentation rate. Final-color accumulation progressively refines an unchanged view and resets when the camera or scene changes.
 
 An on-demand debug-variant compile also happens in single-frame mode because render dispatch remains active.
 
-### Debug Variant Warmup Deferral
+### Shader Variant Warmup Deferral
 
-Before dispatch, `RenderImage()` checks for a switch to a `debugRenderMode` whose `DEBUG_RENDER` shader variant has not been compiled yet (tracked in `_warmedDebugModes`, compared against `_appliedDebugRenderMode`). The first variant `Dispatch` compiles synchronously and freezes the main thread, so on detection `RenderImage()` sets `_pendingVariantWarmup`, re-blits the previous `_outputTexture`, and returns without the heavy dispatch. That extra frame lets `GameManager.OnGUI()` paint a centered "Compiling shader variant" notice; the next frame runs the stalling dispatch with the notice already on screen, then marks the mode warmed. See `10-benchmarking-and-performance.md` for the full rationale and `08-shader-debugging-and-randomness.md` for the variant split.
+Before dispatch, `RenderImage()` computes a shader variant key from `debugRenderMode`, active fog state, and active terrain state. If that `DEBUG_RENDER`/`FOG_ENABLED`/`TERRAIN_ENABLED` combination has not been compiled yet, the first variant `Dispatch` would compile synchronously and freeze the main thread. On detection, `RenderImage()` sets `_pendingVariantWarmup`, re-blits the previous `_outputTexture`, and returns without the heavy dispatch. That extra frame lets `GameManager.OnGUI()` paint a centered "Compiling shader variant" notice; the next frame runs the stalling dispatch with the notice already on screen, then marks the combination warmed. See `10-benchmarking-and-performance.md` for the full rationale and `08-shader-debugging-and-randomness.md` for the variant split.
 
 After dispatch, it always calls:
 
@@ -122,6 +122,7 @@ On `Start()`, `GameManager` ensures that the generic benchmark runner and live p
 `SetShaderParameters()` sends:
 
 - `_SkyboxTexture`
+- `_EnvironmentConditionalCdf`, `_EnvironmentMarginalCdf`, `_EnvironmentLightEnabled`, `_EnvironmentLightSampleCount`, `_EnvironmentHighlightThreshold`, `_EnvironmentHighlightSoftKnee`, `_EnvironmentHighlightIntensity`, `_EnvironmentCdfWidth`, and `_EnvironmentCdfHeight` when a readable HDR skybox is configured for importance-sampled environment lighting. The highlight controls artistically amplify HDRI luminance above the threshold and rebuild the CDF with the same remapped luminance.
 - `_MeshAlbedoTextures`
 - `_MeshMetallicRoughnessTextures`
 - `_MeshNormalTextures`
@@ -158,7 +159,7 @@ On `Start()`, `GameManager` ensures that the generic benchmark runner and live p
 
 When frame accumulation is active, `_SampleOffset` advances by `AccumulatedFrameCount * numberOfPasses` so deterministic sampling still generates new samples across accumulated frames. `_AccumulatedFrameCount` tells the shader how many previous HDR final-color frames are stored in `AccumulationResult`. Accumulation is applied before exposure/tone mapping, and debug render modes are not accumulated.
 
-Alongside `_DebugRenderMode`, `SetShaderParameters()` toggles the `DEBUG_RENDER` shader keyword: `EnableKeyword("DEBUG_RENDER")` when `debugRenderMode != FinalColor`, otherwise `DisableKeyword("DEBUG_RENDER")`. It also toggles `FOG_ENABLED` from the active `FogVolume`, keeping fog intersection, scattering, and shadow-transmittance work out of the disabled variant. Shader variant warmup keys include debug mode, caustics, and fog state. See `08-shader-debugging-and-randomness.md` and `10-benchmarking-and-performance.md`.
+Alongside `_DebugRenderMode`, `SetShaderParameters()` toggles the `DEBUG_RENDER` shader keyword for shader diagnostic modes and `FOG_ENABLED` only when the registered fog volume is active. TerrainManager independently toggles `TERRAIN_ENABLED` when terrain resources are available. Photon caustics remain runtime-controlled through `_CausticsEnabled`; CPU photon-map allocation and dispatch remain gated by the caustics setting. Shader variant warmup keys include debug, fog, and terrain state. See `08-shader-debugging-and-randomness.md` and `10-benchmarking-and-performance.md`.
 
 `SetShaderParameters()` also logs a one-time warning when `lightSamplingStrategy == ImportanceSampled` and the active light count exceeds `MaxImportanceLights` (`128`), since lights beyond that count are dropped from importance weighting in the shader. The C# `MaxImportanceLights` constant must stay in sync with the shader's `MaxImportanceLights`.
 

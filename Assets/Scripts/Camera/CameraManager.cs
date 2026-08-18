@@ -60,7 +60,7 @@ public sealed class CameraManager : MonoBehaviour
     
     public CameraApertureMode cameraApertureMode = CameraApertureMode.LensRadius;
     
-    [Range(0.0f, 0.1f)] 
+    [Range(0.0f, 0.2f)] 
     public float cameraApertureRadius = 0.005f;
     
     [Range(0.7f, 32.0f)] 
@@ -105,6 +105,14 @@ public sealed class CameraManager : MonoBehaviour
     private int FocusQueryGeneration;
     private ComputeBuffer FocusQueryBuffer;
     private AsyncGPUReadbackRequest FocusReadbackRequest;
+    private int FocusQueryDispatchGeneration;
+    private Action ResetFocusAccumulation;
+    private Action<AsyncGPUReadbackRequest> FocusReadbackCallback;
+
+    private void Awake()
+    {
+        FocusReadbackCallback = CompleteFocusQuery;
+    }
 
     public void InitSceneSettings(SceneSettings settings)
     {
@@ -370,15 +378,16 @@ public sealed class CameraManager : MonoBehaviour
         FocusQueryCameraPosition = renderTextureCamera.transform.position;
         FocusQueryCameraForward = renderTextureCamera.transform.forward;
 
-        var generation = FocusQueryGeneration;
+        FocusQueryDispatchGeneration = FocusQueryGeneration;
+        ResetFocusAccumulation = resetFrameAccumulation;
         FocusReadbackRequest = AsyncGPUReadback.Request(
             FocusQueryBuffer,
-            request => CompleteFocusQuery(request, generation, resetFrameAccumulation));
+            FocusReadbackCallback);
     }
 
-    private void CompleteFocusQuery(AsyncGPUReadbackRequest request, int generation, Action resetFrameAccumulation)
+    private void CompleteFocusQuery(AsyncGPUReadbackRequest request)
     {
-        if (generation != FocusQueryGeneration)
+        if (FocusQueryDispatchGeneration != FocusQueryGeneration)
         {
             return;
         }
@@ -415,7 +424,7 @@ public sealed class CameraManager : MonoBehaviour
         ClickedFocusPoint = hitPosition;
         HasClickedFocusPoint = enableClickToFocus && trackClickedFocusPoint;
         UpdateTrackedFocusPoint();
-        resetFrameAccumulation();
+        ResetFocusAccumulation?.Invoke();
     }
 
     private void InitializeOrbitFromSceneSettings(SceneSettings settings)

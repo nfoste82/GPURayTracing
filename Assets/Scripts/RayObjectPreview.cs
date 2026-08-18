@@ -26,6 +26,8 @@ public class RayObjectPreview : MonoBehaviour
     private Vector3[] _sphereVertices;
     private float _previewRadius = -1.0f;
     private Vector3 _previewCenter;
+    private Material _previewMaterial;
+    private Shader _previewShader;
 
     public bool HideRendererInPlayMode
     {
@@ -129,8 +131,20 @@ public class RayObjectPreview : MonoBehaviour
     private void SyncMaterial()
     {
         var material = _meshRenderer.sharedMaterial;
-        var previewShader = Shader.Find(PreviewShaderName);
-        if (material == null || material.name != PreviewMaterialName || material.shader != previewShader)
+        if (_previewShader == null)
+        {
+            _previewShader = Shader.Find(PreviewShaderName);
+        }
+
+        var previewShader = _previewShader;
+        if (_previewMaterial == null && material != null && material.shader == previewShader
+            && material.hideFlags == HideFlags.HideAndDontSave)
+        {
+            // Recover the generated material after a domain reload without querying Object.name.
+            _previewMaterial = material;
+        }
+
+        if (material == null || material != _previewMaterial || material.shader != previewShader)
         {
             if (previewShader == null)
             {
@@ -142,6 +156,7 @@ public class RayObjectPreview : MonoBehaviour
                 name = PreviewMaterialName,
                 hideFlags = HideFlags.HideAndDontSave
             };
+            _previewMaterial = material;
             _meshRenderer.sharedMaterial = material;
         }
 

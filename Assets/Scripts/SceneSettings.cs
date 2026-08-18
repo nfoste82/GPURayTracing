@@ -34,6 +34,7 @@ public sealed class SceneSettings
     public int CausticSeed = 1;
     public float CausticIntensity = 1.0f;
 
+    public bool EnableVolumetricFog = false;
     public float FogDensityScale = 1.0f;
     public float FogScatteringScale = 1.0f;
     public float FogInScatteringIntensity = 8.0f;
@@ -58,6 +59,14 @@ public sealed class SceneSettings
     public float GlareThreshold = 1.0f;
     public float GlareSoftKnee = 0.1f;
     public float GlareIntensity = 1.0f;
+
+    public bool EnableEnvironmentLighting = true;
+    public int EnvironmentLightSampleCount = 1;
+    public float EnvironmentHighlightThreshold = 0.0f;
+    public float EnvironmentHighlightSoftKnee = 0.5f;
+    public float EnvironmentHighlightIntensity = 0.0f;
+    public int EnvironmentImportanceWidth = 512;
+    public int EnvironmentImportanceHeight = 256;
     
     public float DirectionalLightIntensity = 1.0f;
     public float DirectionalLightAngularRadius = 0.27f;

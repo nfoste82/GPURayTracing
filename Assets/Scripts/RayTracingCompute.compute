@@ -3,11 +3,11 @@
 #pragma kernel CSFeatures
 #pragma kernel CSFocusQuery
 #pragma kernel CSRegressionProbe
-#pragma kernel ClearCausticPhotons CAUSTICS_ENABLED
-#pragma kernel TraceCausticPhotons CAUSTICS_ENABLED CAUSTIC_PHOTON_TRACE
-#pragma kernel ClearCausticGrid CAUSTICS_ENABLED
-#pragma kernel BuildCausticGrid CAUSTICS_ENABLED
-#pragma kernel CSCausticsDebug CAUSTICS_ENABLED
+#pragma kernel ClearCausticPhotons
+#pragma kernel TraceCausticPhotons CAUSTIC_PHOTON_TRACE
+#pragma kernel ClearCausticGrid
+#pragma kernel BuildCausticGrid
+#pragma kernel CSCausticsDebug
 
 // Compile-time experiment: bypass Metal backend optimization so its effect on shader compile
 // time and runtime performance can be measured against the optimized baseline.
@@ -20,7 +20,6 @@
 // debug code out of the default variant; GameManager enables DEBUG_RENDER only when a debug mode
 // is selected. The non-debug variant (the hot path) compiles without any debug intersection code.
 #pragma multi_compile _ DEBUG_RENDER
-#pragma multi_compile _ CAUSTICS_ENABLED
 #pragma multi_compile _ FOG_ENABLED
 #pragma multi_compile _ TERRAIN_ENABLED
 
@@ -46,6 +45,8 @@ int _UseTemporalJitter;
 
 Texture2D<float4> _SkyboxTexture;
 SamplerState sampler_SkyboxTexture;
+StructuredBuffer<float> _EnvironmentConditionalCdf;
+StructuredBuffer<float> _EnvironmentMarginalCdf;
 Texture2DArray<float4> _MeshAlbedoTextures;
 SamplerState sampler_MeshAlbedoTextures;
 Texture2DArray<float4> _MeshMetallicRoughnessTextures;
@@ -56,6 +57,13 @@ Texture2DArray<float4> _MeshParallaxTextures;
 SamplerState sampler_MeshParallaxTextures;
 
 float4 _SkyboxLight;
+int _EnvironmentLightEnabled;
+int _EnvironmentLightSampleCount;
+float _EnvironmentHighlightThreshold;
+float _EnvironmentHighlightSoftKnee;
+float _EnvironmentHighlightIntensity;
+int _EnvironmentCdfWidth;
+int _EnvironmentCdfHeight;
 
 int _NumberOfPasses;
 float _SubpixelJitterScale;
@@ -94,11 +102,13 @@ float _WaterWaveSpeed;
 float _WaterTime;
 int _WaterMarchSteps;
 int _WaterRefinementSteps;
+// Used by the terrain-cell debug visualization, including debug variants where the terrain
+// intersection path is not compiled.
+int _TerrainCellResolution;
 
 #if defined(TERRAIN_ENABLED)
 float3 _TerrainPosition;
 float3 _TerrainSize;
-int _TerrainCellResolution;
 int _TerrainHeightmapResolution;
 int _TerrainMarchSteps;
 int _TerrainRefinementSteps;
@@ -130,13 +140,14 @@ struct TerrainCell { float minHeight; float maxHeight; };
 StructuredBuffer<TerrainCell> _TerrainCells;
 #endif
 
-int _FogEnabled;
+#if defined(FOG_ENABLED)
 float3 _FogBoundsMin;
 float3 _FogBoundsMax;
 float _FogDensity;
 float3 _FogScatteringAlbedo;
 float _FogInScatteringIntensity;
 int _FogMultipleScattering;
+#endif
 
 uint _Seed;
 uint _SampleOffset;
@@ -152,8 +163,8 @@ int _NumShadowBvhNodes;
 // When 0, GetShadowTransmittance() takes a cheaper pure-occlusion path that returns black on
 // the first opaque blocker and never does nearest-transparent-blocker bookkeeping.
 int _HasTransparentShadowBlockers;
+int _CausticsEnabled;
 
-#if defined(CAUSTICS_ENABLED)
 int _CausticPhotonCapacity;
 int _CausticPhotonAttemptCount;
 int _CausticMaxBounces;
@@ -166,7 +177,6 @@ float _CausticGridCellSize;
 int3 _CausticGridDimensions;
 int _CausticGridCellCount;
 int _NumCausticTargetPairs;
-#endif
 
 static const float PI = 3.141593f;
 // Keep this finite sentinel well below the backend's float-literal limit. It is still vastly
@@ -245,7 +255,6 @@ uint Hash(uint value)
     return value;
 }
 
-#if defined(CAUSTICS_ENABLED)
 float CausticSequenceSample(uint photonIndex, uint dimension)
 {
     uint scramble = Hash(_CausticSeed ^ (_CausticFrameIndex * 2246822519u) ^ (dimension * 3266489917u));
@@ -265,7 +274,6 @@ float CausticDecorrelatedSample(uint photonIndex, uint dimension)
         ^ (dimension * 2891336453u));
     return min((bits + 0.5f) * 2.3283064365386963e-10f, 0.99999994f);
 }
-#endif
 
 uint CreateRngState(uint2 pixel, uint sampleIndex)
 {
@@ -407,7 +415,6 @@ struct TopLevelBvhNode
 StructuredBuffer<TopLevelBvhNode> _TopLevelBvhNodes;
 StructuredBuffer<TopLevelBvhNode> _ShadowBvhNodes;
 
-#if defined(CAUSTICS_ENABLED)
 struct CausticPhoton
 {
     float3 position;
@@ -442,7 +449,6 @@ struct CausticTargetTriangle
 
 StructuredBuffer<CausticTargetPair> _CausticTargetPairs;
 StructuredBuffer<CausticTargetTriangle> _CausticTargetTriangles;
-#endif
 #endif
 
 // =======================================================
@@ -1937,11 +1943,12 @@ bool IntersectAabb(Ray ray, float3 boundsMin, float3 boundsMax, float maxDistanc
     return IntersectAabbInverse(ray.origin, inverseDirection, boundsMin, boundsMax, maxDistance, entryDistance);
 }
 
+#if defined(FOG_ENABLED)
 bool GetFogInterval(Ray ray, float maxDistance, out float entryDistance, out float exitDistance)
 {
     entryDistance = 0.0f;
     exitDistance = 0.0f;
-    if (_FogEnabled == 0 || _FogDensity <= 0.0f)
+    if (_FogDensity <= 0.0f)
     {
         return false;
     }
@@ -1993,6 +2000,7 @@ bool SampleFogScatteringEvent(Ray ray, float maxDistance, inout uint rngState, o
     eventDistance = entryDistance + freeFlightDistance;
     return eventDistance < exitDistance;
 }
+#endif
 
 float3 SampleUniformSphere(inout uint rngState)
 {
@@ -2888,73 +2896,116 @@ float3 EvaluateMaterialBrdf(Ray ray, RayHit hit, float3 lightDirection, out floa
     return diffuse + specular;
 }
 
+float3 GetSkyboxColor(float3 direction);
+float3 GetSkyboxDirection(float2 uv);
+int SelectEnvironmentCdf(bool marginal, int offset, int count, float target);
+
 float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
-                         float lightSelectionPdf, int lightTechniqueSampleCount,
-#if defined(FOG_ENABLED)
-                         bool volumeEvent,
-#endif
-                         inout uint rngState)
+                          float lightSelectionPdf, int lightTechniqueSampleCount,
+                          bool volumeEvent,
+                          inout uint rngState)
 {
     float3 lightTotal = float3(0.0f, 0.0f, 0.0f);
-    Light light = _Lights[lightIndex];
-    float triangleSelectionProbability = 1.0f;
-    bool isMeshLight = light.type == LightTypeMesh;
-    if (light.type == LightTypeMesh)
+    bool isEnvironment = lightIndex < 0;
+    if (isEnvironment && (_EnvironmentLightEnabled == 0 || _EnvironmentCdfWidth <= 0 || _EnvironmentCdfHeight <= 0))
     {
-        int triangleIndex = SelectMeshLightTriangle(light, rngState, triangleSelectionProbability);
-        if (triangleIndex < 0)
-        {
-            return lightTotal;
-        }
-
-        MeshTriangle meshTriangle = _Triangles[triangleIndex];
-        light.position = meshTriangle.vertex0;
-        light.u = meshTriangle.vertex1 - meshTriangle.vertex0;
-        light.v = meshTriangle.vertex2 - meshTriangle.vertex0;
-        light.normal = meshTriangle.normal;
-        light.area = GetTriangleArea(meshTriangle);
-        light.type = LightTypeTriangle;
+        return lightTotal;
     }
-    bool isDirectional = light.type == LightTypeDirectional;
-    float3 lightPos = light.type == LightTypeTriangle || light.type == LightTypeSunTriangle
-        ? light.position + (light.u + light.v) / 3.0f
-        : light.position;
-    float3 ptToLight = isDirectional ? -normalize(light.position) : normalize(lightPos - hit.position);
-    float3 tangent;
-    float3 bitangent;
-    CreateBasisFromNormal(ptToLight, tangent, bitangent);
+
+    Light light;
+    float triangleSelectionProbability = 1.0f;
+    bool isMeshLight = false;
+    if (!isEnvironment)
+    {
+        light = _Lights[lightIndex];
+        isMeshLight = light.type == LightTypeMesh;
+        if (light.type == LightTypeMesh)
+        {
+            int triangleIndex = SelectMeshLightTriangle(light, rngState, triangleSelectionProbability);
+            if (triangleIndex < 0)
+            {
+                return lightTotal;
+            }
+
+            MeshTriangle meshTriangle = _Triangles[triangleIndex];
+            light.position = meshTriangle.vertex0;
+            light.u = meshTriangle.vertex1 - meshTriangle.vertex0;
+            light.v = meshTriangle.vertex2 - meshTriangle.vertex0;
+            light.normal = meshTriangle.normal;
+            light.area = GetTriangleArea(meshTriangle);
+            light.type = LightTypeTriangle;
+        }
+    }
+    bool isDirectional = false;
+    float3 lightPos = 0.0f;
+    float3 ptToLight = 0.0f;
+    float3 tangent = 0.0f;
+    float3 bitangent = 0.0f;
+    if (!isEnvironment)
+    {
+        isDirectional = light.type == LightTypeDirectional;
+        lightPos = light.type == LightTypeTriangle || light.type == LightTypeSunTriangle
+            ? light.position + (light.u + light.v) / 3.0f
+            : light.position;
+        ptToLight = isDirectional ? -normalize(light.position) : normalize(lightPos - hit.position);
+        CreateBasisFromNormal(ptToLight, tangent, bitangent);
+    }
 
     int sampleIndex;
     [loop]
     for (sampleIndex = 0; sampleIndex < sampleCount; sampleIndex++)
     {
-        float3 offsetPt;
-        if (isDirectional)
+        float3 offsetPt = hit.position;
+        float3 ptToOffset;
+        float distanceToLight;
+        float environmentPdf = 0.0f;
+        if (isEnvironment)
         {
-            offsetPt = hit.position + SampleCone(ptToLight, light.radius, rngState);
-        }
-        else if (light.type == LightTypeTriangle || light.type == LightTypeSunTriangle)
-        {
-            float r1 = rand(rngState);
-            float r2 = rand(rngState);
-            if (r1 + r2 > 1.0f)
-            {
-                r1 = 1.0f - r1;
-                r2 = 1.0f - r2;
-            }
-            offsetPt = light.position + light.u * r1 + light.v * r2;
+            int y = SelectEnvironmentCdf(true, 0, _EnvironmentCdfHeight, rand(rngState));
+            int x = SelectEnvironmentCdf(false, y * _EnvironmentCdfWidth, _EnvironmentCdfWidth, rand(rngState));
+            float2 distributionUv = (float2(x, y) + float2(rand(rngState), rand(rngState)))
+                / float2(_EnvironmentCdfWidth, _EnvironmentCdfHeight);
+            float rowCdf = _EnvironmentMarginalCdf[y];
+            float previousRowCdf = y > 0 ? _EnvironmentMarginalCdf[y - 1] : 0.0f;
+            float columnCdf = _EnvironmentConditionalCdf[y * _EnvironmentCdfWidth + x];
+            float previousColumnCdf = x > 0 ? _EnvironmentConditionalCdf[y * _EnvironmentCdfWidth + x - 1] : 0.0f;
+            float texelProbability = max(0.0f, rowCdf - previousRowCdf)
+                * max(0.0f, columnCdf - previousColumnCdf);
+            float theta = distributionUv.y * PI;
+            float texelSolidAngle = (2.0f * PI / _EnvironmentCdfWidth) * (PI / _EnvironmentCdfHeight)
+                * max(abs(sin(theta)), 1e-5f);
+            environmentPdf = texelProbability / texelSolidAngle;
+            ptToOffset = GetSkyboxDirection(float2(distributionUv.x, 1.0f - distributionUv.y));
+            distanceToLight = RayMaxDistance;
         }
         else
         {
-            float2 diskSample = SampleDisk(rngState) * light.radius * max(0.0f, _ShadowRandomness);
-            offsetPt = lightPos + tangent * diskSample.x + bitangent * diskSample.y;
+            if (isDirectional)
+            {
+                offsetPt = hit.position + SampleCone(ptToLight, light.radius, rngState);
+            }
+            else if (light.type == LightTypeTriangle || light.type == LightTypeSunTriangle)
+            {
+                float r1 = rand(rngState);
+                float r2 = rand(rngState);
+                if (r1 + r2 > 1.0f)
+                {
+                    r1 = 1.0f - r1;
+                    r2 = 1.0f - r2;
+                }
+                offsetPt = light.position + light.u * r1 + light.v * r2;
+            }
+            else
+            {
+                float2 diskSample = SampleDisk(rngState) * light.radius * max(0.0f, _ShadowRandomness);
+                offsetPt = lightPos + tangent * diskSample.x + bitangent * diskSample.y;
+            }
+
+            ptToOffset = isDirectional ? normalize(offsetPt - hit.position) : offsetPt - hit.position;
+            distanceToLight = isDirectional ? RayMaxDistance : length(ptToOffset);
+            ptToOffset = normalize(ptToOffset);
         }
 
-        float3 ptToOffset = isDirectional
-            ? normalize(offsetPt - hit.position)
-            : offsetPt - hit.position;
-        float distanceToLight = isDirectional ? RayMaxDistance : length(ptToOffset);
-        ptToOffset = normalize(ptToOffset);
         float shadowOffsetSign = dot(ptToOffset, hit.geometricNormal) >= 0.0f ? 1.0f : -1.0f;
         float3 shadowOrigin = hit.position + hit.geometricNormal * (0.001f * shadowOffsetSign);
 #if defined(FOG_ENABLED)
@@ -2983,7 +3034,7 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
             continue;
         }
 
-        if (isDirectional)
+        if (isEnvironment || isDirectional)
         {
             shadowTransmittance *= GetWaterAbsorptionTransmittance(GetWaterDistanceAlongRay(rayToLight, RayMaxDistance));
         }
@@ -2992,7 +3043,7 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
             shadowTransmittance *= GetWaterAbsorptionTransmittance(EstimateWaterDistanceAlongSegment(hit.position, offsetPt));
         }
 #if defined(FOG_ENABLED)
-        if (isDirectional)
+        if (isEnvironment || isDirectional)
         {
             float fogEntryDistance;
             float fogExitDistance;
@@ -3008,6 +3059,21 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
 #endif
         if (max(shadowTransmittance.x, max(shadowTransmittance.y, shadowTransmittance.z)) <= 0.001f)
         {
+            continue;
+        }
+
+        if (isEnvironment)
+        {
+            if (environmentPdf <= 1e-8f)
+            {
+                continue;
+            }
+
+            float materialPdf;
+            float3 brdf = EvaluateMaterialBrdf(ray, hit, ptToOffset, materialPdf);
+            float misWeight = PowerHeuristic(environmentPdf, materialPdf);
+            lightTotal += GetSkyboxColor(ptToOffset) * _SkyboxLight.xyz * shadowTransmittance
+                * brdf * rayNormalDot * misWeight / environmentPdf;
             continue;
         }
 
@@ -3203,12 +3269,12 @@ int SelectLightForDraw(int iteration, int drawCount, int lightCount, float3 shad
 }
 
 float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
-#if defined(FOG_ENABLED)
-                            bool volumeEvent,
-#endif
-                            inout uint rngState)
+                            bool volumeEvent, inout uint rngState)
 {
     int sampleCount = max(1, samplesPerLight);
+    // Preserve fog's established finite-emitter estimator; environment NEE is a surface path.
+    bool sampleEnvironment = !volumeEvent && _EnvironmentLightEnabled != 0
+        && _EnvironmentCdfWidth > 0 && _EnvironmentCdfHeight > 0;
 
     int lightCount = _NumLights;
     // Diagnostic cap: when _MaxLightSamples > 0, only consider the first N lights.
@@ -3218,7 +3284,7 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
         lightCount = _MaxLightSamples;
     }
 
-    if (lightCount <= 0)
+    if (lightCount <= 0 && !sampleEnvironment)
     {
         return float3(0.0f, 0.0f, 0.0f);
     }
@@ -3233,7 +3299,11 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
         _LightSamplingStrategy != LightSamplingUniformRandom &&
         _LightSamplingStrategy != LightSamplingImportance;
 
-    if (sampleAllLights)
+    if (lightCount <= 0)
+    {
+        drawCount = 0;
+    }
+    else if (sampleAllLights)
     {
         drawCount = lightCount;
     }
@@ -3252,26 +3322,41 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
         }
     }
 
-    // SINGLE inlined SampleSingleLight call site. Each iteration selects a light index and a
-    // contribution weight via SelectLightForDraw (cheap), then shades it once here (expensive).
+    // SINGLE inlined SampleSingleLight call site. Finite-light and environment samples both use
+    // this visibility path so the Metal compiler sees only one shadow-BVH traversal body.
     float3 accumulated = float3(0.0f, 0.0f, 0.0f);
     int d;
     [loop]
-    for (d = 0; d < drawCount; d++)
+    for (d = 0; d < drawCount + (sampleEnvironment ? 1 : 0); d++)
     {
         float weight;
         float selectionPdf;
         int lightIndex;
-        if (sampleAllLights)
+        int selectedSampleCount;
+        int lightTechniqueSampleCount;
+        if (d == drawCount)
+        {
+            // A negative index identifies the separately sampled environment distribution.
+            lightIndex = -1;
+            weight = 1.0f;
+            selectionPdf = 1.0f;
+            selectedSampleCount = max(1, _EnvironmentLightSampleCount);
+            lightTechniqueSampleCount = selectedSampleCount;
+        }
+        else if (sampleAllLights)
         {
             lightIndex = d;
             weight = 1.0f;
             selectionPdf = 1.0f;
+            selectedSampleCount = sampleCount;
+            lightTechniqueSampleCount = sampleCount;
         }
         else
         {
             lightIndex = SelectLightForDraw(
                 d, drawCount, lightCount, hit.position, rngState, weight, selectionPdf);
+            selectedSampleCount = sampleCount;
+            lightTechniqueSampleCount = sampleCount * drawCount;
         }
 
         if (weight <= 0.0f)
@@ -3279,12 +3364,9 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
             continue;
         }
 
-        int lightTechniqueSampleCount = sampleCount * (sampleAllLights ? 1 : drawCount);
-        accumulated += SampleSingleLight(lightIndex, ray, hit, sampleCount,
+        accumulated += SampleSingleLight(lightIndex, ray, hit, selectedSampleCount,
             selectionPdf, lightTechniqueSampleCount,
-#if defined(FOG_ENABLED)
             volumeEvent,
-#endif
             rngState) * weight;
     }
 
@@ -3351,7 +3433,76 @@ float3 GetSkyboxColor(float3 direction)
 {
     float theta = acos(direction.y) / -PI;
     float phi = atan2(direction.x, -direction.z) / -PI * 0.5f;
-    return _SkyboxTexture.SampleLevel(sampler_SkyboxTexture, float2(phi, theta), 0).xyz;
+    float3 color = _SkyboxTexture.SampleLevel(sampler_SkyboxTexture, float2(phi, theta), 0).xyz;
+    if (_EnvironmentHighlightThreshold <= 0.0f || _EnvironmentHighlightIntensity <= 0.0f)
+    {
+        return color;
+    }
+
+    float luminance = max(0.0f, dot(color, float3(0.2126f, 0.7152f, 0.0722f)));
+    float knee = max(0.0f, _EnvironmentHighlightThreshold * saturate(_EnvironmentHighlightSoftKnee));
+    float excess = max(0.0f, luminance - _EnvironmentHighlightThreshold);
+    if (knee > 0.0f)
+    {
+        excess *= excess / (excess + knee);
+    }
+    float boostedLuminance = luminance + excess * _EnvironmentHighlightIntensity;
+    return color * (boostedLuminance / max(luminance, 1e-6f));
+}
+
+float2 GetSkyboxUv(float3 direction)
+{
+    return float2(atan2(direction.x, -direction.z) / -PI * 0.5f, acos(direction.y) / -PI);
+}
+
+float3 GetSkyboxDirection(float2 uv)
+{
+    float theta = (1.0f - uv.y) * PI;
+    float phi = -uv.x * PI * 2.0f;
+    float sinTheta = sin(theta);
+    return float3(sinTheta * sin(phi), cos(theta), -sinTheta * cos(phi));
+}
+
+int SelectEnvironmentCdf(bool marginal, int offset, int count, float target)
+{
+    int low = 0;
+    int high = count - 1;
+    [loop]
+    while (low < high)
+    {
+        int middle = (low + high) / 2;
+        float value = marginal ? _EnvironmentMarginalCdf[offset + middle] : _EnvironmentConditionalCdf[offset + middle];
+        if (target <= value)
+        {
+            high = middle;
+        }
+        else
+        {
+            low = middle + 1;
+        }
+    }
+    return low;
+}
+
+float GetEnvironmentPdf(float3 direction)
+{
+    if (_EnvironmentLightEnabled == 0 || _EnvironmentCdfWidth <= 0 || _EnvironmentCdfHeight <= 0)
+    {
+        return 0.0f;
+    }
+
+    float2 skyboxUv = GetSkyboxUv(direction);
+    float2 uv = float2(frac(skyboxUv.x), saturate(-skyboxUv.y));
+    int x = min(_EnvironmentCdfWidth - 1, (int)(uv.x * _EnvironmentCdfWidth));
+    int y = min(_EnvironmentCdfHeight - 1, (int)(uv.y * _EnvironmentCdfHeight));
+    float rowCdf = _EnvironmentMarginalCdf[y];
+    float previousRowCdf = y > 0 ? _EnvironmentMarginalCdf[y - 1] : 0.0f;
+    float columnCdf = _EnvironmentConditionalCdf[y * _EnvironmentCdfWidth + x];
+    float previousColumnCdf = x > 0 ? _EnvironmentConditionalCdf[y * _EnvironmentCdfWidth + x - 1] : 0.0f;
+    float texelProbability = max(0.0f, rowCdf - previousRowCdf) * max(0.0f, columnCdf - previousColumnCdf);
+    float theta = (1.0f - uv.y) * PI;
+    float texelSolidAngle = (2.0f * PI / _EnvironmentCdfWidth) * (PI / _EnvironmentCdfHeight) * max(abs(sin(theta)), 1e-5f);
+    return texelProbability / texelSolidAngle;
 }
 
 float3 GetRandomizedNormalBasedOnAmount(float3 normal, float amount, inout uint rngState)
@@ -3760,11 +3911,7 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
 float3 GetDirectLight(Ray ray, RayHit hit, bool softShadows, inout uint rngState)
 {
     int samplesPerLight = softShadows ? max(1, _ShadowQuality + 1) : 1;
-    return GetLightHittingPoint(ray, hit, samplesPerLight,
-#if defined(FOG_ENABLED)
-        false,
-#endif
-        rngState);
+    return GetLightHittingPoint(ray, hit, samplesPerLight, false, rngState);
 }
 
 #if defined(FOG_ENABLED)
@@ -3794,7 +3941,6 @@ bool ApplyRussianRoulette(inout float3 throughput, int bounce, inout uint rngSta
     return true;
 }
 
-#if defined(CAUSTICS_ENABLED)
 bool IsCausticReceiver(RayHit hit)
 {
     return !DidHitSky(hit) && !DidHitLight(hit) && hit.materialType == MaterialDiffuse && hit.opacity >= 1.0f;
@@ -3887,7 +4033,6 @@ float3 TraceVisibleCausticRadiance(Ray ray, inout uint rngState)
 
     return float3(0.0f, 0.0f, 0.0f);
 }
-#endif
 
 float3 TracePath(Ray ray, inout uint rngState)
 {
@@ -3898,9 +4043,7 @@ float3 TracePath(Ray ray, inout uint rngState)
     float previousMaterialPdf = 0.0f;
     bool previousDirectLightSampled = false;
     bool previousSoftShadows = false;
-#if defined(CAUSTICS_ENABLED)
     bool canGatherCaustics = true;
-#endif
 
     [loop]
     for (int bounce = 0; bounce < _NumBounces; bounce++)
@@ -3954,7 +4097,16 @@ float3 TracePath(Ray ray, inout uint rngState)
 
         if (DidHitSky(hit))
         {
-            radiance += throughput * GetTerminalHitColor(ray, hit);
+            float misWeight = 1.0f;
+            if (previousDirectLightSampled && previousMaterialPdf > 0.0f && _EnvironmentLightEnabled != 0)
+            {
+                float environmentPdf = GetEnvironmentPdf(ray.direction);
+                if (environmentPdf > 0.0f)
+                {
+                    misWeight = PowerHeuristic(previousMaterialPdf, _EnvironmentLightSampleCount * environmentPdf);
+                }
+            }
+            radiance += throughput * GetTerminalHitColor(ray, hit) * misWeight;
             break;
         }
 
@@ -3975,12 +4127,10 @@ float3 TracePath(Ray ray, inout uint rngState)
             break;
         }
 
-#if defined(CAUSTICS_ENABLED)
-        if (canGatherCaustics)
+        if (_CausticsEnabled != 0 && canGatherCaustics)
         {
             radiance += throughput * GatherCausticRadiance(hit);
         }
-#endif
 
         bool sampledDirectLight = false;
         if (ShouldSampleDirectLight(throughput))
@@ -3998,9 +4148,7 @@ float3 TracePath(Ray ray, inout uint rngState)
         previousSurfacePosition = hit.position;
         previousMaterialPdf = scatter.materialPdf;
         previousDirectLightSampled = sampledDirectLight;
-#if defined(CAUSTICS_ENABLED)
         canGatherCaustics = canGatherCaustics && IsGlassMaterial(hit);
-#endif
         ray = scatter.ray;
         throughput *= scatter.attenuation;
         bounce += scatter.bouncesConsumed - 1;
@@ -4036,9 +4184,11 @@ float3 ClampFirefly(float3 radiance)
 #if DEBUG_RENDER
 float3 TraceCausticPaths(Ray ray, inout uint rngState)
 {
-#if defined(CAUSTICS_ENABLED)
-    return TraceVisibleCausticRadiance(ray, rngState);
-#else
+    if (_CausticsEnabled != 0)
+    {
+        return TraceVisibleCausticRadiance(ray, rngState);
+    }
+
     float3 throughput = float3(1.0f, 1.0f, 1.0f);
     MediumStack mediumStack = CreateMediumStack(ray.origin);
     bool hitDiffuseReceiver = false;
@@ -4089,7 +4239,6 @@ float3 TraceCausticPaths(Ray ray, inout uint rngState)
     }
 
     return float3(0.0f, 0.0f, 0.0f);
-#endif
 }
 
 float3 GetDebugRenderColor(Ray ray, inout uint rngState)
@@ -4138,7 +4287,7 @@ float3 GetDebugRenderColor(Ray ray, inout uint rngState)
             return float3(0.0f, 0.0f, 0.0f);
         }
 
-        float2 cellUv = frac(hit.uv * max(1, _TerrainCellResolution));
+        float2 cellUv = frac(hit.uv * max(1.0f, (float)_TerrainCellResolution));
         float2 distanceToBoundary = min(cellUv, 1.0f - cellUv);
         float boundary = 1.0f - smoothstep(0.015f, 0.035f, min(distanceToBoundary.x, distanceToBoundary.y));
         return float3(cellUv, boundary);
@@ -4325,7 +4474,6 @@ float3 ACESFilmicToneMap(float3 color)
     return saturate((color * (a * color + b)) / (color * (c * color + d) + e));
 }
 
-#if defined(CAUSTICS_ENABLED)
 [numthreads(1,1,1)]
 void ClearCausticPhotons(uint3 id : SV_DispatchThreadID)
 {
@@ -4743,6 +4891,7 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
         InterlockedAdd(_CausticPhotonMetadata[1], 1);
     }
 }
+
 #endif
 
 [numthreads(64,1,1)]
@@ -4768,7 +4917,6 @@ void BuildCausticGrid(uint3 id : SV_DispatchThreadID)
     _CausticPhotonNext[id.x] = previousHead;
     InterlockedAdd(_CausticPhotonMetadata[5], 1);
 }
-#endif
 
 // Deterministic probes for EditMode regression tests. These call the renderer's production helpers
 // directly so reflection/refraction changes cannot silently diverge from a separate test shader.
@@ -5033,7 +5181,6 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     RegressionResults[41] = float4(insideSphereHit.normal, dot(insideSphereHit.geometricNormal, normal));
 }
 
-#if defined(CAUSTICS_ENABLED)
 [numthreads(8,4,1)]
 void CSCausticsDebug(uint3 id : SV_DispatchThreadID)
 {
@@ -5061,7 +5208,6 @@ void CSCausticsDebug(uint3 id : SV_DispatchThreadID)
     }
     Result[id.xy] = float4(result / max(1, _NumberOfPasses), 1.0f);
 }
-#endif
 
 [numthreads(1,1,1)]
 void CSFocusQuery(uint3 id : SV_DispatchThreadID)

@@ -386,7 +386,11 @@ namespace PathTracing.Lighting
         private static float GetWorldSphereRadius(SphereCollider sphereCollider, Transform sphereTransform)
         {
             var scale = sphereTransform.lossyScale;
-            var largestAxisScale = Mathf.Max(Mathf.Abs(scale.x), Mathf.Abs(scale.y), Mathf.Abs(scale.z));
+            var largestAxisScale = Mathf.Abs(scale.x);
+            var yScale = Mathf.Abs(scale.y);
+            if (yScale > largestAxisScale) largestAxisScale = yScale;
+            var zScale = Mathf.Abs(scale.z);
+            if (zScale > largestAxisScale) largestAxisScale = zScale;
             return sphereCollider.radius * largestAxisScale;
         }
 

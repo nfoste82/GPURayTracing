@@ -34,7 +34,7 @@ namespace GPURayTracing.Tests
             float scale = (float)browserType.GetMethod("GetMinimumUniformScaleFactor", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
                 .Invoke(null, new object[] { new Bounds(Vector3.zero, new Vector3(0.1f, 0.2f, 0.125f)) });
 
-            Assert.That(scale, Is.EqualTo(2.5f).Within(0.0001f));
+            Assert.That(scale, Is.EqualTo(25.0f).Within(0.0001f));
         }
 
         [Test]
@@ -44,7 +44,7 @@ namespace GPURayTracing.Tests
             float scale = (float)browserType.GetMethod("GetMinimumUniformScaleFactor", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
                 .Invoke(null, new object[] { new Bounds(Vector3.zero, new Vector3(0.5f, 0.1f, 0.1f)) });
 
-            Assert.That(scale, Is.EqualTo(1.0f));
+            Assert.That(scale, Is.EqualTo(10.0f));
         }
 
         [Test]

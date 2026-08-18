@@ -32,6 +32,7 @@ namespace PathTracing.Caustics
         private static readonly int CausticPhotonNext = Shader.PropertyToID("_CausticPhotonNext");
         private static readonly int CausticTargetPairs = Shader.PropertyToID("_CausticTargetPairs");
         private static readonly int CausticTargetTriangles = Shader.PropertyToID("_CausticTargetTriangles");
+        private readonly int[] _gridDimensions = new int[3];
 
         [SerializeField, Range(64, 2097252)]
         [Tooltip("Photon attempts traced for each rendered frame. Independent batches are averaged by final-color frame accumulation.")]
@@ -74,6 +75,12 @@ namespace PathTracing.Caustics
         internal ComputeBuffer PhotonNextBuffer;
         internal ComputeBuffer TargetPairBuffer;
         internal ComputeBuffer TargetTriangleBuffer;
+        private ComputeBuffer _dummyPhotonBuffer;
+        private ComputeBuffer _dummyMetadataBuffer;
+        private ComputeBuffer _dummyGridHeadBuffer;
+        private ComputeBuffer _dummyPhotonNextBuffer;
+        private ComputeBuffer _dummyTargetPairBuffer;
+        private ComputeBuffer _dummyTargetTriangleBuffer;
 
         internal const int PhotonStride = 36;
         internal const int MetadataCount = 6;
@@ -238,6 +245,11 @@ namespace PathTracing.Caustics
 
         internal void SetShaderParameters(ComputeShader shader, int kernelHandle, int maxBounces)
         {
+            _gridDimensions[0] = GridDimensions.x;
+            _gridDimensions[1] = GridDimensions.y;
+            _gridDimensions[2] = GridDimensions.z;
+            
+            EnsureDummyResources();
             shader.SetInt(CausticPhotonCapacity, Mathf.Max(1, PhotonCount));
             shader.SetInt(CausticPhotonAttemptCount, Mathf.Max(1, PhotonCount));
             shader.SetInt(CausticMaxBounces, Mathf.Clamp(maxBounces, 1, 16));
@@ -247,15 +259,36 @@ namespace PathTracing.Caustics
             shader.SetFloat(CausticIntensity, Mathf.Max(0.0f, Intensity));
             shader.SetVector(CausticGridMin, GridMin);
             shader.SetFloat(CausticGridCellSize, GridCellSize);
-            shader.SetInts(CausticGridDimensions, GridDimensions.x, GridDimensions.y, GridDimensions.z);
+            shader.SetInts(CausticGridDimensions, _gridDimensions);
             shader.SetInt(CausticGridCellCount, GridCellCount);
             shader.SetInt(NumCausticTargetPairs, TargetPairs.Count);
-            SetBuffer(shader, kernelHandle, CausticPhotons, PhotonBuffer);
-            SetBuffer(shader, kernelHandle, CausticPhotonMetadata, PhotonMetadataBuffer);
-            SetBuffer(shader, kernelHandle, CausticGridCellHeads, GridCellHeadBuffer);
-            SetBuffer(shader, kernelHandle, CausticPhotonNext, PhotonNextBuffer);
-            SetBuffer(shader, kernelHandle, CausticTargetPairs, TargetPairBuffer);
-            SetBuffer(shader, kernelHandle, CausticTargetTriangles, TargetTriangleBuffer);
+            SetBuffer(shader, kernelHandle, CausticPhotons, PhotonBuffer ?? _dummyPhotonBuffer);
+            SetBuffer(shader, kernelHandle, CausticPhotonMetadata, PhotonMetadataBuffer ?? _dummyMetadataBuffer);
+            SetBuffer(shader, kernelHandle, CausticGridCellHeads, GridCellHeadBuffer ?? _dummyGridHeadBuffer);
+            SetBuffer(shader, kernelHandle, CausticPhotonNext, PhotonNextBuffer ?? _dummyPhotonNextBuffer);
+            SetBuffer(shader, kernelHandle, CausticTargetPairs, TargetPairBuffer ?? _dummyTargetPairBuffer);
+            SetBuffer(shader, kernelHandle, CausticTargetTriangles, TargetTriangleBuffer ?? _dummyTargetTriangleBuffer);
+        }
+
+        internal void BindBuffers(ComputeShader shader, int kernelHandle)
+        {
+            EnsureDummyResources();
+            SetBuffer(shader, kernelHandle, CausticPhotons, PhotonBuffer ?? _dummyPhotonBuffer);
+            SetBuffer(shader, kernelHandle, CausticPhotonMetadata, PhotonMetadataBuffer ?? _dummyMetadataBuffer);
+            SetBuffer(shader, kernelHandle, CausticGridCellHeads, GridCellHeadBuffer ?? _dummyGridHeadBuffer);
+            SetBuffer(shader, kernelHandle, CausticPhotonNext, PhotonNextBuffer ?? _dummyPhotonNextBuffer);
+            SetBuffer(shader, kernelHandle, CausticTargetPairs, TargetPairBuffer ?? _dummyTargetPairBuffer);
+            SetBuffer(shader, kernelHandle, CausticTargetTriangles, TargetTriangleBuffer ?? _dummyTargetTriangleBuffer);
+        }
+
+        private void EnsureDummyResources()
+        {
+            _dummyPhotonBuffer ??= new ComputeBuffer(1, PhotonStride);
+            _dummyMetadataBuffer ??= new ComputeBuffer(MetadataCount, sizeof(uint));
+            _dummyGridHeadBuffer ??= new ComputeBuffer(1, sizeof(int));
+            _dummyPhotonNextBuffer ??= new ComputeBuffer(1, sizeof(int));
+            _dummyTargetPairBuffer ??= new ComputeBuffer(1, TargetPairStride);
+            _dummyTargetTriangleBuffer ??= new ComputeBuffer(1, TargetTriangleStride);
         }
 
         private static void SetBuffer(ComputeShader shader, int kernelHandle, int nameId, ComputeBuffer buffer)
@@ -380,12 +413,24 @@ namespace PathTracing.Caustics
             PhotonNextBuffer?.Release();
             TargetPairBuffer?.Release();
             TargetTriangleBuffer?.Release();
+            _dummyPhotonBuffer?.Release();
+            _dummyMetadataBuffer?.Release();
+            _dummyGridHeadBuffer?.Release();
+            _dummyPhotonNextBuffer?.Release();
+            _dummyTargetPairBuffer?.Release();
+            _dummyTargetTriangleBuffer?.Release();
             PhotonBuffer = null;
             PhotonMetadataBuffer = null;
             GridCellHeadBuffer = null;
             PhotonNextBuffer = null;
             TargetPairBuffer = null;
             TargetTriangleBuffer = null;
+            _dummyPhotonBuffer = null;
+            _dummyMetadataBuffer = null;
+            _dummyGridHeadBuffer = null;
+            _dummyPhotonNextBuffer = null;
+            _dummyTargetPairBuffer = null;
+            _dummyTargetTriangleBuffer = null;
             GridCellCountValue = 0;
             GridPhotonCountValue = 0;
             GridOutOfBoundsCountValue = 0;

@@ -230,6 +230,12 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
         AppendSetting(builder, "light_falloff_scale", gameManager.Lighting.LightFalloffScale);
         AppendSetting(builder, "exposure", gameManager.exposure);
         AppendSetting(builder, "firefly_clamp", gameManager.fireflyClamp);
+        AppendSetting(builder, "environment_lighting", gameManager.enableEnvironmentLighting);
+        AppendSetting(builder, "environment_light_sample_count", gameManager.environmentLightSampleCount);
+        AppendSetting(builder, "environment_highlight_threshold", gameManager.environmentHighlightThreshold);
+        AppendSetting(builder, "environment_highlight_soft_knee", gameManager.environmentHighlightSoftKnee);
+        AppendSetting(builder, "environment_highlight_intensity", gameManager.environmentHighlightIntensity);
+        AppendSetting(builder, "environment_distribution_resolution", $"{gameManager.EnvironmentDistributionWidth}x{gameManager.EnvironmentDistributionHeight}");
         AppendSetting(builder, "caustics_enabled", gameManager.enableCaustics);
         AppendSetting(builder, "caustic_photon_count", gameManager.enableCaustics ? gameManager.Caustics.PhotonCount : 0);
         AppendSetting(builder, "caustic_gather_radius", gameManager.Caustics.GatherRadius);

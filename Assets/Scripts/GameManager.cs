@@ -109,8 +109,8 @@ public class GameManager : MonoBehaviour
     [Tooltip("Builds a photon map for sphere and triangle-light caustics through glass, closed meshes, and the registered water volume. Disabled by default.")]
     public bool enableCaustics = false;
 
-    [Tooltip("Globally enables the registered FogVolume without disabling its component or changing shader resources.")]
-    public bool enableVolumetricFog = true;
+    [Tooltip("Globally enables the registered FogVolume. Enabling fog selects a dedicated shader variant.")]
+    public bool enableVolumetricFog = false;
 
     [Tooltip("Multiplies the density on the registered FogVolume. Useful for tuning a scene from the GameManager.")]
     [Range(0.0f, 2.0f)]
@@ -156,6 +156,31 @@ public class GameManager : MonoBehaviour
 
     public Texture skyboxTexture;
 
+    [Header("Environment Lighting")]
+    [Tooltip("Samples the skybox as an importance-sampled direct light. The HDRI texture must be a readable Texture2D.")]
+    public bool enableEnvironmentLighting = true;
+
+    [Range(1, 16), Tooltip("Importance-sampled HDRI shadow rays per shaded surface.")]
+    public int environmentLightSampleCount = 1;
+
+    [Tooltip("HDRI luminance at which environment highlight boosting begins. Zero disables the boost.")]
+    [Range(0.0f, 32.0f)]
+    public float environmentHighlightThreshold = 0.0f;
+
+    [Tooltip("Smooths the environment highlight threshold transition. Zero is a hard threshold.")]
+    [Range(0.0f, 1.0f)]
+    public float environmentHighlightSoftKnee = 0.5f;
+
+    [Tooltip("Additional multiplier applied to HDRI luminance above the environment highlight threshold.")]
+    [Range(0.0f, 16.0f)]
+    public float environmentHighlightIntensity = 0.0f;
+
+    [Range(16, 2048), Tooltip("Maximum horizontal resolution used to build the HDRI sampling distribution.")]
+    public int environmentImportanceWidth = 512;
+
+    [Range(8, 1024), Tooltip("Maximum vertical resolution used to build the HDRI sampling distribution.")]
+    public int environmentImportanceHeight = 256;
+
     [HideInInspector]
     public Texture2D defaultMeshAlbedoTexture;
 
@@ -177,6 +202,11 @@ public class GameManager : MonoBehaviour
     public float unitySkyboxRotation = 0.0f;
 
     private Material _unitySkyboxMaterial;
+    private readonly EnvironmentImportanceSampling _environmentImportanceSampling = new();
+    private bool _warnedEnvironmentImportanceFailure;
+    private Action<int> _setShaderParametersCallback;
+    private Action _resetFrameAccumulationCallback;
+    private Func<Ray, float> _nearestIntersectionDistanceCallback;
 
     private RenderTexture _outputTexture;
     private RenderTexture _presentationTexture;
@@ -271,8 +301,7 @@ public class GameManager : MonoBehaviour
     // sees a "compiling" message instead of an apparently locked-up app.
     private readonly HashSet<int> _warmedShaderVariants = new ();
     private DebugRenderMode _appliedDebugRenderMode = DebugRenderMode.FinalColor;
-    private bool _appliedCausticsEnabled;
-    private bool _appliedFogEnabled;
+    private int _appliedShaderVariant = -1;
     private bool _pendingVariantWarmup;
     
     public int SphereCount => _spheres.Count;
@@ -334,6 +363,8 @@ public class GameManager : MonoBehaviour
         }
     }
     public bool HasWaterVolume => WaterManager.HasWaterVolume;
+    public int EnvironmentDistributionWidth => _environmentImportanceSampling.Width;
+    public int EnvironmentDistributionHeight => _environmentImportanceSampling.Height;
     public bool IsVolumetricFogActive => IsFogEnabled();
     public float EffectiveFogDensity => IsFogEnabled() ? _fogVolume.Density * Mathf.Max(0.0f, fogDensityScale) : 0.0f;
     public Color EffectiveFogScatteringAlbedo => IsFogEnabled()
@@ -344,6 +375,15 @@ public class GameManager : MonoBehaviour
     private readonly HashSet<PathTracingObject> _rayTracingObjects = new ();
     
     private static readonly int SkyboxTexture = Shader.PropertyToID("_SkyboxTexture");
+    private static readonly int EnvironmentConditionalCdf = Shader.PropertyToID("_EnvironmentConditionalCdf");
+    private static readonly int EnvironmentMarginalCdf = Shader.PropertyToID("_EnvironmentMarginalCdf");
+    private static readonly int EnvironmentLightEnabled = Shader.PropertyToID("_EnvironmentLightEnabled");
+    private static readonly int EnvironmentLightSampleCount = Shader.PropertyToID("_EnvironmentLightSampleCount");
+    private static readonly int EnvironmentHighlightThreshold = Shader.PropertyToID("_EnvironmentHighlightThreshold");
+    private static readonly int EnvironmentHighlightSoftKnee = Shader.PropertyToID("_EnvironmentHighlightSoftKnee");
+    private static readonly int EnvironmentHighlightIntensity = Shader.PropertyToID("_EnvironmentHighlightIntensity");
+    private static readonly int EnvironmentCdfWidth = Shader.PropertyToID("_EnvironmentCdfWidth");
+    private static readonly int EnvironmentCdfHeight = Shader.PropertyToID("_EnvironmentCdfHeight");
     private static readonly int MeshAlbedoTextures = Shader.PropertyToID("_MeshAlbedoTextures");
     private static readonly int MeshMetallicRoughnessTextures = Shader.PropertyToID("_MeshMetallicRoughnessTextures");
     private static readonly int MeshNormalTextures = Shader.PropertyToID("_MeshNormalTextures");
@@ -359,7 +399,7 @@ public class GameManager : MonoBehaviour
     private static readonly int ParallaxMaximumStrengthCosine = Shader.PropertyToID("_ParallaxMaximumStrengthCosine");
     private static readonly int Exposure = Shader.PropertyToID("_Exposure");
     private static readonly int FireflyClamp = Shader.PropertyToID("_FireflyClamp");
-    private static readonly int FogEnabled = Shader.PropertyToID("_FogEnabled");
+    private static readonly int CausticsEnabled = Shader.PropertyToID("_CausticsEnabled");
     private static readonly int FogBoundsMin = Shader.PropertyToID("_FogBoundsMin");
     private static readonly int FogBoundsMax = Shader.PropertyToID("_FogBoundsMax");
     private static readonly int FogScatteringAlbedo = Shader.PropertyToID("_FogScatteringAlbedo");
@@ -432,6 +472,7 @@ public class GameManager : MonoBehaviour
         Caustics.GatherRadius = settings.CausticGatherRadius;
         Caustics.Seed = settings.CausticSeed;
         Caustics.Intensity = settings.CausticIntensity;
+        enableVolumetricFog = settings.EnableVolumetricFog;
         fogDensityScale = settings.FogDensityScale;
         fogScatteringScale = settings.FogScatteringScale;
         fogInScatteringIntensity = settings.FogInScatteringIntensity;
@@ -442,6 +483,13 @@ public class GameManager : MonoBehaviour
         glareThreshold = settings.GlareThreshold;
         glareSoftKnee = settings.GlareSoftKnee;
         glareIntensity = settings.GlareIntensity;
+        enableEnvironmentLighting = settings.EnableEnvironmentLighting;
+        environmentLightSampleCount = settings.EnvironmentLightSampleCount;
+        environmentHighlightThreshold = settings.EnvironmentHighlightThreshold;
+        environmentHighlightSoftKnee = settings.EnvironmentHighlightSoftKnee;
+        environmentHighlightIntensity = settings.EnvironmentHighlightIntensity;
+        environmentImportanceWidth = settings.EnvironmentImportanceWidth;
+        environmentImportanceHeight = settings.EnvironmentImportanceHeight;
         fireflyClamp = settings.FireflyClamp;
         randomNoise = settings.RandomNoise;
         Lighting.SkyboxLightColor = settings.SkyboxLightColor;
@@ -457,6 +505,9 @@ public class GameManager : MonoBehaviour
 
     private void Start()
     {
+        _setShaderParametersCallback = SetShaderParameters;
+        _resetFrameAccumulationCallback = ResetFrameAccumulation;
+        _nearestIntersectionDistanceCallback = GetNearestIntersectionDistanceForAutoFocus;
         _videoCaptureManager.Initialize(this);
         CameraManager.FocusRequested += QueueFocusQuery;
         _terrainManager = GetComponent<TerrainManager>();
@@ -698,6 +749,7 @@ public class GameManager : MonoBehaviour
 
         const float boxWidth = 520f;
         const float boxHeight = 120f;
+
         
         var rect = new Rect(
             (Screen.width - boxWidth) * 0.5f,
@@ -709,6 +761,7 @@ public class GameManager : MonoBehaviour
             ? _startupInitializationStatus + "\nStartup timings will be logged when initialization completes."
             : "Compiling shader variant, this may take several minutes...";
         
+
         GUI.Box(rect, message, _compileNoticeStyle);
     }
 
@@ -754,6 +807,7 @@ public class GameManager : MonoBehaviour
             _terrainManager.TerrainChanged -= ResetFrameAccumulation;
         }
         _videoCaptureManager.Release();
+
         
         _outputTexture?.Release();
         _presentationTexture?.Release();
@@ -777,6 +831,7 @@ public class GameManager : MonoBehaviour
         _sceneBvhs.Release();
         
         _lightingManager.ReleaseBuffers();
+        _environmentImportanceSampling.Dispose();
         
         _causticsManager.ReleaseResources();
         
@@ -1011,7 +1066,6 @@ public class GameManager : MonoBehaviour
             return;
         }
 
-        shader.EnableKeyword("CAUSTICS_ENABLED");
         var clearKernel = shader.FindKernel("ClearCausticPhotons");
         var traceKernel = shader.FindKernel("TraceCausticPhotons");
         var clearGridKernel = shader.FindKernel("ClearCausticGrid");
@@ -1126,9 +1180,9 @@ public class GameManager : MonoBehaviour
             fogEnabled = IsFogEnabled(),
             useDedicatedCausticsDebugKernel = enableCaustics && debugRenderMode == DebugRenderMode.Caustics
         };
-        frame.requestedVariant = GetShaderVariantKey(debugRenderMode, enableCaustics, frame.fogEnabled);
+        frame.requestedVariant = GetShaderVariantKey(debugRenderMode, frame.fogEnabled, _terrainManager != null && _terrainManager.Terrain != null);
         
-        var changed = debugRenderMode != _appliedDebugRenderMode || enableCaustics != _appliedCausticsEnabled || frame.fogEnabled != _appliedFogEnabled;
+        var changed = frame.requestedVariant != _appliedShaderVariant;
         
         if (_pendingVariantWarmup || !changed || _warmedShaderVariants.Contains(frame.requestedVariant)) return false;
         
@@ -1159,7 +1213,8 @@ public class GameManager : MonoBehaviour
         UpdateSpheres(); 
         UpdateTriangles(); 
         UpdateSceneBvhs();
-        CameraManager.UpdateAutoFocus(numberOfPasses, WaterManager.CalculateAutoFocusStateHash(), GetNearestIntersectionDistanceForAutoFocus);
+        CameraManager.UpdateAutoFocus(numberOfPasses, WaterManager.CalculateAutoFocusStateHash(),
+            _nearestIntersectionDistanceCallback);
         CameraManager.AutoFocusSceneChanged = false;
         UpdateCausticPhotonMap();
         
@@ -1191,7 +1246,8 @@ public class GameManager : MonoBehaviour
     private void DispatchRenderFrame(ref RenderFrame frame)
     {
         SetShaderParameters(frame.kernelHandle);
-        CameraManager.DispatchPendingFocusQuery(shader, SetShaderParameters, ResetFrameAccumulation);
+        CameraManager.DispatchPendingFocusQuery(shader, _setShaderParametersCallback,
+            _resetFrameAccumulationCallback);
         if (_startupProfilePending)
         {
             AddStartupProfilePhase("first-frame CPU preparation", frame.preparationStart);
@@ -1247,8 +1303,7 @@ public class GameManager : MonoBehaviour
         _temporalDenoisingManager.CommitRenderedCameraState();
         _warmedShaderVariants.Add(frame.requestedVariant);
         _appliedDebugRenderMode = debugRenderMode;
-        _appliedCausticsEnabled = enableCaustics;
-        _appliedFogEnabled = frame.fogEnabled;
+        _appliedShaderVariant = frame.requestedVariant;
         _pendingVariantWarmup = false;
     }
 
@@ -1306,9 +1361,9 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    private static int GetShaderVariantKey(DebugRenderMode mode, bool causticsEnabled, bool fogEnabled)
+    private static int GetShaderVariantKey(DebugRenderMode mode, bool fogEnabled, bool terrainEnabled)
     {
-        return ((int)mode << 2) | (causticsEnabled ? 2 : 0) | (fogEnabled ? 1 : 0);
+        return (int)mode | (fogEnabled ? 1 << 8 : 0) | (terrainEnabled ? 1 << 9 : 0);
     }
 
     private bool IsFogEnabled()
@@ -2369,7 +2424,21 @@ public class GameManager : MonoBehaviour
     private static float GetWorldSphereRadius(SphereCollider sphereCollider, Transform sphereTransform)
     {
         var scale = sphereTransform.lossyScale;
-        var largestAxisScale = Mathf.Max(Mathf.Abs(scale.x), Mathf.Abs(scale.y), Mathf.Abs(scale.z));
+        
+        var largestAxisScale = Mathf.Abs(scale.x);
+        
+        var yScale = Mathf.Abs(scale.y);
+        if (yScale > largestAxisScale)
+        {
+            largestAxisScale = yScale;
+        }
+        
+        var zScale = Mathf.Abs(scale.z);
+        if (zScale > largestAxisScale)
+        {
+            largestAxisScale = zScale;
+        }
+        
         return sphereCollider.radius * largestAxisScale;
     }
 
@@ -2422,11 +2491,55 @@ public class GameManager : MonoBehaviour
     private void BindShaderTextures(int kernelHandle)
     {
         shader.SetTexture(kernelHandle, SkyboxTexture, skyboxTexture);
+        BindEnvironmentImportanceSampling(kernelHandle);
         EnsureMeshTextureArrays();
         shader.SetTexture(kernelHandle, MeshAlbedoTextures, _meshAlbedoTextureArray);
         shader.SetTexture(kernelHandle, MeshMetallicRoughnessTextures, _meshMetallicRoughnessTextureArray);
         shader.SetTexture(kernelHandle, MeshNormalTextures, _meshNormalTextureArray);
         shader.SetTexture(kernelHandle, MeshParallaxTextures, _meshParallaxTextureArray);
+    }
+
+    private void BindEnvironmentImportanceSampling(int kernelHandle)
+    {
+        _environmentImportanceSampling.EnsureDummyBuffers();
+
+        var enabled = enableEnvironmentLighting && skyboxTexture != null;
+
+        var highlightThreshold = Mathf.Max(0.0f, environmentHighlightThreshold);
+        var highlightSoftKnee = Mathf.Clamp01(environmentHighlightSoftKnee);
+        var highlightIntensity = Mathf.Max(0.0f, environmentHighlightIntensity);
+
+        if (enabled && _environmentImportanceSampling.NeedsRebuild(
+                skyboxTexture, environmentImportanceWidth, environmentImportanceHeight,
+                highlightThreshold, highlightSoftKnee, highlightIntensity))
+        {
+            if (!_environmentImportanceSampling.Rebuild(
+                    skyboxTexture, environmentImportanceWidth, environmentImportanceHeight,
+                    highlightThreshold, highlightSoftKnee, highlightIntensity, out string error))
+            {
+                if (!_warnedEnvironmentImportanceFailure && !string.IsNullOrEmpty(error))
+                {
+                    Debug.LogWarning(error, this);
+                    _warnedEnvironmentImportanceFailure = true;
+                }
+                enabled = false;
+            }
+            else
+            {
+                _warnedEnvironmentImportanceFailure = false;
+            }
+        }
+
+        enabled &= _environmentImportanceSampling.IsValid;
+        shader.SetInt(EnvironmentLightEnabled, enabled ? 1 : 0);
+        shader.SetInt(EnvironmentLightSampleCount, Mathf.Clamp(environmentLightSampleCount, 1, 16));
+        shader.SetFloat(EnvironmentHighlightThreshold, highlightThreshold);
+        shader.SetFloat(EnvironmentHighlightSoftKnee, highlightSoftKnee);
+        shader.SetFloat(EnvironmentHighlightIntensity, highlightIntensity);
+        shader.SetInt(EnvironmentCdfWidth, _environmentImportanceSampling.Width);
+        shader.SetInt(EnvironmentCdfHeight, _environmentImportanceSampling.Height);
+        shader.SetBuffer(kernelHandle, EnvironmentConditionalCdf, _environmentImportanceSampling.ConditionalCdfBuffer);
+        shader.SetBuffer(kernelHandle, EnvironmentMarginalCdf, _environmentImportanceSampling.MarginalCdfBuffer);
     }
 
     private void BindShaderCameraAndRendererSamplingParameters()
@@ -2469,23 +2582,8 @@ public class GameManager : MonoBehaviour
         {
             shader.EnableKeyword("DEBUG_RENDER");
         }
-        if (enableCaustics)
-        {
-            shader.EnableKeyword("CAUSTICS_ENABLED");
-            _causticsManager.SetShaderParameters(shader, kernelHandle, numBounces);
-        }
-        else
-        {
-            shader.DisableKeyword("CAUSTICS_ENABLED");
-        }
-        if (IsFogEnabled())
-        {
-            shader.EnableKeyword("FOG_ENABLED");
-        }
-        else
-        {
-            shader.DisableKeyword("FOG_ENABLED");
-        }
+        shader.SetInt(CausticsEnabled, enableCaustics ? 1 : 0);
+        _causticsManager.SetShaderParameters(shader, kernelHandle, numBounces);
         Lighting.SetShaderParameters(shader);
         Lighting.SetShaderSamplingParameters(shader, maxLightSamples, shadowQuality, shadowRandomness);
 
@@ -2506,19 +2604,29 @@ public class GameManager : MonoBehaviour
         var fogCenter = fogEnabled ? _fogVolume.Center : Vector3.zero;
         var fogSize = fogEnabled ? _fogVolume.Size : Vector3.one;
         var fogAlbedo = fogEnabled ? _fogVolume.ScatteringAlbedo : Color.black;
-        shader.SetInt(FogEnabled, fogEnabled ? 1 : 0);
-        var fogBoundsMin = fogCenter - fogSize * 0.5f;
-        var fogBoundsMax = fogCenter + fogSize * 0.5f;
-        shader.SetVector(FogBoundsMin, new Vector4(fogBoundsMin.x, fogBoundsMin.y, fogBoundsMin.z, 0.0f));
-        shader.SetVector(FogBoundsMax, new Vector4(fogBoundsMax.x, fogBoundsMax.y, fogBoundsMax.z, 0.0f));
-        shader.SetVector(FogScatteringAlbedo, new Vector4(
-            Mathf.Clamp01(fogAlbedo.r * fogScatteringScale),
-            Mathf.Clamp01(fogAlbedo.g * fogScatteringScale),
-            Mathf.Clamp01(fogAlbedo.b * fogScatteringScale),
-            0.0f));
-        shader.SetFloat(FogDensity, fogEnabled ? EffectiveFogDensity : 0.0f);
-        shader.SetFloat(FogInScatteringIntensity, Mathf.Max(0.0f, fogInScatteringIntensity));
-        shader.SetInt(FogMultipleScattering, enableFogMultipleScattering ? 1 : 0);
+        if (fogEnabled)
+        {
+            shader.EnableKeyword("FOG_ENABLED");
+        }
+        else
+        {
+            shader.DisableKeyword("FOG_ENABLED");
+        }
+        if (fogEnabled)
+        {
+            var fogBoundsMin = fogCenter - fogSize * 0.5f;
+            var fogBoundsMax = fogCenter + fogSize * 0.5f;
+            shader.SetVector(FogBoundsMin, new Vector4(fogBoundsMin.x, fogBoundsMin.y, fogBoundsMin.z, 0.0f));
+            shader.SetVector(FogBoundsMax, new Vector4(fogBoundsMax.x, fogBoundsMax.y, fogBoundsMax.z, 0.0f));
+            shader.SetVector(FogScatteringAlbedo, new Vector4(
+                Mathf.Clamp01(fogAlbedo.r * fogScatteringScale),
+                Mathf.Clamp01(fogAlbedo.g * fogScatteringScale),
+                Mathf.Clamp01(fogAlbedo.b * fogScatteringScale),
+                0.0f));
+            shader.SetFloat(FogDensity, EffectiveFogDensity);
+            shader.SetFloat(FogInScatteringIntensity, Mathf.Max(0.0f, fogInScatteringIntensity));
+            shader.SetInt(FogMultipleScattering, enableFogMultipleScattering ? 1 : 0);
+        }
         
         Lighting.SetShaderLightCount(shader);
         
@@ -2591,6 +2699,13 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, Lighting.SkyboxLightColor.r);
             hash = AddHash(hash, Lighting.SkyboxLightColor.g);
             hash = AddHash(hash, Lighting.SkyboxLightColor.b);
+            hash = AddHash(hash, enableEnvironmentLighting ? 1 : 0);
+            hash = AddHash(hash, environmentLightSampleCount);
+            hash = AddHash(hash, environmentHighlightThreshold);
+            hash = AddHash(hash, environmentHighlightSoftKnee);
+            hash = AddHash(hash, environmentHighlightIntensity);
+            hash = AddHash(hash, environmentImportanceWidth);
+            hash = AddHash(hash, environmentImportanceHeight);
             hash = AddHash(hash, _spheres.Count);
             for (var i = 0; i < _spheres.Count; i++)
             {

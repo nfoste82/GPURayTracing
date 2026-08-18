@@ -27,6 +27,7 @@ public sealed class RayTracingSceneGalleryWindow : EditorWindow
         new ("Many Spheres", "ManySpheres", "Sphere-count stress and benchmark workload.", "Stress test", null),
         new ("Many Meshes", "ManyMeshes", "Mesh-count stress and benchmark workload.", "Stress test", null),
         new ("Many Lights", "ManyLights", "Light-count stress and benchmark workload.", "Stress test", null),
+        new ("Environment Mapping", "Environment_Mapping", "69k-triangle Stanford bunny lit only by environment mapping.", "Low", null),
     };
 
     private static readonly GalleryEntry[] TestScenes =

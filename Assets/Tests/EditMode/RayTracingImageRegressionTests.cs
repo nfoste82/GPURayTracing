@@ -795,6 +795,13 @@ namespace GPURayTracing.Tests
             ComputeBuffer topLevelBuffer = CreateDummyBuffer(48);
             ComputeBuffer shadowBuffer = CreateDummyBuffer(48);
             ComputeBuffer meshLightCdfBuffer = CreateDummyBuffer(4);
+            ComputeBuffer environmentCdfBuffer = CreateDummyBuffer(4);
+            ComputeBuffer causticPhotonBuffer = CreateDummyBuffer(40);
+            ComputeBuffer causticMetadataBuffer = CreateDummyBuffer(24);
+            ComputeBuffer causticGridHeadBuffer = CreateDummyBuffer(4);
+            ComputeBuffer causticPhotonNextBuffer = CreateDummyBuffer(4);
+            ComputeBuffer causticTargetPairBuffer = CreateDummyBuffer(32);
+            ComputeBuffer causticTargetTriangleBuffer = CreateDummyBuffer(12);
             CausticMap causticMap = null;
 
             try
@@ -802,12 +809,15 @@ namespace GPURayTracing.Tests
                 if (caustics == null)
                 {
                     shader.DisableKeyword("DEBUG_RENDER");
-                    shader.DisableKeyword("CAUSTICS_ENABLED");
+                    shader.SetInt("_CausticsEnabled", 0);
+                    SetDummyCausticBuffers(shader, kernel, causticPhotonBuffer, causticMetadataBuffer,
+                        causticGridHeadBuffer, causticPhotonNextBuffer, causticTargetPairBuffer,
+                        causticTargetTriangleBuffer);
                 }
                 else
                 {
                     shader.DisableKeyword("DEBUG_RENDER");
-                    shader.EnableKeyword("CAUSTICS_ENABLED");
+                    shader.SetInt("_CausticsEnabled", 1);
                     causticMap = DispatchCausticPhotons(
                         shader, sphereBuffer, lightBuffer, triangleBuffer, meshBuffer, bvhBuffer,
                         topLevelBuffer, shadowBuffer, spheres.Length, lights.Length, triangles.Length,
@@ -823,6 +833,15 @@ namespace GPURayTracing.Tests
                 shader.SetTexture(kernel, "_MeshMetallicRoughnessTextures", meshDataTextures);
                 shader.SetTexture(kernel, "_MeshNormalTextures", meshNormalTextures);
                 shader.SetTexture(kernel, "_MeshParallaxTextures", meshParallaxTextures);
+                // The production shader always declares environment CDF resources. These
+                // fixtures intentionally test the non-environment path, so bind harmless dummy
+                // buffers and disable the feature explicitly.
+                shader.SetInt("_EnvironmentLightEnabled", 0);
+                shader.SetInt("_EnvironmentLightSampleCount", 1);
+                shader.SetInt("_EnvironmentCdfWidth", 1);
+                shader.SetInt("_EnvironmentCdfHeight", 1);
+                shader.SetBuffer(kernel, "_EnvironmentConditionalCdf", environmentCdfBuffer);
+                shader.SetBuffer(kernel, "_EnvironmentMarginalCdf", environmentCdfBuffer);
                 shader.SetBuffer(kernel, "_Spheres", sphereBuffer);
                 shader.SetBuffer(kernel, "_Lights", lightBuffer);
                 shader.SetBuffer(kernel, "_Triangles", triangleBuffer);
@@ -875,7 +894,6 @@ namespace GPURayTracing.Tests
                 shader.SetInt("_HasTransparentShadowBlockers", hasTransparentSphere || hasTransparentMesh ? 1 : 0);
                 SetWater(shader, waterEnabled);
                 SetFogDisabled(shader);
-                shader.DisableKeyword("FOG_ENABLED");
 
                 shader.Dispatch(kernel, Mathf.CeilToInt(width / 4.0f), Mathf.CeilToInt(height / 4.0f), 1);
                 if (caustics == null)
@@ -898,8 +916,9 @@ namespace GPURayTracing.Tests
             finally
             {
                 shader.DisableKeyword("DEBUG_RENDER");
-                shader.DisableKeyword("CAUSTICS_ENABLED");
                 shader.DisableKeyword("FOG_ENABLED");
+                shader.DisableKeyword("TERRAIN_ENABLED");
+                shader.SetInt("_CausticsEnabled", 0);
                 causticMap?.Dispose();
                 sphereBuffer.Release();
                 lightBuffer.Release();
@@ -909,6 +928,13 @@ namespace GPURayTracing.Tests
                 topLevelBuffer.Release();
                 shadowBuffer.Release();
                 meshLightCdfBuffer.Release();
+                environmentCdfBuffer.Release();
+                causticPhotonBuffer.Release();
+                causticMetadataBuffer.Release();
+                causticGridHeadBuffer.Release();
+                causticPhotonNextBuffer.Release();
+                causticTargetPairBuffer.Release();
+                causticTargetTriangleBuffer.Release();
                 result.Release();
                 accumulation.Release();
                 beauty.Release();
@@ -994,10 +1020,8 @@ namespace GPURayTracing.Tests
 
             ComputeShader shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
             Assert.That(shader, Is.Not.Null);
-            shader.EnableKeyword("CAUSTICS_ENABLED");
             if (!shader.HasKernel("TraceCausticPhotons"))
             {
-                shader.DisableKeyword("CAUSTICS_ENABLED");
                 Assert.Ignore("The active graphics device did not compile the caustics kernels. Run without -nographics.");
             }
 
@@ -1025,7 +1049,7 @@ namespace GPURayTracing.Tests
             }
             finally
             {
-                shader.DisableKeyword("CAUSTICS_ENABLED");
+                shader.SetInt("_CausticsEnabled", 0);
                 map?.Dispose();
                 sphereBuffer.Release();
                 lightBuffer.Release();
@@ -1204,6 +1228,7 @@ namespace GPURayTracing.Tests
 
         private static void SetCausticParameters(ComputeShader shader, CausticOptions options)
         {
+            shader.SetInt("_CausticsEnabled", 1);
             shader.SetInt("_CausticPhotonCapacity", options.photonCount);
             shader.SetInt("_CausticPhotonAttemptCount", options.photonCount);
             shader.SetInt("_CausticMaxBounces", options.maxBounces);
@@ -1225,6 +1250,28 @@ namespace GPURayTracing.Tests
             shader.SetBuffer(kernel, "_CausticPhotonNext", map.photonNext);
             shader.SetBuffer(kernel, "_CausticTargetPairs", map.targetPairs);
             shader.SetBuffer(kernel, "_CausticTargetTriangles", map.targetTriangles);
+        }
+
+        private static void SetDummyCausticBuffers(
+            ComputeShader shader,
+            int kernel,
+            ComputeBuffer photons,
+            ComputeBuffer metadata,
+            ComputeBuffer gridHeads,
+            ComputeBuffer photonNext,
+            ComputeBuffer targetPairs,
+            ComputeBuffer targetTriangles)
+        {
+            shader.SetBuffer(kernel, "_CausticPhotons", photons);
+            shader.SetBuffer(kernel, "_CausticPhotonMetadata", metadata);
+            shader.SetBuffer(kernel, "_CausticGridCellHeads", gridHeads);
+            shader.SetBuffer(kernel, "_CausticPhotonNext", photonNext);
+            shader.SetBuffer(kernel, "_CausticTargetPairs", targetPairs);
+            shader.SetBuffer(kernel, "_CausticTargetTriangles", targetTriangles);
+            shader.SetInt("_CausticPhotonCapacity", 0);
+            shader.SetInt("_CausticPhotonAttemptCount", 0);
+            shader.SetInt("_CausticGridCellCount", 0);
+            shader.SetInt("_NumCausticTargetPairs", 0);
         }
 
         private static void SortPhotons(CausticPhotonData[] photons)
@@ -1608,7 +1655,7 @@ namespace GPURayTracing.Tests
 
         private static void SetFogDisabled(ComputeShader shader)
         {
-            shader.SetInt("_FogEnabled", 0);
+            shader.DisableKeyword("FOG_ENABLED");
             shader.SetVector("_FogBoundsMin", Vector4.zero);
             shader.SetVector("_FogBoundsMax", Vector4.one);
             shader.SetFloat("_FogDensity", 0.0f);
