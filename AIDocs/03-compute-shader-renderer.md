@@ -16,6 +16,7 @@ Important shader globals:
 - `_NumberOfPasses`: per-frame samples per pixel.
 - `_SubpixelJitterScale`: width of the random primary-ray pixel filter. `1` samples the full pixel footprint; values above `1` intentionally extend into neighboring pixels and blur the image.
 - `_UseFrameAccumulation`, `_AccumulatedFrameCount`, `_SampleOffset`: control progressive final-color accumulation and advance deterministic sample indices across frames. The sample sequence also advances when accumulation is disabled, so animated scenes do not repeat the same stochastic samples every frame.
+- `_UseAdaptiveSampling`, `_AdaptiveSamplingMinSamples`, `_AdaptiveSamplingRelativeError`, `_AdaptiveSamplingAbsoluteError`, and `_AdaptiveSamplingMaxInterval`: optionally let each pixel use its running luminance variance to choose a 1-, 2-, 4-, 8-, or 16-frame update interval. `AdaptiveSamplingState` holds per-pixel path-sample count, luminance mean, and Welford M2; skipped pixels retain their accumulated HDR radiance. Adaptive policy changes do not clear this state; enabling the policy after ordinary accumulation seeds missing state from `AccumulationResult` and `_AccumulatedFrameCount`.
 - `_NumBounces`: maximum bounces for `TracePath()`.
 - `_DebugRenderMode`: selects final path-traced color or a debug visualization.
 - `_ShadowQuality`: soft-shadow sample budget control. Bounce-0 direct lighting takes `max(1, _ShadowQuality + 1)` stochastic area-light samples per light.

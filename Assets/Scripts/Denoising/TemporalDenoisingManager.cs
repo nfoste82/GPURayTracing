@@ -305,7 +305,7 @@ namespace PathTracing.TemporalDenoising
             shader.SetMatrix("_PreviousUnjitteredViewProjection", _previousViewProjection);
             shader.SetMatrix("_CameraToWorld", _gameManager.renderTextureCamera.cameraToWorldMatrix);
             shader.SetMatrix("_CameraInverseProjection", _gameManager.renderTextureCamera.projectionMatrix.inverse);
-            shader.Dispatch(motionKernel, groupsX, groupsY, 1);
+            ComputeDispatch.Dispatch(shader, motionKernel, groupsX, groupsY, 1);
 
             var previousRadiance = _historyReadIsA ? _radianceHistoryA : _radianceHistoryB;
             var nextRadiance = _historyReadIsA ? _radianceHistoryB : _radianceHistoryA;
@@ -350,7 +350,7 @@ namespace PathTracing.TemporalDenoising
             shader.SetInt(TemporalMaxHistoryLength, temporalMaxHistoryLength);
             shader.SetFloat(TemporalCameraRotationDelta, _hasRenderedCameraState
                 ? Quaternion.Angle(_gameManager.renderTextureCamera.transform.rotation, _lastRenderedCameraRotation) : 0.0f);
-            shader.Dispatch(validationKernel, groupsX, groupsY, 1);
+            ComputeDispatch.Dispatch(shader, validationKernel, groupsX, groupsY, 1);
 
             var momentsKernel = shader.FindKernel("CSUpdateTemporalMoments");
             shader.SetTexture(momentsKernel, Beauty, _gameManager.BeautyTexture);
@@ -362,7 +362,7 @@ namespace PathTracing.TemporalDenoising
             shader.SetTexture(momentsKernel, NextVariance, _varianceTexture);
             shader.SetFloat(TemporalCameraRotationDelta, _hasRenderedCameraState
                 ? Quaternion.Angle(_gameManager.renderTextureCamera.transform.rotation, _lastRenderedCameraRotation) : 0.0f);
-            shader.Dispatch(momentsKernel, groupsX, groupsY, 1);
+            ComputeDispatch.Dispatch(shader, momentsKernel, groupsX, groupsY, 1);
 
             if (_gameManager.enableCaustics || debugMode == DebugRenderMode.CausticPreservationMask)
             {
@@ -392,7 +392,7 @@ namespace PathTracing.TemporalDenoising
                 shader.SetInt(TemporalDebugMode, temporalDebugMode);
                 shader.SetFloat(Exposure, _gameManager.exposure);
                 shader.SetInt(TemporalMaxHistoryLength, temporalMaxHistoryLength);
-                shader.Dispatch(visualizeKernel, groupsX, groupsY, 1);
+                ComputeDispatch.Dispatch(shader, visualizeKernel, groupsX, groupsY, 1);
             }
             else if (ShouldUseAccumulation(debugMode))
             {
@@ -406,16 +406,8 @@ namespace PathTracing.TemporalDenoising
                 }
                 else
                 {
-                    var presentKernel = shader.FindKernel("CSPresent");
-                    shader.SetTexture(presentKernel, InputBeauty, nextRadiance);
-                    shader.SetTexture(presentKernel, PresentationResult, _gameManager.OutputTexture);
-                    shader.SetFloat(Exposure, _gameManager.exposure);
-                    shader.SetInt("_EnableGlare", 0);
-                    shader.SetTexture(presentKernel, "GlareMip0", nextRadiance);
-                    shader.SetTexture(presentKernel, "GlareMip1", nextRadiance);
-                    shader.SetTexture(presentKernel, "GlareMip2", nextRadiance);
-                    shader.SetTexture(presentKernel, "GlareMip3", nextRadiance);
-                    shader.Dispatch(presentKernel, groupsX, groupsY, 1);
+                    _gameManager.Glare.Present(nextRadiance, _gameManager.OutputTexture, _gameManager.exposure,
+                        false, 0.0f, 0.0f, 0.0f);
                 }
             }
 

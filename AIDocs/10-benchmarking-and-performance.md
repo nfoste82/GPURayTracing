@@ -38,6 +38,29 @@ Existing generated scene files are skipped rather than overwritten by the menu c
 
 `RayTracingSceneCapture` accepts `-rayTracingGenerateScenes` to selectively regenerate and overwrite only the generated scene paths supplied to `-rayTracingScenes` before capture. This is the preferred non-interactive workflow when generator changes need to be applied.
 
+For adaptive-sampling comparisons, add `-rayTracingCompareAdaptiveSampling`. Each requested scene is rendered four times with the same fixed sample count: adaptive sampling disabled, then the `quality`, `performance`, and `ultra_performance` presets. The output is organized as `<output>/<label>/<scene>/adaptive_off.png`, `quality.png`, `performance.png`, `ultra_performance.png`, and matching `.txt` reports. The reports include total measured render time, average milliseconds per measured frame, and average FPS. One warm-up dispatch is excluded from timing so shader compilation and initial setup do not dominate the comparison. The maximum custom verification interval is 16 frames; stable pixels can therefore be sampled at most once every 16 frames. Example:
+
+```sh
+/Applications/Unity/Hub/Editor/6000.3.18f1/Unity.app/Contents/MacOS/Unity \
+  -batchmode \
+  -projectPath /Users/nic.foster/Projects/GPURayTracing \
+  -executeMethod RayTracingSceneCapture.CaptureFromCommandLine \
+  -rayTracingCompareAdaptiveSampling \
+  -rayTracingSamples 300 \
+  -rayTracingWidth 512 \
+  -rayTracingHeight 512 \
+  -rayTracingCaptureLabel adaptive_test \
+  -rayTracingOutput /tmp/gpuraytracing-captures \
+  -rayTracingScenes "Assets/Scenes/Generated/Benchmark_CornellBox.unity" \
+  -logFile /tmp/gpuraytracing-adaptive.log
+```
+
+For a single non-comparison capture, use `-rayTracingAdaptiveSamplingPreset quality`, `performance`, or `ultraPerformance`.
+
+Use `-rayTracingDurationSeconds 10` instead of `-rayTracingSamples` to render each variant for a wall-clock duration. The timing report records the actual frame count reached during that interval and the measured average frame time. When both options are supplied, duration takes precedence.
+
+This comparison currently measures CPU-observed `RenderImage` wall time, which includes the synchronous GPU dispatch and presentation work. Use the same Unity process conditions, scene, resolution, sample count, and graphics backend for both variants. The adaptive-on image is expected to be visually close to the adaptive-off image, while its timing report should show the speedup after stable pixels begin skipping dispatch work.
+
 ## Performance Hotspots
 
 `GameManager.profileStartup` logs one startup timing report after the first successful compute dispatch. The report separates object registration/Unity startup, output texture allocation, triangle data and per-mesh BVH construction, new mesh BVH template time, texture-array construction, top-level and shadow BVHs, compute-buffer creation/upload, first-frame CPU preparation, and the first compute dispatch. The dispatch measurement includes synchronous shader compilation, while the total runs from `GameManager` initialization through that dispatch. This makes cold shader compilation distinguishable from scene preprocessing in large imported scenes.

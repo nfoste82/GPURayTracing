@@ -251,10 +251,10 @@ public static class RayTracingShaderPrecompiler
                 SetKeyword(shader, "TERRAIN_ENABLED", variant.Terrain);
 
                 var coldStopwatch = Stopwatch.StartNew();
-                shader.Dispatch(kernel, 1, 1, 1);
+                PathTracing.ComputeDispatch.Dispatch(shader, kernel, 1, 1, 1);
                 coldStopwatch.Stop();
                 var warmStopwatch = Stopwatch.StartNew();
-                shader.Dispatch(kernel, 1, 1, 1);
+                PathTracing.ComputeDispatch.Dispatch(shader, kernel, 1, 1, 1);
                 warmStopwatch.Stop();
                 totalColdDispatchMs += coldStopwatch.ElapsedMilliseconds;
                 totalWarmDispatchMs += warmStopwatch.ElapsedMilliseconds;

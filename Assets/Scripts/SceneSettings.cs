@@ -16,6 +16,11 @@ public sealed class SceneSettings
     public int NumberOfPasses = 1;
     public float SubpixelJitterScale = 1.4f;
     public bool EnableFrameAccumulation = true;
+    public bool EnableAdaptiveSampling = false;
+    public int AdaptiveSamplingMinSamples = 16;
+    public float AdaptiveSamplingRelativeError = 0.05f;
+    public float AdaptiveSamplingAbsoluteError = 0.002f;
+    public int AdaptiveSamplingMaxInterval = 8;
     public int NumBounces = 6;
     public int ShadowQuality = 0;
     public int TopLevelBvhMinObjectCount = 64;

@@ -192,11 +192,11 @@ namespace GPURayTracing.Tests
             var source = CreateRandomWriteTexture(32, 32, RenderTextureFormat.ARGBFloat);
             var withoutGlare = CreateRandomWriteTexture(32, 32, RenderTextureFormat.ARGBFloat);
             var withGlare = CreateRandomWriteTexture(32, 32, RenderTextureFormat.ARGBFloat);
-            Type denoiserType = Type.GetType("PathTracing.Denoising.SpatialDenoisingManager, Assembly-CSharp");
-            Assert.That(denoiserType, Is.Not.Null, "Could not load the spatial denoising manager.");
-            object denoiser = Activator.CreateInstance(denoiserType);
-            MethodInfo present = denoiserType.GetMethod("Present");
-            MethodInfo releaseResources = denoiserType.GetMethod("ReleaseResources");
+            Type glareType = Type.GetType("PathTracing.Denoising.GlareManager, Assembly-CSharp");
+            Assert.That(glareType, Is.Not.Null, "Could not load the glare manager.");
+            object glare = Activator.CreateInstance(glareType);
+            MethodInfo present = glareType.GetMethod("Present");
+            MethodInfo releaseResources = glareType.GetMethod("ReleaseResources");
             Assert.That(present, Is.Not.Null);
             Assert.That(releaseResources, Is.Not.Null);
             try
@@ -207,8 +207,8 @@ namespace GPURayTracing.Tests
                 sourcePixels.Apply(false, false);
                 Graphics.Blit(sourcePixels, source);
 
-                present.Invoke(denoiser, new object[] { source, withoutGlare, 1.0f, false, 1.0f, 0.5f, 1.0f });
-                present.Invoke(denoiser, new object[] { source, withGlare, 1.0f, true, 1.0f, 0.5f, 1.0f });
+                present.Invoke(glare, new object[] { source, withoutGlare, 1.0f, false, 1.0f, 0.5f, 1.0f });
+                present.Invoke(glare, new object[] { source, withGlare, 1.0f, true, 1.0f, 0.5f, 1.0f });
 
                 // mip0 is intentionally kept at presentation resolution. Compare the source
                 // pixel itself, where glare must retain the bright contribution, then verify that
@@ -220,13 +220,13 @@ namespace GPURayTracing.Tests
                 Assert.That(ReadPixel(withGlare, 17, 16).r, Is.LessThanOrEqualTo(glarePixel.r + Epsilon),
                     "Glare should decay smoothly away from a point source instead of forming a repeated pixel block.");
 
-                present.Invoke(denoiser, new object[] { source, withoutGlare, 1.0f, false, 0.0f, 1.0f, 4.0f });
+                present.Invoke(glare, new object[] { source, withoutGlare, 1.0f, false, 0.0f, 1.0f, 4.0f });
                 Assert.That(ReadPixel(withoutGlare, 20, 16).r, Is.EqualTo(disabledPixel.r).Within(Epsilon),
                     "Disabled glare must not change the existing presentation output.");
             }
             finally
             {
-                releaseResources.Invoke(denoiser, null);
+                releaseResources.Invoke(glare, null);
                 source.Release();
                 withoutGlare.Release();
                 withGlare.Release();
@@ -282,6 +282,37 @@ namespace GPURayTracing.Tests
                 int changedFilterHash = (int)hashMethod.Invoke(manager, null);
                 Assert.That(changedFilterHash, Is.Not.EqualTo(defaultHash),
                     "Changing the sub-pixel filter must reset progressive accumulation.");
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(gameObject);
+                UnityEngine.Object.DestroyImmediate(cameraObject);
+            }
+        }
+
+        [Test]
+        public void GameManager_AccumulationStateHash_DoesNotChangeWhenAdaptiveSamplingChanges()
+        {
+            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+            Assert.That(managerType, Is.Not.Null, "Could not load GameManager from Assembly-CSharp");
+
+            var gameObject = new GameObject("Adaptive Sampling State Hash Test");
+            var cameraObject = new GameObject("Adaptive Sampling State Hash Camera");
+            try
+            {
+                Component manager = gameObject.AddComponent(managerType);
+                Camera camera = cameraObject.AddComponent<Camera>();
+                Component cameraManager = gameObject.GetComponent(Type.GetType("CameraManager, Assembly-CSharp"));
+                cameraManager.GetType().GetField("renderTextureCamera").SetValue(cameraManager, camera);
+
+                MethodInfo hashMethod = managerType.GetMethod("CalculateAccumulationStateHash", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.That(hashMethod, Is.Not.Null);
+                int defaultHash = (int)hashMethod.Invoke(manager, null);
+
+                managerType.GetField("enableAdaptiveSampling").SetValue(manager, true);
+                int adaptiveSamplingHash = (int)hashMethod.Invoke(manager, null);
+                Assert.That(adaptiveSamplingHash, Is.EqualTo(defaultHash),
+                    "Changing adaptive sampling policy must preserve progressive accumulation.");
             }
             finally
             {

@@ -62,7 +62,7 @@ Note: These video were rendered offline, at around 45-75 seconds per frame.
 ### Misc
 [![Dragon model rendered in a Cornell box](ExampleImages/dragon_cornell_box.png)](ExampleImages/dragon_cornell_box.png)
 [![Many glass orbs with caustics](ExampleImages/glass_spheres.png)](ExampleImages/glass_spheres.png)
-
+[![Various materials](ExampleImages/materials_test.png)](ExampleImages/materials_test.png)
 
 ## Quick Start
 

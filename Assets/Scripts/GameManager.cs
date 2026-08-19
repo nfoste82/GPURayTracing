@@ -18,6 +18,14 @@ using UnityEngine.Rendering;
 using Debug = UnityEngine.Debug;
 using Light = PathTracing.Lighting.Light;
 
+public enum AdaptiveSamplingPreset
+{
+    Custom,
+    Quality,
+    Performance,
+    UltraPerformance
+}
+
 [RequireComponent(typeof(TerrainManager))]
 [RequireComponent(typeof(CameraManager))]
 [RequireComponent(typeof(WaterManager))]
@@ -86,9 +94,59 @@ public class GameManager : MonoBehaviour
     [Range(0, 1024)]
     public int shadowBvhMinObjectCount = 1024;
 
-    [Header("Sampling and Accumulation")]
     [Range(0f, 1.5f)]
     public float shadowRandomness = 0.65f;
+
+    [Tooltip("Selects a predefined adaptive-sampling quality/performance balance. Custom preserves manually entered values.")]
+    public AdaptiveSamplingPreset adaptiveSamplingPreset = AdaptiveSamplingPreset.Custom;
+
+    [Tooltip("Uses per-pixel luminance variance to trace stable pixels less often while progressive frame accumulation is active. Pixels always receive the minimum samples before they can be skipped.")]
+    public bool enableAdaptiveSampling = false;
+
+    [Tooltip("Path samples a pixel must receive before adaptive sampling can reduce its update rate.")]
+    [Range(1, 256)]
+    public int adaptiveSamplingMinSamples = 16;
+
+    [Tooltip("Target relative standard error for luminance. Lower values are higher quality and trace more often.")]
+    [Range(0.001f, 0.5f)]
+    public float adaptiveSamplingRelativeError = 0.05f;
+
+    [Tooltip("Target absolute standard error for dark pixels in linear HDR luminance.")]
+    [Range(0.0001f, 1.0f)]
+    public float adaptiveSamplingAbsoluteError = 0.002f;
+
+    [Tooltip("Longest interval between verification samples for a stable pixel. Values are rounded down to 1, 2, 4, 8, or 16 frames.")]
+    [Range(1, 16)]
+    public int adaptiveSamplingMaxInterval = 8;
+
+    public void ApplyAdaptiveSamplingPreset(AdaptiveSamplingPreset preset)
+    {
+        adaptiveSamplingPreset = preset;
+        switch (preset)
+        {
+            case AdaptiveSamplingPreset.Quality:
+                enableAdaptiveSampling = true;
+                adaptiveSamplingMinSamples = 16;
+                adaptiveSamplingRelativeError = 0.1f;
+                adaptiveSamplingAbsoluteError = 0.1f;
+                adaptiveSamplingMaxInterval = 4;
+                break;
+            case AdaptiveSamplingPreset.Performance:
+                enableAdaptiveSampling = true;
+                adaptiveSamplingMinSamples = 12;
+                adaptiveSamplingRelativeError = 0.2f;
+                adaptiveSamplingAbsoluteError = 0.2f;
+                adaptiveSamplingMaxInterval = 8;
+                break;
+            case AdaptiveSamplingPreset.UltraPerformance:
+                enableAdaptiveSampling = true;
+                adaptiveSamplingMinSamples = 8;
+                adaptiveSamplingRelativeError = 0.3f;
+                adaptiveSamplingAbsoluteError = 0.3f;
+                adaptiveSamplingMaxInterval = 16;
+                break;
+        }
+    }
 
     [Header("Parallax Mapping")]
     [Range(0f, 90f)]
@@ -104,6 +162,7 @@ public class GameManager : MonoBehaviour
 
     public LightingManager Lighting => _lightingManager ??= new LightingManager();
     public SpatialDenoisingManager SpatialDenoising => _spatialDenoisingManager ??= new SpatialDenoisingManager();
+    public GlareManager Glare => _glareManager ??= new GlareManager();
     public TemporalDenoisingManager TemporalDenoising => _temporalDenoisingManager ??= new TemporalDenoisingManager();
 
     [Tooltip("Builds a photon map for sphere and triangle-light caustics through glass, closed meshes, and the registered water volume. Disabled by default.")]
@@ -211,6 +270,8 @@ public class GameManager : MonoBehaviour
     private RenderTexture _outputTexture;
     private RenderTexture _presentationTexture;
     private RenderTexture _accumulationTexture;
+    private RenderTexture _adaptiveSamplingStateTexture;
+    private bool _adaptiveSamplingStateClearPending;
     // Reconstruction-neutral, linear feature outputs. They are allocated now but do not change
     // presentation until a denoiser consumes them in a later milestone.
     private RenderTexture _beautyTexture;
@@ -251,6 +312,7 @@ public class GameManager : MonoBehaviour
     
     [SerializeField]
     private SpatialDenoisingManager _spatialDenoisingManager = new ();
+    private GlareManager _glareManager = new ();
     
     [SerializeField]
     private TemporalDenoisingManager _temporalDenoisingManager = new ();
@@ -396,6 +458,12 @@ public class GameManager : MonoBehaviour
     private static readonly int UseFrameAccumulation = Shader.PropertyToID("_UseFrameAccumulation");
     private static readonly int FrameCount = Shader.PropertyToID("_AccumulatedFrameCount");
     private static readonly int SampleOffset = Shader.PropertyToID("_SampleOffset");
+    private static readonly int AdaptiveSamplingState = Shader.PropertyToID("AdaptiveSamplingState");
+    private static readonly int UseAdaptiveSampling = Shader.PropertyToID("_UseAdaptiveSampling");
+    private static readonly int AdaptiveSamplingMinSamples = Shader.PropertyToID("_AdaptiveSamplingMinSamples");
+    private static readonly int AdaptiveSamplingRelativeError = Shader.PropertyToID("_AdaptiveSamplingRelativeError");
+    private static readonly int AdaptiveSamplingAbsoluteError = Shader.PropertyToID("_AdaptiveSamplingAbsoluteError");
+    private static readonly int AdaptiveSamplingMaxInterval = Shader.PropertyToID("_AdaptiveSamplingMaxInterval");
     private static readonly int ParallaxMaximumStrengthCosine = Shader.PropertyToID("_ParallaxMaximumStrengthCosine");
     private static readonly int Exposure = Shader.PropertyToID("_Exposure");
     private static readonly int FireflyClamp = Shader.PropertyToID("_FireflyClamp");
@@ -457,6 +525,11 @@ public class GameManager : MonoBehaviour
         numberOfPasses = settings.NumberOfPasses;
         subpixelJitterScale = settings.SubpixelJitterScale;
         enableFrameAccumulation = settings.EnableFrameAccumulation;
+        enableAdaptiveSampling = settings.EnableAdaptiveSampling;
+        adaptiveSamplingMinSamples = settings.AdaptiveSamplingMinSamples;
+        adaptiveSamplingRelativeError = settings.AdaptiveSamplingRelativeError;
+        adaptiveSamplingAbsoluteError = settings.AdaptiveSamplingAbsoluteError;
+        adaptiveSamplingMaxInterval = settings.AdaptiveSamplingMaxInterval;
         numBounces = settings.NumBounces;
         shadowQuality = settings.ShadowQuality;
         topLevelBvhMinObjectCount = settings.TopLevelBvhMinObjectCount;
@@ -607,6 +680,7 @@ public class GameManager : MonoBehaviour
         _outputTexture?.Release();
         _presentationTexture?.Release();
         _accumulationTexture?.Release();
+        _adaptiveSamplingStateTexture?.Release();
         _beautyTexture?.Release();
         _featureNormalTexture?.Release();
         _featureAlbedoTexture?.Release();
@@ -614,6 +688,7 @@ public class GameManager : MonoBehaviour
         _featureIdentityTexture?.Release();
         _featureValidityTexture?.Release();
         _spatialDenoisingManager.ReleaseResources();
+        _glareManager.ReleaseResources();
         ReleaseTemporalDenoiserResources();
         _textureSize = new Vector2Int(width, height);
         _outputTexture = new RenderTexture(_textureSize.x, _textureSize.y, 0, RenderTextureFormat.ARGBFloat)
@@ -636,6 +711,13 @@ public class GameManager : MonoBehaviour
             filterMode = FilterMode.Point
         };
         _accumulationTexture.Create();
+
+        _adaptiveSamplingStateTexture = new RenderTexture(_textureSize.x, _textureSize.y, 0, RenderTextureFormat.ARGBFloat)
+        {
+            enableRandomWrite = true,
+            filterMode = FilterMode.Point
+        };
+        _adaptiveSamplingStateTexture.Create();
 
         _beautyTexture = CreateFeatureTexture(RenderTextureFormat.ARGBFloat);
         _featureNormalTexture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
@@ -812,6 +894,7 @@ public class GameManager : MonoBehaviour
         _outputTexture?.Release();
         _presentationTexture?.Release();
         _accumulationTexture?.Release();
+        _adaptiveSamplingStateTexture?.Release();
         _beautyTexture?.Release();
         _featureNormalTexture?.Release();
         _featureAlbedoTexture?.Release();
@@ -820,6 +903,7 @@ public class GameManager : MonoBehaviour
         _featureValidityTexture?.Release();
         
         _spatialDenoisingManager.ReleaseResources();
+        _glareManager.ReleaseResources();
         
         ReleaseTemporalDenoiserResources();
         
@@ -909,6 +993,16 @@ public class GameManager : MonoBehaviour
 
     private void UpdateTextureFromCompute(int kernelHandle)
     {
+        if (_adaptiveSamplingStateClearPending && _adaptiveSamplingStateTexture != null)
+        {
+            var clearKernel = shader.FindKernel("ClearAdaptiveSamplingState");
+            shader.SetTexture(clearKernel, AdaptiveSamplingState, _adaptiveSamplingStateTexture);
+            var clearGroupsX = Mathf.CeilToInt(_textureSize.x / (float)RenderThreadCountX);
+            var clearGroupsY = Mathf.CeilToInt(_textureSize.y / (float)RenderThreadCountY);
+            ComputeDispatch.Dispatch(shader, clearKernel, clearGroupsX, clearGroupsY, 1);
+            _adaptiveSamplingStateClearPending = false;
+        }
+
         shader.SetTexture(kernelHandle, Result, _outputTexture);
         shader.SetTexture(kernelHandle, AccumulationResult, _accumulationTexture);
         shader.SetTexture(kernelHandle, Beauty, _beautyTexture);
@@ -916,13 +1010,13 @@ public class GameManager : MonoBehaviour
         var threadGroupsX = Mathf.CeilToInt(_textureSize.x / (float)RenderThreadCountX);
         var threadGroupsY = Mathf.CeilToInt(_textureSize.y / (float)RenderThreadCountY);
         
-        shader.Dispatch(kernelHandle, threadGroupsX, threadGroupsY, 1);
+        ComputeDispatch.Dispatch(shader, kernelHandle, threadGroupsX, threadGroupsY, 1);
     }
 
     private void PresentFinalColor()
     {
-        _spatialDenoisingManager.Present(_presentationSource ?? _beautyTexture, _presentationTexture, exposure,
-            enableGlare, glareThreshold, glareSoftKnee, glareIntensity);
+        _glareManager.Present(_presentationSource ?? _beautyTexture, _presentationTexture,
+            exposure, enableGlare, glareThreshold, glareSoftKnee, glareIntensity);
     }
 
     private void PresentLinearTexture(RenderTexture source, RenderTexture destination)
@@ -943,7 +1037,7 @@ public class GameManager : MonoBehaviour
         
         var threadGroupsX = Mathf.CeilToInt(_textureSize.x / (float)RenderThreadCountX);
         var threadGroupsY = Mathf.CeilToInt(_textureSize.y / (float)RenderThreadCountY);
-        shader.Dispatch(kernelHandle, threadGroupsX, threadGroupsY, 1);
+        ComputeDispatch.Dispatch(shader, kernelHandle, threadGroupsX, threadGroupsY, 1);
     }
 
     private void PresentFeatureDebugMode()
@@ -981,6 +1075,7 @@ public class GameManager : MonoBehaviour
     {
         _accumulatedFrameCount = 0;
         _hasAccumulationStateHash = false;
+        _adaptiveSamplingStateClearPending = true;
     }
 
     private void BuildCausticSamplingDistribution()
@@ -1079,11 +1174,11 @@ public class GameManager : MonoBehaviour
         
         SetSceneBuffers(traceKernel);
         
-        shader.Dispatch(clearKernel, 1, 1, 1);
-        shader.Dispatch(traceKernel, Mathf.CeilToInt(Mathf.Max(1, Caustics.PhotonCount) / (float)CausticTraceThreadCount), 1, 1);
-        shader.Dispatch(clearGridKernel, Mathf.Max(1,
+        ComputeDispatch.Dispatch(shader, clearKernel, 1, 1, 1);
+        ComputeDispatch.Dispatch(shader, traceKernel, Mathf.CeilToInt(Mathf.Max(1, Caustics.PhotonCount) / (float)CausticTraceThreadCount), 1, 1);
+        ComputeDispatch.Dispatch(shader, clearGridKernel, Mathf.Max(1,
             Mathf.CeilToInt(_causticsManager.GridCellCount / (float)CausticTraceThreadCount)), 1, 1);
-        shader.Dispatch(buildGridKernel, Mathf.CeilToInt(Mathf.Max(1, Caustics.PhotonCount) / (float)CausticTraceThreadCount), 1, 1);
+        ComputeDispatch.Dispatch(shader, buildGridKernel, Mathf.CeilToInt(Mathf.Max(1, Caustics.PhotonCount) / (float)CausticTraceThreadCount), 1, 1);
         
         RequestCausticMetadataReadback();
         _causticsManager.DispatchCountValue++;
@@ -1231,6 +1326,7 @@ public class GameManager : MonoBehaviour
             if (!_hasAccumulationStateHash || stateHash != _accumulationStateHash)
             {
                 _accumulatedFrameCount = 0; 
+                _adaptiveSamplingStateClearPending = true;
                 _accumulationStateHash = stateHash; 
                 _hasAccumulationStateHash = true;
             }
@@ -2491,6 +2587,7 @@ public class GameManager : MonoBehaviour
     private void BindShaderTextures(int kernelHandle)
     {
         shader.SetTexture(kernelHandle, SkyboxTexture, skyboxTexture);
+        shader.SetTexture(kernelHandle, AdaptiveSamplingState, _adaptiveSamplingStateTexture);
         BindEnvironmentImportanceSampling(kernelHandle);
         EnsureMeshTextureArrays();
         shader.SetTexture(kernelHandle, MeshAlbedoTextures, _meshAlbedoTextureArray);
@@ -2566,6 +2663,11 @@ public class GameManager : MonoBehaviour
         shader.SetInt(UseFrameAccumulation, ShouldUseFrameAccumulation() ? 1 : 0);
         shader.SetInt(FrameCount, _accumulatedFrameCount);
         shader.SetInt(SampleOffset, CalculateSampleOffset());
+        shader.SetInt(UseAdaptiveSampling, ShouldUseAdaptiveSampling() ? 1 : 0);
+        shader.SetInt(AdaptiveSamplingMinSamples, Mathf.Max(1, adaptiveSamplingMinSamples));
+        shader.SetFloat(AdaptiveSamplingRelativeError, Mathf.Max(0.0001f, adaptiveSamplingRelativeError));
+        shader.SetFloat(AdaptiveSamplingAbsoluteError, Mathf.Max(0.00001f, adaptiveSamplingAbsoluteError));
+        shader.SetInt(AdaptiveSamplingMaxInterval, GetAdaptiveSamplingMaxInterval());
     }
 
     private void BindShaderKeywordsAndLightingParameters(int kernelHandle)
@@ -2660,6 +2762,17 @@ public class GameManager : MonoBehaviour
         var frameIndex = ShouldUseFrameAccumulation() ? _accumulatedFrameCount : _renderedFrameCount;
         var sampleOffset = frameIndex * Mathf.Max(1, numberOfPasses);
         return (int)Math.Min(int.MaxValue, sampleOffset);
+    }
+
+    private bool ShouldUseAdaptiveSampling()
+    {
+        return enableAdaptiveSampling && ShouldUseFrameAccumulation();
+    }
+
+    private int GetAdaptiveSamplingMaxInterval()
+    {
+        var interval = Mathf.Clamp(adaptiveSamplingMaxInterval, 1, 16);
+        return interval >= 16 ? 16 : interval >= 8 ? 8 : interval >= 4 ? 4 : interval >= 2 ? 2 : 1;
     }
 
     private int CalculateAccumulationStateHash()

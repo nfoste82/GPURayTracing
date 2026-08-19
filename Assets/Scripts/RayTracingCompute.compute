@@ -1,5 +1,6 @@
 ﻿// Each #kernel tells which function to compile; you can have many kernels
 #pragma kernel CSMain
+#pragma kernel ClearAdaptiveSamplingState
 #pragma kernel CSFeatures
 #pragma kernel CSFocusQuery
 #pragma kernel CSRegressionProbe
@@ -29,6 +30,8 @@
 // with cs.SetTexture
 RWTexture2D<float4> Result;
 RWTexture2D<float4> AccumulationResult;
+// R: path-sample count, G: luminance mean, B: Welford M2, A: unused.
+RWTexture2D<float4> AdaptiveSamplingState;
 RWTexture2D<float4> Beauty;
 RWTexture2D<float4> FeatureNormal;
 RWTexture2D<float4> FeatureAlbedo;
@@ -75,6 +78,11 @@ int _LightSamplingStrategy;
 int _LightSampleCount;
 int _UseFrameAccumulation;
 int _AccumulatedFrameCount;
+int _UseAdaptiveSampling;
+int _AdaptiveSamplingMinSamples;
+float _AdaptiveSamplingRelativeError;
+float _AdaptiveSamplingAbsoluteError;
+int _AdaptiveSamplingMaxInterval;
 float _ShadowRandomness;
 float _LightFalloffScale;
 float _ParallaxMaximumStrengthCosine;
@@ -1420,7 +1428,7 @@ float4 GetTerrainMask(float2 uv)
 void SetTerrainHit(Ray ray, float hitDistance, inout RayHit bestHit)
 {
     float3 position = ray.origin + ray.direction * hitDistance;
-    float2 uv = (position.xz - _TerrainPosition.xz) / _TerrainSize.xz;
+    float2 uv = (position.xz - _TerrainPosition.xz) / max(_TerrainSize.xz, float2(0.001f, 0.001f));
     float3 geometricNormal = GetTerrainNormal(position.xz);
     float3 normal = GetTerrainNormal(uv, geometricNormal);
     float4 mask = GetTerrainMask(uv);
@@ -2343,6 +2351,11 @@ float3 GetClosestPointOnLineSegment(float3 linePointStart, float3 linePointEnd, 
 
     float3 lineToPoint = testPoint - linePointStart;
     float dotProduct = dot(lineDiff, lineToPoint);
+
+    if (lineSegSqrLength <= 1e-12f)
+    {
+        return linePointStart;
+    }
 
     float percentageAlongLine = dotProduct / lineSegSqrLength;
 
@@ -5237,6 +5250,19 @@ void CSFeatures(uint3 id : SV_DispatchThreadID)
 }
 
 [numthreads(4,4,1)]
+void ClearAdaptiveSamplingState(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    AdaptiveSamplingState.GetDimensions(width, height);
+    if (id.x >= width || id.y >= height)
+    {
+        return;
+    }
+
+    AdaptiveSamplingState[id.xy] = 0.0f;
+}
+
+[numthreads(4,4,1)]
 void CSMain (uint3 id : SV_DispatchThreadID)
 {
     // Get the dimensions of the RenderTexture
@@ -5246,6 +5272,40 @@ void CSMain (uint3 id : SV_DispatchThreadID)
     if (id.x >= width || id.y >= height)
     {
         return;
+    }
+
+    float4 adaptiveState = AdaptiveSamplingState[id.xy];
+    bool trackAdaptiveStatistics = _UseFrameAccumulation != 0 && _DebugRenderMode == DebugFinalColor;
+    float adaptiveSampleCount = adaptiveState.x;
+    float adaptiveMean = adaptiveState.y;
+    float adaptiveM2 = adaptiveState.z;
+    if (trackAdaptiveStatistics && adaptiveSampleCount <= 0.0f && _AccumulatedFrameCount > 0)
+    {
+        // Preserve an existing global accumulation when adaptive sampling is enabled later.
+        adaptiveSampleCount = _AccumulatedFrameCount;
+        adaptiveMean = dot(AccumulationResult[id.xy].rgb, float3(0.2126f, 0.7152f, 0.0722f));
+        adaptiveM2 = 0.0f;
+    }
+    if (_UseAdaptiveSampling != 0 && adaptiveSampleCount >= _AdaptiveSamplingMinSamples)
+    {
+        float sampleCount = adaptiveSampleCount;
+        float variance = sampleCount > 1.0f ? max(0.0f, adaptiveM2 / (sampleCount - 1.0f)) : 0.0f;
+        float standardError = sqrt(variance / max(sampleCount, 1.0f));
+        float targetError = max(_AdaptiveSamplingAbsoluteError,
+            _AdaptiveSamplingRelativeError * max(adaptiveMean, 0.001f));
+        float errorRatio = targetError > 0.0f ? standardError / targetError : 1.0f;
+        int interval = errorRatio <= 0.25f ? _AdaptiveSamplingMaxInterval
+            : errorRatio <= 0.5f ? min(8, _AdaptiveSamplingMaxInterval)
+            : errorRatio <= 1.0f ? min(2, _AdaptiveSamplingMaxInterval)
+            : 1;
+        uint phase = Hash(id.x + id.y * width) & (uint)(interval - 1);
+        if (((uint)_AccumulatedFrameCount & (uint)(interval - 1)) != phase)
+        {
+            float3 retainedColor = AccumulationResult[id.xy].rgb;
+            Beauty[id.xy] = float4(retainedColor, 1.0f);
+            Result[id.xy] = float4(retainedColor, 1.0f);
+            return;
+        }
     }
 
     // Transform pixel to [-1,1] range
@@ -5291,22 +5351,41 @@ void CSMain (uint3 id : SV_DispatchThreadID)
         }
 
 #if DEBUG_RENDER
-        result += _DebugRenderMode == DebugFinalColor ? ClampFirefly(TracePath(ray, rngState)) : GetDebugRenderColor(ray, rngState);
+        float3 sampleRadiance = _DebugRenderMode == DebugFinalColor ? ClampFirefly(TracePath(ray, rngState)) : GetDebugRenderColor(ray, rngState);
 #else
-        result += ClampFirefly(TracePath(ray, rngState));
+        float3 sampleRadiance = ClampFirefly(TracePath(ray, rngState));
 #endif
+        result += sampleRadiance;
+        if (trackAdaptiveStatistics)
+        {
+            float luminance = dot(sampleRadiance, float3(0.2126f, 0.7152f, 0.0722f));
+            adaptiveSampleCount += 1.0f;
+            float delta = luminance - adaptiveMean;
+            adaptiveMean += delta / adaptiveSampleCount;
+            adaptiveM2 += delta * (luminance - adaptiveMean);
+        }
     }
 
     float3 color = result / _NumberOfPasses;
 
     if (_UseFrameAccumulation != 0 && _DebugRenderMode == DebugFinalColor)
     {
-        float previousFrameCount = max(0, _AccumulatedFrameCount);
-        if (previousFrameCount > 0.0f)
+        float previousSampleCount = _UseAdaptiveSampling != 0 ? adaptiveSampleCount : max(0, _AccumulatedFrameCount);
+        if (trackAdaptiveStatistics)
         {
-            color = (AccumulationResult[id.xy].rgb * previousFrameCount + color) / (previousFrameCount + 1.0f);
+            color = (AccumulationResult[id.xy].rgb * previousSampleCount + result) /
+                (previousSampleCount + _NumberOfPasses);
+        }
+        else if (previousSampleCount > 0.0f)
+        {
+            color = (AccumulationResult[id.xy].rgb * previousSampleCount + color) / (previousSampleCount + 1.0f);
         }
         AccumulationResult[id.xy] = float4(color, 1);
+
+        if (_UseAdaptiveSampling != 0)
+        {
+            AdaptiveSamplingState[id.xy] = float4(adaptiveSampleCount, adaptiveMean, adaptiveM2, 0.0f);
+        }
     }
 
     Beauty[id.xy] = float4(color, 1.0f);

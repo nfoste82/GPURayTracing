@@ -1,4 +1,5 @@
 using System;
+using PathTracing;
 using PathTracing.Camera;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -371,7 +372,7 @@ public sealed class CameraManager : MonoBehaviour
         
         shader.SetVector(FocusQueryUv, PendingFocusQueryUv);
         shader.SetBuffer(kernel, FocusQueryResult, FocusQueryBuffer);
-        shader.Dispatch(kernel, 1, 1, 1);
+        ComputeDispatch.Dispatch(shader, kernel, 1, 1, 1);
 
         FocusQueryPending = false;
         FocusQueryInFlight = true;
