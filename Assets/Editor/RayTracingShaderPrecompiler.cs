@@ -41,6 +41,15 @@ public static class RayTracingShaderPrecompiler
         Precompile(-1);
     }
 
+    // Run this in a separate Unity process before EditMode tests after changing a shader:
+    // -executeMethod RayTracingShaderPrecompiler.PrecompileFromCommandLine
+    public static void PrecompileFromCommandLine()
+    {
+        bool allVariants = HasCommandLineArgument("-rayTracingPrecompileAllVariants");
+        bool succeeded = Precompile(allVariants ? -1 : 0);
+        EditorApplication.Exit(succeeded ? 0 : 1);
+    }
+
     [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Final Color - Default")]
     private static void PrecompileDefaultVariant()
     {
@@ -89,13 +98,13 @@ public static class RayTracingShaderPrecompiler
         Precompile(7);
     }
 
-    private static void Precompile(int selectedVariant)
+    private static bool Precompile(int selectedVariant)
     {
         var shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ShaderPath);
         if (shader == null)
         {
             Debug.LogError($"Precompile failed: could not load compute shader at '{ShaderPath}'.");
-            return;
+            return false;
         }
 
         var allVariants = CreateVariants();
@@ -113,7 +122,7 @@ public static class RayTracingShaderPrecompiler
         if (shader == null)
         {
             Debug.LogError($"Precompile failed after reimport: could not load compute shader at '{ShaderPath}'.");
-            return;
+            return false;
         }
 
         // 1) Force the HLSL -> backend compile and surface any compile messages. This is the
@@ -138,7 +147,7 @@ public static class RayTracingShaderPrecompiler
         if (hasError)
         {
             Debug.LogError("Precompile aborted: the compute shader has compile errors (see above).");
-            return;
+            return false;
         }
 
         // 2) Force the real GPU dispatch (the lazy step Play triggers) on a tiny render target.
@@ -214,6 +223,8 @@ public static class RayTracingShaderPrecompiler
             shader.SetTexture(kernel, "FeatureDepth", featureScalar);
             shader.SetTexture(kernel, "FeatureIdentity", featureScalar);
             shader.SetTexture(kernel, "FeatureValidity", featureScalar);
+            shader.SetInt("_AccumulatedFrameCount", 1);
+            shader.SetInt("_SampleOffset", 0);
             shader.SetTexture(kernel, "_TerrainAlphamap", Texture2D.blackTexture);
             shader.SetTexture(kernel, "_TerrainLayer0", Texture2D.whiteTexture);
             shader.SetTexture(kernel, "_TerrainLayer1", Texture2D.whiteTexture);
@@ -288,7 +299,7 @@ public static class RayTracingShaderPrecompiler
         catch (System.Exception e)
         {
             Debug.LogError($"Precompile dispatch threw: {e.Message}\n{e}");
-            return;
+            return false;
         }
         finally
         {
@@ -318,7 +329,7 @@ public static class RayTracingShaderPrecompiler
         if (cancelled)
         {
             Debug.LogWarning($"Ray tracing shader precompile cancelled after {completedVariants} of {variants.Length} variants.");
-            return;
+            return false;
         }
 
         var statsPath = Path.Combine(Directory.GetParent(Application.dataPath).FullName, StatsPath);
@@ -326,6 +337,21 @@ public static class RayTracingShaderPrecompiler
             $"Ray tracing compute shader recompiled and dispatched across {variants.Length} selected variant(s) in " +
             $"{totalStopwatch.ElapsedMilliseconds} ms. Cold dispatch total={totalColdDispatchMs} ms, " +
             $"warm dispatch total={totalWarmDispatchMs} ms. Stats appended to '{statsPath}'. Safe to enter Play mode.");
+        return true;
+    }
+
+    private static bool HasCommandLineArgument(string argument)
+    {
+        string[] arguments = System.Environment.GetCommandLineArgs();
+        for (int i = 0; i < arguments.Length; i++)
+        {
+            if (arguments[i] == argument)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Caustics")]

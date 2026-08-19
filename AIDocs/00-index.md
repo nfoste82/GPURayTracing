@@ -20,6 +20,7 @@ Use this folder as focused context for LLM-assisted work on the Unity GPU ray tr
 - `14-svgf-implementation-plan.md`: Ordered GPU-native A-trous/SVGF implementation milestones, current status, validation criteria, diagnostics, and remaining denoising work.
 - `15-terrain-rendering.md`: GPU heightfield terrain data flow, acceleration structure, scene generation, rank-based layer weight painting, coverage reporting, and limitations.
 - `16-accessibility-and-onboarding.md`: Completed public-project onboarding work and remaining accessibility, diagnostics, gallery, quality-preset, testing, and platform-validation improvements.
+- `17-adaptive-sampling-continuation.md`: Adaptive-sampling handoff, benchmark evidence, paper-derived display-space confidence guidance, and the recommended fixed-budget GPU work-list architecture.
 
 ## Fast Context Selection
 
@@ -39,3 +40,4 @@ Use this folder as focused context for LLM-assisted work on the Unity GPU ray tr
 - To change terrain layer textures, weights, or elevation/slope banding, read `15-terrain-rendering.md`; declare rules in rank/degree space via `TerrainLayerPainter` and verify with `Tools > Ray Tracing > Report Terrain Coverage`.
 - To regenerate generated scenes after changing generator code, use `Tools > Ray Tracing > Regenerate Scenes (Delete Existing Scenes)`; plain `Generate Scenes` skips scenes that already exist.
 - To continue reducing the public project's barrier to entry, read `16-accessibility-and-onboarding.md`.
+- To continue adaptive-sampling work, read `17-adaptive-sampling-continuation.md`, then `03-compute-shader-renderer.md`, `08-shader-debugging-and-randomness.md`, and `10-benchmarking-and-performance.md`.

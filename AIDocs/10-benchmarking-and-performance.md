@@ -38,7 +38,7 @@ Existing generated scene files are skipped rather than overwritten by the menu c
 
 `RayTracingSceneCapture` accepts `-rayTracingGenerateScenes` to selectively regenerate and overwrite only the generated scene paths supplied to `-rayTracingScenes` before capture. This is the preferred non-interactive workflow when generator changes need to be applied.
 
-For adaptive-sampling comparisons, add `-rayTracingCompareAdaptiveSampling`. Each requested scene is rendered four times with the same fixed sample count: adaptive sampling disabled, then the `quality`, `performance`, and `ultra_performance` presets. The output is organized as `<output>/<label>/<scene>/adaptive_off.png`, `quality.png`, `performance.png`, `ultra_performance.png`, and matching `.txt` reports. The reports include total measured render time, average milliseconds per measured frame, and average FPS. One warm-up dispatch is excluded from timing so shader compilation and initial setup do not dominate the comparison. The maximum custom verification interval is 16 frames; stable pixels can therefore be sampled at most once every 16 frames. Example:
+For adaptive-sampling comparisons, add `-rayTracingCompareAdaptiveSampling`. Each requested scene is rendered twice with the same fixed sample count: `adaptive_off` and `adaptive_on`. The output is organized as `<output>/<label>/<scene>/adaptive_off.png`, `adaptive_on.png`, and matching `.txt` reports. The reports include total measured render time, average milliseconds per measured frame, and average FPS. One warm-up dispatch is excluded from timing so shader compilation and initial setup do not dominate the comparison. The current toggle is intentionally dormant after the legacy policy was removed; this comparison remains so future implementations have a stable baseline harness. Example:
 
 ```sh
 /Applications/Unity/Hub/Editor/6000.3.18f1/Unity.app/Contents/MacOS/Unity \
@@ -55,11 +55,11 @@ For adaptive-sampling comparisons, add `-rayTracingCompareAdaptiveSampling`. Eac
   -logFile /tmp/gpuraytracing-adaptive.log
 ```
 
-For a single non-comparison capture, use `-rayTracingAdaptiveSamplingPreset quality`, `performance`, or `ultraPerformance`.
+To measure fixed-time convergence rather than timing alone, add `-rayTracingReferenceMetrics` to a duration-based adaptive comparison at `1024x1024`. References live under `Assets/Editor/RayTracingSceneReferences/` in a scene-path-derived folder, named after the scene, for example `Generated/TeapotMaterials/TeapotMaterials.png`. When absent, the capture automatically renders a deterministic 120-second adaptive-off reference with a matching JSON metadata sidecar; existing references are validated and never silently replaced. Use `-rayTracingRefreshReferences` only after reviewing an intentional renderer change, or `-rayTracingRequireExistingReferences` in CI. Each candidate gets a neighboring `.metrics.json` report with linear-sRGB RGB/luminance MAE, RMSE, RGB PSNR, relative luminance error, and the fraction of pixels over an absolute luminance error of `0.01`.
 
-Use `-rayTracingDurationSeconds 10` instead of `-rayTracingSamples` to render each variant for a wall-clock duration. The timing report records the actual frame count reached during that interval and the measured average frame time. When both options are supplied, duration takes precedence.
+Use `-rayTracingDurationSeconds 10` instead of `-rayTracingSamples` to render each variant for a wall-clock duration. The timing report records the actual frame count reached during that interval and the measured average frame time; there is no frame-count cap, so faster adaptive presets can produce more progressively converged samples in the same interval. Duration captures synchronize each completed frame so the wall-clock budget measures retired GPU work rather than CPU submission followed by a large queue drain. When both options are supplied, duration takes precedence.
 
-This comparison currently measures CPU-observed `RenderImage` wall time, which includes the synchronous GPU dispatch and presentation work. Use the same Unity process conditions, scene, resolution, sample count, and graphics backend for both variants. The adaptive-on image is expected to be visually close to the adaptive-off image, while its timing report should show the speedup after stable pixels begin skipping dispatch work.
+This comparison currently measures CPU-observed `RenderImage` wall time, which includes the synchronous GPU dispatch and presentation work. Use the same Unity process conditions, scene, resolution, sample count, and graphics backend for both variants. Timed adaptive-comparison variants pause for 10 seconds between runs to reduce thermal-throttling bias on laptops.
 
 ## Performance Hotspots
 

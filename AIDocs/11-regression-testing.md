@@ -49,6 +49,8 @@ Unity Test Framework `1.6.0` exits after a command-line run without requiring `-
 
 `RayTracingSceneCapture` is an editor tool, not a test. It loads the production scenes supplied on its command line, enters Play mode, renders a `512x512` final-color image with 200 deterministic accumulated samples by default, and writes PNGs for visual before/after comparison. Command-line capture uses this same Play-mode lifecycle rather than a separate direct-dispatch path, so scene initialization and renderer registration match a user entering Play mode. It fixes the random seed, freezes simulation, and disables temporal denoising. Scenes do not need to be in Build Settings. The output subfolder defaults to a local timestamp in `YYYY-MM-DD_HH-MM-SS` format; `-rayTracingCaptureLabel` can override it for named before/after comparisons.
 
+For adaptive fixed-time comparisons, `-rayTracingReferenceMetrics` requires `-rayTracingCompareAdaptiveSampling`, a positive `-rayTracingDurationSeconds`, final-color mode, and `1024x1024`. It uses a durable 120-second adaptive-off reference at `Assets/Editor/RayTracingSceneReferences/<scene path>/<scene name>.png`, generating it only when neither image nor metadata exists. References include a SHA-256 checked metadata sidecar and must be deliberately regenerated with `-rayTracingRefreshReferences`; `-rayTracingRequireExistingReferences` makes missing references fail for automated jobs.
+
 The tool can also be run non-interactively, which allows automated change workflows to capture before/after images. Close any Unity instance using the project first, then run:
 
 ```sh

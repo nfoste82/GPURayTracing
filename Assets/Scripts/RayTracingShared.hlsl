@@ -4,14 +4,13 @@
 // with cs.SetTexture
 RWTexture2D<float4> Result;
 RWTexture2D<float4> AccumulationResult;
-// R: path-sample count, G: luminance mean, B: Welford M2, A: unused.
-RWTexture2D<float4> AdaptiveSamplingState;
 RWTexture2D<float4> Beauty;
 RWTexture2D<float4> FeatureNormal;
 RWTexture2D<float4> FeatureAlbedo;
 RWTexture2D<float> FeatureDepth;
 RWTexture2D<float> FeatureIdentity;
 RWTexture2D<float> FeatureValidity;
+
 RWStructuredBuffer<float4> RegressionResults;
 RWStructuredBuffer<float4> _FocusQueryResult;
 
@@ -52,11 +51,6 @@ int _LightSamplingStrategy;
 int _LightSampleCount;
 int _UseFrameAccumulation;
 int _AccumulatedFrameCount;
-int _UseAdaptiveSampling;
-int _AdaptiveSamplingMinSamples;
-float _AdaptiveSamplingRelativeError;
-float _AdaptiveSamplingAbsoluteError;
-int _AdaptiveSamplingMaxInterval;
 float _ShadowRandomness;
 float _LightFalloffScale;
 float _ParallaxMaximumStrengthCosine;
@@ -4460,4 +4454,3 @@ float3 ACESFilmicToneMap(float3 color)
     const float e = 0.14f;
     return saturate((color * (a * color + b)) / (color * (c * color + d) + e));
 }
-

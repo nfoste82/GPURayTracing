@@ -291,33 +291,23 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
-        public void GameManager_AccumulationStateHash_DoesNotChangeWhenAdaptiveSamplingChanges()
+        public void GameManager_AdaptiveSamplingToggle_RemainsDisabledByDefault()
         {
             Type managerType = Type.GetType("GameManager, Assembly-CSharp");
             Assert.That(managerType, Is.Not.Null, "Could not load GameManager from Assembly-CSharp");
 
-            var gameObject = new GameObject("Adaptive Sampling State Hash Test");
-            var cameraObject = new GameObject("Adaptive Sampling State Hash Camera");
+            var gameObject = new GameObject("Adaptive Sampling Toggle Test");
             try
             {
                 Component manager = gameObject.AddComponent(managerType);
-                Camera camera = cameraObject.AddComponent<Camera>();
-                Component cameraManager = gameObject.GetComponent(Type.GetType("CameraManager, Assembly-CSharp"));
-                cameraManager.GetType().GetField("renderTextureCamera").SetValue(cameraManager, camera);
-
-                MethodInfo hashMethod = managerType.GetMethod("CalculateAccumulationStateHash", BindingFlags.NonPublic | BindingFlags.Instance);
-                Assert.That(hashMethod, Is.Not.Null);
-                int defaultHash = (int)hashMethod.Invoke(manager, null);
-
-                managerType.GetField("enableAdaptiveSampling").SetValue(manager, true);
-                int adaptiveSamplingHash = (int)hashMethod.Invoke(manager, null);
-                Assert.That(adaptiveSamplingHash, Is.EqualTo(defaultHash),
-                    "Changing adaptive sampling policy must preserve progressive accumulation.");
+                FieldInfo toggle = managerType.GetField("enableAdaptiveSampling");
+                Assert.That(toggle, Is.Not.Null, "The capture comparison requires an adaptive-sampling toggle.");
+                Assert.That((bool)toggle.GetValue(manager), Is.False,
+                    "Uniform sampling must remain the default reference path.");
             }
             finally
             {
                 UnityEngine.Object.DestroyImmediate(gameObject);
-                UnityEngine.Object.DestroyImmediate(cameraObject);
             }
         }
 
@@ -915,23 +905,6 @@ namespace GPURayTracing.Tests
                 "private static readonly int MeshParallaxTextures = Shader.PropertyToID"));
             string shaderSource = System.IO.File.ReadAllText("Assets/Scripts/RayTracingShared.hlsl");
             Assert.That(shaderSource, Does.Contain("tangentNormal.xy *= meshTriangle.normalStrength"));
-        }
-
-        [Test]
-        public void AdaptiveSampling_IsDisabledWhenCameraMoves()
-        {
-            string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
-            int methodStart = managerSource.IndexOf("private bool ShouldUseAdaptiveSampling()", StringComparison.Ordinal);
-            int nextMethodStart = managerSource.IndexOf("private int GetAdaptiveSamplingMaxInterval()", methodStart, StringComparison.Ordinal);
-
-            Assert.That(methodStart, Is.GreaterThanOrEqualTo(0));
-            Assert.That(nextMethodStart, Is.GreaterThan(methodStart));
-            string method = managerSource.Substring(methodStart, nextMethodStart - methodStart);
-            Assert.That(method, Does.Contain("!enableAdaptiveSampling || !ShouldUseFrameAccumulation()"));
-            Assert.That(managerSource, Does.Contain("!_temporalDenoisingManager.IsCameraMovingForSampling"));
-            Assert.That(managerSource, Does.Contain("private bool ShouldUseFrameAccumulation()"));
-            Assert.That(managerSource, Does.Contain("adaptiveSamplingMinSamples"));
-            Assert.That(managerSource, Does.Contain("CeilToInt(requiredSamples"));
         }
 
         [Test]

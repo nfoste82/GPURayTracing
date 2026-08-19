@@ -58,7 +58,7 @@ public sealed class GameManagerEditor : Editor
         DrawSection(manager, "Sampling and Accumulation", true, () =>
         {
             DrawProperty("shadowRandomness", "Local Light Shadow Randomness");
-            DrawAdaptiveSamplingSettings();
+            DrawProperty("enableAdaptiveSampling", "Adaptive Sampling (Experimental)");
         });
         DrawSection(manager, "Lighting", true, () =>
         {
@@ -122,33 +122,6 @@ public sealed class GameManagerEditor : Editor
         });
 
         serializedObject.ApplyModifiedProperties();
-    }
-
-    private void DrawAdaptiveSamplingSettings()
-    {
-        SerializedProperty preset = serializedObject.FindProperty("adaptiveSamplingPreset");
-        EditorGUI.BeginChangeCheck();
-        EditorGUILayout.PropertyField(preset, new GUIContent("Adaptive Sampling Preset"));
-        bool presetChanged = EditorGUI.EndChangeCheck();
-        if (presetChanged && preset.enumValueIndex != (int)AdaptiveSamplingPreset.Custom)
-        {
-            serializedObject.ApplyModifiedProperties();
-            ((GameManager)target).ApplyAdaptiveSamplingPreset((AdaptiveSamplingPreset)preset.enumValueIndex);
-            serializedObject.Update();
-        }
-
-        EditorGUILayout.HelpBox("Changing adaptive sampling policy preserves the current accumulation. Other render or scene changes still reset it.", MessageType.None);
-
-        DrawProperty("enableAdaptiveSampling", "Adaptive Sampling");
-        if (!serializedObject.FindProperty("enableAdaptiveSampling").boolValue)
-        {
-            return;
-        }
-
-        DrawProperty("adaptiveSamplingMinSamples", "Adaptive Minimum Samples");
-        DrawProperty("adaptiveSamplingRelativeError", "Adaptive Relative Error");
-        DrawProperty("adaptiveSamplingAbsoluteError", "Adaptive Absolute Error");
-        DrawProperty("adaptiveSamplingMaxInterval", "Adaptive Maximum Interval");
     }
 
     private void DrawBvhBaking(GameManager manager)
