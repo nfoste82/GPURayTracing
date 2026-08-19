@@ -24,6 +24,7 @@ public static class RayTracingSceneCapture
     private const int ReferenceHeight = 1024;
     private const double ReferenceDurationSeconds = 120.0;
     private const int ThermalCooldownMilliseconds = 10000;
+    private const float DifferenceHeatmapRedPercentile = 0.99f;
     private const string SessionPrefix = "GPURayTracing.SceneCapture.";
     private static RenderTexture _captureTarget;
     private static RenderTexture _captureSource;
@@ -64,6 +65,33 @@ public static class RayTracingSceneCapture
     // Invoke with -executeMethod RayTracingSceneCapture.CaptureFromCommandLine.
     public static void CaptureFromCommandLine()
     {
+        var differenceImageA = GetCommandLineArgument("-rayTracingDifferenceImageA");
+        var differenceImageB = GetCommandLineArgument("-rayTracingDifferenceImageB");
+        var differenceOutput = GetCommandLineArgument("-rayTracingDifferenceOutput");
+        if (differenceImageA != null || differenceImageB != null || differenceOutput != null)
+        {
+            if (string.IsNullOrWhiteSpace(differenceImageA) || string.IsNullOrWhiteSpace(differenceImageB)
+                || string.IsNullOrWhiteSpace(differenceOutput))
+            {
+                Debug.LogError("Difference image generation requires -rayTracingDifferenceImageA, -rayTracingDifferenceImageB, and -rayTracingDifferenceOutput.");
+                ExitBatchMode(1);
+                return;
+            }
+
+            try
+            {
+                GenerateDifferenceImage(differenceImageA, differenceImageB, differenceOutput);
+                Debug.Log($"Difference image written to '{differenceOutput}'.");
+                ExitBatchMode(0);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception);
+                ExitBatchMode(1);
+            }
+            return;
+        }
+
         var sceneArgument = GetCommandLineArgument("-rayTracingScenes");
         var outputArgument = GetCommandLineArgument("-rayTracingOutput");
         var generateScenes = HasCommandLineArgument("-rayTracingGenerateScenes");
@@ -238,6 +266,15 @@ public static class RayTracingSceneCapture
             WriteReferenceMetrics(comparisonRoot, "adaptive_off", adaptiveOff, referenceImagePath, reference);
             WriteReferenceMetrics(comparisonRoot, "adaptive_on", adaptiveOn, referenceImagePath, reference);
         }
+        GenerateDifferenceImage(adaptiveOff.imagePath, adaptiveOn.imagePath,
+            Path.Combine(comparisonRoot, "adaptive_off_vs_on_difference.png"));
+        if (referenceMetrics)
+        {
+            GenerateDifferenceImage(adaptiveOff.imagePath, referenceImagePath,
+                Path.Combine(comparisonRoot, "adaptive_off_vs_reference_difference.png"));
+            GenerateDifferenceImage(adaptiveOn.imagePath, referenceImagePath,
+                Path.Combine(comparisonRoot, "adaptive_on_vs_reference_difference.png"));
+        }
     }
 
     private static void CoolDownBetweenTimedCaptures(double durationSeconds)
@@ -265,6 +302,8 @@ public static class RayTracingSceneCapture
         manager.randomNoise = false;
         manager.enableFrameAccumulation = true;
         manager.enableAdaptiveSampling = adaptiveSampling;
+        // Capture both variants with the same fixed path budget: one path per pixel per frame.
+        manager.adaptiveSamplingMinSamples = Mathf.Max(1, manager.adaptiveSamplingMinSamples);
         manager.TemporalDenoising.enabled = false;
         manager.debugRenderMode = debugRenderMode;
         manager.numberOfPasses = 1;
@@ -365,7 +404,9 @@ public static class RayTracingSceneCapture
                 $"Resolution: {width}x{height}\n" +
                 $"Total measured render time: {totalMilliseconds:0.000} ms\n" +
                 $"Average render time per frame: {averageMilliseconds:0.000} ms\n" +
-                $"Average measured FPS: {(averageMilliseconds > 0.0 ? 1000.0 / averageMilliseconds : 0.0):0.000}\n");
+                $"Average measured FPS: {(averageMilliseconds > 0.0 ? 1000.0 / averageMilliseconds : 0.0):0.000}\n" +
+                $"Adaptive policy: fixed 4x4 block budget, no automatic stopping\n" +
+                $"Adaptive bootstrap paths per pixel: {(adaptiveSampling ? "configured minimum" : "uniform")}" + "\n");
     }
 
     private static string EnsureReference(GameManager manager, string scenePath, string referenceRoot, bool refresh,
@@ -529,6 +570,68 @@ public static class RayTracingSceneCapture
         {
             UnityEngine.Object.DestroyImmediate(candidate);
             UnityEngine.Object.DestroyImmediate(referenceImage);
+        }
+    }
+
+    private static void GenerateDifferenceImage(string firstPath, string secondPath, string outputPath)
+    {
+        var first = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+        var second = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+        Texture2D difference = null;
+        try
+        {
+            if (!first.LoadImage(File.ReadAllBytes(firstPath), false)
+                || !second.LoadImage(File.ReadAllBytes(secondPath), false)
+                || first.width != second.width || first.height != second.height)
+            {
+                throw new InvalidOperationException($"Difference images must be readable and have matching dimensions: '{firstPath}', '{secondPath}'.");
+            }
+
+            Color[] firstPixels = first.GetPixels();
+            Color[] secondPixels = second.GetPixels();
+            float[] differences = new float[firstPixels.Length];
+            for (int i = 0; i < differences.Length; i++)
+            {
+                Color a = firstPixels[i].linear;
+                Color b = secondPixels[i].linear;
+                float dr = a.r - b.r;
+                float dg = a.g - b.g;
+                float db = a.b - b.b;
+                float magnitude = Mathf.Sqrt((dr * dr + dg * dg + db * db) / 3.0f);
+                differences[i] = magnitude;
+            }
+
+            float[] sortedDifferences = (float[])differences.Clone();
+            Array.Sort(sortedDifferences);
+            int redIndex = Mathf.Min(sortedDifferences.Length - 1,
+                Mathf.FloorToInt((sortedDifferences.Length - 1) * DifferenceHeatmapRedPercentile));
+            float redDifference = sortedDifferences[redIndex];
+
+            difference = new Texture2D(first.width, first.height, TextureFormat.RGB24, false, true);
+            Color[] outputPixels = new Color[differences.Length];
+            for (int i = 0; i < differences.Length; i++)
+            {
+                float amount = redDifference > 0.0f ? Mathf.Clamp01(differences[i] / redDifference) : 0.0f;
+                outputPixels[i] = Color.Lerp(Color.blue, Color.red, amount);
+            }
+            difference.SetPixels(outputPixels);
+            difference.Apply(false, false);
+
+            string directory = Path.GetDirectoryName(outputPath);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+            File.WriteAllBytes(outputPath, difference.EncodeToPNG());
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(first);
+            UnityEngine.Object.DestroyImmediate(second);
+            if (difference != null)
+            {
+                UnityEngine.Object.DestroyImmediate(difference);
+            }
         }
     }
 

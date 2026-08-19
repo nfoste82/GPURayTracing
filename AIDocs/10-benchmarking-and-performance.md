@@ -55,9 +55,22 @@ For adaptive-sampling comparisons, add `-rayTracingCompareAdaptiveSampling`. Eac
   -logFile /tmp/gpuraytracing-adaptive.log
 ```
 
-To measure fixed-time convergence rather than timing alone, add `-rayTracingReferenceMetrics` to a duration-based adaptive comparison at `1024x1024`. References live under `Assets/Editor/RayTracingSceneReferences/` in a scene-path-derived folder, named after the scene, for example `Generated/TeapotMaterials/TeapotMaterials.png`. When absent, the capture automatically renders a deterministic 120-second adaptive-off reference with a matching JSON metadata sidecar; existing references are validated and never silently replaced. Use `-rayTracingRefreshReferences` only after reviewing an intentional renderer change, or `-rayTracingRequireExistingReferences` in CI. Each candidate gets a neighboring `.metrics.json` report with linear-sRGB RGB/luminance MAE, RMSE, RGB PSNR, relative luminance error, and the fraction of pixels over an absolute luminance error of `0.01`.
+To measure fixed-time convergence rather than timing alone, add `-rayTracingReferenceMetrics` to a duration-based adaptive comparison at `1024x1024`. References live under `Assets/Editor/RayTracingSceneReferences/` in a scene-path-derived folder, named after the scene, for example `Generated/TeapotMaterials/TeapotMaterials.png`. When absent, the capture automatically renders a deterministic 120-second adaptive-off reference with a matching JSON metadata sidecar; existing references are validated and never silently replaced. Use `-rayTracingRefreshReferences` only after reviewing an intentional renderer change, or `-rayTracingRequireExistingReferences` in CI. Each candidate gets a neighboring `.metrics.json` report with linear-sRGB RGB/luminance MAE, RMSE, RGB PSNR, relative luminance error, and the fraction of pixels over an absolute luminance error of `0.01`. Adaptive comparisons with reference metrics also write three same-size heatmaps: `adaptive_off_vs_on_difference.png`, `adaptive_off_vs_reference_difference.png`, and `adaptive_on_vs_reference_difference.png`. In each image, blue is the smallest per-pixel linear-RGB difference and red is the 99th-percentile difference for that pair. Differences at or above that percentile are clamped to red so isolated outliers do not make the rest of the image appear uniformly blue.
 
 Use `-rayTracingDurationSeconds 10` instead of `-rayTracingSamples` to render each variant for a wall-clock duration. The timing report records the actual frame count reached during that interval and the measured average frame time; there is no frame-count cap, so faster adaptive presets can produce more progressively converged samples in the same interval. Duration captures synchronize each completed frame so the wall-clock budget measures retired GPU work rather than CPU submission followed by a large queue drain. When both options are supplied, duration takes precedence.
+
+The same heatmap can be generated from any two readable, same-size images without opening a scene:
+
+```sh
+/Applications/Unity/Hub/Editor/6000.3.18f1/Unity.app/Contents/MacOS/Unity \
+  -batchmode \
+  -projectPath /Users/nic.foster/Projects/GPURayTracing \
+  -executeMethod RayTracingSceneCapture.CaptureFromCommandLine \
+  -rayTracingDifferenceImageA /tmp/adaptive_off.png \
+  -rayTracingDifferenceImageB /tmp/adaptive_on.png \
+  -rayTracingDifferenceOutput /tmp/adaptive_difference.png \
+  -logFile /tmp/gpuraytracing-difference.log
+```
 
 This comparison currently measures CPU-observed `RenderImage` wall time, which includes the synchronous GPU dispatch and presentation work. Use the same Unity process conditions, scene, resolution, sample count, and graphics backend for both variants. Timed adaptive-comparison variants pause for 10 seconds between runs to reduce thermal-throttling bias on laptops.
 

@@ -1,6 +1,11 @@
 // Renderer kernels. Shared scene, material, and caustic-gather code lives in RayTracingShared.hlsl.
 #pragma kernel CSMain
+#pragma kernel CSAdaptiveClassify
+#pragma kernel CSAdaptiveTrace
+#pragma kernel CSBuildAdaptiveDispatchArgs
 #pragma kernel ClearAccumulation
+#pragma kernel ClearAdaptiveSamplingState
+#pragma kernel ClearAdaptiveWorkList
 #pragma kernel CSFeatures
 #pragma kernel CSFocusQuery
 #pragma kernel CSRegressionProbe
@@ -306,6 +311,185 @@ void ClearAccumulation(uint3 id : SV_DispatchThreadID)
     {
         AccumulationResult[id.xy] = 0.0f;
     }
+}
+
+[numthreads(4,4,1)]
+void ClearAdaptiveSamplingState(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    AdaptiveSamplingState.GetDimensions(width, height);
+    if (id.x < width && id.y < height)
+    {
+        AdaptiveSamplingState[id.xy] = 0.0f;
+    }
+}
+
+[numthreads(1,1,1)]
+void ClearAdaptiveWorkList(uint3 id : SV_DispatchThreadID)
+{
+    AdaptiveWorkListMetadata[0] = 0u;
+}
+
+[numthreads(1,1,1)]
+void CSBuildAdaptiveDispatchArgs(uint3 id : SV_DispatchThreadID)
+{
+    AdaptiveDispatchArgs[0] = (min(AdaptiveWorkListMetadata[0], _AdaptiveWorkListCapacity) + 15u) / 16u;
+    AdaptiveDispatchArgs[1] = 1u;
+    AdaptiveDispatchArgs[2] = 1u;
+}
+
+groupshared float AdaptivePriorities[16];
+groupshared uint AdaptiveValidPixels[16];
+
+[numthreads(4,4,1)]
+void CSAdaptiveClassify(uint3 id : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex)
+{
+    uint width, height;
+    Result.GetDimensions(width, height);
+    uint2 pixel = id.xy;
+    bool valid = pixel.x < width && pixel.y < height;
+
+    // State stores path count, linear-HDR luminance mean, M2, and the current display uncertainty.
+    float4 previousState = valid ? AdaptiveSamplingState[pixel] : 0.0f;
+    float priority = 0.0f;
+    if (valid)
+    {
+        float count = previousState.x;
+        if (count < _AdaptiveSamplingMinSamples)
+        {
+            priority = 1.0f;
+        }
+        else
+        {
+            float variance = count > 1.0f ? max(0.0f, previousState.z / (count - 1.0f)) : 0.0f;
+            float standardError = sqrt(variance / max(1.0f, count));
+            float lowerValue = max(0.0f, previousState.y - standardError) * _Exposure;
+            float upperValue = max(0.0f, previousState.y + standardError) * _Exposure;
+            float lower = ACESFilmicToneMap(float3(lowerValue, lowerValue, lowerValue)).y;
+            float upper = ACESFilmicToneMap(float3(upperValue, upperValue, upperValue)).y;
+            // Keep a small exploration floor so low-variance estimates cannot starve rare paths.
+            priority = max(_AdaptiveSamplingExploration, (upper - lower) / (count + 1.0f));
+        }
+    }
+    AdaptivePriorities[groupIndex] = priority;
+    AdaptiveValidPixels[groupIndex] = valid ? 1u : 0u;
+    GroupMemoryBarrierWithGroupSync();
+
+    int samplesThisPixel = 0;
+    if (valid && previousState.x < _AdaptiveSamplingMinSamples)
+    {
+        // Bootstrap is uniform: every pixel receives one path and valid statistics before allocation.
+        samplesThisPixel = max(1, _NumberOfPasses);
+    }
+    else
+    {
+        float priorityTotal = 0.0f;
+        uint validPixelCount = 0u;
+        [unroll]
+        for (uint index = 0; index < 16; index++)
+        {
+            priorityTotal += AdaptivePriorities[index];
+            validPixelCount += AdaptiveValidPixels[index];
+        }
+        if (priorityTotal > 0.0f)
+        {
+            // Allocate this group's fixed uniform-equivalent path budget by deterministic tickets.
+            [loop]
+            for (uint ticket = 0; ticket < validPixelCount * (uint)max(1, _NumberOfPasses); ticket++)
+            {
+                uint ticketState = CreateRngState(uint2(id.xy / 4u), _SampleOffset + ticket + 7919u);
+                float target = rand(ticketState) * priorityTotal;
+                float cumulative = 0.0f;
+                uint selected = 15;
+                [unroll]
+                for (uint index = 0; index < 16; index++)
+                {
+                    cumulative += AdaptivePriorities[index];
+                    if (target <= cumulative)
+                    {
+                        selected = index;
+                        break;
+                    }
+                }
+                samplesThisPixel += selected == groupIndex ? 1 : 0;
+            }
+        }
+    }
+
+    if (!valid || samplesThisPixel == 0) return;
+
+    uint workIndex;
+    InterlockedAdd(AdaptiveWorkListMetadata[0], 1u, workIndex);
+    if (workIndex < _AdaptiveWorkListCapacity)
+    {
+        AdaptiveWorkList[workIndex] = uint2(pixel.x + pixel.y * width, (uint)samplesThisPixel);
+    }
+}
+
+[numthreads(16,1,1)]
+void CSAdaptiveTrace(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    Result.GetDimensions(width, height);
+    uint workIndex = id.x;
+    uint workCount = min(AdaptiveWorkListMetadata[0], _AdaptiveWorkListCapacity);
+    if (workIndex >= workCount) return;
+
+    uint2 workItem = AdaptiveWorkList[workIndex];
+    uint2 pixel = uint2(workItem.x % width, workItem.x / width);
+    int samplesThisPixel = (int)workItem.y;
+    float4 previousState = AdaptiveSamplingState[pixel];
+
+    float3 radianceSum = 0.0f;
+    float luminanceMean = previousState.y;
+    float luminanceM2 = previousState.z;
+    float oldCount = previousState.x;
+    [loop]
+    for (int i = 0; i < samplesThisPixel; i++)
+    {
+        uint rngState = CreateRngState(pixel, (uint)oldCount + (uint)i);
+        float2 pixelJitter = float2(rand(rngState), rand(rngState));
+        if (_SubpixelJitterScale != 1.0f) pixelJitter = (pixelJitter - 0.5f) * _SubpixelJitterScale + 0.5f;
+        float2 uv = ((pixel + pixelJitter) / float2(width, height)) * 2.0f - 1.0f;
+        if (_UseTemporalJitter != 0) uv += _FrameJitterNdc;
+        Ray ray = CreateCameraRay(uv);
+        if (_ApertureRadius > 0.0f)
+        {
+            float3 cameraForward = normalize(mul(_CameraToWorld, float4(0.0f, 0.0f, -1.0f, 0.0f)).xyz);
+            float focusRayDistance = _FocalDistance / max(0.0001f, dot(ray.direction, cameraForward));
+            float3 focalPoint = ray.origin + ray.direction * focusRayDistance;
+            float2 apertureSample = SampleAperture(rngState) * _ApertureRadius;
+            float3 cameraRight = normalize(mul(_CameraToWorld, float4(1.0f, 0.0f, 0.0f, 0.0f)).xyz);
+            float3 cameraUp = normalize(mul(_CameraToWorld, float4(0.0f, 1.0f, 0.0f, 0.0f)).xyz);
+            ray.origin += cameraRight * apertureSample.x + cameraUp * apertureSample.y;
+            ray.direction = normalize(focalPoint - ray.origin);
+        }
+        else
+        {
+            // Preserve the established downstream path-sampling sequence when the lens is pinhole.
+            rand(rngState); rand(rngState); rand(rngState); rand(rngState); rand(rngState); rand(rngState);
+        }
+        float3 sampleRadiance = ClampFirefly(TracePath(ray, rngState));
+        radianceSum += sampleRadiance;
+        float luminance = dot(sampleRadiance, float3(0.2126f, 0.7152f, 0.0722f));
+        float nextCount = oldCount + (float)i + 1.0f;
+        float delta = luminance - luminanceMean;
+        luminanceMean += delta / nextCount;
+        luminanceM2 += delta * (luminance - luminanceMean);
+    }
+
+    float newCount = oldCount + samplesThisPixel;
+    float3 color = (AccumulationResult[pixel].rgb * oldCount + radianceSum) / newCount;
+    float variance = newCount > 1.0f ? max(0.0f, luminanceM2 / (newCount - 1.0f)) : 0.0f;
+    float standardError = sqrt(variance / max(1.0f, newCount));
+    float uncertaintyUpper = max(0.0f, luminanceMean + standardError) * _Exposure;
+    float uncertaintyLower = max(0.0f, luminanceMean - standardError) * _Exposure;
+    float uncertainty = ACESFilmicToneMap(float3(uncertaintyUpper, uncertaintyUpper, uncertaintyUpper)).y
+        - ACESFilmicToneMap(float3(uncertaintyLower, uncertaintyLower, uncertaintyLower)).y;
+    AccumulationResult[pixel] = float4(color, 1.0f);
+    AdaptiveSamplingState[pixel] = float4(newCount, luminanceMean, luminanceM2, uncertainty);
+    Beauty[pixel] = float4(color, 1.0f);
+    Result[pixel] = float4(color, 1.0f);
 }
 
 [numthreads(4,4,1)]

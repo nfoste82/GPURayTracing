@@ -1,358 +1,338 @@
 # Adaptive Sampling Continuation
 
-This document is the handoff for future work on adaptive sampling. It records the current implementation, measured behavior, conclusions from the reviewed paper, and the recommended architecture for making adaptive sampling improve image quality at a fixed wall-clock budget rather than only increasing FPS.
+This is the handoff for adaptive sampling in the Unity GPU ray tracer. It records the current experimental implementation as of August 2026, its measured results, constraints, and the next work required to make it improve convergence.
 
-## Goal
+## Goal And Non-Goal
 
-The goal is not merely to skip stable pixels. The goal is:
+The goal is lower displayed-image error than uniform progressive sampling at the same wall-clock time and, separately, at the same retired path budget:
 
 ```text
-For the same rendering time or path-tracing work budget,
-produce a lower-error image than uniform sampling.
+same time or traced-path budget -> lower error than uniform sampling
 ```
 
-Adaptive sampling is only useful for this project if difficult pixels receive the work saved from easy pixels and the resulting image converges faster than the adaptive-off baseline.
+Do not implement automatic render stopping. The user decides when to pause rendering. Adaptive sampling must keep redistributing a fixed budget while rendering continues.
 
-## Relevant Documentation
+The uniform `CSMain` path is the production reference and must remain unchanged when adaptive sampling is off.
 
-Before changing this area, read:
+## Read Before Editing
 
-- `03-compute-shader-renderer.md` for `CSMain`, accumulation, shader globals, and path tracing.
-- `08-shader-debugging-and-randomness.md` for sample sequences and deterministic randomness.
-- `10-benchmarking-and-performance.md` for capture tooling and fixed-duration comparisons.
-- `11-regression-testing.md` for image/GPU regression policy.
-- `13-denoising-and-upscaling.md` and `14-svgf-implementation-plan.md` for feature-buffer and variance semantics.
-- `04-materials-lights-scene.md` and `07-shader-lighting-and-materials.md` for difficult materials and lighting behavior.
+- `03-compute-shader-renderer.md`: renderer kernels, sampling, HDR accumulation, and presentation.
+- `08-shader-debugging-and-randomness.md`: deterministic per-pixel sample sequence.
+- `10-benchmarking-and-performance.md`: fixed-duration capture workflow and Metal compile constraints.
+- `11-regression-testing.md`: GPU/image test policy.
+- `13-denoising-and-upscaling.md` and `14-svgf-implementation-plan.md`: feature and temporal-history semantics.
 
-## Legacy Implementation (Removed)
+## Current Implementation
 
-The interval/multiplier policy and its experimental work-list path described below were removed after failing to improve equal-time image error. The retained production surface is `GameManager.enableAdaptiveSampling`, which is currently a dormant toggle for `adaptive_off`/`adaptive_on` capture comparisons. Uniform progressive accumulation, captures, references, PNG metrics, and timing reports remain available for the next implementation.
+`GameManager.enableAdaptiveSampling` is now a real experimental render path. It is off by default and is only eligible for static final-color progressive accumulation. Animated-water, temporal-accumulation, and non-final/debug paths fall back to uniform sampling through `ShouldUseFrameAccumulation()` / `ShouldUseAdaptiveSampling()`.
 
-### Historical Files
+### Settings
 
-- `Assets/Scripts/RayTracingCompute.compute`: adaptive decision, path loop, and unequal-sample accumulation.
-- `Assets/Scripts/RayTracingShared.hlsl`: adaptive state and shader globals.
-- `Assets/Scripts/GameManager.cs`: adaptive settings, shader binding, state texture allocation, and accumulation lifecycle.
-- `Assets/Scripts/SceneSettings.cs`: scene-setting defaults.
-- `Assets/Editor/GameManagerEditor.cs`: inspector controls.
-- `Assets/Editor/RayTracingSceneCapture.cs`: duration comparisons, diagnostics, references, and error metrics.
-- `Assets/Tests/EditMode/RayTracingComputeRegressionTests.cs`: current source-level adaptive coverage.
-
-### State Texture
-
-`AdaptiveSamplingState` is an `ARGBFloat` random-write texture at internal trace resolution. Its current channels are:
+`GameManager` and `SceneSettings` expose:
 
 ```text
-R: total path-sample count used by HDR accumulation
-G: trusted Welford luminance mean
-B: trusted Welford luminance M2
-A: trusted Welford observation count
+enableAdaptiveSampling       default false
+adaptiveSamplingMinSamples  default 8
+adaptiveSamplingExploration default 0.05
 ```
 
-The separate trusted count is important. When adaptive sampling is enabled after ordinary progressive accumulation, the old HDR mean is preserved but historic variance is unknown. The shader therefore starts fresh variance observations instead of treating historic variance as zero.
+The inspector exposes the bootstrap count and exploration floor when adaptive sampling is enabled. Any of these settings changes the accumulation-state hash, so progressive and adaptive state reset together.
 
-### Current Decision Policy
+### Persistent State
 
-After the trusted count reaches `_AdaptiveSamplingMinSamples`, the shader calculates a linear-HDR
-standard error and transforms its confidence bounds with ACES and `_Exposure` before calculating
-the visible error ratio:
+`AdaptiveSamplingState` is an internal-resolution `ARGBFloat` random-write texture:
 
 ```text
-variance = M2 / (n - 1)
+R: exact retired path count for the pixel
+G: Welford linear-HDR luminance mean
+B: Welford luminance M2
+A: display-space confidence width from the latest update
+```
+
+`AccumulationResult.rgb` remains the HDR RGB sample mean. Adaptive accumulation is count weighted:
+
+```text
+newMean = (oldMean * oldCount + newRadianceSum) / (oldCount + newCount)
+```
+
+The adaptive state is cleared beside `AccumulationResult` in `GameManager.UpdateTextureFromCompute()` whenever accumulation resets or the output resolution changes.
+
+Each adaptive path uses its old per-pixel count as its sample index:
+
+```text
+sampleIndex = oldPixelPathCount + localSampleIndex
+```
+
+This guarantees distinct deterministic samples for variable per-pixel batches. The uniform `_SampleOffset` sequence remains unchanged while adaptive sampling is off.
+
+### Priority
+
+Statistics remain in linear HDR. After bootstrap, the classifier derives a display-space confidence width:
+
+```text
+variance      = M2 / (n - 1)
 standardError = sqrt(variance / n)
-displayUncertainty = ACES(exposure * (mean + standardError))
-                    - ACES(exposure * max(0, mean - standardError))
-errorRatio = displayUncertainty / displayTargetError
+uncertainty   = ACES(exposure * (mean + standardError))
+              - ACES(exposure * max(0, mean - standardError))
+priority      = max(explorationFloor, uncertainty / (n + 1))
 ```
 
-The ratio maps to a verification interval:
+Before `adaptiveSamplingMinSamples`, pixels receive the uniform baseline number of paths. The exploration floor is a starvation safeguard only; it is not a material/feature prior.
+
+### GPU Work-List Pipeline
+
+The compute asset contains these adaptive kernels:
 
 ```text
-errorRatio > 1.0       -> every frame
-0.5 < ratio <= 1.0     -> every 2 frames
-0.25 < ratio <= 0.5    -> every 8 frames, capped by max interval
-ratio <= 0.25          -> configured max interval
+ClearAdaptiveSamplingState
+ClearAdaptiveWorkList
+CSAdaptiveClassify
+CSBuildAdaptiveDispatchArgs
+CSAdaptiveTrace
 ```
 
-Current scheduling uses a hashed phase shared by each `4x4` threadgroup. Stable pixels can skip and retain their previous accumulated HDR result.
-
-Material-risk protection limits glass, water, metal, emissive, and highly smooth primary surfaces to an interval of at most two frames. When active, these pixels receive at least two paths.
-
-### Current Sample Reallocation
-
-The current branch also reallocates paths within active pixels:
+`CSAdaptiveClassify` runs over the internal image with `4x4` groups. It currently preserves a fixed **per-threadgroup** path budget: each valid `4x4` group distributes its uniform-equivalent path count among its own pixels using priority-weighted deterministic tickets. Pixels receiving nonzero paths append one work item:
 
 ```text
-errorRatio <= 0.5 -> normal _NumberOfPasses
-errorRatio > 0.5  -> at least 2x _NumberOfPasses
-errorRatio > 1.0  -> adaptiveSamplingMaxPassMultiplier x _NumberOfPasses
+uint2 AdaptiveWorkList item:
+  x: flattened pixel coordinate
+  y: requested paths for that unique pixel
 ```
 
-The maximum multiplier is exposed as `Adaptive Max Pass Multiplier`, defaults to `4`, and is preset to `2` for Quality and `4` for Performance and UltraPerformance.
+`CSBuildAdaptiveDispatchArgs` converts the compacted count to 16-thread indirect-dispatch arguments. `CSAdaptiveTrace` uses `[numthreads(16,1,1)]`, maps one thread to one work item, traces its requested local batch, and writes the pixel state exactly once. This avoids concurrent floating-point accumulation writers.
 
-Adaptive confidence decisions now apply the active ACES/exposure presentation transform to the
-linear HDR confidence bounds. Welford accumulation remains in linear HDR; only the uncertainty
-comparison is display-space aware. Individual stochastic samples are never tone-mapped before
-accumulation.
-
-Accumulation uses the pre-batch sample count, so variable per-pixel path batches remain correctly weighted:
+Resources are owned by `GameManager` and resized with output textures:
 
 ```text
-newMean = (oldMean * oldCount + newSampleSum) / (oldCount + newCount)
+AdaptiveSamplingState              ARGBFloat texture
+AdaptiveWorkList                   uint2 structured buffer, capacity width * height
+AdaptiveWorkListMetadata           uint counter buffer
+AdaptiveDispatchArgs               3-uint indirect-argument buffer
 ```
 
-### Important Limitation
+`ComputeDispatch.DispatchIndirect()` was added for this path.
 
-The current shader still launches a full-screen `CSMain` dispatch. Skipped pixels still execute scheduling/state/retention logic, and active pixels are selected independently. There is no shared global budget and no compacted active-pixel work list.
+### Current Limitation
 
-Adaptive batches also reserve a per-frame sample-index stride equal to the configured maximum
-multiplier. This prevents a high-uncertainty pixel's extra paths from reusing the sample indices
-that a later frame would otherwise assign to it. The stride only changes when adaptive sampling is
-active; the uniform sequence remains unchanged.
+The work-list and indirect trace dispatch are real, but allocation is still **local to each 4x4 block**. An easy block cannot donate its budget to a difficult block elsewhere in the image. This is not yet the desired globally prioritized sampler.
 
-Therefore the current implementation is still primarily a local throttling policy with local sample reallocation. It is not yet a globally prioritized adaptive sampler.
+The classifier also still visits every pixel every frame, and the current ticket allocator does repeated local scans. The indirect path eliminated the previous capacity-sized trace dispatch, but the classifier/compaction cost remains.
 
-## Capture And Reference Measurement
+## Current Files
 
-`RayTracingSceneCapture` supports fixed-duration adaptive comparisons:
+- `Assets/Scripts/RayTracingCompute.compute`: adaptive clear, classify, indirect-argument, trace kernels.
+- `Assets/Scripts/RayTracingShared.hlsl`: state/work-list declarations and adaptive globals.
+- `Assets/Scripts/GameManager.cs`: state/buffer ownership, reset, adaptive dispatch orchestration.
+- `Assets/Scripts/ComputeDispatch.cs`: indirect dispatch wrapper.
+- `Assets/Scripts/SceneSettings.cs`: adaptive defaults.
+- `Assets/Editor/GameManagerEditor.cs`: experimental controls.
+- `Assets/Editor/RayTracingSceneCapture.cs`: off/on capture reports.
+- `Assets/Tests/EditMode/RayTracingComputeRegressionTests.cs`: adaptive default and accumulation-hash coverage.
+
+## Measurements
+
+All values below use `Assets/Scenes/Generated/TeapotMaterials.unity`, the existing 120-second 1024x1024 uniform reference, deterministic sampling, `numberOfPasses = 1`, final color, temporal denoising disabled, and a 30-second wall-clock duration.
+
+### First Local In-Kernel Allocator
+
+The initial `CSAdaptiveMain` implementation performed classification, ticket assignment, and tracing in one full-screen kernel. It was intentionally replaced because scheduling overhead was in the hot trace kernel.
 
 ```text
--rayTracingCompareAdaptiveSampling
--rayTracingReferenceMetrics
--rayTracingDurationSeconds <seconds>
--rayTracingWidth 1024
--rayTracingHeight 1024
+Uniform:  42 frames, 715.525 ms/frame, RGB RMSE 0.01164, PSNR 38.68 dB
+Adaptive: 34 frames, 896.792 ms/frame, RGB RMSE 0.02435, PSNR 32.27 dB
 ```
 
-Canonical references are stored under:
+Artifacts:
 
 ```text
-Assets/Editor/RayTracingSceneReferences/<scene path>/<scene name>.png
+/var/folders/hk/2wk9yqf564g4c39vrly7dgd80000gq/T/opencode/adaptive-captures/
 ```
 
-When missing, the tool generates a deterministic 1024x1024 adaptive-off reference for 120 seconds. A JSON sidecar records the scene, dimensions, duration, frame count, Unity version, graphics backend, timestamp, and PNG SHA-256. Existing references are validated and not silently replaced. Use `-rayTracingRefreshReferences` only after deliberate review.
+### Compact Work List Before Indirect Dispatch
 
-Candidate output includes PNGs, timing reports, and `.metrics.json` reports. Metrics are calculated after converting exported PNG values from sRGB to linear:
-
-- RGB MAE and RMSE.
-- RGB PSNR.
-- Luminance MAE and RMSE.
-- Mean relative luminance error with a `0.01` denominator floor.
-- Fraction of pixels above absolute luminance error `0.01`.
-
-Timing reports also include per-pixel sample-count min/mean/max, interval buckets, and predicted skipped pixels.
-
-## Measured Evidence
-
-Scene:
+The first compact work-list version still used a capacity-sized guarded trace dispatch:
 
 ```text
-Assets/Scenes/Generated/TeapotMaterials.unity
+Uniform:  51 frames, 599.352 ms/frame, RGB RMSE 0.00990, PSNR 40.09 dB
+Adaptive: 24 frames, 1268.652 ms/frame, RGB RMSE 0.03194, PSNR 29.91 dB
 ```
 
-Reference:
+Artifacts:
 
 ```text
-Assets/Editor/RayTracingSceneReferences/Generated/TeapotMaterials/TeapotMaterials.png
+/tmp/gpuraytracing-adaptive-worklist-captures/
 ```
 
-The 30-second pre-reallocation comparison was:
+### Current Indirect Work List
 
-| Variant | Frames | Mean samples | RGB RMSE | PSNR |
-|---|---:|---:|---:|---:|
-| Adaptive off | 50 | 50.0 | 0.01134 | 38.91 dB |
-| Quality | 69 | 40.54 | 0.01564 | 36.12 dB |
-| Performance | 94 | 31.40 | 0.02134 | 33.41 dB |
-| Ultra Performance | 94 | 24.39 | 0.02570 | 31.80 dB |
-
-The post-reallocation 30-second run had unusually different overall GPU timing, so compare variants within that run rather than treating absolute before/after values as a controlled benchmark:
-
-| Variant | Frames | Mean samples | RGB RMSE | PSNR |
-|---|---:|---:|---:|---:|
-| Adaptive off | 28 | 28.0 | 0.01995 | 34.00 dB |
-| Quality | 30 | 24.46 | 0.02188 | 33.20 dB |
-| Performance | 36 | 20.86 | 0.02488 | 32.08 dB |
-| Ultra Performance | 38 | 17.38 | 0.02981 | 30.51 dB |
-
-Within the post-reallocation run, adaptive quality penalties relative to adaptive-off were approximately:
-
-- Quality: `+9.6%` RGB RMSE.
-- Performance: `+24.7%` RGB RMSE.
-- UltraPerformance: `+49.4%` RGB RMSE.
-
-This is a meaningful improvement over the pre-reallocation penalties, but adaptive sampling still did not produce a better image than adaptive-off in equal time. The current work should therefore focus on global allocation and a better importance metric, not only more aggressive multipliers.
-
-## Paper Findings
-
-The reviewed paper is:
-
-> Rasmus Tamstorf and Henrik Wann Jensen, *Adaptive Sampling and Bias Estimation in Path Tracing*.
-
-Source:
+The indirect work-list trace path improved runtime substantially over the guarded work-list path but still loses to uniform quality:
 
 ```text
-http://luthuli.cs.uiuc.edu/~daf/courses/Rendering/Papers-2/RTHWJ.article.pdf
+Uniform:            45 frames, 678.578 ms/frame, RGB RMSE 0.01215, PSNR 38.31 dB
+Adaptive indirect:  40 frames, 766.042 ms/frame, RGB RMSE 0.02229, PSNR 33.04 dB
 ```
 
-The useful idea is to make convergence decisions in display space. Raw HDR variance does not directly represent visible error because exposure and tone mapping compress highlights and reshape contrast.
+Relative to uniform in this run, adaptive RGB RMSE is approximately `83.4%` higher. The adaptive result is valid but not a success criterion pass.
 
-For a pixel with linear luminance mean `mu`, trusted sample count `n`, and variance `s2`, estimate a confidence half-width:
-
-```text
-standardError = sqrt(s2 / n)
-
-Then apply the active display transform to the bounds:
+Artifacts to inspect:
 
 ```text
-lower = ACES(exposure * max(0, mu - halfWidth))
-upper = ACES(exposure * max(0, mu + halfWidth))
+/tmp/gpuraytracing-adaptive-indirect-captures/adaptive_indirect_30s/TeapotMaterials/
+  adaptive_off.png
+  adaptive_off.txt
+  adaptive_off.metrics.json
+  adaptive_on.png
+  adaptive_on.txt
+  adaptive_on.metrics.json
 
-Continue sampling while display uncertainty exceeds the chosen tolerance. Do not tone-map individual stochastic samples before Welford accumulation. Keep statistics in linear HDR, then transform confidence bounds.
-
-The paper also warns that adaptive stopping introduces optional-stopping bias. Correct unequal-sample weighting does not remove that bias. Retain fixed-SPP/reference modes, minimum sample counts, periodic rechecks, and conservative policies for rare-event transport.
-
-The paper's bootstrap bias estimation/correction is not suitable for the runtime renderer. It requires large retained sample histories and many repeated resampling passes. It is only potentially useful as an offline validation experiment.
-
-## Recommended Target Architecture
-
-The next meaningful implementation should become a **fixed-budget, globally prioritized sampler**.
-
-The previous experimental work-list path was removed with the legacy policy. Rebuild this path
-behind the retained `GameManager.enableAdaptiveSampling` toggle only after the classification,
-budget accounting, and accumulation-validation steps below are ready.
-
-```text
-classify pixel priorities
--> reserve a fixed path budget
--> select highest-value pixel/sample jobs
--> compact jobs into a GPU work list
--> indirect-dispatch path tracing for those jobs
+/tmp/gpuraytracing-adaptive-indirect-capture.log
+/tmp/gpuraytracing-adaptive-indirect-compile.log
 ```
 
-The adaptive path should be compared against uniform sampling at approximately equal total path-tracing work. It should win by placing paths better, not by silently doing less work.
+The last successful shader precompile took `179.359 s` cold on the Apple M3 Max. Use at least a 20-minute command timeout because cold compilation varies.
 
-### Priority Metric
+## Verification Status
 
-The priority should approximate expected visible error reduction per unit cost:
+- Metal compile: successful for the current default final-color variant.
+- Scene capture: successful, wrote PNGs and reference metrics under `/tmp`.
+- New state-hash regression: passed in the prior focused run.
+- The prior focused `RayTracingComputeRegressionTests` invocation had three unrelated pre-existing failures: caustics debug source expectation, caustics scene sampling distribution, and glare behavior. Do not claim a clean suite without resolving or baselining those separately.
+- `git diff --check` was clean after the current implementation.
 
-```text
-priority = display-space uncertainty reduction
-         * undersampling benefit
-         * material/feature prior
-         / estimated path cost
-```
+## Required Next Work
 
-A practical first approximation is:
+The next iteration must implement a **global** budget allocator. Do not tune the local ticket policy further and expect it to solve the main problem.
 
-```text
-priority = displayUncertainty / (n + 1)
-```
+### 1. Add Diagnostics First
 
-or, before display-space confidence is available:
+Before changing allocation, add GPU metadata/readback and report it in `RayTracingSceneCapture`:
 
-```text
-priority = variance / (n * (n + 1))
-```
+- requested root paths;
+- assigned paths;
+- retired paths;
+- active work-item count;
+- work-list overflow;
+- per-pixel path-count min/mean/max and percentiles;
+- display uncertainty mean/max/percentiles;
+- exploration paths;
+- priority bucket populations and admitted paths.
 
-Display-space uncertainty should become the main signal once the pixel has enough trusted observations.
+The current timing reports only describe the policy text and frame timing. Earlier documentation claiming sample-count or interval diagnostics is stale.
 
-### Bootstrap And Priors
+Use asynchronous diagnostic readback, following the caustics metadata pattern. Never add a synchronous metadata readback to every interactive frame.
 
-Variance is unreliable early and can miss rare events. Reserve a small exploration budget, approximately 5-10%, for:
+### 2. Replace Local Allocation With Global Buckets
 
-- pixels below the minimum trusted sample count;
-- glass, water, metal, emissive, fog, and high-smoothness surfaces;
-- caustic-preservation candidates;
-- depth, normal, albedo, or identity edges;
-- silhouettes and high display-space gradients;
-- randomly selected stable pixels to prevent starvation.
-
-After the minimum sample count, measured display-space uncertainty should dominate. Material and feature classification must be a prior or safety floor, not the final objective.
-
-### Global Budget
-
-For a baseline of one path per pixel:
+Use approximately 16-32 quantized priority buckets. A practical GPU sequence is:
 
 ```text
-uniform budget = width * height paths
-adaptive budget = sum(selected jobs and their requested paths)
+classify per-pixel priority and requested count
+-> atomically count paths/pixels per bucket
+-> allocate the fixed global root budget from highest bucket down
+-> deterministically admit pixels in the cutoff bucket
+-> compact unique pixel work items
+-> build indirect arguments
+-> indirect trace
 ```
 
-Initially constrain the adaptive budget to approximately the uniform baseline. A later experiment can intentionally vary the budget, but quality comparisons must report total retired paths and GPU time.
-
-### Work-List Implementation
-
-Avoid exact GPU sorting for the first version. Use priority buckets:
-
-1. A lightweight classification kernel evaluates display-space priority.
-2. Quantize priority into approximately 16-32 buckets.
-3. Count bucket populations and requested path costs.
-4. Allocate from the highest buckets until the global budget is full.
-5. Compact admitted coordinates and requested sample counts into an append/structured buffer.
-6. Indirect-dispatch a work-list path kernel.
-
-The path kernel must map:
+The baseline budget for one path per pixel is:
 
 ```text
-dispatch thread -> work-item index -> original pixel coordinate
+width * height * max(1, numberOfPasses)
 ```
 
-and update the existing accumulation/state textures at that coordinate. Preserve the current full-screen `CSMain` as a fallback and baseline while the work-list path is validated.
-
-### Cost Awareness
-
-If practical, estimate path cost from cheap first-hit/material features. Glass/refraction, fog, deep glossy paths, and expensive mesh intersections can cost more than diffuse paths. The allocator should eventually prioritize:
+Do not silently discard overflow, cap spill, or rejected work. Report it, and preserve:
 
 ```text
-visible error reduction / estimated GPU cost
+assigned paths == sum(workItem.requestedPaths) == retired paths
 ```
 
-Do not add a complicated cost model before measuring whether path-cost variation affects the result.
+An exact GPU sort is not a first milestone. A block pyramid/quadtree is also acceptable if it conserves one global root budget, preserves hotspots, and is validated against a CPU reference allocator.
 
-## Implementation Order
+### 3. Add Priors Only After Global Accounting Works
 
-1. Add and validate display-space confidence width using existing Welford state, `_Exposure`, and the ACES presentation transform.
-2. Add a debug visualization for priority/display uncertainty and report mean/max uncertainty.
-3. Add fixed-budget diagnostics: total requested paths, accepted paths, bucket histogram, exploration paths, and rejected work.
-4. Implement a classification kernel and priority buckets without changing the production path.
-5. Implement work-list compaction and indirect dispatch behind an experimental setting.
-6. Validate work-list accumulation against full-screen accumulation at identical explicit per-pixel sample assignments.
-7. Compare uniform, legacy adaptive, and fixed-budget adaptive at equal wall-clock time and approximately equal retired path work.
-8. Add error heatmaps and inspect glass, glossy, indirect-light, caustic, shadow-boundary, and low-light regions separately.
-9. Tune exploration share, confidence tolerance, bucket count, and cost normalization only after measurements exist.
+Measured display uncertainty should dominate after bootstrap. Use the existing stable feature buffers for conservative priors/floors:
 
-## Validation Requirements
+- normal, depth, albedo, and identity discontinuities;
+- glass, water, metal, emissive, and high-smoothness primary hits;
+- fog/caustic candidates;
+- randomly selected stable pixels.
 
-Every adaptive change should report:
+Do not use temporal denoiser variance as authoritative Monte Carlo variance. It is reprojected, bounded history data with different semantics.
 
-- fixed-duration elapsed time;
-- median and preferably multiple trials;
-- total traced paths, not just completed frames;
-- mean/min/max per-pixel path counts;
-- priority bucket population and admitted-work counts;
-- display-space confidence statistics;
-- RGB and luminance RMSE/MAE/PSNR against the same reference;
-- error heatmaps or at least regional error summaries;
-- whether fixed-budget work was within the intended budget.
+### 4. Validate Allocation Correctness
 
-Required comparisons:
+Add tests before comparing quality:
 
-- adaptive-off uniform baseline;
-- current legacy interval/multiplier policy;
-- experimental display-space fixed-budget policy;
-- high-sample reference.
+1. CPU reference tests for bucket/hierarchy budget conservation, zero priorities, ties, cutoff buckets, and odd dimensions.
+2. GPU probes matching small CPU allocations.
+3. Explicit per-pixel assignment parity: adaptive trace must match a controlled reference using identical sample indices.
+4. Work-list invariants: no overflow, unique pixel item per frame, assigned equals retired paths.
+5. Reset coverage for camera, geometry/material/light, resolution, settings, adaptive enable/disable, and temporal-mode changes.
+6. Partial-group dimensions: at least `1x1`, `3x5`, and `13x7`.
 
-Do not judge success from FPS or screenshots alone. The acceptance criterion is lower display-space error at equal or explicitly documented time/path cost.
+### 5. Benchmark Properly
 
-## Risks And Non-Goals
+For every candidate, compare both:
 
-- Adaptive stopping is statistically biased; preserve fixed-SPP output for unbiased/reference use.
-- Rare-event paths can be missed by variance estimates; retain exploration and risk floors.
-- Tone-map-dependent convergence intentionally changes with exposure and presentation policy.
-- A global priority queue adds GPU synchronization, buffer, indirect-dispatch, and Metal portability complexity.
-- Exact global sorting and bootstrap bias correction are not first milestones.
-- Denoising should not hide a regression in raw adaptive beauty; retain raw output and reference metrics.
+```text
+equal retired paths: measures allocation quality
+equal wall-clock time: includes classification/compaction/dispatch overhead
+```
+
+Use the same reference and inspect more than TeapotMaterials:
+
+- diffuse Cornell scene;
+- glass/refraction and water;
+- glossy metal;
+- low-light indirect transport;
+- many lights;
+- emissive geometry;
+- caustic receivers;
+- dense meshes;
+- dynamic/reset fallback behavior.
+
+At least three trials and alternating on/off order are preferable to one ordered run because thermal effects are material at these durations.
+
+## Constraints And Non-Goals
+
+- No automatic stopping.
+- Adaptive stopping bias remains relevant to any confidence-driven de-prioritization. Keep exploration, bootstrap, and fixed-SPP uniform modes for references.
+- Keep Welford statistics linear HDR. Apply ACES/exposure only to confidence bounds.
+- Keep `CSMain` as a uniform baseline.
+- Do not hide raw-beauty regressions behind denoising.
+- Do not add a sophisticated path-cost model until diagnostics prove that concentrated expensive paths dominate wall time.
+- New large path kernels increase Metal compile time and register pressure. Preserve small thread groups where required and recompile with generous timeouts.
+
+## Standard Commands
+
+Always write generated test/capture artifacts under `/tmp` unless the user asks for a persistent project location.
+
+```sh
+/Applications/Unity/Hub/Editor/6000.3.18f1/Unity.app/Contents/MacOS/Unity \
+  -batchmode \
+  -projectPath /Users/nic.foster/Projects/GPURayTracing \
+  -executeMethod RayTracingShaderPrecompiler.PrecompileFromCommandLine \
+  -logFile /tmp/gpuraytracing-adaptive-compile.log
+```
+
+```sh
+/Applications/Unity/Hub/Editor/6000.3.18f1/Unity.app/Contents/MacOS/Unity \
+  -batchmode \
+  -projectPath /Users/nic.foster/Projects/GPURayTracing \
+  -executeMethod RayTracingSceneCapture.CaptureFromCommandLine \
+  -rayTracingCompareAdaptiveSampling \
+  -rayTracingReferenceMetrics \
+  -rayTracingRequireExistingReferences \
+  -rayTracingDurationSeconds 30 \
+  -rayTracingWidth 1024 \
+  -rayTracingHeight 1024 \
+  -rayTracingCaptureLabel adaptive_candidate_30s \
+  -rayTracingOutput /tmp/gpuraytracing-adaptive-captures \
+  -rayTracingScenes "Assets/Scenes/Generated/TeapotMaterials.unity" \
+  -logFile /tmp/gpuraytracing-adaptive-capture.log
+```
 
 ## Handoff Summary
 
-The current implementation fixes unequal-sample accumulation and reallocates extra paths locally, improving the adaptive quality penalty but not yet beating uniform sampling at equal time. The paper's strongest contribution for this project is display-space confidence testing. The next architectural step is a globally budgeted GPU work list whose priority is expected display-space error reduction per path cost, with material/feature priors and a small exploration budget to protect rare transport.
+Adaptive sampling now has correct unequal-sample accumulation, deterministic per-pixel sample indexing, compact unique-pixel work items, and a Metal-validated indirect trace dispatch. It is still not globally allocating work and does not improve equal-time convergence. The next LLM should implement global budget accounting and diagnostics before adding new priority heuristics. Acceptance remains lower reference-image error than uniform at equal paths and equal wall-clock time, not higher FPS or a plausible screenshot.

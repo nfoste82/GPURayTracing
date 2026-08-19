@@ -312,6 +312,39 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void GameManager_AdaptiveSamplingPolicy_ResetsProgressiveAccumulation()
+        {
+            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+            Assert.That(managerType, Is.Not.Null, "Could not load GameManager from Assembly-CSharp");
+
+            var gameObject = new GameObject("Adaptive Sampling State Hash Test");
+            var cameraObject = new GameObject("Adaptive Sampling State Hash Camera");
+            try
+            {
+                Component manager = gameObject.AddComponent(managerType);
+                Camera camera = cameraObject.AddComponent<Camera>();
+                Component cameraManager = gameObject.GetComponent(Type.GetType("CameraManager, Assembly-CSharp"));
+                cameraManager.GetType().GetField("renderTextureCamera").SetValue(cameraManager, camera);
+                MethodInfo hashMethod = managerType.GetMethod("CalculateAccumulationStateHash", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.That(hashMethod, Is.Not.Null);
+
+                int uniformHash = (int)hashMethod.Invoke(manager, null);
+                managerType.GetField("enableAdaptiveSampling").SetValue(manager, true);
+                int adaptiveHash = (int)hashMethod.Invoke(manager, null);
+                managerType.GetField("adaptiveSamplingMinSamples").SetValue(manager, 16);
+                int changedPolicyHash = (int)hashMethod.Invoke(manager, null);
+
+                Assert.That(adaptiveHash, Is.Not.EqualTo(uniformHash));
+                Assert.That(changedPolicyHash, Is.Not.EqualTo(adaptiveHash));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(gameObject);
+                UnityEngine.Object.DestroyImmediate(cameraObject);
+            }
+        }
+
+        [Test]
         public void GameManager_DefaultFireflyClamp_IsEnabled()
         {
             Type managerType = Type.GetType("GameManager, Assembly-CSharp");

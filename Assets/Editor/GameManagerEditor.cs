@@ -59,6 +59,11 @@ public sealed class GameManagerEditor : Editor
         {
             DrawProperty("shadowRandomness", "Local Light Shadow Randomness");
             DrawProperty("enableAdaptiveSampling", "Adaptive Sampling (Experimental)");
+            if (manager.enableAdaptiveSampling)
+            {
+                DrawProperty("adaptiveSamplingMinSamples", "Adaptive Bootstrap Paths");
+                DrawProperty("adaptiveSamplingExploration", "Adaptive Exploration Floor");
+            }
         });
         DrawSection(manager, "Lighting", true, () =>
         {

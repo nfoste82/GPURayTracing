@@ -9,5 +9,10 @@ namespace PathTracing
         {
             shader.Dispatch(kernel, groupsX, groupsY, groupsZ);
         }
+
+        public static void DispatchIndirect(ComputeShader shader, int kernel, ComputeBuffer arguments)
+        {
+            shader.DispatchIndirect(kernel, arguments);
+        }
     }
 }
