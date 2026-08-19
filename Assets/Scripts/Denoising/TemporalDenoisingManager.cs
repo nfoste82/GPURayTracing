@@ -116,6 +116,9 @@ namespace PathTracing.TemporalDenoising
         public Vector2 CurrentJitterNdc => _currentJitterNdc;
         public bool HasResources => _radianceHistoryA != null;
         public bool HistoryValid => _historyValid;
+        // This camera-state check is also used by progressive sampling when temporal denoising
+        // is disabled. Camera motion must not inherit the stationary accumulation history.
+        public bool IsCameraMovingForSampling => IsCameraMoving();
 
         public void ValidateSettings()
         {

@@ -837,7 +837,9 @@ namespace GPURayTracing.Tests
                     "The production sampling distribution should produce indexed receiver photons");
 
                 ComputeShader shader = managerType.GetField("shader").GetValue(manager) as ComputeShader;
-                int gatherKernel = shader.FindKernel("CSCausticsDebug");
+                ComputeShader causticsShader = Resources.Load<ComputeShader>("RayTracingCaustics");
+                Assert.That(causticsShader, Is.Not.Null);
+                int gatherKernel = causticsShader.FindKernel("CSCausticsDebug");
                 var causticsImage = new RenderTexture(256, 256, 0, RenderTextureFormat.ARGBFloat)
                 {
                     enableRandomWrite = true
@@ -845,11 +847,12 @@ namespace GPURayTracing.Tests
                 causticsImage.Create();
                 try
                 {
-                    managerType.GetMethod("SetShaderParameters", BindingFlags.Instance | BindingFlags.NonPublic)
-                        .Invoke(manager, new object[] { gatherKernel });
-                    shader.SetTexture(gatherKernel, "Result", causticsImage);
-                    shader.SetInt("_NumberOfPasses", 1);
-                    shader.Dispatch(gatherKernel, 32, 64, 1);
+                    managerType.GetMethod("SetShaderParameters", BindingFlags.Instance | BindingFlags.NonPublic,
+                            null, new[] { typeof(ComputeShader), typeof(int) }, null)
+                        .Invoke(manager, new object[] { causticsShader, gatherKernel });
+                    causticsShader.SetTexture(gatherKernel, "Result", causticsImage);
+                    causticsShader.SetInt("_NumberOfPasses", 1);
+                    causticsShader.Dispatch(gatherKernel, 32, 64, 1);
 
                     RenderTexture previous = RenderTexture.active;
                     RenderTexture.active = causticsImage;
@@ -910,14 +913,31 @@ namespace GPURayTracing.Tests
                 "private static readonly int MeshNormalTextures = Shader.PropertyToID"));
             Assert.That(managerSource, Does.Contain(
                 "private static readonly int MeshParallaxTextures = Shader.PropertyToID"));
-            string shaderSource = System.IO.File.ReadAllText("Assets/Scripts/RayTracingCompute.compute");
+            string shaderSource = System.IO.File.ReadAllText("Assets/Scripts/RayTracingShared.hlsl");
             Assert.That(shaderSource, Does.Contain("tangentNormal.xy *= meshTriangle.normalStrength"));
+        }
+
+        [Test]
+        public void AdaptiveSampling_IsDisabledWhenCameraMoves()
+        {
+            string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+            int methodStart = managerSource.IndexOf("private bool ShouldUseAdaptiveSampling()", StringComparison.Ordinal);
+            int nextMethodStart = managerSource.IndexOf("private int GetAdaptiveSamplingMaxInterval()", methodStart, StringComparison.Ordinal);
+
+            Assert.That(methodStart, Is.GreaterThanOrEqualTo(0));
+            Assert.That(nextMethodStart, Is.GreaterThan(methodStart));
+            string method = managerSource.Substring(methodStart, nextMethodStart - methodStart);
+            Assert.That(method, Does.Contain("!enableAdaptiveSampling || !ShouldUseFrameAccumulation()"));
+            Assert.That(managerSource, Does.Contain("!_temporalDenoisingManager.IsCameraMovingForSampling"));
+            Assert.That(managerSource, Does.Contain("private bool ShouldUseFrameAccumulation()"));
+            Assert.That(managerSource, Does.Contain("adaptiveSamplingMinSamples"));
+            Assert.That(managerSource, Does.Contain("CeilToInt(requiredSamples"));
         }
 
         [Test]
         public void WaterCausticTarget_UsesDecorrelatedSurfaceCoordinates()
         {
-            string shaderSource = System.IO.File.ReadAllText("Assets/Scripts/RayTracingCompute.compute");
+            string shaderSource = System.IO.File.ReadAllText("Assets/Scripts/RayTracingCausticsKernels.hlsl");
             int waterTargetStart = shaderSource.IndexOf(
                 "float2 waterSample = float2(", StringComparison.Ordinal);
             int waterTargetEnd = shaderSource.IndexOf(

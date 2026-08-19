@@ -1,6 +1,6 @@
 # Caustics
 
-The renderer provides optional photon-mapped caustics for focused refracted and reflected lighting through glass and water. `GameManager.enableCaustics` defaults to `false`; the disabled renderer does not allocate photon resources, dispatch caustics kernels, or gather photon radiance.
+The renderer provides optional photon-mapped caustics for focused refracted and reflected lighting through glass and water. `GameManager.enableCaustics` defaults to `false`; the disabled renderer does not allocate photon resources, dispatch caustics kernels, or gather photon radiance. Photon/grid generation and the dedicated gather debug kernel are compiled from `Assets/Resources/RayTracingCaustics.compute`, while camera-side gathering remains in `RayTracingCompute.compute`.
 
 ## Supported Transport
 

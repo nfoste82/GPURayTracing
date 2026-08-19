@@ -9,6 +9,7 @@ namespace GPURayTracing.Tests
     public class RayTracingImageRegressionTests
     {
         private const string ComputeShaderPath = "Assets/Scripts/RayTracingCompute.compute";
+        private const string CausticsShaderPath = "Assets/Resources/RayTracingCaustics.compute";
         private const string DenoiserShaderPath = "Assets/Resources/RayTracingSpatialDenoiser.compute";
         private const int ImageSize = 32;
         private const float SignatureTolerance = 0.002f;
@@ -756,7 +757,8 @@ namespace GPURayTracing.Tests
                 Assert.Ignore("Compute shaders are not supported by the active graphics device.");
             }
 
-            ComputeShader shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
+            ComputeShader shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(
+                caustics == null ? ComputeShaderPath : CausticsShaderPath);
             Assert.That(shader, Is.Not.Null);
             string kernelName = caustics == null ? "CSMain" : "CSCausticsDebug";
             if (!shader.HasKernel(kernelName))
@@ -1018,7 +1020,7 @@ namespace GPURayTracing.Tests
                 Assert.Ignore("Compute shaders are not supported by the active graphics device.");
             }
 
-            ComputeShader shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
+            ComputeShader shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(CausticsShaderPath);
             Assert.That(shader, Is.Not.Null);
             if (!shader.HasKernel("TraceCausticPhotons"))
             {

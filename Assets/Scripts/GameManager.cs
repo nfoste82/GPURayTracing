@@ -41,6 +41,9 @@ public class GameManager : MonoBehaviour
 
     public ComputeShader shader;
 
+    [SerializeField]
+    public ComputeShader causticsShader;
+
     public CameraManager CameraManager
     {
         get
@@ -270,8 +273,9 @@ public class GameManager : MonoBehaviour
     private RenderTexture _outputTexture;
     private RenderTexture _presentationTexture;
     private RenderTexture _accumulationTexture;
-    private RenderTexture _adaptiveSamplingStateTexture;
-    private bool _adaptiveSamplingStateClearPending;
+        private RenderTexture _adaptiveSamplingStateTexture;
+        private bool _adaptiveSamplingStateClearPending;
+        private bool _accumulationClearPending;
     // Reconstruction-neutral, linear feature outputs. They are allocated now but do not change
     // presentation until a denoiser consumes them in a later milestone.
     private RenderTexture _beautyTexture;
@@ -578,6 +582,16 @@ public class GameManager : MonoBehaviour
 
     private void Start()
     {
+        if (causticsShader == null)
+        {
+            causticsShader = Resources.Load<ComputeShader>("RayTracingCaustics");
+        }
+
+        if (causticsShader == null)
+        {
+            Debug.LogError("Caustics shader is missing. Assign RayTracingCaustics.compute to GameManager.causticsShader.", this);
+        }
+
         _setShaderParametersCallback = SetShaderParameters;
         _resetFrameAccumulationCallback = ResetFrameAccumulation;
         _nearestIntersectionDistanceCallback = GetNearestIntersectionDistanceForAutoFocus;
@@ -991,26 +1005,39 @@ public class GameManager : MonoBehaviour
             Mathf.Max(1, Mathf.RoundToInt(displayHeight * renderScale)));
     }
 
-    private void UpdateTextureFromCompute(int kernelHandle)
+    private void UpdateTextureFromCompute(ComputeShader targetShader, int kernelHandle)
     {
-        if (_adaptiveSamplingStateClearPending && _adaptiveSamplingStateTexture != null)
+        if (_adaptiveSamplingStateClearPending || _accumulationClearPending)
         {
             var clearKernel = shader.FindKernel("ClearAdaptiveSamplingState");
-            shader.SetTexture(clearKernel, AdaptiveSamplingState, _adaptiveSamplingStateTexture);
             var clearGroupsX = Mathf.CeilToInt(_textureSize.x / (float)RenderThreadCountX);
             var clearGroupsY = Mathf.CeilToInt(_textureSize.y / (float)RenderThreadCountY);
-            ComputeDispatch.Dispatch(shader, clearKernel, clearGroupsX, clearGroupsY, 1);
-            _adaptiveSamplingStateClearPending = false;
+
+            if (_adaptiveSamplingStateClearPending && _adaptiveSamplingStateTexture != null)
+            {
+                shader.SetTexture(clearKernel, AdaptiveSamplingState, _adaptiveSamplingStateTexture);
+                ComputeDispatch.Dispatch(shader, clearKernel, clearGroupsX, clearGroupsY, 1);
+                _adaptiveSamplingStateClearPending = false;
+            }
+
+            if (_accumulationClearPending && _accumulationTexture != null)
+            {
+                // Reuse the format-agnostic clear kernel. The first post-motion accumulation
+                // frame must not read the previous stationary view's HDR history.
+                shader.SetTexture(clearKernel, AdaptiveSamplingState, _accumulationTexture);
+                ComputeDispatch.Dispatch(shader, clearKernel, clearGroupsX, clearGroupsY, 1);
+                _accumulationClearPending = false;
+            }
         }
 
-        shader.SetTexture(kernelHandle, Result, _outputTexture);
-        shader.SetTexture(kernelHandle, AccumulationResult, _accumulationTexture);
-        shader.SetTexture(kernelHandle, Beauty, _beautyTexture);
+        targetShader.SetTexture(kernelHandle, Result, _outputTexture);
+        targetShader.SetTexture(kernelHandle, AccumulationResult, _accumulationTexture);
+        targetShader.SetTexture(kernelHandle, Beauty, _beautyTexture);
         
         var threadGroupsX = Mathf.CeilToInt(_textureSize.x / (float)RenderThreadCountX);
         var threadGroupsY = Mathf.CeilToInt(_textureSize.y / (float)RenderThreadCountY);
         
-        ComputeDispatch.Dispatch(shader, kernelHandle, threadGroupsX, threadGroupsY, 1);
+        ComputeDispatch.Dispatch(targetShader, kernelHandle, threadGroupsX, threadGroupsY, 1);
     }
 
     private void PresentFinalColor()
@@ -1076,6 +1103,7 @@ public class GameManager : MonoBehaviour
         _accumulatedFrameCount = 0;
         _hasAccumulationStateHash = false;
         _adaptiveSamplingStateClearPending = true;
+        _accumulationClearPending = true;
     }
 
     private void BuildCausticSamplingDistribution()
@@ -1161,24 +1189,29 @@ public class GameManager : MonoBehaviour
             return;
         }
 
-        var clearKernel = shader.FindKernel("ClearCausticPhotons");
-        var traceKernel = shader.FindKernel("TraceCausticPhotons");
-        var clearGridKernel = shader.FindKernel("ClearCausticGrid");
-        var buildGridKernel = shader.FindKernel("BuildCausticGrid");
+        if (causticsShader == null)
+        {
+            return;
+        }
+
+        var clearKernel = causticsShader.FindKernel("ClearCausticPhotons");
+        var traceKernel = causticsShader.FindKernel("TraceCausticPhotons");
+        var clearGridKernel = causticsShader.FindKernel("ClearCausticGrid");
+        var buildGridKernel = causticsShader.FindKernel("BuildCausticGrid");
         
         SetPhotonTraceSceneParameters(traceKernel);
-        _causticsManager.SetShaderParameters(shader, clearKernel, numBounces);
-        _causticsManager.SetShaderParameters(shader, traceKernel, numBounces);
-        _causticsManager.SetShaderParameters(shader, clearGridKernel, numBounces);
-        _causticsManager.SetShaderParameters(shader, buildGridKernel, numBounces);
+        _causticsManager.SetShaderParameters(causticsShader, clearKernel, numBounces);
+        _causticsManager.SetShaderParameters(causticsShader, traceKernel, numBounces);
+        _causticsManager.SetShaderParameters(causticsShader, clearGridKernel, numBounces);
+        _causticsManager.SetShaderParameters(causticsShader, buildGridKernel, numBounces);
         
-        SetSceneBuffers(traceKernel);
+        SetSceneBuffers(traceKernel, causticsShader);
         
-        ComputeDispatch.Dispatch(shader, clearKernel, 1, 1, 1);
-        ComputeDispatch.Dispatch(shader, traceKernel, Mathf.CeilToInt(Mathf.Max(1, Caustics.PhotonCount) / (float)CausticTraceThreadCount), 1, 1);
-        ComputeDispatch.Dispatch(shader, clearGridKernel, Mathf.Max(1,
+        ComputeDispatch.Dispatch(causticsShader, clearKernel, 1, 1, 1);
+        ComputeDispatch.Dispatch(causticsShader, traceKernel, Mathf.CeilToInt(Mathf.Max(1, Caustics.PhotonCount) / (float)CausticTraceThreadCount), 1, 1);
+        ComputeDispatch.Dispatch(causticsShader, clearGridKernel, Mathf.Max(1,
             Mathf.CeilToInt(_causticsManager.GridCellCount / (float)CausticTraceThreadCount)), 1, 1);
-        ComputeDispatch.Dispatch(shader, buildGridKernel, Mathf.CeilToInt(Mathf.Max(1, Caustics.PhotonCount) / (float)CausticTraceThreadCount), 1, 1);
+        ComputeDispatch.Dispatch(causticsShader, buildGridKernel, Mathf.CeilToInt(Mathf.Max(1, Caustics.PhotonCount) / (float)CausticTraceThreadCount), 1, 1);
         
         RequestCausticMetadataReadback();
         _causticsManager.DispatchCountValue++;
@@ -1199,22 +1232,22 @@ public class GameManager : MonoBehaviour
     {
         EnsureMeshTextureArrays();
         
-        shader.SetTexture(traceKernel, MeshAlbedoTextures, _meshAlbedoTextureArray);
-        shader.SetTexture(traceKernel, MeshMetallicRoughnessTextures, _meshMetallicRoughnessTextureArray);
-        shader.SetTexture(traceKernel, MeshNormalTextures, _meshNormalTextureArray);
-        shader.SetTexture(traceKernel, MeshParallaxTextures, _meshParallaxTextureArray);
+        causticsShader.SetTexture(traceKernel, MeshAlbedoTextures, _meshAlbedoTextureArray);
+        causticsShader.SetTexture(traceKernel, MeshMetallicRoughnessTextures, _meshMetallicRoughnessTextureArray);
+        causticsShader.SetTexture(traceKernel, MeshNormalTextures, _meshNormalTextureArray);
+        causticsShader.SetTexture(traceKernel, MeshParallaxTextures, _meshParallaxTextureArray);
         
-        shader.SetInt(NumSpheres, _spheres.Count);
-        shader.SetInt(NumTriangles, _triangles.Count);
-        shader.SetInt(NumMeshes, _meshInfos.Count);
+        causticsShader.SetInt(NumSpheres, _spheres.Count);
+        causticsShader.SetInt(NumTriangles, _triangles.Count);
+        causticsShader.SetInt(NumMeshes, _meshInfos.Count);
         
-        Lighting.SetShaderLightCount(shader);
+        Lighting.SetShaderLightCount(causticsShader);
         
-        _sceneBvhs.SetShaderParameters(shader);
+        _sceneBvhs.SetShaderParameters(causticsShader);
         
-        WaterManager.SetShaderParameters(shader, Application.isPlaying ? GetRenderTime() : 0.0f);
+        WaterManager.SetShaderParameters(causticsShader, Application.isPlaying ? GetRenderTime() : 0.0f);
         
-        SetTerrainShaderParameters(traceKernel);
+        SetTerrainShaderParameters(traceKernel, causticsShader);
     }
 
     private bool ShouldUseFrameAccumulation()
@@ -1224,6 +1257,7 @@ public class GameManager : MonoBehaviour
         return enableFrameAccumulation && 
                debugRenderMode == DebugRenderMode.FinalColor && 
                !animatedWater && 
+               !_temporalDenoisingManager.IsCameraMovingForSampling &&
                !ShouldUseTemporalAccumulation();
     }
 
@@ -1258,6 +1292,7 @@ public class GameManager : MonoBehaviour
         public int requestedVariant;
         public bool useFrameAccumulation;
         public int kernelHandle;
+        public ComputeShader computeShader;
         public long preparationStart;
     }
 
@@ -1273,7 +1308,8 @@ public class GameManager : MonoBehaviour
         frame = new RenderFrame
         {
             fogEnabled = IsFogEnabled(),
-            useDedicatedCausticsDebugKernel = enableCaustics && debugRenderMode == DebugRenderMode.Caustics
+            useDedicatedCausticsDebugKernel = enableCaustics && causticsShader != null
+                && debugRenderMode == DebugRenderMode.Caustics
         };
         frame.requestedVariant = GetShaderVariantKey(debugRenderMode, frame.fogEnabled, _terrainManager != null && _terrainManager.Terrain != null);
         
@@ -1336,12 +1372,13 @@ public class GameManager : MonoBehaviour
             ResetFrameAccumulation();
         }
         
-        frame.kernelHandle = shader.FindKernel(frame.useDedicatedCausticsDebugKernel ? "CSCausticsDebug" : "CSMain");
+        frame.computeShader = frame.useDedicatedCausticsDebugKernel ? causticsShader : shader;
+        frame.kernelHandle = frame.computeShader.FindKernel(frame.useDedicatedCausticsDebugKernel ? "CSCausticsDebug" : "CSMain");
     }
 
     private void DispatchRenderFrame(ref RenderFrame frame)
     {
-        SetShaderParameters(frame.kernelHandle);
+        SetShaderParameters(frame.computeShader, frame.kernelHandle);
         CameraManager.DispatchPendingFocusQuery(shader, _setShaderParametersCallback,
             _resetFrameAccumulationCallback);
         if (_startupProfilePending)
@@ -1350,7 +1387,7 @@ public class GameManager : MonoBehaviour
         }
         
         var dispatchStart = _startupProfilePending ? Stopwatch.GetTimestamp() : 0;
-        UpdateTextureFromCompute(frame.kernelHandle);
+        UpdateTextureFromCompute(frame.computeShader, frame.kernelHandle);
         _presentationSource = _beautyTexture;
         
         if (!frame.useDedicatedCausticsDebugKernel && (ShouldRunSpatialDenoiser() || ShouldRunTemporalDenoiser() || IsFeatureDebugMode() || IsCausticPreservationDebugMode()))
@@ -2499,22 +2536,23 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    private void SetComputeBuffer(int nameId, ComputeBuffer buffer, int kernelHandle)
+    private static void SetComputeBuffer(ComputeShader targetShader, int nameId, ComputeBuffer buffer, int kernelHandle)
     {
         if (buffer != null)
         {
-            shader.SetBuffer(kernelHandle, nameId, buffer);
+            targetShader.SetBuffer(kernelHandle, nameId, buffer);
         }
     }
 
-    private void SetSceneBuffers(int kernelHandle)
+    private void SetSceneBuffers(int kernelHandle, ComputeShader targetShader = null)
     {
-        SetComputeBuffer(Spheres, _sphereBuffer, kernelHandle);
-        _lightingManager.SetBuffers(shader, kernelHandle);
-        SetComputeBuffer(Triangles, _triangleBuffer, kernelHandle);
-        SetComputeBuffer(Meshes, _meshBuffer, kernelHandle);
-        SetComputeBuffer(BvhNodes, _bvhNodeBuffer, kernelHandle);
-        _sceneBvhs.SetBuffers(shader, kernelHandle);
+        targetShader ??= shader;
+        SetComputeBuffer(targetShader, Spheres, _sphereBuffer, kernelHandle);
+        _lightingManager.SetBuffers(targetShader, kernelHandle);
+        SetComputeBuffer(targetShader, Triangles, _triangleBuffer, kernelHandle);
+        SetComputeBuffer(targetShader, Meshes, _meshBuffer, kernelHandle);
+        SetComputeBuffer(targetShader, BvhNodes, _bvhNodeBuffer, kernelHandle);
+        _sceneBvhs.SetBuffers(targetShader, kernelHandle);
     }
 
     private static float GetWorldSphereRadius(SphereCollider sphereCollider, Transform sphereTransform)
@@ -2578,25 +2616,30 @@ public class GameManager : MonoBehaviour
     
     private void SetShaderParameters(int kernelHandle)
     {
-        BindShaderTextures(kernelHandle);
-        BindShaderCameraAndRendererSamplingParameters();
-        BindShaderKeywordsAndLightingParameters(kernelHandle);
-        BindShaderEnvironmentAndSceneParameters(kernelHandle);
+        SetShaderParameters(shader, kernelHandle);
     }
 
-    private void BindShaderTextures(int kernelHandle)
+    private void SetShaderParameters(ComputeShader targetShader, int kernelHandle)
     {
-        shader.SetTexture(kernelHandle, SkyboxTexture, skyboxTexture);
-        shader.SetTexture(kernelHandle, AdaptiveSamplingState, _adaptiveSamplingStateTexture);
-        BindEnvironmentImportanceSampling(kernelHandle);
-        EnsureMeshTextureArrays();
-        shader.SetTexture(kernelHandle, MeshAlbedoTextures, _meshAlbedoTextureArray);
-        shader.SetTexture(kernelHandle, MeshMetallicRoughnessTextures, _meshMetallicRoughnessTextureArray);
-        shader.SetTexture(kernelHandle, MeshNormalTextures, _meshNormalTextureArray);
-        shader.SetTexture(kernelHandle, MeshParallaxTextures, _meshParallaxTextureArray);
+        BindShaderTextures(targetShader, kernelHandle);
+        BindShaderCameraAndRendererSamplingParameters(targetShader);
+        BindShaderKeywordsAndLightingParameters(targetShader, kernelHandle);
+        BindShaderEnvironmentAndSceneParameters(targetShader, kernelHandle);
     }
 
-    private void BindEnvironmentImportanceSampling(int kernelHandle)
+    private void BindShaderTextures(ComputeShader targetShader, int kernelHandle)
+    {
+        targetShader.SetTexture(kernelHandle, SkyboxTexture, skyboxTexture);
+        targetShader.SetTexture(kernelHandle, AdaptiveSamplingState, _adaptiveSamplingStateTexture);
+        BindEnvironmentImportanceSampling(targetShader, kernelHandle);
+        EnsureMeshTextureArrays();
+        targetShader.SetTexture(kernelHandle, MeshAlbedoTextures, _meshAlbedoTextureArray);
+        targetShader.SetTexture(kernelHandle, MeshMetallicRoughnessTextures, _meshMetallicRoughnessTextureArray);
+        targetShader.SetTexture(kernelHandle, MeshNormalTextures, _meshNormalTextureArray);
+        targetShader.SetTexture(kernelHandle, MeshParallaxTextures, _meshParallaxTextureArray);
+    }
+
+    private void BindEnvironmentImportanceSampling(ComputeShader targetShader, int kernelHandle)
     {
         _environmentImportanceSampling.EnsureDummyBuffers();
 
@@ -2628,49 +2671,49 @@ public class GameManager : MonoBehaviour
         }
 
         enabled &= _environmentImportanceSampling.IsValid;
-        shader.SetInt(EnvironmentLightEnabled, enabled ? 1 : 0);
-        shader.SetInt(EnvironmentLightSampleCount, Mathf.Clamp(environmentLightSampleCount, 1, 16));
-        shader.SetFloat(EnvironmentHighlightThreshold, highlightThreshold);
-        shader.SetFloat(EnvironmentHighlightSoftKnee, highlightSoftKnee);
-        shader.SetFloat(EnvironmentHighlightIntensity, highlightIntensity);
-        shader.SetInt(EnvironmentCdfWidth, _environmentImportanceSampling.Width);
-        shader.SetInt(EnvironmentCdfHeight, _environmentImportanceSampling.Height);
-        shader.SetBuffer(kernelHandle, EnvironmentConditionalCdf, _environmentImportanceSampling.ConditionalCdfBuffer);
-        shader.SetBuffer(kernelHandle, EnvironmentMarginalCdf, _environmentImportanceSampling.MarginalCdfBuffer);
+        targetShader.SetInt(EnvironmentLightEnabled, enabled ? 1 : 0);
+        targetShader.SetInt(EnvironmentLightSampleCount, Mathf.Clamp(environmentLightSampleCount, 1, 16));
+        targetShader.SetFloat(EnvironmentHighlightThreshold, highlightThreshold);
+        targetShader.SetFloat(EnvironmentHighlightSoftKnee, highlightSoftKnee);
+        targetShader.SetFloat(EnvironmentHighlightIntensity, highlightIntensity);
+        targetShader.SetInt(EnvironmentCdfWidth, _environmentImportanceSampling.Width);
+        targetShader.SetInt(EnvironmentCdfHeight, _environmentImportanceSampling.Height);
+        targetShader.SetBuffer(kernelHandle, EnvironmentConditionalCdf, _environmentImportanceSampling.ConditionalCdfBuffer);
+        targetShader.SetBuffer(kernelHandle, EnvironmentMarginalCdf, _environmentImportanceSampling.MarginalCdfBuffer);
     }
 
-    private void BindShaderCameraAndRendererSamplingParameters()
+    private void BindShaderCameraAndRendererSamplingParameters(ComputeShader targetShader)
     {
-        CameraManager.SetShaderParameters(shader);
-        _temporalDenoisingManager.SetRayTracingShaderParameters(shader, debugRenderMode);
+        CameraManager.SetShaderParameters(targetShader);
+        _temporalDenoisingManager.SetRayTracingShaderParameters(targetShader, debugRenderMode);
 
         if (randomNoise)
         {
-            shader.SetInt(Seed, UnityEngine.Random.Range(1, int.MaxValue));
+            targetShader.SetInt(Seed, UnityEngine.Random.Range(1, int.MaxValue));
         }
         else
         {
-            shader.SetInt(Seed, 1);
+            targetShader.SetInt(Seed, 1);
         }
 
-        shader.SetInt(NumberOfPasses, numberOfPasses);
-        shader.SetFloat(SubpixelJitterScale, subpixelJitterScale);
-        shader.SetInt(NumBounces, numBounces);
+        targetShader.SetInt(NumberOfPasses, numberOfPasses);
+        targetShader.SetFloat(SubpixelJitterScale, subpixelJitterScale);
+        targetShader.SetInt(NumBounces, numBounces);
         // Temporal modes are presented by RayTracingSpatialDenoiser after CSMain. Keep CSMain
         // on its normal HDR beauty path so an out-of-range renderer debug value cannot write
         // an untonemapped fallback before the temporal presentation pass runs.
-        shader.SetInt(Mode, IsTemporalDebugMode() ? (int)DebugRenderMode.FinalColor : (int)debugRenderMode);
-        shader.SetInt(UseFrameAccumulation, ShouldUseFrameAccumulation() ? 1 : 0);
-        shader.SetInt(FrameCount, _accumulatedFrameCount);
-        shader.SetInt(SampleOffset, CalculateSampleOffset());
-        shader.SetInt(UseAdaptiveSampling, ShouldUseAdaptiveSampling() ? 1 : 0);
-        shader.SetInt(AdaptiveSamplingMinSamples, Mathf.Max(1, adaptiveSamplingMinSamples));
-        shader.SetFloat(AdaptiveSamplingRelativeError, Mathf.Max(0.0001f, adaptiveSamplingRelativeError));
-        shader.SetFloat(AdaptiveSamplingAbsoluteError, Mathf.Max(0.00001f, adaptiveSamplingAbsoluteError));
-        shader.SetInt(AdaptiveSamplingMaxInterval, GetAdaptiveSamplingMaxInterval());
+        targetShader.SetInt(Mode, IsTemporalDebugMode() ? (int)DebugRenderMode.FinalColor : (int)debugRenderMode);
+        targetShader.SetInt(UseFrameAccumulation, ShouldUseFrameAccumulation() ? 1 : 0);
+        targetShader.SetInt(FrameCount, _accumulatedFrameCount);
+        targetShader.SetInt(SampleOffset, CalculateSampleOffset());
+        targetShader.SetInt(UseAdaptiveSampling, ShouldUseAdaptiveSampling() ? 1 : 0);
+        targetShader.SetInt(AdaptiveSamplingMinSamples, Mathf.Max(1, adaptiveSamplingMinSamples));
+        targetShader.SetFloat(AdaptiveSamplingRelativeError, Mathf.Max(0.0001f, adaptiveSamplingRelativeError));
+        targetShader.SetFloat(AdaptiveSamplingAbsoluteError, Mathf.Max(0.00001f, adaptiveSamplingAbsoluteError));
+        targetShader.SetInt(AdaptiveSamplingMaxInterval, GetAdaptiveSamplingMaxInterval());
     }
 
-    private void BindShaderKeywordsAndLightingParameters(int kernelHandle)
+    private void BindShaderKeywordsAndLightingParameters(ComputeShader targetShader, int kernelHandle)
     {
         // The shader splits its debug render path behind the DEBUG_RENDER keyword so the default
         // final-color variant compiles without any debug intersection/scatter code (a large shader
@@ -2678,29 +2721,29 @@ public class GameManager : MonoBehaviour
         if (debugRenderMode == DebugRenderMode.FinalColor || debugRenderMode == DebugRenderMode.Caustics
             || (debugRenderMode >= DebugRenderMode.RawBeauty && debugRenderMode != DebugRenderMode.TerrainCells))
         {
-            shader.DisableKeyword("DEBUG_RENDER");
+            targetShader.DisableKeyword("DEBUG_RENDER");
         }
         else
         {
-            shader.EnableKeyword("DEBUG_RENDER");
+            targetShader.EnableKeyword("DEBUG_RENDER");
         }
-        shader.SetInt(CausticsEnabled, enableCaustics ? 1 : 0);
-        _causticsManager.SetShaderParameters(shader, kernelHandle, numBounces);
-        Lighting.SetShaderParameters(shader);
-        Lighting.SetShaderSamplingParameters(shader, maxLightSamples, shadowQuality, shadowRandomness);
+        targetShader.SetInt(CausticsEnabled, enableCaustics ? 1 : 0);
+        _causticsManager.SetShaderParameters(targetShader, kernelHandle, numBounces);
+        Lighting.SetShaderParameters(targetShader);
+        Lighting.SetShaderSamplingParameters(targetShader, maxLightSamples, shadowQuality, shadowRandomness);
 
         _lightingManager.WarnIfImportanceLightLimitExceeded();
-        shader.SetFloat(ParallaxMaximumStrengthCosine, Mathf.Cos(Mathf.Clamp(parallaxMaximumStrengthAngle, 0.0f, 90.0f) * Mathf.Deg2Rad));
+        targetShader.SetFloat(ParallaxMaximumStrengthCosine, Mathf.Cos(Mathf.Clamp(parallaxMaximumStrengthAngle, 0.0f, 90.0f) * Mathf.Deg2Rad));
     }
 
-    private void BindShaderEnvironmentAndSceneParameters(int kernelHandle)
+    private void BindShaderEnvironmentAndSceneParameters(ComputeShader targetShader, int kernelHandle)
     {
-        shader.SetFloat(Exposure, exposure);
-        shader.SetFloat(FireflyClamp, Mathf.Max(0.0f, fireflyClamp));
+        targetShader.SetFloat(Exposure, exposure);
+        targetShader.SetFloat(FireflyClamp, Mathf.Max(0.0f, fireflyClamp));
         
-        WaterManager.SetShaderParameters(shader, Application.isPlaying ? GetRenderTime() : 0.0f);
+        WaterManager.SetShaderParameters(targetShader, Application.isPlaying ? GetRenderTime() : 0.0f);
         
-        SetTerrainShaderParameters(kernelHandle);
+        SetTerrainShaderParameters(kernelHandle, targetShader);
         
         var fogEnabled = IsFogEnabled();
         var fogCenter = fogEnabled ? _fogVolume.Center : Vector3.zero;
@@ -2708,42 +2751,43 @@ public class GameManager : MonoBehaviour
         var fogAlbedo = fogEnabled ? _fogVolume.ScatteringAlbedo : Color.black;
         if (fogEnabled)
         {
-            shader.EnableKeyword("FOG_ENABLED");
+            targetShader.EnableKeyword("FOG_ENABLED");
         }
         else
         {
-            shader.DisableKeyword("FOG_ENABLED");
+            targetShader.DisableKeyword("FOG_ENABLED");
         }
         if (fogEnabled)
         {
             var fogBoundsMin = fogCenter - fogSize * 0.5f;
             var fogBoundsMax = fogCenter + fogSize * 0.5f;
-            shader.SetVector(FogBoundsMin, new Vector4(fogBoundsMin.x, fogBoundsMin.y, fogBoundsMin.z, 0.0f));
-            shader.SetVector(FogBoundsMax, new Vector4(fogBoundsMax.x, fogBoundsMax.y, fogBoundsMax.z, 0.0f));
-            shader.SetVector(FogScatteringAlbedo, new Vector4(
+            targetShader.SetVector(FogBoundsMin, new Vector4(fogBoundsMin.x, fogBoundsMin.y, fogBoundsMin.z, 0.0f));
+            targetShader.SetVector(FogBoundsMax, new Vector4(fogBoundsMax.x, fogBoundsMax.y, fogBoundsMax.z, 0.0f));
+            targetShader.SetVector(FogScatteringAlbedo, new Vector4(
                 Mathf.Clamp01(fogAlbedo.r * fogScatteringScale),
                 Mathf.Clamp01(fogAlbedo.g * fogScatteringScale),
                 Mathf.Clamp01(fogAlbedo.b * fogScatteringScale),
                 0.0f));
-            shader.SetFloat(FogDensity, EffectiveFogDensity);
-            shader.SetFloat(FogInScatteringIntensity, Mathf.Max(0.0f, fogInScatteringIntensity));
-            shader.SetInt(FogMultipleScattering, enableFogMultipleScattering ? 1 : 0);
+            targetShader.SetFloat(FogDensity, EffectiveFogDensity);
+            targetShader.SetFloat(FogInScatteringIntensity, Mathf.Max(0.0f, fogInScatteringIntensity));
+            targetShader.SetInt(FogMultipleScattering, enableFogMultipleScattering ? 1 : 0);
         }
         
-        Lighting.SetShaderLightCount(shader);
+        Lighting.SetShaderLightCount(targetShader);
         
-        _sceneBvhs.SetShaderParameters(shader);
+        _sceneBvhs.SetShaderParameters(targetShader);
 
         // When no shadow-casting blocker is transparent, the shader can use a cheaper
         // pure-occlusion shadow path that early-outs on the first opaque blocker.
-        Lighting.SetShaderTransparentShadowBlockers(shader, Lighting.HasTransparentShadowBlockers);
-        SetSceneBuffers(kernelHandle);
+        Lighting.SetShaderTransparentShadowBlockers(targetShader, Lighting.HasTransparentShadowBlockers);
+        SetSceneBuffers(kernelHandle, targetShader);
     }
 
-    private void SetTerrainShaderParameters(int kernelHandle)
+    private void SetTerrainShaderParameters(int kernelHandle, ComputeShader targetShader = null)
     {
+        targetShader ??= shader;
         _terrainManager ??= GetComponent<TerrainManager>();
-        _terrainManager.SetShaderParameters(shader, kernelHandle);
+        _terrainManager.SetShaderParameters(targetShader, kernelHandle);
     }
 
     private void EnsureMeshTextureArrays()
@@ -2766,7 +2810,17 @@ public class GameManager : MonoBehaviour
 
     private bool ShouldUseAdaptiveSampling()
     {
-        return enableAdaptiveSampling && ShouldUseFrameAccumulation();
+        if (!enableAdaptiveSampling || !ShouldUseFrameAccumulation())
+        {
+            return false;
+        }
+
+        // Let the newly cleared accumulation gather the minimum configured sample count before
+        // adaptive intervals can skip pixels. This prevents a reset from treating a sparse or
+        // zero-variance estimate as converged.
+        var requiredSamples = Mathf.Max(1, adaptiveSamplingMinSamples);
+        var warmupFrames = Mathf.CeilToInt(requiredSamples / (float)Mathf.Max(1, numberOfPasses));
+        return _accumulatedFrameCount >= warmupFrames;
     }
 
     private int GetAdaptiveSamplingMaxInterval()

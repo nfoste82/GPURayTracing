@@ -1,6 +1,6 @@
 # Compute Shader Renderer
 
-The renderer lives in `Assets/Scripts/RayTracingCompute.compute`. Its main image kernel, `CSMain`, uses `[numthreads(4,4,1)]` (16 threads) to keep Metal's threadgroup-wide temporary-register use within its recommended budget. The shader also contains regression and optional caustics kernels.
+The renderer lives in `Assets/Scripts/RayTracingCompute.compute`, with shared declarations and helpers in `Assets/Scripts/RayTracingShared.hlsl`. Its main image kernel, `CSMain`, uses `[numthreads(4,4,1)]` (16 threads) to keep Metal's threadgroup-wide temporary-register use within its recommended budget. Caustics generation and gather-only debugging are isolated in `Assets/Resources/RayTracingCaustics.compute`; both assets consume the shared scene/intersection/material code.
 
 ## GPU Inputs
 

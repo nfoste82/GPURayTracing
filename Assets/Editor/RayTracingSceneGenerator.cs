@@ -14,6 +14,7 @@ public static class RayTracingSceneGenerator
     private const string GeneratedSceneFolder = "Assets/Scenes/Generated";
     private const string GeneratedAssetFolder = "Assets/Scenes/Generated/GeneratedAssets";
     private const string ComputeShaderPath = "Assets/Scripts/RayTracingCompute.compute";
+    private const string CausticsShaderPath = "Assets/Resources/RayTracingCaustics.compute";
     private const string SkyboxPath = "Assets/Textures/Skyboxes/skyboxOcean.jpg";
     private const string AutumnFieldSkyboxPath = "Assets/Textures/Skyboxes/autumn_field_puresky_4k.hdr";
     private const string StanfordDragonModelPath = "Assets/Models/Dragon/stanford-dragon-pbr.fbx";
@@ -541,6 +542,7 @@ public static class RayTracingSceneGenerator
         var manager = managerObject.AddComponent<GameManager>();
         var cameraManager = managerObject.GetComponent<CameraManager>();
         manager.shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
+        manager.causticsShader = AssetDatabase.LoadAssetAtPath<ComputeShader>(CausticsShaderPath);
         cameraManager.renderTextureCamera = camera;
         manager.InitSceneSettings(settings);
         manager.skyboxTexture = AssetDatabase.LoadAssetAtPath<Texture>(SkyboxPath);

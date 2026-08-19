@@ -13,6 +13,7 @@ using Debug = UnityEngine.Debug;
 public static class RayTracingShaderPrecompiler
 {
     private const string ShaderPath = "Assets/Scripts/RayTracingCompute.compute";
+    private const string CausticsShaderPath = "Assets/Resources/RayTracingCaustics.compute";
     private const string ProgressTitle = "Precompiling ray tracing shader";
     private const string StatsPath = "Library/RayTracingShaderCompileStats.csv";
 
@@ -325,6 +326,52 @@ public static class RayTracingShaderPrecompiler
             $"Ray tracing compute shader recompiled and dispatched across {variants.Length} selected variant(s) in " +
             $"{totalStopwatch.ElapsedMilliseconds} ms. Cold dispatch total={totalColdDispatchMs} ms, " +
             $"warm dispatch total={totalWarmDispatchMs} ms. Stats appended to '{statsPath}'. Safe to enter Play mode.");
+    }
+
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Caustics")]
+    private static void PrecompileCaustics()
+    {
+        var shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(CausticsShaderPath);
+        if (shader == null)
+        {
+            Debug.LogError($"Precompile failed: could not load compute shader at '{CausticsShaderPath}'.");
+            return;
+        }
+
+        ClearShaderCache();
+        AssetDatabase.ImportAsset(CausticsShaderPath, ImportAssetOptions.ForceUpdate);
+        shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(CausticsShaderPath);
+        var messages = ShaderUtil.GetComputeShaderMessages(shader);
+        foreach (var message in messages)
+        {
+            var formatted = $"[{message.platform}] {message.message}\n{message.messageDetails}";
+            if (message.severity == UnityEditor.Rendering.ShaderCompilerMessageSeverity.Error)
+            {
+                Debug.LogError($"Caustics compute shader error: {formatted}");
+            }
+            else
+            {
+                Debug.LogWarning($"Caustics compute shader warning: {formatted}");
+            }
+        }
+
+        int kernel = shader.FindKernel("CSCausticsDebug");
+        var result = new RenderTexture(8, 8, 0, RenderTextureFormat.ARGBFloat) { enableRandomWrite = true };
+        result.Create();
+        try
+        {
+            shader.SetInt("_NumberOfPasses", 1);
+            shader.SetInt("_NumBounces", 1);
+            shader.SetInt("_NumCausticTargetPairs", 0);
+            shader.SetTexture(kernel, "Result", result);
+            PathTracing.ComputeDispatch.Dispatch(shader, kernel, 1, 1, 1);
+            Debug.Log("Caustics compute shader precompile dispatched successfully.");
+        }
+        finally
+        {
+            result.Release();
+            Object.DestroyImmediate(result);
+        }
     }
 
     private static Variant[] CreateVariants()
