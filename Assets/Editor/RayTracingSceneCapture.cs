@@ -16,13 +16,14 @@ public static class RayTracingSceneCapture
     private const int DefaultSamplesPerScene = 300;
     private const int DefaultCaptureWidth = 512;
     private const int DefaultCaptureHeight = 512;
-    private const string DefaultOutputFolder = "RayTracingSceneCaptures";
+    private const string DefaultOutputFolder = "TestCaptures";
     private const string GalleryThumbnailOutputFolder = "Assets/Editor/RayTracingSceneGalleryThumbnails";
     private const string GalleryThumbnailLabel = "Current";
     private const string DefaultReferenceRoot = "Assets/Editor/RayTracingSceneReferences";
     private const int ReferenceWidth = 1024;
     private const int ReferenceHeight = 1024;
-    private const double ReferenceDurationSeconds = 120.0;
+    private const double ReferenceDurationSeconds = 240.0;
+    private const double MaximumTimedCaptureSeconds = 120.0;
     private const int ThermalCooldownMilliseconds = 10000;
     private const float DifferenceHeatmapRedPercentile = 0.99f;
     private const string SessionPrefix = "GPURayTracing.SceneCapture.";
@@ -49,11 +50,35 @@ public static class RayTracingSceneCapture
         public readonly string imagePath;
         public readonly int measuredFrames;
         public readonly double totalMilliseconds;
-        public CaptureResult(string imagePath, int measuredFrames, double totalMilliseconds)
+        public readonly ulong retiredPaths;
+        public readonly GameManager.AdaptiveDiagnosticsData adaptiveDiagnostics;
+        public CaptureResult(string imagePath, int measuredFrames, double totalMilliseconds, ulong retiredPaths)
         {
             this.imagePath = imagePath;
             this.measuredFrames = measuredFrames;
             this.totalMilliseconds = totalMilliseconds;
+            this.retiredPaths = retiredPaths;
+            adaptiveDiagnostics = null;
+        }
+        public CaptureResult(string imagePath, int measuredFrames, double totalMilliseconds,
+            ulong retiredPaths, GameManager.AdaptiveDiagnosticsData adaptiveDiagnostics)
+            : this(imagePath, measuredFrames, totalMilliseconds, retiredPaths)
+        {
+            this.adaptiveDiagnostics = adaptiveDiagnostics;
+        }
+    }
+
+    private readonly struct AdaptiveCaptureFrame
+    {
+        public readonly int frame;
+        public readonly double milliseconds;
+        public readonly GameManager.AdaptiveFrameTelemetry telemetry;
+
+        public AdaptiveCaptureFrame(int frame, double milliseconds, GameManager.AdaptiveFrameTelemetry telemetry)
+        {
+            this.frame = frame;
+            this.milliseconds = milliseconds;
+            this.telemetry = telemetry;
         }
     }
 
@@ -73,7 +98,7 @@ public static class RayTracingSceneCapture
             if (string.IsNullOrWhiteSpace(differenceImageA) || string.IsNullOrWhiteSpace(differenceImageB)
                 || string.IsNullOrWhiteSpace(differenceOutput))
             {
-                Debug.LogError("Difference image generation requires -rayTracingDifferenceImageA, -rayTracingDifferenceImageB, and -rayTracingDifferenceOutput.");
+                ReportCommandLineError("Difference image generation requires -rayTracingDifferenceImageA, -rayTracingDifferenceImageB, and -rayTracingDifferenceOutput.");
                 ExitBatchMode(1);
                 return;
             }
@@ -86,7 +111,7 @@ public static class RayTracingSceneCapture
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception);
+                ReportCommandLineError("Difference image generation failed.", exception);
                 ExitBatchMode(1);
             }
             return;
@@ -100,30 +125,44 @@ public static class RayTracingSceneCapture
         var refreshReferences = HasCommandLineArgument("-rayTracingRefreshReferences");
         var requireExistingReferences = HasCommandLineArgument("-rayTracingRequireExistingReferences");
         var referenceRoot = GetCommandLineArgument("-rayTracingReferenceRoot") ?? DefaultReferenceRoot;
-        if (!TryGetCaptureSettings(out int samplesPerScene, out int captureWidth, out int captureHeight,
-                out double durationSeconds))
+
+        if (!TryGetCaptureSettings(out var samplesPerScene, out var captureWidth, out var captureHeight,
+                out var durationSeconds))
         {
+            ReportCommandLineError("Invalid scene capture settings.");
             ExitBatchMode(1);
             return;
         }
+
+        // The candidate comparison is capped independently from the longer reference capture.
+        if (compareAdaptiveSampling && durationSeconds > MaximumTimedCaptureSeconds)
+        {
+            ReportCommandLineError($"Timed captures are capped at {MaximumTimedCaptureSeconds:0} seconds to prevent adaptive regressions from stalling the editor.");
+            ExitBatchMode(1);
+            return;
+        }
+
         var label = GetCommandLineArgument("-rayTracingCaptureLabel") ?? DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
         var debugRenderMode = GetDebugRenderMode();
-        if (referenceMetrics && (!compareAdaptiveSampling || durationSeconds <= 0.0 || captureWidth != ReferenceWidth
+
+        if (referenceMetrics && (!compareAdaptiveSampling || captureWidth != ReferenceWidth
             || captureHeight != ReferenceHeight || debugRenderMode != DebugRenderMode.FinalColor))
         {
-            Debug.LogError("-rayTracingReferenceMetrics requires -rayTracingCompareAdaptiveSampling, a positive duration, FinalColor, and 1024x1024 capture dimensions.");
+            ReportCommandLineError("-rayTracingReferenceMetrics requires -rayTracingCompareAdaptiveSampling, FinalColor, and 1024x1024 capture dimensions.");
             ExitBatchMode(1);
             return;
         }
+
         if ((refreshReferences || requireExistingReferences) && !referenceMetrics)
         {
-            Debug.LogError("-rayTracingRefreshReferences and -rayTracingRequireExistingReferences require -rayTracingReferenceMetrics.");
+            ReportCommandLineError("-rayTracingRefreshReferences and -rayTracingRequireExistingReferences require -rayTracingReferenceMetrics.");
             ExitBatchMode(1);
             return;
         }
+
         if (string.IsNullOrWhiteSpace(sceneArgument))
         {
-            Debug.LogError("Scene capture requires -rayTracingScenes with semicolon-separated scene asset paths.");
+            ReportCommandLineError("Scene capture requires -rayTracingScenes with semicolon-separated scene asset paths.");
             ExitBatchMode(1);
             return;
         }
@@ -135,6 +174,7 @@ public static class RayTracingSceneCapture
         }
         
         var outputRoot = string.IsNullOrWhiteSpace(outputArgument) ? GetDefaultOutputRoot() : outputArgument;
+        label = GetAvailableCaptureLabel(outputRoot, label);
         if (Application.isBatchMode)
         {
             CaptureInBatchMode(label, scenes, outputRoot, samplesPerScene, captureWidth, captureHeight,
@@ -225,7 +265,7 @@ public static class RayTracingSceneCapture
         }
         catch (Exception exception)
         {
-            Debug.LogException(exception);
+            ReportCommandLineError("Ray tracing scene capture failed.", exception);
             ReleaseCaptureTarget(null);
             ExitBatchMode(1);
         }
@@ -275,6 +315,28 @@ public static class RayTracingSceneCapture
             GenerateDifferenceImage(adaptiveOn.imagePath, referenceImagePath,
                 Path.Combine(comparisonRoot, "adaptive_on_vs_reference_difference.png"));
         }
+        WriteCaptureLog(comparisonRoot, label);
+    }
+
+    private static void WriteCaptureLog(string outputRoot, string label)
+    {
+        string consoleLogPath = Application.consoleLogPath;
+        if (string.IsNullOrWhiteSpace(consoleLogPath) || !File.Exists(consoleLogPath))
+        {
+            Debug.LogWarning("Could not copy the Unity console log because its source path is unavailable.");
+            return;
+        }
+
+        Directory.CreateDirectory(outputRoot);
+        File.Copy(consoleLogPath, Path.Combine(outputRoot, SanitizePathSegment(label) + ".log"), true);
+    }
+
+    private static void ReportCommandLineError(string message, Exception exception = null)
+    {
+        string details = exception == null ? message : message + Environment.NewLine + exception;
+        Debug.LogError(details);
+        Console.Error.WriteLine(details);
+        Console.Error.Flush();
     }
 
     private static void CoolDownBetweenTimedCaptures(double durationSeconds)
@@ -332,22 +394,34 @@ public static class RayTracingSceneCapture
         ResetAccumulation(manager);
 
         var measuredFrames = 0;
+        var adaptiveFrames = adaptiveSampling ? new List<AdaptiveCaptureFrame>() : null;
         var stopwatch = Stopwatch.StartNew();
         while ((durationSeconds > 0.0 && stopwatch.Elapsed.TotalSeconds < durationSeconds)
                || (durationSeconds <= 0.0 && measuredFrames < samplesPerScene))
         {
+            var frameStopwatch = Stopwatch.StartNew();
             manager.RenderImage(_captureSource, _captureTarget);
             measuredFrames++;
-            if (durationSeconds > 0.0)
+            if (durationSeconds > 0.0 || adaptiveSampling)
             {
                 // RenderImage can submit work faster than Metal retires it. Synchronizing each
                 // duration frame makes the wall-clock budget measure completed rendering rather
                 // than CPU submission followed by an unreported queue drain at the end.
                 SynchronizeDurationCaptureGpu();
             }
+            frameStopwatch.Stop();
+            if (adaptiveSampling)
+            {
+                adaptiveFrames.Add(new AdaptiveCaptureFrame(measuredFrames, frameStopwatch.Elapsed.TotalMilliseconds,
+                    manager.ReadAdaptiveFrameTelemetryForCapture()));
+            }
         }
         stopwatch.Stop();
         SynchronizeDurationCaptureGpu();
+        var adaptiveDiagnostics = adaptiveSampling ? manager.ReadAdaptiveDiagnosticsForCapture() : null;
+        ulong retiredPaths = adaptiveSampling
+            ? SumPathCounts(adaptiveDiagnostics.pathCounts)
+            : (ulong)captureWidth * (ulong)captureHeight * (ulong)measuredFrames;
 
         Directory.CreateDirectory(outputRoot);
         string outputPath = Path.Combine(outputRoot, label + ".png");
@@ -355,11 +429,209 @@ public static class RayTracingSceneCapture
         if (writeTimingReport)
         {
             WriteTimingReport(outputRoot, label, sceneName, adaptiveSampling, measuredFrames, durationSeconds,
-                captureWidth, captureHeight, stopwatch.Elapsed.TotalMilliseconds);
+                captureWidth, captureHeight, stopwatch.Elapsed.TotalMilliseconds, retiredPaths);
+            if (adaptiveDiagnostics != null) WriteAdaptiveDiagnostics(outputRoot, adaptiveDiagnostics);
+            if (adaptiveDiagnostics != null)
+            {
+                WriteAdaptiveFrameTelemetry(outputRoot, adaptiveFrames);
+                WriteAdaptiveAllocationHeatmap(outputRoot, adaptiveDiagnostics);
+            }
         }
         Debug.Log($"Ray tracing scene capture wrote '{outputPath}' ({stopwatch.Elapsed.TotalMilliseconds:0.00} ms).");
         ReleaseCaptureTarget(manager.renderTextureCamera);
-        return new CaptureResult(outputPath, measuredFrames, stopwatch.Elapsed.TotalMilliseconds);
+        return new CaptureResult(outputPath, measuredFrames, stopwatch.Elapsed.TotalMilliseconds, retiredPaths, adaptiveDiagnostics);
+    }
+
+    private static void WriteAdaptiveDiagnostics(string outputRoot, GameManager.AdaptiveDiagnosticsData diagnostics)
+    {
+        uint[] metadata = diagnostics.metadata;
+        var pathCounts = (float[])diagnostics.pathCounts.Clone();
+        var uncertainties = (float[])diagnostics.uncertainties.Clone();
+        Array.Sort(pathCounts);
+        Array.Sort(uncertainties);
+        int pixels = pathCounts.Length;
+        if (pixels == 0 || metadata.Length < GameManager.AdaptiveDiagnosticsMetadataCount)
+        {
+            throw new InvalidOperationException("Adaptive diagnostics readback returned incomplete data.");
+        }
+        uint requestedPaths = metadata[GameManager.AdaptiveMetadataRequestedPaths];
+        uint assignedPaths = metadata[GameManager.AdaptiveMetadataAssignedPaths];
+        uint retiredPaths = metadata[GameManager.AdaptiveMetadataRetiredPaths];
+        uint activeWorkItems = metadata[GameManager.AdaptiveMetadataWorkItemCount];
+        uint overflow = metadata[GameManager.AdaptiveMetadataWorkListOverflow];
+        ulong workItemPaths = 0;
+        var assignedPixels = new bool[pixels];
+        for (int index = 0; index < diagnostics.workItemPathCounts.Length; index++)
+        {
+            uint pixel = diagnostics.workItemPixels[index];
+            if (pixel >= pixels || assignedPixels[pixel])
+            {
+                throw new InvalidOperationException($"Adaptive work list contains an invalid or duplicate pixel index: {pixel}.");
+            }
+            assignedPixels[pixel] = true;
+            workItemPaths += diagnostics.workItemPathCounts[index];
+        }
+        if (requestedPaths != assignedPaths || assignedPaths != retiredPaths || overflow != 0u
+            || activeWorkItems > pixels || workItemPaths != assignedPaths)
+        {
+            throw new InvalidOperationException(
+                $"Adaptive allocation invariant failed: requested={requestedPaths}, assigned={assignedPaths}, " +
+                $"workItemPaths={workItemPaths}, retired={retiredPaths}, workItems={activeWorkItems}, " +
+                $"pixels={pixels}, overflow={overflow}.");
+        }
+        string report = "{\n" +
+            $"  \"width\": {diagnostics.width},\n" +
+            $"  \"height\": {diagnostics.height},\n" +
+            $"  \"requestedRootPaths\": {requestedPaths},\n" +
+            $"  \"assignedPaths\": {assignedPaths},\n" +
+            $"  \"retiredPaths\": {retiredPaths},\n" +
+            $"  \"activeWorkItems\": {activeWorkItems},\n" +
+            $"  \"workItemPaths\": {workItemPaths},\n" +
+            $"  \"workListOverflow\": {overflow},\n" +
+            $"  \"pathCountMin\": {pathCounts[0]:R},\n" +
+            $"  \"pathCountMean\": {Mean(pathCounts):R},\n" +
+            $"  \"pathCountMax\": {pathCounts[pixels - 1]:R},\n" +
+            $"  \"pathCountP50\": {Percentile(pathCounts, 0.50f):R},\n" +
+            $"  \"pathCountP95\": {Percentile(pathCounts, 0.95f):R},\n" +
+            $"  \"pathCountP99\": {Percentile(pathCounts, 0.99f):R},\n" +
+            $"  \"uncertaintyMean\": {Mean(uncertainties):R},\n" +
+            $"  \"uncertaintyMax\": {uncertainties[pixels - 1]:R},\n" +
+            $"  \"uncertaintyP50\": {Percentile(uncertainties, 0.50f):R},\n" +
+            $"  \"uncertaintyP95\": {Percentile(uncertainties, 0.95f):R},\n" +
+            $"  \"uncertaintyP99\": {Percentile(uncertainties, 0.99f):R},\n" +
+            $"  \"prioritySum\": {metadata[GameManager.AdaptiveMetadataPrioritySum]},\n" +
+            $"  \"bootstrapPixels\": {metadata[GameManager.AdaptiveMetadataBootstrapPixels]},\n" +
+            $"  \"bootstrapPaths\": {metadata[GameManager.AdaptiveMetadataBootstrapPaths]},\n" +
+            "  \"priorityBucketPopulations\": [" + JoinMetadata(metadata, GameManager.AdaptiveMetadataBucketPopulationStart, 16) + "],\n" +
+            "  \"priorityBucketAdmittedPaths\": [" + JoinMetadata(metadata, GameManager.AdaptiveMetadataBucketAdmittedPathsStart, 16) + "],\n" +
+            "  \"priorityBucketBudgets\": [" + JoinMetadata(metadata, GameManager.AdaptiveMetadataBucketBudgetStart, 16) + "]\n" +
+            "}\n";
+        File.WriteAllText(Path.Combine(outputRoot, "adaptive_diagnostics.json"), report);
+    }
+
+    private static double Mean(float[] values)
+    {
+        double sum = 0.0;
+        foreach (float value in values) sum += value;
+        return values.Length == 0 ? 0.0 : sum / values.Length;
+    }
+
+    private static ulong SumPathCounts(float[] pathCounts)
+    {
+        ulong total = 0;
+        foreach (float count in pathCounts)
+        {
+            total += (ulong)Mathf.Max(0.0f, count);
+        }
+        return total;
+    }
+
+    private static float Percentile(float[] sortedValues, float percentile)
+    {
+        if (sortedValues.Length == 0) return 0.0f;
+        int index = Mathf.Clamp(Mathf.FloorToInt((sortedValues.Length - 1) * percentile), 0, sortedValues.Length - 1);
+        return sortedValues[index];
+    }
+
+    private static string JoinMetadata(uint[] values, int start, int count)
+    {
+        var parts = new string[count];
+        for (int i = 0; i < count; i++) parts[i] = values[start + i].ToString();
+        return string.Join(", ", parts);
+    }
+
+    private static void WriteAdaptiveFrameTelemetry(string outputRoot, List<AdaptiveCaptureFrame> frames)
+    {
+        if (frames == null || frames.Count == 0) return;
+
+        var lines = new List<string>(frames.Count + 1)
+        {
+            "frame,accumulated_frame,reclassified,frame_ms,active_work_items,assigned_paths,retired_paths"
+        };
+        foreach (AdaptiveCaptureFrame frame in frames)
+        {
+            lines.Add($"{frame.frame},{frame.telemetry.accumulatedFrameCount},{frame.telemetry.reclassified}," +
+                $"{frame.milliseconds:R},{frame.telemetry.activeWorkItems},{frame.telemetry.assignedPaths},{frame.telemetry.retiredPaths}");
+        }
+        File.WriteAllLines(Path.Combine(outputRoot, "adaptive_frame_telemetry.csv"), lines);
+
+        double firstHalf = 0.0;
+        double secondHalf = 0.0;
+        int split = Math.Max(1, frames.Count / 2);
+        int reclassificationFrames = 0;
+        double reclassificationMilliseconds = 0.0;
+        double reuseMilliseconds = 0.0;
+        int reuseFrames = 0;
+        for (int index = 0; index < frames.Count; index++)
+        {
+            AdaptiveCaptureFrame frame = frames[index];
+            if (index < split) firstHalf += frame.milliseconds;
+            else secondHalf += frame.milliseconds;
+            if (frame.telemetry.reclassified)
+            {
+                reclassificationFrames++;
+                reclassificationMilliseconds += frame.milliseconds;
+            }
+            else
+            {
+                reuseFrames++;
+                reuseMilliseconds += frame.milliseconds;
+            }
+        }
+        string summary = "Adaptive Frame Telemetry\n" +
+            $"Frames: {frames.Count}\n" +
+            $"First-half average: {firstHalf / split:0.000} ms\n" +
+            $"Second-half average: {secondHalf / Math.Max(1, frames.Count - split):0.000} ms\n" +
+            $"Reclassification frames: {reclassificationFrames}, average {reclassificationMilliseconds / Math.Max(1, reclassificationFrames):0.000} ms\n" +
+            $"Reuse frames: {reuseFrames}, average {reuseMilliseconds / Math.Max(1, reuseFrames):0.000} ms\n" +
+            "See adaptive_frame_telemetry.csv for the synchronized per-frame sequence.\n";
+        File.WriteAllText(Path.Combine(outputRoot, "adaptive_frame_telemetry.txt"), summary);
+    }
+
+    private static void WriteAdaptiveAllocationHeatmap(string outputRoot, GameManager.AdaptiveDiagnosticsData diagnostics)
+    {
+        int width = diagnostics.width;
+        int height = diagnostics.height;
+        var allocatedPaths = new uint[width * height];
+        uint maxPaths = 0;
+        for (int index = 0; index < diagnostics.workItemPixels.Length; index++)
+        {
+            uint pixel = diagnostics.workItemPixels[index];
+            uint paths = diagnostics.workItemPathCounts[index];
+            allocatedPaths[pixel] = paths;
+            maxPaths = Math.Max(maxPaths, paths);
+        }
+
+        var texture = new Texture2D(width, height, TextureFormat.RGB24, false, true);
+        var pixels = new Color[allocatedPaths.Length];
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                uint paths = allocatedPaths[x + y * width];
+                float normalized = maxPaths == 0 ? 0.0f : paths / (float)maxPaths;
+                // Black = not selected, blue/green/yellow/red = increasing paths this allocation.
+                pixels[x + y * width] = HeatmapColor(normalized);
+            }
+        }
+        texture.SetPixels(pixels);
+        texture.Apply(false, false);
+        File.WriteAllBytes(Path.Combine(outputRoot, "adaptive_allocation_heatmap.png"), texture.EncodeToPNG());
+        UnityEngine.Object.DestroyImmediate(texture);
+
+        File.WriteAllText(Path.Combine(outputRoot, "adaptive_allocation_heatmap.txt"),
+            "Adaptive allocation heatmap\n" +
+            "Black pixels receive no path in the current allocation. Blue through red denotes increasing paths per selected pixel.\n" +
+            $"Maximum paths per selected pixel: {maxPaths}\n");
+    }
+
+    private static Color HeatmapColor(float value)
+    {
+        if (value <= 0.0f) return Color.black;
+        if (value < 0.25f) return Color.Lerp(new Color(0.0f, 0.0f, 0.25f), Color.blue, value * 4.0f);
+        if (value < 0.5f) return Color.Lerp(Color.blue, Color.cyan, (value - 0.25f) * 4.0f);
+        if (value < 0.75f) return Color.Lerp(Color.cyan, Color.yellow, (value - 0.5f) * 4.0f);
+        return Color.Lerp(Color.yellow, Color.red, (value - 0.75f) * 4.0f);
     }
 
     private static void SynchronizeDurationCaptureGpu()
@@ -391,7 +663,8 @@ public static class RayTracingSceneCapture
         double requestedDurationSeconds,
         int width,
         int height,
-        double totalMilliseconds)
+        double totalMilliseconds,
+        ulong retiredPaths)
     {
         Directory.CreateDirectory(outputRoot);
         string path = Path.Combine(outputRoot, label + ".txt");
@@ -405,17 +678,18 @@ public static class RayTracingSceneCapture
                 $"Total measured render time: {totalMilliseconds:0.000} ms\n" +
                 $"Average render time per frame: {averageMilliseconds:0.000} ms\n" +
                 $"Average measured FPS: {(averageMilliseconds > 0.0 ? 1000.0 / averageMilliseconds : 0.0):0.000}\n" +
-                $"Adaptive policy: fixed 4x4 block budget, no automatic stopping\n" +
+                $"Cumulative retired paths: {retiredPaths}\n" +
+                $"Adaptive policy: fixed global root budget, no automatic stopping\n" +
                 $"Adaptive bootstrap paths per pixel: {(adaptiveSampling ? "configured minimum" : "uniform")}" + "\n");
     }
 
     private static string EnsureReference(GameManager manager, string scenePath, string referenceRoot, bool refresh,
         bool requireExisting, out ReferenceMetadata metadata)
     {
-        string imagePath = GetReferenceImagePath(scenePath, referenceRoot);
-        string metadataPath = Path.ChangeExtension(imagePath, ".json");
-        bool imageExists = File.Exists(imagePath);
-        bool metadataExists = File.Exists(metadataPath);
+        var imagePath = GetReferenceImagePath(scenePath, referenceRoot);
+        var metadataPath = Path.ChangeExtension(imagePath, ".json");
+        var imageExists = File.Exists(imagePath);
+        var metadataExists = File.Exists(metadataPath);
         if (!refresh && imageExists && metadataExists)
         {
             metadata = ValidateReference(scenePath, imagePath, metadataPath);
@@ -430,7 +704,7 @@ public static class RayTracingSceneCapture
             throw new InvalidOperationException($"Reference for '{scenePath}' is missing at '{imagePath}'.");
         }
 
-        Debug.Log($"Generating 120-second adaptive-off reference for '{scenePath}'.");
+        Debug.Log($"Generating {ReferenceDurationSeconds:0}-second adaptive-off reference for '{scenePath}'.");
         string sceneName = Path.GetFileNameWithoutExtension(scenePath);
         CaptureResult result = CaptureVariant(manager, sceneName, Path.GetDirectoryName(imagePath), sceneName,
             0, ReferenceWidth, ReferenceHeight, ReferenceDurationSeconds, DebugRenderMode.FinalColor,
@@ -492,7 +766,7 @@ public static class RayTracingSceneCapture
             || metadata.width != ReferenceWidth || metadata.height != ReferenceHeight
             || metadata.durationSeconds != ReferenceDurationSeconds || metadata.imageSha256 != ComputeSha256(imagePath))
         {
-            throw new InvalidOperationException($"Reference '{imagePath}' does not match the required 120-second 1024x1024 contract. Use -rayTracingRefreshReferences after review.");
+            throw new InvalidOperationException($"Reference '{imagePath}' does not match the required {ReferenceDurationSeconds:0}-second 1024x1024 contract. Use -rayTracingRefreshReferences after review.");
         }
         var image = new Texture2D(2, 2, TextureFormat.RGB24, false);
         try
@@ -562,6 +836,7 @@ public static class RayTracingSceneCapture
             $"  \"luminanceMeanRelativeAbsoluteError\": {relative / pixels:R},\n" +
             $"  \"luminanceFractionAbove0_01\": {(double)aboveThreshold / pixels:R},\n" +
             $"  \"measuredFrames\": {result.measuredFrames},\n" +
+            $"  \"cumulativeRetiredPaths\": {result.retiredPaths},\n" +
             $"  \"totalMeasuredRenderMilliseconds\": {result.totalMilliseconds:R}\n" +
                 "}\n";
             File.WriteAllText(Path.Combine(outputRoot, label + ".metrics.json"), report);
@@ -945,7 +1220,21 @@ public static class RayTracingSceneCapture
 
     private static string GetDefaultOutputRoot()
     {
-        return Path.Combine(Directory.GetCurrentDirectory(), DefaultOutputFolder);
+        return Path.Combine(Application.dataPath, "..", DefaultOutputFolder);
+    }
+
+    private static string GetAvailableCaptureLabel(string outputRoot, string label)
+    {
+        string sanitizedLabel = SanitizePathSegment(label);
+        string fullOutputRoot = Path.GetFullPath(outputRoot);
+        string availableLabel = sanitizedLabel;
+        int suffix = 2;
+        while (Directory.Exists(Path.Combine(fullOutputRoot, availableLabel)))
+        {
+            availableLabel = sanitizedLabel + "_" + suffix++;
+        }
+
+        return availableLabel;
     }
 
     private static string SanitizePathSegment(string value)

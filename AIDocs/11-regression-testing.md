@@ -18,6 +18,7 @@ The project uses EditMode tests under `Assets/Tests/EditMode/` to make rendering
 - Medium-identity and stack probes for air -> water -> sphere glass -> water -> air, parent lookup, matching exits, overflow, unmatched exits, underwater initialization, and flat water-volume side/bottom intersections.
 - Deterministic randomized CPU reference comparisons for per-mesh, top-level, and shadow BVH traversal against brute force, with maximum build depth checked against the fixed stack capacity of `32`.
 - GPU dispatch smoke coverage at `1x1`, `3x5`, and `13x7`; `CSMain` returns before accessing output textures for partial 8x4 thread groups outside their dimensions.
+- Adaptive allocator parity coverage drives the production scan, allocation, and compaction kernels with controlled bucket lanes and compares the compact work list with a CPU reference at `1x1`, `3x5`, `13x7`, and `17x19`. Controlled trace parity validates the deterministic sample-index and Welford/RGB accumulation contract. Root-list parity verifies that each allocated root path is emitted and resolved exactly once; the live trace no longer dispatches fixed inactive waves.
 - Camera coverage verifies that the serialized lens defaults preserve the previous `0.005` blur scale and enable click-to-focus with clicked focus-point tracking. Existing image fixtures explicitly use the pinhole path; deterministic focus-plane and aperture-shape image fixtures remain future coverage.
 - Production GPU probes cover shared Lambert/GGX BRDF values, PDFs, and finite positive sampled throughput.
 - Production GPU probes cover the MIS power heuristic and triangle area-to-solid-angle PDF conversion.
@@ -47,9 +48,9 @@ Unity Test Framework `1.6.0` exits after a command-line run without requiring `-
 
 ## Scene Capture Comparisons
 
-`RayTracingSceneCapture` is an editor tool, not a test. It loads the production scenes supplied on its command line, enters Play mode, renders a `512x512` final-color image with 200 deterministic accumulated samples by default, and writes PNGs for visual before/after comparison. Command-line capture uses this same Play-mode lifecycle rather than a separate direct-dispatch path, so scene initialization and renderer registration match a user entering Play mode. It fixes the random seed, freezes simulation, and disables temporal denoising. Scenes do not need to be in Build Settings. The output subfolder defaults to a local timestamp in `YYYY-MM-DD_HH-MM-SS` format; `-rayTracingCaptureLabel` can override it for named before/after comparisons.
+`RayTracingSceneCapture` is an editor tool, not a test. It loads the production scenes supplied on its command line, enters Play mode, renders a `512x512` final-color image with 200 deterministic accumulated samples by default, and writes PNGs for visual before/after comparison. Command-line capture uses this same Play-mode lifecycle rather than a separate direct-dispatch path, so scene initialization and renderer registration match a user entering Play mode. It fixes the random seed, freezes simulation, and disables temporal denoising. Scenes do not need to be in Build Settings. Capture output defaults to the project-root `TestCaptures/` directory; the output subfolder defaults to a local timestamp in `YYYY-MM-DD_HH-mm-ss` format, and `-rayTracingCaptureLabel` can override it for named before/after comparisons. If the requested label folder already exists, the tool selects `_2`, `_3`, and higher numeric suffixes automatically.
 
-For adaptive fixed-time comparisons, `-rayTracingReferenceMetrics` requires `-rayTracingCompareAdaptiveSampling`, a positive `-rayTracingDurationSeconds`, final-color mode, and `1024x1024`. It uses a durable 120-second adaptive-off reference at `Assets/Editor/RayTracingSceneReferences/<scene path>/<scene name>.png`, generating it only when neither image nor metadata exists. References include a SHA-256 checked metadata sidecar and must be deliberately regenerated with `-rayTracingRefreshReferences`; `-rayTracingRequireExistingReferences` makes missing references fail for automated jobs.
+For adaptive comparisons, `-rayTracingReferenceMetrics` requires `-rayTracingCompareAdaptiveSampling`, final-color mode, and `1024x1024`. Use `-rayTracingSamples` for equal-frame/equal-root-path comparisons or `-rayTracingDurationSeconds 5` through `120` for fixed-time diagnostics. Adaptive candidate timed captures are capped at 120 seconds to prevent a pathological candidate from stalling the editor. A missing reference is generated automatically as a deterministic 240-second adaptive-off capture at `Assets/Editor/RayTracingSceneReferences/<scene path>/<scene name>.png`; this reference-generation duration is independent of the candidate cap. References include a SHA-256 checked metadata sidecar and must be deliberately regenerated with `-rayTracingRefreshReferences`; `-rayTracingRequireExistingReferences` makes missing references fail for automated jobs. Adaptive captures also emit per-frame timing telemetry and an allocation heatmap showing where the current root budget was assigned.
 
 The tool can also be run non-interactively, which allows automated change workflows to capture before/after images. Close any Unity instance using the project first, then run:
 
@@ -63,7 +64,7 @@ The tool can also be run non-interactively, which allows automated change workfl
    -rayTracingHeight 768 \
    -rayTracingSamples 400 \
    -rayTracingCaptureLabel before \
-   -rayTracingOutput /tmp/gpuraytracing-captures \
+    -rayTracingOutput /Users/nic.foster/Projects/GPURayTracing/TestCaptures \
    -rayTracingScenes "Assets/Scenes/Root.unity;Assets/Scenes/Generated/CornellBox.unity" \
   -logFile /tmp/gpuraytracing-scene-capture.log
 ```

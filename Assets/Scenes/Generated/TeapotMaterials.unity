@@ -26,7 +26,7 @@ RenderSettings:
   m_AmbientIntensity: 1
   m_AmbientMode: 0
   m_SubtractiveShadowColor: {r: 0.42, g: 0.478, b: 0.627, a: 1}
-  m_SkyboxMaterial: {fileID: 10304, guid: 0000000000000000f000000000000000, type: 0}
+  m_SkyboxMaterial: {fileID: 0}
   m_HaloStrength: 0.5
   m_FlareStrength: 1
   m_FlareFadeSpeed: 3
@@ -1686,6 +1686,9 @@ MonoBehaviour:
   shadowBvhMinObjectCount: 0
   shadowRandomness: 0.65
   enableAdaptiveSampling: 0
+  adaptiveSamplingMinSamples: 8
+  adaptiveSamplingExploration: 0.05
+  adaptiveSamplingReclassificationInterval: 8
   parallaxMaximumStrengthAngle: 20
   maxLightSamples: 0
   _lightingManager:
@@ -1707,7 +1710,7 @@ MonoBehaviour:
   glareThreshold: 1
   glareSoftKnee: 0.1
   glareIntensity: 1
-  fireflyClamp: 4
+  fireflyClamp: 3
   randomNoise: 0
   skyboxTexture: {fileID: 2800000, guid: 498101212922c43cb9800ac08f1737bd, type: 3}
   enableEnvironmentLighting: 1

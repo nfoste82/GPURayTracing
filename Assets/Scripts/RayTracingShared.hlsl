@@ -12,8 +12,40 @@ RWTexture2D<float> FeatureIdentity;
 RWTexture2D<float> FeatureValidity;
 RWTexture2D<float4> AdaptiveSamplingState;
 RWStructuredBuffer<uint2> AdaptiveWorkList;
+StructuredBuffer<uint2> AdaptiveTraceWorkList;
+RWStructuredBuffer<uint2> AdaptiveRootWorkList;
+StructuredBuffer<uint2> AdaptiveTraceRootWorkList;
+RWStructuredBuffer<float4> AdaptiveRootRadiance;
+RWStructuredBuffer<uint> AdaptiveWorkRootOffsets;
+RWStructuredBuffer<uint2> AdaptivePixelInfo;
+RWStructuredBuffer<uint> AdaptivePixelBucketRanks;
 RWStructuredBuffer<uint> AdaptiveWorkListMetadata;
 RWStructuredBuffer<uint> AdaptiveDispatchArgs;
+RWStructuredBuffer<uint> AdaptiveResolveDispatchArgs;
+RWStructuredBuffer<uint> AdaptiveGroupBucketCounts;
+RWStructuredBuffer<uint> AdaptiveBucketBlockSums;
+RWStructuredBuffer<uint> AdaptiveBucketWorkOffsets;
+RWStructuredBuffer<uint> AdaptiveBucketRootOffsets;
+RWStructuredBuffer<uint> AdaptiveBucketBudgets;
+StructuredBuffer<uint> AdaptiveProbeLanes;
+
+#define AdaptiveMetadataWorkItemCount 0u
+#define AdaptiveMetadataPrioritySum 1u
+#define AdaptiveMetadataAssignedPaths 2u
+#define AdaptiveMetadataWorkListOverflow 3u
+#define AdaptiveMetadataBootstrapPixels 4u
+#define AdaptiveMetadataRequestedPaths 5u
+#define AdaptiveMetadataRetiredPaths 6u
+#define AdaptiveMetadataBootstrapPaths 7u
+#define AdaptiveMetadataPathCountMin 8u
+#define AdaptiveMetadataPathCountMax 9u
+#define AdaptiveMetadataPathCountSum 10u
+#define AdaptiveMetadataUncertaintySum 11u
+#define AdaptiveMetadataUncertaintyMax 12u
+#define AdaptiveMetadataBucketPopulationStart 16u
+#define AdaptiveMetadataBucketAdmittedPathsStart 32u
+#define AdaptiveMetadataBucketBudgetStart 48u
+#define AdaptiveMetadataCount 64u
 
 RWStructuredBuffer<float4> RegressionResults;
 RWStructuredBuffer<float4> _FocusQueryResult;
@@ -57,7 +89,10 @@ int _UseFrameAccumulation;
 int _AccumulatedFrameCount;
 int _AdaptiveSamplingMinSamples;
 float _AdaptiveSamplingExploration;
+int _AdaptiveSamplingReclassificationInterval;
 uint _AdaptiveWorkListCapacity;
+uint _AdaptiveRootPathCapacity;
+uint _AdaptiveBucketBlockCount;
 float _ShadowRandomness;
 float _LightFalloffScale;
 float _ParallaxMaximumStrengthCosine;

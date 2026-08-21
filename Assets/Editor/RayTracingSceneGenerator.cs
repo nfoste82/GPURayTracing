@@ -482,7 +482,7 @@ public static class RayTracingSceneGenerator
             DirectionalLightRotation = new Vector3(70.0f, -30.0f, 0.0f),
             DirectionalLightAngularRadius = 8.43f,
             CausticIntensity = 0.53f,
-            FireflyClamp = 4f,
+            FireflyClamp = 3f,
         });
         
         var defaultCheckerGray = AssetDatabase.GetBuiltinExtraResource<Texture2D>(DefaultCheckerGrayTexturePath);

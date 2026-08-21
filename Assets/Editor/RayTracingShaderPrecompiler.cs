@@ -38,67 +38,68 @@ public static class RayTracingShaderPrecompiler
     [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/All Variants")]
     private static void PrecompileAllVariants()
     {
-        Precompile(-1);
+        Precompile(-1, true);
     }
 
     // Run this in a separate Unity process before EditMode tests after changing a shader:
     // -executeMethod RayTracingShaderPrecompiler.PrecompileFromCommandLine
+    // Add -rayTracingColdShaderPrecompile only to measure a deliberately cold compile.
     public static void PrecompileFromCommandLine()
     {
         bool allVariants = HasCommandLineArgument("-rayTracingPrecompileAllVariants");
-        bool succeeded = Precompile(allVariants ? -1 : 0);
+        bool succeeded = Precompile(allVariants ? -1 : 0, HasCommandLineArgument("-rayTracingColdShaderPrecompile"));
         EditorApplication.Exit(succeeded ? 0 : 1);
     }
 
     [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Final Color - Default")]
     private static void PrecompileDefaultVariant()
     {
-        Precompile(0);
+        Precompile(0, true);
     }
 
     [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Final Color - Fog")]
     private static void PrecompileFinalColorFogVariant()
     {
-        Precompile(1);
+        Precompile(1, true);
     }
 
     [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Final Color - Terrain")]
     private static void PrecompileFinalColorTerrainVariant()
     {
-        Precompile(2);
+        Precompile(2, true);
     }
 
     [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Final Color - Fog + Terrain")]
     private static void PrecompileFinalColorFogTerrainVariant()
     {
-        Precompile(3);
+        Precompile(3, true);
     }
 
     [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Debug - Default")]
     private static void PrecompileDebugVariant()
     {
-        Precompile(4);
+        Precompile(4, true);
     }
 
     [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Debug - Fog")]
     private static void PrecompileDebugFogVariant()
     {
-        Precompile(5);
+        Precompile(5, true);
     }
 
     [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Debug - Terrain")]
     private static void PrecompileDebugTerrainVariant()
     {
-        Precompile(6);
+        Precompile(6, true);
     }
 
     [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Debug - Fog + Terrain")]
     private static void PrecompileDebugFogTerrainVariant()
     {
-        Precompile(7);
+        Precompile(7, true);
     }
 
-    private static bool Precompile(int selectedVariant)
+    private static bool Precompile(int selectedVariant, bool coldCompile)
     {
         var shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ShaderPath);
         if (shader == null)
@@ -113,16 +114,18 @@ public static class RayTracingShaderPrecompiler
             : allVariants;
         var stats = new StringBuilder();
         stats.AppendLine("timestamp,unityVersion,buildTarget,graphicsDevice,shaderHash,variant,coldDispatchMs,warmDispatchMs");
-        // ComputeShader is not a UnityEngine.Shader, so ShaderUtil.ClearCachedData cannot be used
-        // here. Clear Unity's generated shader cache, then force-reimport the asset before the
-        // first dispatch of the selected keyword combination.
-        ClearShaderCache();
-        AssetDatabase.ImportAsset(ShaderPath, ImportAssetOptions.ForceUpdate);
-        shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ShaderPath);
-        if (shader == null)
+        if (coldCompile)
         {
-            Debug.LogError($"Precompile failed after reimport: could not load compute shader at '{ShaderPath}'.");
-            return false;
+            // ComputeShader is not a UnityEngine.Shader, so ShaderUtil.ClearCachedData cannot be
+            // clear its cache. Only explicit cold-compile measurements clear and reimport here.
+            ClearShaderCache();
+            AssetDatabase.ImportAsset(ShaderPath, ImportAssetOptions.ForceUpdate);
+            shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ShaderPath);
+            if (shader == null)
+            {
+                Debug.LogError($"Precompile failed after reimport: could not load compute shader at '{ShaderPath}'.");
+                return false;
+            }
         }
 
         // 1) Force the HLSL -> backend compile and surface any compile messages. This is the
@@ -279,7 +282,7 @@ public static class RayTracingShaderPrecompiler
                     warmStopwatch.ElapsedMilliseconds);
                 stats.AppendLine(row);
                 AppendStatsRow(stats, row);
-                Debug.Log($"Ray tracing shader variant ({variant.Label}) cold={coldStopwatch.ElapsedMilliseconds} ms, " +
+                Debug.Log($"Ray tracing shader variant ({variant.Label}) first={coldStopwatch.ElapsedMilliseconds} ms, " +
                     $"warm={warmStopwatch.ElapsedMilliseconds} ms.");
                 completedVariants++;
             }
@@ -334,8 +337,8 @@ public static class RayTracingShaderPrecompiler
 
         var statsPath = Path.Combine(Directory.GetParent(Application.dataPath).FullName, StatsPath);
         Debug.Log(
-            $"Ray tracing compute shader recompiled and dispatched across {variants.Length} selected variant(s) in " +
-            $"{totalStopwatch.ElapsedMilliseconds} ms. Cold dispatch total={totalColdDispatchMs} ms, " +
+            $"Ray tracing compute shader {(coldCompile ? "cold-recompiled" : "cache-preservingly dispatched")} across {variants.Length} selected variant(s) in " +
+            $"{totalStopwatch.ElapsedMilliseconds} ms. First dispatch total={totalColdDispatchMs} ms, " +
             $"warm dispatch total={totalWarmDispatchMs} ms. Stats appended to '{statsPath}'. Safe to enter Play mode.");
         return true;
     }

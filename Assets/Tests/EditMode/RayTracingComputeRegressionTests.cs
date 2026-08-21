@@ -259,6 +259,24 @@ namespace GPURayTracing.Tests
             }
         }
 
+        private static Color[] ReadPixels(RenderTexture texture)
+        {
+            RenderTexture previous = RenderTexture.active;
+            RenderTexture.active = texture;
+            var image = new Texture2D(texture.width, texture.height, TextureFormat.RGBAFloat, false, true);
+            try
+            {
+                image.ReadPixels(new Rect(0, 0, texture.width, texture.height), 0, 0);
+                image.Apply(false, false);
+                return image.GetPixels();
+            }
+            finally
+            {
+                RenderTexture.active = previous;
+                UnityEngine.Object.DestroyImmediate(image);
+            }
+        }
+
         [Test]
         public void GameManager_AccumulationStateHash_ResetsWhenSubpixelFilterChanges()
         {
@@ -333,15 +351,534 @@ namespace GPURayTracing.Tests
                 int adaptiveHash = (int)hashMethod.Invoke(manager, null);
                 managerType.GetField("adaptiveSamplingMinSamples").SetValue(manager, 16);
                 int changedPolicyHash = (int)hashMethod.Invoke(manager, null);
+                managerType.GetField("adaptiveSamplingExploration").SetValue(manager, 0.15f);
+                int changedExplorationHash = (int)hashMethod.Invoke(manager, null);
+                managerType.GetField("adaptiveSamplingReclassificationInterval").SetValue(manager, 16);
+                int changedIntervalHash = (int)hashMethod.Invoke(manager, null);
 
                 Assert.That(adaptiveHash, Is.Not.EqualTo(uniformHash));
                 Assert.That(changedPolicyHash, Is.Not.EqualTo(adaptiveHash));
+                Assert.That(changedExplorationHash, Is.Not.EqualTo(changedPolicyHash));
+                Assert.That(changedIntervalHash, Is.Not.EqualTo(changedExplorationHash));
             }
             finally
             {
                 UnityEngine.Object.DestroyImmediate(gameObject);
                 UnityEngine.Object.DestroyImmediate(cameraObject);
             }
+        }
+
+        [Test]
+        public void GameManager_AdaptiveBucketAllocation_ConservesRootBudgetAndPrefersHighestBucket()
+        {
+            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+            Assert.That(managerType, Is.Not.Null);
+            MethodInfo allocationMethod = managerType.GetMethod("AllocateAdaptiveBucketBudget",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(allocationMethod, Is.Not.Null);
+
+            var populations = new uint[16];
+            populations[3] = 7;
+            populations[12] = 2;
+            var admitted = (uint[])allocationMethod.Invoke(null, new object[] { 91u, 15u, 1u, populations });
+
+            Assert.That(admitted, Has.Length.EqualTo(16));
+            Assert.That(admitted[12], Is.EqualTo(8u));
+            Assert.That(admitted[3], Is.EqualTo(28u));
+            Assert.That(Sum(admitted) + 15u, Is.EqualTo(91u));
+        }
+
+        [TestCase(1, 1, 1)]
+        [TestCase(3, 5, 1)]
+        [TestCase(13, 7, 2)]
+        public void GameManager_AdaptiveBucketAllocation_ConservesOddDimensionBudgets(int width, int height, int pathsPerPixel)
+        {
+            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+            Assert.That(managerType, Is.Not.Null);
+            MethodInfo allocationMethod = managerType.GetMethod("AllocateAdaptiveBucketBudget",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(allocationMethod, Is.Not.Null);
+
+            uint rootBudget = (uint)(width * height * pathsPerPixel);
+            var populations = new uint[16];
+            populations[0] = 1;
+            populations[15] = (uint)(width * height - 1);
+            var admitted = (uint[])allocationMethod.Invoke(null, new object[] { rootBudget, 0u, (uint)pathsPerPixel, populations });
+
+            Assert.That(Sum(admitted), Is.EqualTo(rootBudget));
+            Assert.That(admitted[width * height == 1 ? 0 : 15], Is.EqualTo(rootBudget));
+        }
+
+        [Test]
+        public void GameManager_AdaptiveBucketAllocation_CapsPerPixelDemandBeforeLowerBuckets()
+        {
+            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+            MethodInfo allocationMethod = managerType.GetMethod("AllocateAdaptiveBucketBudget",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            var populations = new uint[16];
+            populations[15] = 2;
+            populations[14] = 10;
+
+            var admitted = (uint[])allocationMethod.Invoke(null, new object[] { 30u, 0u, 1u, populations });
+
+            Assert.That(admitted[15], Is.EqualTo(8u));
+            Assert.That(admitted[14], Is.EqualTo(22u));
+            Assert.That(Sum(admitted), Is.EqualTo(30u));
+        }
+
+        [TestCase(0u, 0u)]
+        [TestCase(1u, 1u)]
+        [TestCase(3u, 3u)]
+        [TestCase(4u, 3u)]
+        [TestCase(7u, 4u)]
+        [TestCase(15u, 6u)]
+        [TestCase(31u, 7u)]
+        [TestCase(63u, 9u)]
+        [TestCase(127u, 11u)]
+        [TestCase(255u, 12u)]
+        [TestCase(511u, 14u)]
+        [TestCase(1023u, 15u)]
+        [TestCase(1023u, 15u)]
+        [TestCase(1024u, 15u)]
+        [TestCase(uint.MaxValue, 15u)]
+        public void AdaptivePriorityBucket_LogarithmicMapping_CoversLowPriorityRange(uint priority, uint expectedBucket)
+        {
+            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+            Assert.That(managerType, Is.Not.Null);
+            MethodInfo bucketMethod = managerType.GetMethod("GetAdaptivePriorityBucketForTest",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(bucketMethod, Is.Not.Null);
+
+            uint actualBucket = (uint)bucketMethod.Invoke(null, new object[] { priority });
+
+            Assert.That(actualBucket, Is.EqualTo(expectedBucket));
+        }
+
+        [TestCase(1, 1, 1, new uint[] { 0 })]
+        [TestCase(3, 5, 1, new uint[] { 0, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3 })]
+        [TestCase(13, 7, 1, new uint[] { 0, 16, 16, 15, 15, 14, 14, 13, 13, 12 })]
+        [TestCase(17, 19, 1, new uint[] { 16, 16, 16, 15, 15, 14, 0, 0, 13, 12, 11 })]
+        public void AdaptiveParallelAllocator_GpuWorkListMatchesStableCpuReference(int width, int height,
+            int pathsPerPixel, uint[] lanePattern)
+        {
+            if (!SystemInfo.supportsComputeShaders) Assert.Ignore("Compute shaders are not supported by the active graphics device.");
+            ComputeShader shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
+            if (shader == null || !shader.HasKernel("CSAdaptiveProbeClassify"))
+                Assert.Ignore("The active graphics device did not compile the adaptive probe kernels.");
+
+            int pixelCount = width * height;
+            var lanes = new uint[pixelCount];
+            for (int i = 0; i < lanes.Length; i++) lanes[i] = lanePattern[i % lanePattern.Length];
+            var expected = BuildAdaptiveCpuReference(lanes, pathsPerPixel);
+                int groupsX = Mathf.CeilToInt(width / 4.0f);
+                int groupsY = Mathf.CeilToInt(height / 4.0f);
+                int blockCount = Mathf.CeilToInt(pixelCount / 256.0f);
+                var result = new RenderTexture(width, height, 0, RenderTextureFormat.ARGBFloat) { enableRandomWrite = true };
+                var pixelInfo = new ComputeBuffer(pixelCount, sizeof(uint) * 2);
+                var pixelRanks = new ComputeBuffer(pixelCount, sizeof(uint));
+                var workList = new ComputeBuffer(pixelCount, sizeof(uint) * 2);
+                var metadata = new ComputeBuffer(64, sizeof(uint));
+            var groupCounts = new ComputeBuffer(blockCount * 17, sizeof(uint));
+            var blockSums = new ComputeBuffer(blockCount * 17, sizeof(uint));
+            var offsets = new ComputeBuffer(17, sizeof(uint));
+            var budgets = new ComputeBuffer(17, sizeof(uint));
+            var probeLanes = new ComputeBuffer(pixelCount, sizeof(uint));
+            try
+            {
+                result.Create();
+                probeLanes.SetData(lanes);
+                int clearMetadata = shader.FindKernel("ClearAdaptiveWorkList");
+                int clearCounts = shader.FindKernel("ClearAdaptiveGroupBucketCounts");
+                int classify = shader.FindKernel("CSAdaptiveProbeClassify");
+                int scan = shader.FindKernel("CSAdaptiveScanGroupBuckets");
+                int allocate = shader.FindKernel("CSAdaptiveAllocateParallel");
+                int addOffsets = shader.FindKernel("CSAdaptiveAddBucketOffsets");
+                int compact = shader.FindKernel("CSAdaptiveCompactParallel");
+                foreach (int kernel in new[] { classify, scan, allocate, addOffsets, compact })
+                {
+                    shader.SetTexture(kernel, "Result", result);
+                    shader.SetBuffer(kernel, "AdaptivePixelInfo", pixelInfo);
+                    shader.SetBuffer(kernel, "AdaptivePixelBucketRanks", pixelRanks);
+                    shader.SetBuffer(kernel, "AdaptiveWorkList", workList);
+                    shader.SetBuffer(kernel, "AdaptiveWorkListMetadata", metadata);
+                    shader.SetBuffer(kernel, "AdaptiveGroupBucketCounts", groupCounts);
+                    shader.SetBuffer(kernel, "AdaptiveBucketBlockSums", blockSums);
+                    shader.SetBuffer(kernel, "AdaptiveBucketWorkOffsets", offsets);
+                    shader.SetBuffer(kernel, "AdaptiveBucketBudgets", budgets);
+                    shader.SetInt("_AdaptiveBucketBlockCount", blockCount);
+                    shader.SetInt("_AdaptiveWorkListCapacity", pixelCount);
+                    shader.SetInt("_NumberOfPasses", pathsPerPixel);
+                }
+                shader.SetBuffer(classify, "AdaptiveProbeLanes", probeLanes);
+                shader.SetBuffer(clearMetadata, "AdaptiveWorkListMetadata", metadata);
+                shader.SetBuffer(clearCounts, "AdaptiveGroupBucketCounts", groupCounts);
+                shader.SetInt("_AdaptiveBucketBlockCount", blockCount);
+                shader.Dispatch(clearMetadata, 64, 1, 1);
+                shader.Dispatch(clearCounts, Mathf.CeilToInt(blockCount * 17 / 64.0f), 1, 1);
+                shader.Dispatch(classify, groupsX, groupsY, 1);
+                shader.Dispatch(scan, blockCount, 17, 1);
+                shader.Dispatch(allocate, 1, 1, 1);
+                shader.Dispatch(addOffsets, blockCount, 17, 1);
+                shader.Dispatch(compact, blockCount, 1, 1);
+
+                var actualMetadata = new uint[64];
+                var actualWorkList = new Vector2Int[pixelCount];
+                metadata.GetData(actualMetadata);
+                workList.GetData(actualWorkList);
+                Assert.That(actualMetadata[5], Is.EqualTo((uint)pixelCount * (uint)pathsPerPixel));
+                Assert.That(actualMetadata[2], Is.EqualTo((uint)pixelCount * (uint)pathsPerPixel));
+                Assert.That(actualMetadata[0], Is.EqualTo(expected.Count));
+                Assert.That(actualMetadata[3], Is.Zero, "The compact work list must not overflow its one-item-per-pixel capacity.");
+                for (int i = 0; i < expected.Count; i++)
+                {
+                    Assert.That(actualWorkList[i], Is.EqualTo(expected[i]), $"work item {i}");
+                }
+            }
+            finally
+            {
+                result.Release(); pixelInfo.Release(); pixelRanks.Release(); workList.Release(); metadata.Release(); groupCounts.Release();
+                blockSums.Release(); offsets.Release(); budgets.Release(); probeLanes.Release();
+            }
+        }
+
+        [TestCase(13, 7, new uint[] { 0 })]
+        [TestCase(17, 19, new uint[] { 16 })]
+        [TestCase(17, 19, new uint[] { 15, 15, 14, 14, 0, 0, 1, 1 })]
+        public void AdaptiveParallelAllocator_GpuMetadataMatchesCpuReference(int width, int height, uint[] lanePattern)
+        {
+            if (!SystemInfo.supportsComputeShaders) Assert.Ignore("Compute shaders are not supported by the active graphics device.");
+            ComputeShader shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
+            if (shader == null || !shader.HasKernel("CSAdaptiveProbeClassify"))
+                Assert.Ignore("The active graphics device did not compile the adaptive probe kernels.");
+
+            int pixelCount = width * height;
+            var lanes = new uint[pixelCount];
+            for (int i = 0; i < lanes.Length; i++) lanes[i] = lanePattern[i % lanePattern.Length];
+            var expected = BuildAdaptiveCpuReference(lanes, 1);
+            var expectedPopulations = new uint[16];
+            uint expectedBootstrapPixels = 0;
+            foreach (uint lane in lanes)
+            {
+                if (lane == 0u) expectedBootstrapPixels++;
+                else expectedPopulations[lane - 1u]++;
+            }
+            var expectedBudgets = AllocateAdaptiveBucketBudgetForTest((uint)pixelCount, expectedBootstrapPixels, expectedPopulations);
+            int groupsX = Mathf.CeilToInt(width / 4.0f);
+            int groupsY = Mathf.CeilToInt(height / 4.0f);
+            int blockCount = Mathf.CeilToInt(pixelCount / 256.0f);
+            var result = new RenderTexture(width, height, 0, RenderTextureFormat.ARGBFloat) { enableRandomWrite = true };
+            var pixelInfo = new ComputeBuffer(pixelCount, sizeof(uint) * 2);
+            var pixelRanks = new ComputeBuffer(pixelCount, sizeof(uint));
+            var workList = new ComputeBuffer(pixelCount, sizeof(uint) * 2);
+            var metadata = new ComputeBuffer(64, sizeof(uint));
+            var groupCounts = new ComputeBuffer(blockCount * 17, sizeof(uint));
+            var blockSums = new ComputeBuffer(blockCount * 17, sizeof(uint));
+            var offsets = new ComputeBuffer(17, sizeof(uint));
+            var budgets = new ComputeBuffer(17, sizeof(uint));
+            var probeLanes = new ComputeBuffer(pixelCount, sizeof(uint));
+            try
+            {
+                result.Create();
+                probeLanes.SetData(lanes);
+                int clearMetadata = shader.FindKernel("ClearAdaptiveWorkList");
+                int clearCounts = shader.FindKernel("ClearAdaptiveGroupBucketCounts");
+                int classify = shader.FindKernel("CSAdaptiveProbeClassify");
+                int scan = shader.FindKernel("CSAdaptiveScanGroupBuckets");
+                int allocate = shader.FindKernel("CSAdaptiveAllocateParallel");
+                int addOffsets = shader.FindKernel("CSAdaptiveAddBucketOffsets");
+                int compact = shader.FindKernel("CSAdaptiveCompactParallel");
+                foreach (int kernel in new[] { classify, scan, allocate, addOffsets, compact })
+                {
+                    shader.SetTexture(kernel, "Result", result);
+                    shader.SetBuffer(kernel, "AdaptivePixelInfo", pixelInfo);
+                    shader.SetBuffer(kernel, "AdaptivePixelBucketRanks", pixelRanks);
+                    shader.SetBuffer(kernel, "AdaptiveWorkList", workList);
+                    shader.SetBuffer(kernel, "AdaptiveWorkListMetadata", metadata);
+                    shader.SetBuffer(kernel, "AdaptiveGroupBucketCounts", groupCounts);
+                    shader.SetBuffer(kernel, "AdaptiveBucketBlockSums", blockSums);
+                    shader.SetBuffer(kernel, "AdaptiveBucketWorkOffsets", offsets);
+                    shader.SetBuffer(kernel, "AdaptiveBucketBudgets", budgets);
+                    shader.SetInt("_AdaptiveBucketBlockCount", blockCount);
+                    shader.SetInt("_AdaptiveWorkListCapacity", pixelCount);
+                    shader.SetInt("_NumberOfPasses", 1);
+                }
+                shader.SetBuffer(classify, "AdaptiveProbeLanes", probeLanes);
+                shader.SetBuffer(clearMetadata, "AdaptiveWorkListMetadata", metadata);
+                shader.SetBuffer(clearCounts, "AdaptiveGroupBucketCounts", groupCounts);
+                shader.SetInt("_AdaptiveBucketBlockCount", blockCount);
+                shader.Dispatch(clearMetadata, 64, 1, 1);
+                shader.Dispatch(clearCounts, Mathf.CeilToInt(blockCount * 17 / 64.0f), 1, 1);
+                shader.Dispatch(classify, groupsX, groupsY, 1);
+                shader.Dispatch(scan, blockCount, 17, 1);
+                shader.Dispatch(allocate, 1, 1, 1);
+                shader.Dispatch(addOffsets, blockCount, 17, 1);
+                shader.Dispatch(compact, blockCount, 1, 1);
+
+                var actual = new uint[64];
+                metadata.GetData(actual);
+                Assert.That(actual[5], Is.EqualTo((uint)pixelCount));
+                Assert.That(actual[2], Is.EqualTo((uint)pixelCount));
+                Assert.That(actual[0], Is.EqualTo(expected.Count));
+                Assert.That(actual[4], Is.EqualTo(expectedBootstrapPixels));
+                Assert.That(actual[7], Is.EqualTo(expectedBootstrapPixels));
+                for (int bucket = 0; bucket < 16; bucket++)
+                {
+                    Assert.That(actual[16 + bucket], Is.EqualTo(expectedPopulations[bucket]), $"bucket {bucket} population");
+                    Assert.That(actual[48 + bucket], Is.EqualTo(expectedBudgets[bucket]), $"bucket {bucket} budget");
+                    Assert.That(actual[32 + bucket], Is.EqualTo(expectedBudgets[bucket]), $"bucket {bucket} admitted paths");
+                }
+            }
+            finally
+            {
+                result.Release(); pixelInfo.Release(); pixelRanks.Release(); workList.Release(); metadata.Release(); groupCounts.Release();
+                blockSums.Release(); offsets.Release(); budgets.Release(); probeLanes.Release();
+            }
+        }
+
+        [Test]
+        [Timeout(600000)]
+        public void AdaptiveTrace_ControlledAssignments_MatchPerPixelSampleIndexReference()
+        {
+            if (!SystemInfo.supportsComputeShaders || SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
+                Assert.Ignore("Adaptive trace parity requires an active compute graphics device.");
+
+            ComputeShader shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
+            if (shader == null || !shader.HasKernel("CSAdaptiveTraceReference"))
+                Assert.Ignore("The active graphics device did not compile the adaptive trace parity kernels.");
+
+            const int width = 3;
+            const int height = 5;
+            const int pixelCount = width * height;
+            int adaptiveTrace = shader.FindKernel("CSAdaptiveTraceRoot");
+            int adaptiveResolve = shader.FindKernel("CSAdaptiveResolveRoot");
+            int referenceTrace = shader.FindKernel("CSAdaptiveTraceReference");
+            var assignments = new Vector2Int[pixelCount];
+            var initialStatePixels = new Color[pixelCount];
+            var initialAccumulationPixels = new Color[pixelCount];
+            for (int pixel = 0; pixel < pixelCount; pixel++)
+            {
+                assignments[pixel] = new Vector2Int(pixel, 1 + pixel % 4);
+                float count = 2 + pixel % 3;
+                initialStatePixels[pixel] = new Color(count, 0.15f + pixel * 0.01f, 0.02f + pixel * 0.003f, 0.0f);
+                initialAccumulationPixels[pixel] = new Color(0.1f + pixel * 0.01f, 0.2f, 0.3f, 1.0f);
+            }
+
+            var initialState = new Texture2D(width, height, TextureFormat.RGBAFloat, false, true);
+            var initialAccumulation = new Texture2D(width, height, TextureFormat.RGBAFloat, false, true);
+            var adaptiveState = CreateRandomWriteTexture(width, height, RenderTextureFormat.ARGBFloat);
+            var adaptiveAccumulation = CreateRandomWriteTexture(width, height, RenderTextureFormat.ARGBFloat);
+            var adaptiveBeauty = CreateRandomWriteTexture(width, height, RenderTextureFormat.ARGBFloat);
+            var adaptiveResult = CreateRandomWriteTexture(width, height, RenderTextureFormat.ARGBFloat);
+            var referenceState = CreateRandomWriteTexture(width, height, RenderTextureFormat.ARGBFloat);
+            var referenceAccumulation = CreateRandomWriteTexture(width, height, RenderTextureFormat.ARGBFloat);
+            var referenceResult = CreateRandomWriteTexture(width, height, RenderTextureFormat.ARGBFloat);
+            var skybox = new Texture2D(1, 1, TextureFormat.RGBAFloat, false, true);
+            var meshTextures = new Texture2DArray(1, 1, 1, TextureFormat.RGBA32, false, true);
+            var workList = new ComputeBuffer(pixelCount, sizeof(uint) * 2);
+            var rootAssignments = new List<Vector2Int>();
+            var rootOffsets = new uint[pixelCount];
+            for (int pixel = 0; pixel < pixelCount; pixel++)
+            {
+                rootOffsets[pixel] = (uint)rootAssignments.Count;
+                for (int sample = 0; sample < assignments[pixel].y; sample++)
+                {
+                    rootAssignments.Add(new Vector2Int(pixel, sample));
+                }
+            }
+            var rootWorkList = new ComputeBuffer(rootAssignments.Count, sizeof(uint) * 2);
+            var rootRadiance = new ComputeBuffer(rootAssignments.Count, sizeof(float) * 4);
+            var workRootOffsets = new ComputeBuffer(pixelCount, sizeof(uint));
+            var metadata = new ComputeBuffer(64, sizeof(uint));
+            var dummySphere = new ComputeBuffer(1, 92);
+            var dummyLight = new ComputeBuffer(1, 88);
+            var dummyTriangle = new ComputeBuffer(1, 260);
+            var dummyMesh = new ComputeBuffer(1, 48);
+            var dummyBvh = new ComputeBuffer(1, 48);
+            var dummyTopLevelBvh = new ComputeBuffer(1, 48);
+            var dummyMeshLightCdf = new ComputeBuffer(1, sizeof(float));
+            var dummyEnvironmentCdf = new ComputeBuffer(1, sizeof(float));
+            var dummyPhoton = new ComputeBuffer(1, 40);
+            var dummyPhotonMetadata = new ComputeBuffer(1, 24);
+            var dummyPhotonGrid = new ComputeBuffer(1, sizeof(int));
+            var dummyPhotonNext = new ComputeBuffer(1, sizeof(int));
+            var dummyTargetPair = new ComputeBuffer(1, 32);
+            var dummyTargetTriangle = new ComputeBuffer(1, 12);
+            try
+            {
+                initialState.SetPixels(initialStatePixels);
+                initialState.Apply(false, false);
+                initialAccumulation.SetPixels(initialAccumulationPixels);
+                initialAccumulation.Apply(false, false);
+                skybox.SetPixel(0, 0, new Color(0.18f, 0.32f, 0.58f, 1.0f));
+                skybox.Apply(false, false);
+                meshTextures.SetPixels(new[] { Color.white }, 0);
+                meshTextures.Apply(false, false);
+                Graphics.Blit(initialState, adaptiveState);
+                Graphics.Blit(initialState, referenceState);
+                Graphics.Blit(initialAccumulation, adaptiveAccumulation);
+                Graphics.Blit(initialAccumulation, referenceAccumulation);
+                workList.SetData(assignments);
+                rootWorkList.SetData(rootAssignments);
+                workRootOffsets.SetData(rootOffsets);
+                var metadataValues = new uint[64];
+                metadataValues[0] = pixelCount;
+                metadataValues[2] = (uint)rootAssignments.Count;
+                metadata.SetData(metadataValues);
+
+                foreach (int kernel in new[] { adaptiveTrace, adaptiveResolve, referenceTrace })
+                {
+                    shader.SetTexture(kernel, "Result", adaptiveResult);
+                    shader.SetTexture(kernel, "_SkyboxTexture", skybox);
+                    shader.SetTexture(kernel, "_MeshAlbedoTextures", meshTextures);
+                    shader.SetTexture(kernel, "_MeshMetallicRoughnessTextures", meshTextures);
+                    shader.SetTexture(kernel, "_MeshNormalTextures", meshTextures);
+                    shader.SetTexture(kernel, "_MeshParallaxTextures", meshTextures);
+                    shader.SetBuffer(kernel, "AdaptiveTraceWorkList", workList);
+                    shader.SetBuffer(kernel, "AdaptiveTraceRootWorkList", rootWorkList);
+                    shader.SetBuffer(kernel, "AdaptiveRootRadiance", rootRadiance);
+                    shader.SetBuffer(kernel, "AdaptiveWorkRootOffsets", workRootOffsets);
+                    shader.SetBuffer(kernel, "_Spheres", dummySphere);
+                    shader.SetBuffer(kernel, "_Lights", dummyLight);
+                    shader.SetBuffer(kernel, "_Triangles", dummyTriangle);
+                    shader.SetBuffer(kernel, "_Meshes", dummyMesh);
+                    shader.SetBuffer(kernel, "_BvhNodes", dummyBvh);
+                    shader.SetBuffer(kernel, "_TopLevelBvhNodes", dummyTopLevelBvh);
+                    shader.SetBuffer(kernel, "_ShadowBvhNodes", dummyTopLevelBvh);
+                    shader.SetBuffer(kernel, "_MeshLightTriangleCdf", dummyMeshLightCdf);
+                    shader.SetBuffer(kernel, "_EnvironmentConditionalCdf", dummyEnvironmentCdf);
+                    shader.SetBuffer(kernel, "_EnvironmentMarginalCdf", dummyEnvironmentCdf);
+                    shader.SetBuffer(kernel, "_CausticPhotons", dummyPhoton);
+                    shader.SetBuffer(kernel, "_CausticPhotonMetadata", dummyPhotonMetadata);
+                    shader.SetBuffer(kernel, "_CausticGridCellHeads", dummyPhotonGrid);
+                    shader.SetBuffer(kernel, "_CausticPhotonNext", dummyPhotonNext);
+                    shader.SetBuffer(kernel, "_CausticTargetPairs", dummyTargetPair);
+                    shader.SetBuffer(kernel, "_CausticTargetTriangles", dummyTargetTriangle);
+                    shader.SetInt("_AdaptiveWorkListCapacity", pixelCount);
+                    shader.SetInt("_AdaptiveRootPathCapacity", rootAssignments.Count);
+                    shader.SetInt("_Seed", 12345);
+                    shader.SetInt("_NumSpheres", 0);
+                    shader.SetInt("_NumLights", 0);
+                    shader.SetInt("_NumTriangles", 0);
+                    shader.SetInt("_NumMeshes", 0);
+                    shader.SetInt("_NumTopLevelBvhNodes", 0);
+                    shader.SetInt("_NumShadowBvhNodes", 0);
+                    shader.SetInt("_EnvironmentLightEnabled", 0);
+                    shader.SetInt("_WaterEnabled", 0);
+                    shader.SetInt("_CausticsEnabled", 0);
+                    shader.SetInt("_CausticPhotonCapacity", 1);
+                    shader.SetInt("_CausticGridCellCount", 1);
+                    shader.SetInt("_UseTemporalJitter", 0);
+                    shader.SetVector("_FrameJitterNdc", Vector4.zero);
+                    shader.SetMatrix("_CameraToWorld", Matrix4x4.TRS(Vector3.zero, Quaternion.identity, new Vector3(1, 1, -1)));
+                    shader.SetMatrix("_CameraInverseProjection", Matrix4x4.Perspective(48.0f, (float)width / height, 0.1f, 100.0f).inverse);
+                    shader.SetVector("_SkyboxLight", Vector4.one);
+                    shader.SetFloat("_SubpixelJitterScale", 1.0f);
+                    shader.SetFloat("_ApertureRadius", 0.0f);
+                    shader.SetFloat("_Exposure", 1.0f);
+                    shader.SetFloat("_FireflyClamp", 0.0f);
+                    shader.SetInt("_NumBounces", 1);
+                }
+                shader.SetTexture(adaptiveTrace, "AccumulationResult", adaptiveAccumulation);
+                shader.SetTexture(adaptiveTrace, "AdaptiveSamplingState", adaptiveState);
+                shader.SetTexture(adaptiveTrace, "Beauty", adaptiveBeauty);
+                shader.SetBuffer(adaptiveTrace, "AdaptiveWorkListMetadata", metadata);
+                shader.SetTexture(adaptiveResolve, "AccumulationResult", adaptiveAccumulation);
+                shader.SetTexture(adaptiveResolve, "AdaptiveSamplingState", adaptiveState);
+                shader.SetTexture(adaptiveResolve, "Beauty", adaptiveBeauty);
+                shader.SetBuffer(adaptiveResolve, "AdaptiveWorkListMetadata", metadata);
+                shader.SetTexture(referenceTrace, "Result", referenceResult);
+                shader.SetTexture(referenceTrace, "AccumulationResult", referenceAccumulation);
+                shader.SetTexture(referenceTrace, "AdaptiveSamplingState", referenceState);
+
+                shader.Dispatch(adaptiveTrace, Mathf.CeilToInt(rootAssignments.Count / 16.0f), 1, 1);
+                shader.Dispatch(adaptiveResolve, 1, 1, 1);
+                shader.Dispatch(referenceTrace, 1, 2, 1);
+
+                Color[] actualState = ReadPixels(adaptiveState);
+                Color[] expectedState = ReadPixels(referenceState);
+                Color[] actualAccumulation = ReadPixels(adaptiveAccumulation);
+                Color[] expectedAccumulation = ReadPixels(referenceAccumulation);
+                for (int pixel = 0; pixel < pixelCount; pixel++)
+                {
+                    AssertColor(actualState[pixel], expectedState[pixel], $"pixel {pixel} adaptive state", 0.0005f);
+                    AssertColor(actualAccumulation[pixel], expectedAccumulation[pixel], $"pixel {pixel} accumulated RGB", 0.0005f);
+                }
+            }
+            finally
+            {
+                workList.Release(); rootWorkList.Release(); rootRadiance.Release(); workRootOffsets.Release(); metadata.Release();
+                dummySphere.Release(); dummyLight.Release(); dummyTriangle.Release(); dummyMesh.Release(); dummyBvh.Release();
+                dummyTopLevelBvh.Release(); dummyMeshLightCdf.Release(); dummyEnvironmentCdf.Release(); dummyPhoton.Release();
+                dummyPhotonMetadata.Release(); dummyPhotonGrid.Release(); dummyPhotonNext.Release(); dummyTargetPair.Release();
+                dummyTargetTriangle.Release();
+                adaptiveState.Release(); adaptiveAccumulation.Release(); adaptiveBeauty.Release(); adaptiveResult.Release();
+                referenceState.Release(); referenceAccumulation.Release(); referenceResult.Release();
+                UnityEngine.Object.DestroyImmediate(initialState); UnityEngine.Object.DestroyImmediate(initialAccumulation);
+                UnityEngine.Object.DestroyImmediate(skybox);
+                UnityEngine.Object.DestroyImmediate(meshTextures);
+            }
+        }
+
+        [TestCase(1, 1, 1)]
+        [TestCase(3, 5, 2)]
+        [TestCase(17, 19, 4)]
+        public void AdaptiveRootWaveCount_CoversEveryAllocatedPathExactlyOnce(int width, int height, int pathsPerPixel)
+        {
+            int pixelCount = width * height;
+            var assignments = new List<Vector2Int>();
+            uint expectedPaths = 0;
+            for (int pixel = 0; pixel < pixelCount; pixel++)
+            {
+                int paths = 1 + pixel % (pathsPerPixel * 4);
+                assignments.Add(new Vector2Int(pixel, paths));
+                expectedPaths += (uint)paths;
+            }
+
+            int waves = pathsPerPixel * 4;
+            uint emittedPaths = 0;
+            foreach (Vector2Int assignment in assignments)
+            {
+                for (int wave = 0; wave < waves; wave++)
+                {
+                    if (wave < assignment.y) emittedPaths++;
+                }
+            }
+
+            Assert.That(emittedPaths, Is.EqualTo(expectedPaths));
+        }
+
+        private static uint[] AllocateAdaptiveBucketBudgetForTest(uint rootBudget, uint bootstrapPixels, uint[] populations)
+        {
+            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+            MethodInfo allocationMethod = managerType.GetMethod("AllocateAdaptiveBucketBudget", BindingFlags.Static | BindingFlags.NonPublic);
+            return (uint[])allocationMethod.Invoke(null, new object[] { rootBudget, bootstrapPixels, 1u, populations });
+        }
+
+        private static List<Vector2Int> BuildAdaptiveCpuReference(uint[] lanes, int pathsPerPixel)
+        {
+            var result = new List<Vector2Int>();
+            var perBucket = new List<int>[16];
+            for (int bucket = 0; bucket < 16; bucket++) perBucket[bucket] = new List<int>();
+            for (int pixel = 0; pixel < lanes.Length; pixel++)
+            {
+                if (lanes[pixel] == 0u) result.Add(new Vector2Int(pixel, pathsPerPixel));
+                else perBucket[(int)lanes[pixel] - 1].Add(pixel);
+            }
+            uint remaining = (uint)(lanes.Length * pathsPerPixel - result.Count * pathsPerPixel);
+            for (int bucket = 15; bucket >= 0 && remaining > 0; bucket--)
+            {
+                List<int> pixels = perBucket[bucket];
+                uint budget = Math.Min(remaining, (uint)pixels.Count * (uint)pathsPerPixel * 4u);
+                uint basePaths = pixels.Count == 0 ? 0u : budget / (uint)pixels.Count;
+                uint extraPaths = pixels.Count == 0 ? 0u : budget % (uint)pixels.Count;
+                for (int index = 0; index < pixels.Count; index++)
+                {
+                    uint paths = basePaths + (index < extraPaths ? 1u : 0u);
+                    if (paths > 0u) result.Add(new Vector2Int(pixels[index], (int)paths));
+                }
+                remaining -= budget;
+            }
+            return result;
         }
 
         [Test]
@@ -969,12 +1506,27 @@ namespace GPURayTracing.Tests
                 "debugRenderMode == DebugRenderMode.FinalColor || debugRenderMode == DebugRenderMode.Caustics"));
         }
 
+        private static uint Sum(uint[] values)
+        {
+            uint sum = 0;
+            foreach (uint value in values) sum += value;
+            return sum;
+        }
+
         private static void AssertVector(Vector4 actual, Vector4 expected, string label, float tolerance = Epsilon)
         {
             Assert.That(actual.x, Is.EqualTo(expected.x).Within(tolerance), $"{label} x");
             Assert.That(actual.y, Is.EqualTo(expected.y).Within(tolerance), $"{label} y");
             Assert.That(actual.z, Is.EqualTo(expected.z).Within(tolerance), $"{label} z");
             Assert.That(actual.w, Is.EqualTo(expected.w).Within(tolerance), $"{label} w");
+        }
+
+        private static void AssertColor(Color actual, Color expected, string label, float tolerance)
+        {
+            Assert.That(actual.r, Is.EqualTo(expected.r).Within(tolerance), $"{label} R");
+            Assert.That(actual.g, Is.EqualTo(expected.g).Within(tolerance), $"{label} G");
+            Assert.That(actual.b, Is.EqualTo(expected.b).Within(tolerance), $"{label} B");
+            Assert.That(actual.a, Is.EqualTo(expected.a).Within(tolerance), $"{label} A");
         }
 
         private static void AssertFinitePositiveSample(Vector4 directionAndPdf, Vector4 weightAndNormalDot)

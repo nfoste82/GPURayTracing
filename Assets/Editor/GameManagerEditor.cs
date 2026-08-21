@@ -63,6 +63,7 @@ public sealed class GameManagerEditor : Editor
             {
                 DrawProperty("adaptiveSamplingMinSamples", "Adaptive Bootstrap Paths");
                 DrawProperty("adaptiveSamplingExploration", "Adaptive Exploration Floor");
+                DrawProperty("adaptiveSamplingReclassificationInterval", "Adaptive Reclassification Interval");
             }
         });
         DrawSection(manager, "Lighting", true, () =>
