@@ -1687,8 +1687,11 @@ MonoBehaviour:
   shadowRandomness: 0.65
   enableAdaptiveSampling: 0
   adaptiveSamplingMinSamples: 8
-  adaptiveSamplingExploration: 0.05
-  adaptiveSamplingReclassificationInterval: 8
+  adaptiveGuidanceMinSamples: 2
+  adaptiveGuidanceChangeThreshold: 0.02
+  adaptiveGuidanceBrightnessPriority: 0.5
+  adaptiveGuidanceDirectLightPriority: 0.5
+  adaptiveGuidanceRoughnessPriority: 0
   parallaxMaximumStrengthAngle: 20
   maxLightSamples: 0
   _lightingManager:

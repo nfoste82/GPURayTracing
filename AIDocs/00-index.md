@@ -21,6 +21,7 @@ Use this folder as focused context for LLM-assisted work on the Unity GPU ray tr
 - `15-terrain-rendering.md`: GPU heightfield terrain data flow, acceleration structure, scene generation, rank-based layer weight painting, coverage reporting, and limitations.
 - `16-accessibility-and-onboarding.md`: Completed public-project onboarding work and remaining accessibility, diagnostics, gallery, quality-preset, testing, and platform-validation improvements.
 - `17-adaptive-sampling-continuation.md`: Adaptive-sampling handoff, benchmark evidence, paper-derived display-space confidence guidance, and the recommended fixed-budget GPU work-list architecture.
+- `18-adaptive-sampling-next-session-prompt.md`: Compact future-session prompt for implementing the remaining low-overhead statistical group scheduler.
 
 ## Fast Context Selection
 

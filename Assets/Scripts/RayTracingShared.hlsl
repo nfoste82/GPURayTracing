@@ -88,14 +88,17 @@ int _LightSampleCount;
 int _UseFrameAccumulation;
 int _AccumulatedFrameCount;
 int _AdaptiveSamplingMinSamples;
-float _AdaptiveSamplingExploration;
 int _AdaptiveGuidanceMinSamples;
 float _AdaptiveGuidanceChangeThreshold;
+float _AdaptiveGuidanceBrightnessPriority;
+float _AdaptiveGuidanceDirectLightPriority;
+float _AdaptiveGuidanceRoughnessPriority;
 uint _AdaptiveWorkListCapacity;
 uint _AdaptiveRootPathCapacity;
 uint _AdaptiveGroupWidth;
 uint _AdaptiveGroupHeight;
 uint _AdaptiveGroupCount;
+int _AdaptiveCaptureDiagnostics;
 float _ShadowRandomness;
 float _LightFalloffScale;
 float _ParallaxMaximumStrengthCosine;
@@ -4060,10 +4063,13 @@ float3 TraceVisibleCausticRadiance(Ray ray, inout uint rngState)
     return float3(0.0f, 0.0f, 0.0f);
 }
 
-float3 TracePath(Ray ray, inout uint rngState)
+float3 TracePathWithDirectLight(Ray ray, inout uint rngState, out float directLightLuminance,
+    out float firstSurfaceRoughness)
 {
     float3 radiance = float3(0.0f, 0.0f, 0.0f);
     float3 throughput = float3(1.0f, 1.0f, 1.0f);
+    directLightLuminance = 0.0f;
+    firstSurfaceRoughness = -1.0f;
     MediumStack mediumStack = CreateMediumStack(ray.origin);
     float3 previousSurfacePosition = float3(0.0f, 0.0f, 0.0f);
     float previousMaterialPdf = 0.0f;
@@ -4092,8 +4098,10 @@ float3 TracePath(Ray ray, inout uint rngState)
             ApplyFiniteMediumExitAfterSegment(mediumStack, ray, fogSegmentHit);
             if (ShouldSampleDirectLight(throughput))
             {
-                radiance += throughput * _FogScatteringAlbedo * max(0.0f, _FogInScatteringIntensity)
+                float3 directLightContribution = throughput * _FogScatteringAlbedo * max(0.0f, _FogInScatteringIntensity)
                     * GetFogDirectLight(ray, eventPosition, bounce == 0, rngState);
+                radiance += directLightContribution;
+                directLightLuminance += dot(directLightContribution, float3(0.2126f, 0.7152f, 0.0722f));
             }
 
             if (_FogMultipleScattering == 0)
@@ -4153,6 +4161,11 @@ float3 TracePath(Ray ray, inout uint rngState)
             break;
         }
 
+        if (firstSurfaceRoughness < 0.0f)
+        {
+            firstSurfaceRoughness = GetMetallicRoughness(hit).y;
+        }
+
         if (_CausticsEnabled != 0 && canGatherCaustics)
         {
             radiance += throughput * GatherCausticRadiance(hit);
@@ -4163,7 +4176,9 @@ float3 TracePath(Ray ray, inout uint rngState)
         {
             bool softShadows = bounce == 0;
             float3 directLight = GetDirectLight(ray, hit, softShadows, rngState);
-            radiance += throughput * directLight;
+            float3 directLightContribution = throughput * directLight;
+            radiance += directLightContribution;
+            directLightLuminance += dot(directLightContribution, float3(0.2126f, 0.7152f, 0.0722f));
             sampledDirectLight = true;
             previousSoftShadows = softShadows;
         }
@@ -4191,6 +4206,13 @@ float3 TracePath(Ray ray, inout uint rngState)
     }
 
     return radiance;
+}
+
+float3 TracePath(Ray ray, inout uint rngState)
+{
+    float ignoredDirectLightLuminance;
+    float ignoredFirstSurfaceRoughness;
+    return TracePathWithDirectLight(ray, rngState, ignoredDirectLightLuminance, ignoredFirstSurfaceRoughness);
 }
 
 float3 ClampFirefly(float3 radiance)

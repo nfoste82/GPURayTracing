@@ -61,8 +61,11 @@ public sealed class GameManagerEditor : Editor
             DrawProperty("enableAdaptiveSampling", "Adaptive Sampling (Experimental)");
             if (manager.enableAdaptiveSampling)
             {
-                DrawProperty("adaptiveGuidanceMinSamples", "Guide Batches Before Promotion");
-                DrawProperty("adaptiveGuidanceChangeThreshold", "Guide Change Threshold");
+                DrawProperty("adaptiveSamplingMinSamples", "Bootstrap Samples Per Pixel");
+                DrawProperty("adaptiveReclassificationInterval", "Reclassification Interval");
+                DrawProperty("adaptiveRecentChangeWeight", "Recent Change Weight");
+                DrawProperty("adaptiveBucketStrength", "Bucket Allocation Strength");
+                DrawProperty("adaptiveMaxPathsPerPixel", "Max Paths Per Pixel");
             }
         });
         DrawSection(manager, "Lighting", true, () =>

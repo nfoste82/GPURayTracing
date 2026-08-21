@@ -141,18 +141,18 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
-        public void AdaptiveGroupScheduler_ResetClearsGuidanceAndGroupState()
+        public void AdaptiveGroupScheduler_ResetClearsSamplingAndGroupState()
         {
             string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
             int start = managerSource.IndexOf("if (_adaptiveSamplingStateTexture != null)", StringComparison.Ordinal);
             int end = managerSource.IndexOf("if (targetShader == shader", start, StringComparison.Ordinal);
             string reset = managerSource.Substring(start, end - start);
-            Assert.That(reset, Does.Contain("ClearAdaptiveGuidanceState"));
+            Assert.That(reset, Does.Contain("ClearAdaptiveSamplingState"));
             Assert.That(reset, Does.Contain("ClearAdaptiveGroupState"));
         }
 
         [Test]
-        public void AdaptiveGroupScheduler_PromotionUsesTwoConsecutivePerGroupGuideConvergenceBatches()
+        public void AdaptiveGroupScheduler_CurrentPromotionStillUsesStableGuideBatches()
         {
             string shaderSource = System.IO.File.ReadAllText(ComputeShaderPath);
             int start = shaderSource.IndexOf("void CSAdaptiveClassifyGroups", StringComparison.Ordinal);
@@ -162,8 +162,12 @@ namespace GPURayTracing.Tests
             Assert.That(classify, Does.Contain("persistent.z >= 2u"));
             string guidance = shaderSource.Substring(guidanceStart, start - guidanceStart);
             Assert.That(guidance, Does.Contain("guideChange"));
-            Assert.That(guidance, Does.Contain("_AdaptiveGuidanceMinSamples"));
-            Assert.That(guidance, Does.Contain("_AdaptiveGuidanceChangeThreshold"));
+            Assert.That(guidance, Does.Contain("AdaptiveGroupInfo[flatGroup].w == 0u"));
+            Assert.That(guidance, Does.Contain("TracePathWithDirectLight"));
+            Assert.That(guidance, Does.Contain("log2(1.0f + max(0.0f, state.y))"));
+            Assert.That(guidance, Does.Contain("log2(1.0f + max(0.0f, state.w))"));
+            Assert.That(guidance, Does.Contain("roughnessSignal"));
+            Assert.That(guidance, Does.Contain("exp2(priorityExponent)"));
             Assert.That(guidance, Does.Contain("guideConverged"));
         }
 
@@ -172,8 +176,23 @@ namespace GPURayTracing.Tests
         {
             string shaderSource = System.IO.File.ReadAllText(ComputeShaderPath);
             Assert.That(shaderSource, Does.Contain("uint samplesPerGroup = 64u"));
-            Assert.That(shaderSource, Does.Contain("fullResolutionPaths += 64u * info.w"));
+            Assert.That(shaderSource, Does.Contain("fullResolutionPaths += groupPaths"));
             Assert.That(shaderSource, Does.Not.Contain("CSAdaptiveResolveQuantileBuckets"));
+        }
+
+        [Test]
+        public void AdaptiveGroupScheduler_BuildsPromotedPixelWorkListInParallel()
+        {
+            string shaderSource = System.IO.File.ReadAllText(ComputeShaderPath);
+            int start = shaderSource.IndexOf("void CSAdaptiveBuildGroupWorkList", StringComparison.Ordinal);
+            int attributeStart = shaderSource.LastIndexOf("[numthreads", start, StringComparison.Ordinal);
+            int end = shaderSource.IndexOf("void CSAdaptiveComposePreview", start, StringComparison.Ordinal);
+            string workList = shaderSource.Substring(attributeStart, end - attributeStart);
+
+            Assert.That(workList, Does.Contain("[numthreads(256,1,1)]"));
+            Assert.That(workList, Does.Contain("uint workIndex = info.x + localIndex"));
+            Assert.That(workList, Does.Contain("AdaptiveWorkRootOffsets[workIndex] = info.y + localIndex * samples"));
+            Assert.That(workList, Does.Not.Contain("for (uint groupFlat"));
         }
 
         [Test]
@@ -186,8 +205,46 @@ namespace GPURayTracing.Tests
 
             Assert.That(allocation, Does.Contain("uint totalBudget = width * height * (uint)max(1, _NumberOfPasses)"));
             Assert.That(allocation, Does.Contain("AdaptiveMetadataAssignedPaths] = totalBudget"));
-            Assert.That(allocation, Does.Contain("fullResolutionPaths += 64u * info.w"));
-            Assert.That(shaderSource, Does.Contain("AdaptiveMetadataGuidancePaths], samplesPerGroup"));
+            Assert.That(allocation, Does.Contain("uint groupPaths = info.z * info.w"));
+            Assert.That(allocation, Does.Contain("AdaptiveMetadataWorkItemCount] = workOffset"));
+            Assert.That(allocation, Does.Contain("AdaptiveMetadataGuidancePaths] = totalBudget - fullResolutionPaths"));
+            Assert.That(shaderSource, Does.Contain("AdaptiveGroupInfo is the allocation snapshot"));
+        }
+
+        [Test]
+        public void AdaptiveResolve_DiagnosticsAtomicIsCaptureOnly()
+        {
+            string shaderSource = System.IO.File.ReadAllText(ComputeShaderPath);
+            int start = shaderSource.IndexOf("void CSAdaptiveResolveRoot", StringComparison.Ordinal);
+            int end = shaderSource.IndexOf("void CSAdaptiveTraceReference", start, StringComparison.Ordinal);
+            string resolve = shaderSource.Substring(start, end - start);
+            Assert.That(resolve, Does.Contain("if (_AdaptiveCaptureDiagnostics != 0)"));
+            Assert.That(resolve, Does.Contain("InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataRetiredPaths]"));
+        }
+
+        [Test]
+        public void AdaptiveScheduler_ReusesAllocationBetweenReclassificationFrames()
+        {
+            string source = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+            Assert.That(source, Does.Contain("Mathf.Clamp(adaptiveReclassificationInterval, 1, 8)"));
+            Assert.That(source, Does.Contain("bool reclassify = !_adaptiveScheduleInitialized"));
+            Assert.That(source, Does.Contain("if (reclassify)"));
+            Assert.That(source, Does.Contain("_adaptiveScheduleFrame = reclassify ? 0 : _adaptiveScheduleFrame + 1"));
+            int dispatchStart = source.IndexOf("private void DispatchAdaptiveSampling", StringComparison.Ordinal);
+            int traceStart = source.IndexOf("SetShaderParameters(traceKernel)", dispatchStart, StringComparison.Ordinal);
+            string dispatch = source.Substring(dispatchStart, traceStart - dispatchStart);
+            Assert.That(dispatch, Does.Contain("ComputeDispatch.Dispatch(shader, guidanceKernel, groupWidth, groupHeight, 1)"));
+        }
+
+        [Test]
+        public void AdaptiveGuidance_UsesAllocationSnapshotForReuseFrameAccounting()
+        {
+            string shaderSource = System.IO.File.ReadAllText(ComputeShaderPath);
+            int start = shaderSource.IndexOf("void CSAdaptiveGuidanceTrace", StringComparison.Ordinal);
+            int end = shaderSource.IndexOf("void CSAdaptiveClassifyGroups", start, StringComparison.Ordinal);
+            string guidance = shaderSource.Substring(start, end - start);
+            Assert.That(guidance, Does.Contain("AdaptiveGuideTraceEnabled = AdaptiveGroupInfo[flatGroup].w == 0u"));
+            Assert.That(guidance, Does.Not.Contain("AdaptiveGroupState[flatGroup].x == 0u ? 1u : 0u"));
         }
 
         [Test]
@@ -201,6 +258,19 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("quantile > 0.40f"));
             Assert.That(source, Does.Contain("GenerateReferenceComparisonImage"));
             Assert.That(source, Does.Contain("new Color(redAmount, greenAmount, 0.0f, 1.0f)"));
+        }
+
+        [Test]
+        public void SceneCapture_AdaptivePriorityOverridesAreValidatedAndApplied()
+        {
+            string source = System.IO.File.ReadAllText("Assets/Editor/RayTracingSceneCapture.cs");
+            Assert.That(source, Does.Contain("-rayTracingAdaptiveBrightnessPriority"));
+            Assert.That(source, Does.Contain("-rayTracingAdaptiveDirectLightPriority"));
+            Assert.That(source, Does.Contain("-rayTracingAdaptiveRoughnessPriority"));
+            Assert.That(source, Does.Contain("CultureInfo.InvariantCulture"));
+            Assert.That(source, Does.Contain("manager.adaptiveGuidanceBrightnessPriority = brightnessPriority.Value"));
+            Assert.That(source, Does.Contain("manager.adaptiveGuidanceDirectLightPriority = directLightPriority.Value"));
+            Assert.That(source, Does.Contain("manager.adaptiveGuidanceRoughnessPriority = roughnessPriority.Value"));
         }
 
         [Test]
@@ -535,15 +605,18 @@ namespace GPURayTracing.Tests
                 int adaptiveHash = (int)hashMethod.Invoke(manager, null);
                 managerType.GetField("adaptiveSamplingMinSamples").SetValue(manager, 16);
                 int changedPolicyHash = (int)hashMethod.Invoke(manager, null);
-                managerType.GetField("adaptiveSamplingExploration").SetValue(manager, 0.15f);
-                int changedExplorationHash = (int)hashMethod.Invoke(manager, null);
-                managerType.GetField("adaptiveGuidanceMinSamples").SetValue(manager, 4);
-                int changedGuidanceHash = (int)hashMethod.Invoke(manager, null);
+                managerType.GetField("adaptiveReclassificationInterval").SetValue(manager, 2);
+                int changedIntervalHash = (int)hashMethod.Invoke(manager, null);
+                managerType.GetField("adaptiveRecentChangeWeight").SetValue(manager, 0.5f);
+                int changedChangeWeightHash = (int)hashMethod.Invoke(manager, null);
+                managerType.GetField("adaptiveBucketStrength").SetValue(manager, 3.0f);
+                int changedBucketStrengthHash = (int)hashMethod.Invoke(manager, null);
 
                 Assert.That(adaptiveHash, Is.Not.EqualTo(uniformHash));
                 Assert.That(changedPolicyHash, Is.Not.EqualTo(adaptiveHash));
-                Assert.That(changedExplorationHash, Is.Not.EqualTo(changedPolicyHash));
-                Assert.That(changedGuidanceHash, Is.Not.EqualTo(changedExplorationHash));
+                Assert.That(changedIntervalHash, Is.Not.EqualTo(changedPolicyHash));
+                Assert.That(changedChangeWeightHash, Is.Not.EqualTo(changedIntervalHash));
+                Assert.That(changedBucketStrengthHash, Is.Not.EqualTo(changedChangeWeightHash));
             }
             finally
             {

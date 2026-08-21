@@ -362,6 +362,7 @@ void ClearAdaptiveGroupState(uint3 id : SV_DispatchThreadID)
 // pixel. Each lane traces one deterministic guide sample; lane zero reduces in local-index order
 // so Welford state remains stable without a global guide-radiance buffer.
 groupshared float4 AdaptiveGuideRadiance[64];
+groupshared float AdaptiveGuideRoughness[64];
 groupshared uint AdaptiveGuideTraceEnabled;
 [numthreads(8,8,1)]
 void CSAdaptiveGuidanceTrace(uint3 groupId : SV_GroupID, uint groupIndex : SV_GroupIndex)
@@ -371,13 +372,19 @@ void CSAdaptiveGuidanceTrace(uint3 groupId : SV_GroupID, uint groupIndex : SV_Gr
     uint flatGroup = guidePixel.x + guidePixel.y * _AdaptiveGroupWidth;
     if (groupIndex == 0u)
     {
-        AdaptiveGuideTraceEnabled = AdaptiveGroupState[flatGroup].x == 0u ? 1u : 0u;
+        // Use the allocation snapshot, not the state written by the trailing classifier. A
+        // classifier can promote a group after the current frame's work list was built; using
+        // GroupState here would then stop its guide on reuse frames while its old allocation still
+        // reserves that budget, breaking requested == retired accounting.
+        AdaptiveGuideTraceEnabled = AdaptiveGroupInfo[flatGroup].w == 0u ? 1u : 0u;
     }
     GroupMemoryBarrierWithGroupSync();
     bool traceGuide = AdaptiveGuideTraceEnabled != 0u;
     float4 state = AdaptiveGuidanceState[guidePixel];
     float previousMean = state.y;
     float3 radianceSum = 0.0f;
+    float roughnessSum = 0.0f;
+    float roughnessSampleCount = 0.0f;
     uint passes = (uint)max(1, _NumberOfPasses);
     [loop]
     for (uint passIndex = 0u; passIndex < passes; passIndex++)
@@ -390,12 +397,19 @@ void CSAdaptiveGuidanceTrace(uint3 groupId : SV_GroupID, uint groupIndex : SV_Gr
             float2 uv = ((guidePixel + jitter) / float2(_AdaptiveGroupWidth, _AdaptiveGroupHeight)) * 2.0f - 1.0f;
             Ray ray = CreateCameraRay(uv);
             rand(rngState); rand(rngState); rand(rngState); rand(rngState); rand(rngState); rand(rngState);
-            float3 radiance = ClampFirefly(TracePath(ray, rngState));
-            AdaptiveGuideRadiance[groupIndex] = float4(all(isfinite(radiance)) ? radiance : 0.0f, 1.0f);
+            float directLightLuminance;
+            float firstSurfaceRoughness;
+            float3 radiance = ClampFirefly(TracePathWithDirectLight(ray, rngState, directLightLuminance,
+                firstSurfaceRoughness));
+            AdaptiveGuideRadiance[groupIndex] = float4(all(isfinite(radiance)) ? radiance : 0.0f,
+                isfinite(directLightLuminance) ? directLightLuminance : 0.0f);
+            AdaptiveGuideRoughness[groupIndex] = isfinite(firstSurfaceRoughness) && firstSurfaceRoughness >= 0.0f
+                ? firstSurfaceRoughness : -1.0f;
         }
         else
         {
             AdaptiveGuideRadiance[groupIndex] = 0.0f;
+            AdaptiveGuideRoughness[groupIndex] = -1.0f;
         }
         GroupMemoryBarrierWithGroupSync();
 
@@ -411,6 +425,13 @@ void CSAdaptiveGuidanceTrace(uint3 groupId : SV_GroupID, uint groupIndex : SV_Gr
                 float delta = luminance - state.y;
                 state.y += delta / nextCount;
                 state.z += delta * (luminance - state.y);
+                state.w += (AdaptiveGuideRadiance[localIndex].w - state.w) / nextCount;
+                float roughness = AdaptiveGuideRoughness[localIndex];
+                if (roughness >= 0.0f)
+                {
+                    roughnessSum += roughness;
+                    roughnessSampleCount += 1.0f;
+                }
             }
         }
         GroupMemoryBarrierWithGroupSync();
@@ -419,19 +440,36 @@ void CSAdaptiveGuidanceTrace(uint3 groupId : SV_GroupID, uint groupIndex : SV_Gr
     if (!traceGuide || groupIndex != 0u) return;
     uint samplesPerGroup = 64u * passes;
     state.x += samplesPerGroup;
+    float4 previousPreview = AdaptiveGuidancePreview[guidePixel];
+    float previousRoughnessCount = max(0.0f, state.x - samplesPerGroup);
+    float previousRoughness = previousPreview.a > 0.0f ? previousPreview.a - 1.0f : 0.0f;
+    float roughnessMean = roughnessSampleCount > 0.0f
+        ? (previousRoughness * previousRoughnessCount + roughnessSum)
+            / (previousRoughnessCount + roughnessSampleCount)
+        : previousRoughness;
     float guideChange = state.x > samplesPerGroup
         ? abs(state.y - previousMean) / max(0.0001f, abs(state.y))
         : 1.0f;
+    // Log scaling favors bright and directly lit regions without letting HDR outliers dominate.
+    float brightnessSignal = log2(1.0f + max(0.0f, state.y));
+    float directLightSignal = log2(1.0f + max(0.0f, state.w));
+    float roughnessSignal = roughnessSampleCount > 0.0f || previousPreview.a > 0.0f
+        ? 1.0f - saturate(roughnessMean) : 0.0f;
+    float priorityExponent = clamp(
+        _AdaptiveGuidanceBrightnessPriority * brightnessSignal
+            + _AdaptiveGuidanceDirectLightPriority * directLightSignal
+            + _AdaptiveGuidanceRoughnessPriority * roughnessSignal,
+        -4.0f, 4.0f);
+    guideChange /= exp2(priorityExponent);
     uint4 persistent = AdaptiveGroupState[flatGroup];
     bool guideConverged = state.x >= (float)(max(1, _AdaptiveGuidanceMinSamples) * samplesPerGroup)
         && guideChange <= _AdaptiveGuidanceChangeThreshold;
     persistent.z = guideConverged ? persistent.z + 1u : 0u;
     AdaptiveGroupState[flatGroup] = persistent;
-    state.w = state.y;
     AdaptiveGuidanceState[guidePixel] = state;
-    float3 preview = (AdaptiveGuidancePreview[guidePixel].rgb * (state.x - samplesPerGroup) + radianceSum) / state.x;
-    AdaptiveGuidancePreview[guidePixel] = float4(preview, 1.0f);
-    InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataGuidancePaths], samplesPerGroup);
+    float3 preview = (previousPreview.rgb * previousRoughnessCount + radianceSum) / state.x;
+    AdaptiveGuidancePreview[guidePixel] = float4(preview, roughnessSampleCount > 0.0f || previousPreview.a > 0.0f
+        ? 1.0f + roughnessMean : 0.0f);
 }
 
 [numthreads(8,8,1)]
@@ -450,7 +488,9 @@ void CSAdaptiveClassifyGroups(uint3 id : SV_DispatchThreadID, uint groupIndex : 
     // Two consecutive completed 64-sample guide batches must agree before promotion.
     if (persistent.x == 0u && persistent.z >= 2u) persistent.x = 1u;
     AdaptiveGroupState[flatGroup] = persistent;
-    AdaptiveGroupInfo[flatGroup] = uint4(0u, 0u, validPixels, persistent.x);
+    // AdaptiveGroupInfo is the allocation snapshot reused by the hot trace path. Do not overwrite
+    // it here: a group promoted after allocation must continue tracing its reserved guide paths
+    // until the next allocation rebuilds a matching full-resolution work list.
     if (persistent.x == 0u)
     {
         InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataCoarseGroups], 1u);
@@ -466,18 +506,44 @@ void CSAdaptiveAllocateGroups(uint3 id : SV_DispatchThreadID)
     Result.GetDimensions(width, height);
     uint totalBudget = width * height * (uint)max(1, _NumberOfPasses);
     uint fullResolutionPaths = 0u;
+    uint workOffset = 0u;
+    uint rootOffset = 0u;
     [loop]
     for (uint groupIndex = 0u; groupIndex < _AdaptiveGroupCount; groupIndex++)
     {
         uint4 info = AdaptiveGroupInfo[groupIndex];
+        uint groupX = groupIndex % _AdaptiveGroupWidth;
+        uint groupY = groupIndex / _AdaptiveGroupWidth;
+        uint validWidth = min(8u, width - groupX * 8u);
+        uint validHeight = min(8u, height - groupY * 8u);
+        // GroupInfo can contain data from a previous resolution or capture. Derive the
+        // current pixel count here before using it for the fixed global budget.
+        info.z = validWidth * validHeight;
         info.w = AdaptiveGroupState[groupIndex].x != 0u ? (uint)max(1, _NumberOfPasses) : 0u;
+        uint groupPaths = info.z * info.w;
+        if (fullResolutionPaths + groupPaths > totalBudget)
+        {
+            // Groups are indivisible. Leave the last group coarse rather than exceeding
+            // the fixed budget and producing invalid diagnostics.
+            info.w = 0u;
+            groupPaths = 0u;
+        }
+        // The serial group pass computes deterministic offsets; pixel entries are emitted in parallel.
+        info.x = workOffset;
+        info.y = rootOffset;
         AdaptiveGroupInfo[groupIndex] = info;
-        fullResolutionPaths += 64u * info.w;
+        workOffset += info.z * (info.w != 0u ? 1u : 0u);
+        rootOffset += groupPaths;
+        fullResolutionPaths += groupPaths;
     }
     AdaptiveWorkListMetadata[AdaptiveMetadataRequestedPaths] = totalBudget;
     AdaptiveWorkListMetadata[AdaptiveMetadataAssignedPaths] = totalBudget;
     AdaptiveWorkListMetadata[AdaptiveMetadataFullResolutionPaths] = fullResolutionPaths;
+    // Coarse guide dispatches are fixed at the unallocated remainder. Record the schedule here
+    // instead of contending on one metadata counter from every guide group.
+    AdaptiveWorkListMetadata[AdaptiveMetadataGuidancePaths] = totalBudget - fullResolutionPaths;
     AdaptiveWorkListMetadata[AdaptiveMetadataBootstrapPaths] = 0u;
+    AdaptiveWorkListMetadata[AdaptiveMetadataWorkItemCount] = workOffset;
 }
 
 // Test-only setup for controlled Metal group allocation probes. Input fields are promoted, bucket,
@@ -496,39 +562,28 @@ void CSAdaptiveProbeGroups(uint3 id : SV_DispatchThreadID)
     }
 }
 
-// Reclassification-only deterministic expansion. Stable row-major work indices and root offsets
-// are part of the root-list parity contract, so do not use atomic append ordering here.
-[numthreads(1,1,1)]
+// Reclassification-only deterministic expansion. Group offsets are prepared by the small serial
+// allocator, allowing each promoted pixel to emit independently without atomic append ordering.
+[numthreads(256,1,1)]
 void CSAdaptiveBuildGroupWorkList(uint3 id : SV_DispatchThreadID)
 {
     uint width, height;
     Result.GetDimensions(width, height);
-    uint workIndex = 0u;
-    uint rootOffset = 0u;
-    [loop]
-    for (uint groupFlat = 0u; groupFlat < _AdaptiveGroupCount; groupFlat++)
-    {
-        uint samples = AdaptiveGroupInfo[groupFlat].w;
-        if (samples == 0u) continue;
-        uint2 groupPixel = uint2(groupFlat % _AdaptiveGroupWidth, groupFlat / _AdaptiveGroupWidth);
-        uint validWidth = min(8u, width - groupPixel.x * 8u);
-        uint validHeight = min(8u, height - groupPixel.y * 8u);
-        [loop]
-        for (uint localY = 0u; localY < validHeight; localY++)
-        {
-            [loop]
-            for (uint localX = 0u; localX < validWidth; localX++)
-            {
-                uint flatPixel = groupPixel.x * 8u + localX + (groupPixel.y * 8u + localY) * width;
-                AdaptiveWorkList[workIndex] = uint2(flatPixel, samples);
-                AdaptiveWorkRootOffsets[workIndex] = rootOffset;
-                workIndex++;
-                rootOffset += samples;
-            }
-        }
-    }
-    AdaptiveWorkListMetadata[AdaptiveMetadataWorkItemCount] = workIndex;
-    AdaptiveWorkListMetadata[AdaptiveMetadataBootstrapPaths] = rootOffset;
+    uint flatPixel = id.x;
+    if (flatPixel >= width * height) return;
+
+    uint2 pixel = uint2(flatPixel % width, flatPixel / width);
+    uint2 groupPixel = pixel / 8u;
+    uint groupFlat = groupPixel.x + groupPixel.y * _AdaptiveGroupWidth;
+    uint4 info = AdaptiveGroupInfo[groupFlat];
+    uint samples = info.w;
+    if (samples == 0u) return;
+
+    uint validWidth = min(8u, width - groupPixel.x * 8u);
+    uint localIndex = (pixel.y % 8u) * validWidth + pixel.x % 8u;
+    uint workIndex = info.x + localIndex;
+    AdaptiveWorkList[workIndex] = uint2(flatPixel, samples);
+    AdaptiveWorkRootOffsets[workIndex] = info.y + localIndex * samples;
 }
 
 // Present the coarse guide only until a pixel owns at least one unbiased full-resolution sample.
@@ -551,9 +606,13 @@ void CSAdaptiveComposePreview(uint3 id : SV_DispatchThreadID)
 void ClearAdaptiveFrameMetadata(uint3 id : SV_DispatchThreadID)
 {
     // The compact work list persists between reclassification passes. Only this counter is
-    // per-dispatch, so capture diagnostics continue to validate one frame of retired work.
+    // per-dispatch, so capture diagnostics continue to validate one frame of retired root work.
+    // Guidance uses the current allocation snapshot and must persist when this frame reuses it.
     AdaptiveWorkListMetadata[AdaptiveMetadataRetiredPaths] = 0u;
-    AdaptiveWorkListMetadata[AdaptiveMetadataGuidancePaths] = 0u;
+    uint requestedPaths = AdaptiveWorkListMetadata[AdaptiveMetadataRequestedPaths];
+    uint fullResolutionPaths = AdaptiveWorkListMetadata[AdaptiveMetadataFullResolutionPaths];
+    AdaptiveWorkListMetadata[AdaptiveMetadataGuidancePaths] = requestedPaths >= fullResolutionPaths
+        ? requestedPaths - fullResolutionPaths : 0u;
 }
 
 [numthreads(1,1,1)]
@@ -688,7 +747,10 @@ void CSAdaptiveResolveRoot(uint3 id : SV_DispatchThreadID)
     float variance = newCount > 1.0f ? max(0.0f, luminanceM2 / (newCount - 1.0f)) : 0.0f;
     float standardError = sqrt(variance / max(1.0f, newCount));
     float uncertainty = standardError;
-    InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataRetiredPaths], workItem.y);
+    if (_AdaptiveCaptureDiagnostics != 0)
+    {
+        InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataRetiredPaths], workItem.y);
+    }
     AccumulationResult[pixel] = float4(color, 1.0f);
     AdaptiveSamplingState[pixel] = float4(newCount, luminanceMean, luminanceM2, uncertainty);
     Beauty[pixel] = float4(color, 1.0f);

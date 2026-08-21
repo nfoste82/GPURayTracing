@@ -92,17 +92,28 @@ public class GameManager : MonoBehaviour
     [Range(0f, 1.5f)]
     public float shadowRandomness = 0.65f;
 
-    [Tooltip("Redistributes one fixed image-wide path budget toward pixels with higher display-space uncertainty. It never automatically stops rendering.")]
+    [Tooltip("Redistributes a fixed image-wide full-resolution path budget using group uncertainty. It never automatically stops rendering.")]
     public bool enableAdaptiveSampling = false;
 
-    [Range(1, 64), Tooltip("Uniform paths per pixel before adaptive priority allocation begins.")]
+    [Range(1, 64), Tooltip("Full-resolution paths per pixel before variance-driven adaptive allocation begins.")]
     public int adaptiveSamplingMinSamples = 8;
 
-    [Range(0.0f, 0.25f), Tooltip("Minimum relative priority assigned to every established pixel to recheck rare transport.")]
-    public float adaptiveSamplingExploration = 0.05f;
+    [Range(1, 8), Tooltip("Frames a compact adaptive schedule is reused before reprioritizing groups. Lower values react sooner but add scheduler overhead.")]
+    public int adaptiveReclassificationInterval = 4;
+    [Range(0.0f, 2.0f), Tooltip("Bounded priority boost for statistically significant group-mean changes.")]
+    public float adaptiveRecentChangeWeight = 1.0f;
+    [Range(0.0f, 4.0f), Tooltip("Allocation contrast between low and high quantile buckets. Higher values focus more aggressively on noisy groups.")]
+    public float adaptiveBucketStrength = 2.0f;
+    [Range(1, 16), Tooltip("Maximum full-resolution paths assigned to one pixel in a scheduling cycle.")]
+    public int adaptiveMaxPathsPerPixel = 4;
 
-    [Range(1, 16)] public int adaptiveGuidanceMinSamples = 2;
-    [Range(0.0f, 1.0f)] public float adaptiveGuidanceChangeThreshold = 0.02f;
+    // Kept serialized so existing scenes and capture command lines load without losing data. The
+    // full-resolution scheduler no longer reads these guide-promotion controls.
+    [HideInInspector] public int adaptiveGuidanceMinSamples = 2;
+    [HideInInspector] public float adaptiveGuidanceChangeThreshold = 0.02f;
+    [HideInInspector] public float adaptiveGuidanceBrightnessPriority = 0.5f;
+    [HideInInspector] public float adaptiveGuidanceDirectLightPriority = 0.5f;
+    [HideInInspector] public float adaptiveGuidanceRoughnessPriority = 0.0f;
 
     [Header("Parallax Mapping")]
     [Range(0f, 90f)]
@@ -282,6 +293,9 @@ public class GameManager : MonoBehaviour
     }
     private ComputeBuffer _adaptiveDispatchArgumentsBuffer;
     private ComputeBuffer _adaptiveResolveDispatchArgumentsBuffer;
+    private int _adaptiveScheduleFrame = -1;
+    private bool _adaptiveScheduleInitialized;
+    private bool _adaptiveCaptureDiagnostics;
     private Vector2Int _textureSize;
     private Vector2Int _displayTextureSize;
     private int _accumulatedFrameCount;
@@ -492,9 +506,11 @@ public class GameManager : MonoBehaviour
     private static readonly int AdaptiveGuidanceState = Shader.PropertyToID("AdaptiveGuidanceState");
     private static readonly int AdaptiveGuidancePreview = Shader.PropertyToID("AdaptiveGuidancePreview");
     private static readonly int AdaptiveSamplingMinSamples = Shader.PropertyToID("_AdaptiveSamplingMinSamples");
-    private static readonly int AdaptiveSamplingExploration = Shader.PropertyToID("_AdaptiveSamplingExploration");
     private static readonly int AdaptiveGuidanceMinSamples = Shader.PropertyToID("_AdaptiveGuidanceMinSamples");
     private static readonly int AdaptiveGuidanceChangeThreshold = Shader.PropertyToID("_AdaptiveGuidanceChangeThreshold");
+    private static readonly int AdaptiveGuidanceBrightnessPriority = Shader.PropertyToID("_AdaptiveGuidanceBrightnessPriority");
+    private static readonly int AdaptiveGuidanceDirectLightPriority = Shader.PropertyToID("_AdaptiveGuidanceDirectLightPriority");
+    private static readonly int AdaptiveGuidanceRoughnessPriority = Shader.PropertyToID("_AdaptiveGuidanceRoughnessPriority");
     private static readonly int AdaptiveWorkList = Shader.PropertyToID("AdaptiveWorkList");
     private static readonly int AdaptiveTraceWorkList = Shader.PropertyToID("AdaptiveTraceWorkList");
     private static readonly int AdaptiveRootWorkList = Shader.PropertyToID("AdaptiveRootWorkList");
@@ -506,6 +522,7 @@ public class GameManager : MonoBehaviour
     private static readonly int AdaptiveGroupWidth = Shader.PropertyToID("_AdaptiveGroupWidth");
     private static readonly int AdaptiveGroupHeight = Shader.PropertyToID("_AdaptiveGroupHeight");
     private static readonly int AdaptiveGroupCount = Shader.PropertyToID("_AdaptiveGroupCount");
+    private static readonly int AdaptiveCaptureDiagnostics = Shader.PropertyToID("_AdaptiveCaptureDiagnostics");
     private static readonly int AdaptiveWorkListMetadata = Shader.PropertyToID("AdaptiveWorkListMetadata");
     private static readonly int AdaptiveWorkListCapacity = Shader.PropertyToID("_AdaptiveWorkListCapacity");
     private static readonly int AdaptiveRootPathCapacity = Shader.PropertyToID("_AdaptiveRootPathCapacity");
@@ -565,9 +582,10 @@ public class GameManager : MonoBehaviour
         enableFrameAccumulation = settings.EnableFrameAccumulation;
         enableAdaptiveSampling = settings.EnableAdaptiveSampling;
         adaptiveSamplingMinSamples = settings.AdaptiveSamplingMinSamples;
-        adaptiveSamplingExploration = settings.AdaptiveSamplingExploration;
-        adaptiveGuidanceMinSamples = settings.AdaptiveGuidanceMinSamples;
-        adaptiveGuidanceChangeThreshold = settings.AdaptiveGuidanceChangeThreshold;
+        adaptiveReclassificationInterval = settings.AdaptiveReclassificationInterval;
+        adaptiveRecentChangeWeight = settings.AdaptiveRecentChangeWeight;
+        adaptiveBucketStrength = settings.AdaptiveBucketStrength;
+        adaptiveMaxPathsPerPixel = settings.AdaptiveMaxPathsPerPixel;
         numBounces = settings.NumBounces;
         shadowQuality = settings.ShadowQuality;
         topLevelBvhMinObjectCount = settings.TopLevelBvhMinObjectCount;
@@ -783,6 +801,8 @@ public class GameManager : MonoBehaviour
         _adaptiveGuidanceStateTexture = CreateAdaptiveGuidanceTexture(adaptiveGroupWidth, adaptiveGroupHeight);
         _adaptiveGuidancePreviewTexture = CreateAdaptiveGuidanceTexture(adaptiveGroupWidth, adaptiveGroupHeight);
         var adaptiveWorkCapacity = Mathf.Max(1, _textureSize.x * _textureSize.y);
+        // The allocation can change at runtime without recreating resources. Keep the existing
+        // maximum-pass capacity until resource lifetime is made adaptive as a separate change.
         var adaptiveRootPathCapacity = adaptiveWorkCapacity * 32;
         _adaptiveWorkListBuffer = new ComputeBuffer(adaptiveWorkCapacity, AdaptiveWorkItemStride);
         _adaptiveRootWorkListBuffer = new ComputeBuffer(adaptiveRootPathCapacity, AdaptiveWorkItemStride);
@@ -1127,15 +1147,10 @@ public class GameManager : MonoBehaviour
                 var clearAdaptiveKernel = shader.FindKernel("ClearAdaptiveSamplingState");
                 shader.SetTexture(clearAdaptiveKernel, AdaptiveSamplingState, _adaptiveSamplingStateTexture);
                 ComputeDispatch.Dispatch(shader, clearAdaptiveKernel, clearGroupsX, clearGroupsY, 1);
-                var clearGuidanceKernel = shader.FindKernel("ClearAdaptiveGuidanceState");
                 var clearGroupStateKernel = shader.FindKernel("ClearAdaptiveGroupState");
-                BindAdaptiveSamplingResources(clearGuidanceKernel);
                 BindAdaptiveSamplingResources(clearGroupStateKernel);
-                ComputeDispatch.Dispatch(shader, clearGuidanceKernel,
-                    Mathf.CeilToInt(_adaptiveGuidanceStateTexture.width / 4.0f),
-                    Mathf.CeilToInt(_adaptiveGuidanceStateTexture.height / 4.0f), 1);
                 ComputeDispatch.Dispatch(shader, clearGroupStateKernel,
-                    Mathf.CeilToInt((float)(_adaptiveGuidanceStateTexture.width * _adaptiveGuidanceStateTexture.height) / 64.0f), 1, 1);
+                    Mathf.CeilToInt((float)(_adaptiveGroupStateBuffer.count) / 64.0f), 1, 1);
             }
         }
 
@@ -1172,60 +1187,78 @@ public class GameManager : MonoBehaviour
         var groupWidth = Mathf.CeilToInt(_textureSize.x / 8.0f);
         var groupHeight = Mathf.CeilToInt(_textureSize.y / 8.0f);
 
-        LastAdaptiveSamplingReclassified = true;
+        bool reclassify = !_adaptiveScheduleInitialized
+            || _adaptiveScheduleFrame >= Mathf.Clamp(adaptiveReclassificationInterval, 1, 8);
+        LastAdaptiveSamplingReclassified = reclassify;
         shader.SetBuffer(clearFrameMetadataKernel, AdaptiveWorkListMetadata, _adaptiveWorkListMetadataBuffer);
         ComputeDispatch.Dispatch(shader, clearFrameMetadataKernel, 1, 1, 1);
-        shader.SetBuffer(clearWorkListKernel, AdaptiveWorkListMetadata, _adaptiveWorkListMetadataBuffer);
-        ComputeDispatch.Dispatch(shader, clearWorkListKernel, AdaptiveMetadataCount, 1, 1);
 
-        SetShaderParameters(allocateKernel);
-        BindAdaptiveSamplingResources(allocateKernel);
-        SetAdaptiveGroupDimensions(groupWidth, groupHeight);
-        ComputeDispatch.Dispatch(shader, allocateKernel, 1, 1, 1);
+        if (reclassify)
+        {
+            shader.SetBuffer(clearWorkListKernel, AdaptiveWorkListMetadata, _adaptiveWorkListMetadataBuffer);
+            ComputeDispatch.Dispatch(shader, clearWorkListKernel, AdaptiveMetadataCount, 1, 1);
 
+            SetShaderParameters(allocateKernel);
+            BindAdaptiveSamplingResources(allocateKernel);
+            SetAdaptiveGroupDimensions(groupWidth, groupHeight);
+            ComputeDispatch.Dispatch(shader, allocateKernel, 1, 1, 1);
+
+            SetShaderParameters(buildGroupWorkListKernel);
+            BindAdaptiveSamplingResources(buildGroupWorkListKernel);
+            SetAdaptiveGroupDimensions(groupWidth, groupHeight);
+            ComputeDispatch.Dispatch(shader, buildGroupWorkListKernel, Mathf.CeilToInt(workCapacity / 256.0f), 1, 1);
+
+            SetShaderParameters(buildRootWorkListKernel);
+            BindAdaptiveSamplingResources(buildRootWorkListKernel);
+            shader.SetInt(AdaptiveWorkListCapacity, workCapacity);
+            shader.SetInt(AdaptiveRootPathCapacity, rootPathCapacity);
+            ComputeDispatch.Dispatch(shader, buildRootWorkListKernel, Mathf.CeilToInt(workCapacity / 256.0f), 1, 1);
+
+            SetShaderParameters(buildDispatchArgsKernel);
+            BindAdaptiveSamplingResources(buildDispatchArgsKernel);
+            shader.SetInt(AdaptiveWorkListCapacity, workCapacity);
+            shader.SetInt(AdaptiveRootPathCapacity, rootPathCapacity);
+            shader.SetBuffer(buildDispatchArgsKernel, AdaptiveWorkListMetadata, _adaptiveWorkListMetadataBuffer);
+            shader.SetBuffer(buildDispatchArgsKernel, AdaptiveDispatchArgs, _adaptiveDispatchArgumentsBuffer);
+            shader.SetBuffer(buildDispatchArgsKernel, AdaptiveResolveDispatchArgs, _adaptiveResolveDispatchArgumentsBuffer);
+            ComputeDispatch.Dispatch(shader, buildDispatchArgsKernel, 1, 1, 1);
+        }
+
+        // Coarse groups consume their reserved portion of the fixed frame budget on every frame.
+        // Reuse frames skip classification and list rebuilding, but cannot skip this work or the
+        // accounting would report a full budget with neither guidance nor full-resolution paths.
         SetShaderParameters(guidanceKernel);
         BindAdaptiveSamplingResources(guidanceKernel);
         SetAdaptiveGroupDimensions(groupWidth, groupHeight);
         ComputeDispatch.Dispatch(shader, guidanceKernel, groupWidth, groupHeight, 1);
 
-        SetShaderParameters(buildGroupWorkListKernel);
-        BindAdaptiveSamplingResources(buildGroupWorkListKernel);
-        SetAdaptiveGroupDimensions(groupWidth, groupHeight);
-        ComputeDispatch.Dispatch(shader, buildGroupWorkListKernel, 1, 1, 1);
-
-        SetShaderParameters(buildRootWorkListKernel);
-        BindAdaptiveSamplingResources(buildRootWorkListKernel);
-        shader.SetInt(AdaptiveWorkListCapacity, workCapacity);
-        shader.SetInt(AdaptiveRootPathCapacity, rootPathCapacity);
-        ComputeDispatch.Dispatch(shader, buildRootWorkListKernel, Mathf.CeilToInt(workCapacity / 256.0f), 1, 1);
-
         SetShaderParameters(traceKernel);
         BindAdaptiveSamplingResources(traceKernel);
         SetShaderParameters(resolveKernel);
         BindAdaptiveSamplingResources(resolveKernel);
-        shader.SetInt(AdaptiveWorkListCapacity, workCapacity);
-        shader.SetInt(AdaptiveRootPathCapacity, rootPathCapacity);
-        shader.SetBuffer(buildDispatchArgsKernel, AdaptiveWorkListMetadata, _adaptiveWorkListMetadataBuffer);
-        shader.SetBuffer(buildDispatchArgsKernel, AdaptiveDispatchArgs, _adaptiveDispatchArgumentsBuffer);
-        shader.SetBuffer(buildDispatchArgsKernel, AdaptiveResolveDispatchArgs, _adaptiveResolveDispatchArgumentsBuffer);
-        ComputeDispatch.Dispatch(shader, buildDispatchArgsKernel, 1, 1, 1);
         ComputeDispatch.DispatchIndirect(shader, traceKernel, _adaptiveDispatchArgumentsBuffer);
         ComputeDispatch.DispatchIndirect(shader, resolveKernel, _adaptiveResolveDispatchArgumentsBuffer);
 
-        var composePreviewKernel = shader.FindKernel("CSAdaptiveComposePreview");
-        SetShaderParameters(composePreviewKernel);
-        BindAdaptiveSamplingResources(composePreviewKernel);
-        SetAdaptiveGroupDimensions(groupWidth, groupHeight);
-        ComputeDispatch.Dispatch(shader, composePreviewKernel,
-            Mathf.CeilToInt(_textureSize.x / (float)RenderThreadCountX),
-            Mathf.CeilToInt(_textureSize.y / (float)RenderThreadCountY), 1);
+        if (reclassify)
+        {
+            var composePreviewKernel = shader.FindKernel("CSAdaptiveComposePreview");
+            SetShaderParameters(composePreviewKernel);
+            BindAdaptiveSamplingResources(composePreviewKernel);
+            SetAdaptiveGroupDimensions(groupWidth, groupHeight);
+            ComputeDispatch.Dispatch(shader, composePreviewKernel,
+                Mathf.CeilToInt(_textureSize.x / (float)RenderThreadCountX),
+                Mathf.CeilToInt(_textureSize.y / (float)RenderThreadCountY), 1);
 
-        // Promote only after this frame's 64-sample guide batch is complete. The updated state is
-        // consumed by the next frame, preventing the same guide measurement from counting twice.
-        SetShaderParameters(classifyKernel);
-        BindAdaptiveSamplingResources(classifyKernel);
-        SetAdaptiveGroupDimensions(groupWidth, groupHeight);
-        ComputeDispatch.Dispatch(shader, classifyKernel, groupWidth, groupHeight, 1);
+            // Promote only after this frame's guide batch is complete. The updated state is
+            // consumed by the next reclassification, preventing the same measurement from counting twice.
+            SetShaderParameters(classifyKernel);
+            BindAdaptiveSamplingResources(classifyKernel);
+            SetAdaptiveGroupDimensions(groupWidth, groupHeight);
+            ComputeDispatch.Dispatch(shader, classifyKernel, groupWidth, groupHeight, 1);
+        }
+
+        _adaptiveScheduleInitialized = true;
+        _adaptiveScheduleFrame = reclassify ? 0 : _adaptiveScheduleFrame + 1;
     }
 
     private void DispatchAdaptiveDiagnostics()
@@ -1430,6 +1463,13 @@ public class GameManager : MonoBehaviour
         _accumulatedFrameCount = 0;
         _hasAccumulationStateHash = false;
         _accumulationClearPending = true;
+        _adaptiveScheduleFrame = -1;
+        _adaptiveScheduleInitialized = false;
+    }
+
+    public void SetAdaptiveCaptureDiagnostics(bool enabled)
+    {
+        _adaptiveCaptureDiagnostics = enabled;
     }
 
     private void BuildCausticSamplingDistribution()
@@ -3038,9 +3078,15 @@ public class GameManager : MonoBehaviour
         targetShader.SetInt(FrameCount, _accumulatedFrameCount);
         targetShader.SetInt(SampleOffset, CalculateSampleOffset());
         targetShader.SetInt(AdaptiveSamplingMinSamples, Mathf.Clamp(adaptiveSamplingMinSamples, 1, 64));
-        targetShader.SetFloat(AdaptiveSamplingExploration, Mathf.Clamp(adaptiveSamplingExploration, 0.0f, 0.25f));
+        // The legacy guide values remain bound while the shader migration is in progress. The
+        // scheduler settings below are included in reset hashing immediately, so policy changes
+        // never mix statistical histories.
         targetShader.SetInt(AdaptiveGuidanceMinSamples, Mathf.Clamp(adaptiveGuidanceMinSamples, 1, 16));
         targetShader.SetFloat(AdaptiveGuidanceChangeThreshold, Mathf.Clamp01(adaptiveGuidanceChangeThreshold));
+        targetShader.SetFloat(AdaptiveGuidanceBrightnessPriority, Mathf.Clamp(adaptiveGuidanceBrightnessPriority, -2.0f, 2.0f));
+        targetShader.SetFloat(AdaptiveGuidanceDirectLightPriority, Mathf.Clamp(adaptiveGuidanceDirectLightPriority, -2.0f, 2.0f));
+        targetShader.SetFloat(AdaptiveGuidanceRoughnessPriority, Mathf.Clamp(adaptiveGuidanceRoughnessPriority, -2.0f, 2.0f));
+        targetShader.SetInt(AdaptiveCaptureDiagnostics, _adaptiveCaptureDiagnostics ? 1 : 0);
     }
 
     private void BindShaderKeywordsAndLightingParameters(ComputeShader targetShader, int kernelHandle)
@@ -3148,9 +3194,10 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, numberOfPasses);
             hash = AddHash(hash, enableAdaptiveSampling ? 1 : 0);
             hash = AddHash(hash, adaptiveSamplingMinSamples);
-            hash = AddHash(hash, adaptiveSamplingExploration);
-            hash = AddHash(hash, adaptiveGuidanceMinSamples);
-            hash = AddHash(hash, adaptiveGuidanceChangeThreshold);
+            hash = AddHash(hash, adaptiveReclassificationInterval);
+            hash = AddHash(hash, adaptiveRecentChangeWeight);
+            hash = AddHash(hash, adaptiveBucketStrength);
+            hash = AddHash(hash, adaptiveMaxPathsPerPixel);
             hash = AddHash(hash, subpixelJitterScale);
             hash = AddHash(hash, numBounces);
             hash = AddHash(hash, shadowQuality);

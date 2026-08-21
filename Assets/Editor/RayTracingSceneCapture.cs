@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Security.Cryptography;
@@ -121,10 +122,21 @@ public static class RayTracingSceneCapture
         var outputArgument = GetCommandLineArgument("-rayTracingOutput");
         var generateScenes = HasCommandLineArgument("-rayTracingGenerateScenes");
         var compareAdaptiveSampling = HasCommandLineArgument("-rayTracingCompareAdaptiveSampling");
+        var skipAdaptiveOff = HasCommandLineArgument("-rayTracingSkipAdaptiveOff");
         var referenceMetrics = HasCommandLineArgument("-rayTracingReferenceMetrics");
         var refreshReferences = HasCommandLineArgument("-rayTracingRefreshReferences");
         var requireExistingReferences = HasCommandLineArgument("-rayTracingRequireExistingReferences");
         var referenceRoot = GetCommandLineArgument("-rayTracingReferenceRoot") ?? DefaultReferenceRoot;
+        float? brightnessPriority;
+        float? directLightPriority;
+        float? roughnessPriority;
+        if (!TryGetSignedPriorityArgument("-rayTracingAdaptiveBrightnessPriority", out brightnessPriority)
+            || !TryGetSignedPriorityArgument("-rayTracingAdaptiveDirectLightPriority", out directLightPriority)
+            || !TryGetSignedPriorityArgument("-rayTracingAdaptiveRoughnessPriority", out roughnessPriority))
+        {
+            ExitBatchMode(1);
+            return;
+        }
 
         if (!TryGetCaptureSettings(out var samplesPerScene, out var captureWidth, out var captureHeight,
                 out var durationSeconds))
@@ -160,6 +172,13 @@ public static class RayTracingSceneCapture
             return;
         }
 
+        if (skipAdaptiveOff && !compareAdaptiveSampling)
+        {
+            ReportCommandLineError("-rayTracingSkipAdaptiveOff requires -rayTracingCompareAdaptiveSampling.");
+            ExitBatchMode(1);
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(sceneArgument))
         {
             ReportCommandLineError("Scene capture requires -rayTracingScenes with semicolon-separated scene asset paths.");
@@ -178,8 +197,8 @@ public static class RayTracingSceneCapture
         if (Application.isBatchMode)
         {
             CaptureInBatchMode(label, scenes, outputRoot, samplesPerScene, captureWidth, captureHeight,
-                durationSeconds, debugRenderMode, compareAdaptiveSampling, referenceMetrics,
-                refreshReferences, requireExistingReferences, referenceRoot);
+                durationSeconds, debugRenderMode, compareAdaptiveSampling, skipAdaptiveOff, referenceMetrics,
+                refreshReferences, requireExistingReferences, referenceRoot, brightnessPriority, directLightPriority, roughnessPriority);
             return;
         }
         StartCapture(label, scenes, outputRoot, samplesPerScene, captureWidth, captureHeight);
@@ -224,10 +243,14 @@ public static class RayTracingSceneCapture
         double durationSeconds,
         DebugRenderMode debugRenderMode,
         bool compareAdaptiveSampling,
+        bool skipAdaptiveOff,
         bool referenceMetrics,
         bool refreshReferences,
         bool requireExistingReferences,
-        string referenceRoot)
+        string referenceRoot,
+        float? brightnessPriority,
+         float? directLightPriority,
+         float? roughnessPriority)
     {
         try
         {
@@ -247,10 +270,22 @@ public static class RayTracingSceneCapture
                 }
 
                 var sceneName = Path.GetFileNameWithoutExtension(trimmedPath);
+                if (brightnessPriority.HasValue)
+                {
+                    manager.adaptiveGuidanceBrightnessPriority = brightnessPriority.Value;
+                }
+                if (directLightPriority.HasValue)
+                {
+                    manager.adaptiveGuidanceDirectLightPriority = directLightPriority.Value;
+                }
+                if (roughnessPriority.HasValue)
+                {
+                    manager.adaptiveGuidanceRoughnessPriority = roughnessPriority.Value;
+                }
                 if (compareAdaptiveSampling)
                 {
                     CaptureAdaptiveComparison(manager, sceneName, outputRoot, label, samplesPerScene,
-                        captureWidth, captureHeight, durationSeconds, debugRenderMode, trimmedPath, referenceMetrics,
+                        captureWidth, captureHeight, durationSeconds, debugRenderMode, trimmedPath, skipAdaptiveOff, referenceMetrics,
                         refreshReferences, requireExistingReferences, referenceRoot);
                 }
                 else
@@ -265,7 +300,11 @@ public static class RayTracingSceneCapture
         }
         catch (Exception exception)
         {
-            ReportCommandLineError("Ray tracing scene capture failed.", exception);
+            string failureLogPath = TryWriteCaptureLog(Path.Combine(outputRoot, SanitizePathSegment(label)), label);
+            string logDetails = failureLogPath == null
+                ? $"Unity console log: '{Application.consoleLogPath}'."
+                : $"Unity console log: '{Application.consoleLogPath}'. Capture log: '{failureLogPath}'.";
+            ReportCommandLineError("Ray tracing scene capture failed. " + logDetails, exception);
             ReleaseCaptureTarget(null);
             ExitBatchMode(1);
         }
@@ -282,6 +321,7 @@ public static class RayTracingSceneCapture
         double durationSeconds,
         DebugRenderMode debugRenderMode,
         string scenePath,
+        bool skipAdaptiveOff,
         bool referenceMetrics,
         bool refreshReferences,
         bool requireExistingReferences,
@@ -296,41 +336,69 @@ public static class RayTracingSceneCapture
                 out reference);
         }
 
-        CaptureResult adaptiveOff = CaptureVariant(manager, sceneName, comparisonRoot, "adaptive_off", samplesPerScene, captureWidth,
-            captureHeight, durationSeconds, debugRenderMode, false, true);
-        CoolDownBetweenTimedCaptures(durationSeconds);
+        CaptureResult adaptiveOff = default;
+        if (!skipAdaptiveOff)
+        {
+            adaptiveOff = CaptureVariant(manager, sceneName, comparisonRoot, "adaptive_off", samplesPerScene, captureWidth,
+                captureHeight, durationSeconds, debugRenderMode, false, true);
+            CoolDownBetweenTimedCaptures(durationSeconds);
+        }
         CaptureResult adaptiveOn = CaptureVariant(manager, sceneName, comparisonRoot, "adaptive_on", samplesPerScene, captureWidth,
             captureHeight, durationSeconds, debugRenderMode, true, true);
         if (referenceMetrics)
         {
-            WriteReferenceMetrics(comparisonRoot, "adaptive_off", adaptiveOff, referenceImagePath, reference);
+            if (!skipAdaptiveOff)
+            {
+                WriteReferenceMetrics(comparisonRoot, "adaptive_off", adaptiveOff, referenceImagePath, reference);
+            }
             WriteReferenceMetrics(comparisonRoot, "adaptive_on", adaptiveOn, referenceImagePath, reference);
         }
-        GenerateDifferenceImage(adaptiveOff.imagePath, adaptiveOn.imagePath,
-            Path.Combine(comparisonRoot, "adaptive_off_vs_on_difference.png"));
+        if (!skipAdaptiveOff)
+        {
+            GenerateDifferenceImage(adaptiveOff.imagePath, adaptiveOn.imagePath,
+                Path.Combine(comparisonRoot, "adaptive_off_vs_on_difference.png"));
+        }
         if (referenceMetrics)
         {
-            GenerateDifferenceImage(adaptiveOff.imagePath, referenceImagePath,
-                Path.Combine(comparisonRoot, "adaptive_off_vs_reference_difference.png"));
             GenerateDifferenceImage(adaptiveOn.imagePath, referenceImagePath,
                 Path.Combine(comparisonRoot, "adaptive_on_vs_reference_difference.png"));
-            GenerateReferenceComparisonImage(adaptiveOff.imagePath, adaptiveOn.imagePath, referenceImagePath,
-                Path.Combine(comparisonRoot, "adaptive_on_red_off_green_vs_reference.png"));
+            if (!skipAdaptiveOff)
+            {
+                GenerateDifferenceImage(adaptiveOff.imagePath, referenceImagePath,
+                    Path.Combine(comparisonRoot, "adaptive_off_vs_reference_difference.png"));
+                GenerateReferenceComparisonImage(adaptiveOff.imagePath, adaptiveOn.imagePath, referenceImagePath,
+                    Path.Combine(comparisonRoot, "adaptive_on_red_off_green_vs_reference.png"));
+            }
         }
         WriteCaptureLog(comparisonRoot, label);
     }
 
     private static void WriteCaptureLog(string outputRoot, string label)
     {
+        TryWriteCaptureLog(outputRoot, label);
+    }
+
+    private static string TryWriteCaptureLog(string outputRoot, string label)
+    {
         string consoleLogPath = Application.consoleLogPath;
         if (string.IsNullOrWhiteSpace(consoleLogPath) || !File.Exists(consoleLogPath))
         {
             Debug.LogWarning("Could not copy the Unity console log because its source path is unavailable.");
-            return;
+            return consoleLogPath;
         }
 
-        Directory.CreateDirectory(outputRoot);
-        File.Copy(consoleLogPath, Path.Combine(outputRoot, SanitizePathSegment(label) + ".log"), true);
+        try
+        {
+            Directory.CreateDirectory(outputRoot);
+            string destination = Path.Combine(outputRoot, SanitizePathSegment(label) + ".log");
+            File.Copy(consoleLogPath, destination, true);
+            return destination;
+        }
+        catch (Exception exception)
+        {
+            Debug.LogWarning($"Could not copy the Unity console log: {exception.Message}");
+            return null;
+        }
     }
 
     private static void ReportCommandLineError(string message, Exception exception = null)
@@ -366,6 +434,7 @@ public static class RayTracingSceneCapture
         manager.randomNoise = false;
         manager.enableFrameAccumulation = true;
         manager.enableAdaptiveSampling = adaptiveSampling;
+        manager.SetAdaptiveCaptureDiagnostics(adaptiveSampling);
         // Capture both variants with the same fixed path budget: one path per pixel per frame.
         manager.adaptiveSamplingMinSamples = Mathf.Max(1, manager.adaptiveSamplingMinSamples);
         manager.TemporalDenoising.enabled = false;
@@ -1266,6 +1335,16 @@ public static class RayTracingSceneCapture
 
     private static void ReleaseCaptureTarget(Camera camera)
     {
+        if (camera == null && _captureTarget != null)
+        {
+            foreach (Camera candidate in UnityEngine.Object.FindObjectsByType<Camera>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+            {
+                if (candidate.targetTexture == _captureTarget)
+                {
+                    candidate.targetTexture = null;
+                }
+            }
+        }
         if (camera != null && camera.targetTexture == _captureTarget)
         {
             camera.targetTexture = null;
@@ -1409,7 +1488,7 @@ public static class RayTracingSceneCapture
         string durationArgument = GetCommandLineArgument("-rayTracingDurationSeconds");
         if (durationArgument != null && (!double.TryParse(durationArgument, out durationSeconds) || durationSeconds <= 0.0))
         {
-            Debug.LogError($"Scene capture argument -rayTracingDurationSeconds must be positive; received '{durationArgument}'.");
+            ReportCommandLineError($"Scene capture argument -rayTracingDurationSeconds must be positive; received '{durationArgument}'.");
             return false;
         }
         return durationArgument == null || !HasCommandLineArgument("-rayTracingSamples") || durationSeconds > 0.0;
@@ -1428,7 +1507,26 @@ public static class RayTracingSceneCapture
             return true;
         }
 
-        Debug.LogError($"Scene capture argument {name} must be a positive integer; received '{argument}'.");
+        ReportCommandLineError($"Scene capture argument {name} must be a positive integer; received '{argument}'.");
+        return false;
+    }
+
+    private static bool TryGetSignedPriorityArgument(string name, out float? value)
+    {
+        string argument = GetCommandLineArgument(name);
+        value = null;
+        if (argument == null)
+        {
+            return true;
+        }
+        if (float.TryParse(argument, NumberStyles.Float, CultureInfo.InvariantCulture, out float parsedValue)
+            && parsedValue >= -2.0f && parsedValue <= 2.0f)
+        {
+            value = parsedValue;
+            return true;
+        }
+
+        ReportCommandLineError($"Scene capture argument {name} must be a number from -2 through 2; received '{argument}'.");
         return false;
     }
 

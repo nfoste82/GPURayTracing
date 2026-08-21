@@ -46,7 +46,7 @@ Timed command-line captures are capped at ten seconds to avoid a pathological ad
 ```text
 enableAdaptiveSampling       default false
 adaptiveSamplingMinSamples  default 8
-adaptiveSamplingExploration default 0.05
+adaptiveGuidanceBrightnessPriority default 0.5
 ```
 
 The inspector exposes the bootstrap count and exploration floor when adaptive sampling is enabled. Any of these settings changes the accumulation-state hash, so progressive and adaptive state reset together.
@@ -338,7 +338,7 @@ The block max sits near the per-pixel P97. A single firefly-adjacent pixel promo
 
 This contradicts the true optimum. Minimizing total variance `sum(sigma_i^2 / n_i)` subject to `sum(n_i) = B` (Neyman allocation) gives `n_i` proportional to `sigma_i`, which is strictly positive for every pixel with nonzero variance — a bucket cutoff that zeroes out low buckets can never be optimal, and it also produces a much steeper allocation curve than the mathematically justified one.
 
-The exploration setting was clearly intended to prevent exactly this starvation, but it does not: `_AdaptiveSamplingExploration` (default `0.05`) is applied only at `RayTracingCompute.compute:458` to compute a value whose sole consumer is the diagnostic counter `AdaptiveMetadataPrioritySum` (`:473`). It never affects bucket membership (`:459-460` recomputes `bucketPriority` from the unfloored value) or admission. It reserves no path for any pixel. See `AIDocs/17-adaptive-sampling-continuation.md:93` (unchanged) for the prior note on this; this diagnosis confirms it is a full no-op on quality, not merely "not yet a starvation-rotation policy."
+The former exploration setting was clearly intended to prevent exactly this starvation, but it did not: it was applied only to a diagnostic counter, never to bucket membership or admission. It reserved no path for any pixel, so it was removed when the group scheduler adopted a bright-group promotion control instead.
 
 Compounding this, admission rank within the cutoff bucket is deterministic row-major flattened order (`CSAdaptiveScanGroupBuckets:511-514`) and is identical every reclassification (every 8 frames by default). The same low-flat-index pixels always win ties in the cutoff bucket; there is no rotation or hash permutation. This is a systematic spatial bias, not sampling noise, and is a plausible mechanism for the clustered/uneven-convergence artifacts that Karl Li's blog post explicitly describes and rejects for a similar naive per-block scheme.
 
@@ -681,7 +681,7 @@ cold compile; it clears the cache and can add several minutes before the capture
    -rayTracingScenes "Assets/Scenes/Generated/TeapotMaterials.unity"
 ```
 
-The adaptive comparison copies Unity's console log to `<output>/<label>/<scene>/<label>.log`, so the command does not need a `-logFile` argument. When `-rayTracingOutput` is omitted, `<output>` is the project-root `TestCaptures/` directory. If `<output>/<label>` already exists, the tool automatically uses `<label>_2`, then `<label>_3`, and so on.
+The adaptive comparison copies Unity's console log to `<output>/<label>/<scene>/<label>.log`, so the command does not need a `-logFile` argument. For live terminal output, add Unity's `-logFile -` option. When `-rayTracingOutput` is omitted, `<output>` is the project-root `TestCaptures/` directory. If `<output>/<label>` already exists, the tool automatically uses `<label>_2`, then `<label>_3`, and so on. If capture or post-processing fails, the command reports the exception and the Unity/capture log paths to stderr.
 
 ## Handoff Summary
 
@@ -1275,3 +1275,70 @@ activeWorkItems <= width * height
 Observed post-fix values were `91 == 91 == 91 == 91`, `workListOverflow = 0`, and `activeWorkItems = 91` for 91 pixels. A `512x512`, 9-frame equal-path smoke capture likewise reported `262144` requested, assigned, work-item, and retired paths with zero overflow. These are accounting validations, not quality wins.
 
 The current serial allocator must not be benchmarked for wall-clock superiority. First replace it with the parallel bucket implementation, then run equal-retired-path comparisons and only afterward repeat the 60-second TeapotMaterials reference comparison.
+
+## Future Session Handoff: Remaining Scheduler Work
+
+This section records what has not yet been implemented after the preparatory scheduler changes. The
+current branch should not be described as having the planned statistical quantile scheduler. The
+live production path still contains the coarse-guide/permanent-promotion design and its serial
+group allocation path.
+
+### Completed Preparatory Work
+
+- Added configurable scheduler-facing settings for bootstrap samples, reclassification interval,
+  recent-change weight, bucket strength, and maximum paths per pixel.
+- Added those settings to `SceneSettings`, the inspector, and the accumulation-state hash.
+- Made allocation reuse cadence configurable, with a default of four frames.
+- Fixed the allocation-snapshot ownership bug: `CSAdaptiveClassifyGroups` no longer overwrites
+  `AdaptiveGroupInfo`, which is the frame-local schedule consumed by reuse-frame guidance/work
+  dispatches. This prevents a newly promoted group from receiving neither its reserved guide work
+  nor a rebuilt full-resolution work list.
+- Updated the focused adaptive source/hash tests for the preparatory changes. The adaptive-focused
+  EditMode filter passed 21/21 tests in the verified run. The broader suite still has three
+  unrelated pre-existing failures in caustics/glare coverage; see the session report for details.
+
+### Not Yet Implemented
+
+1. Replace the coarse guidance estimator with full-resolution bootstrap and refinement. Guide paths
+   currently remain a presentation/scheduling path and do not contribute to unbiased accumulation.
+2. Store RGB Welford variance or an equivalent RGB error statistic. Current production allocation
+   still does not use the full-resolution uncertainty field to redistribute paths.
+3. Replace irreversible promotion with continuously recomputed group priority. The intended score is
+   expected linear-RGB MSE reduction, optionally multiplied by a bounded standardized recent-change
+   boost. Opposite-direction estimate changes should be treated as variance evidence, not filtered
+   as bad movement.
+4. Implement low-overhead GPU quantile assignment. Use a small histogram and prefix scan to map
+   active groups by relative rank into 16 buckets. Do not use fixed absolute thresholds, global GPU
+   sorting, CPU readback, or a per-group serial scan.
+5. Implement exact bucket budgets with a modest monotonic tier weight, largest-remainder rounding,
+   and a one-path-per-group exploration reserve. Rotate group remainder admission and per-pixel
+   allocation so equal-score or low-priority groups do not become row-major-starved.
+6. Replace the image-sized one-thread `CSAdaptiveAllocateGroups` loop and full-capacity list-building
+   dispatches with parallel demand scans, compact emission, and indirect dispatches where useful.
+   Keep the expensive root trace broad and linear so scheduler work does not reduce GPU occupancy.
+7. Add robust handling for equal scores, zero variance, bootstrap counts, NaN/Inf samples, partial
+   edge groups, per-pixel demand caps, count precision, and budget/capacity overflow.
+8. Add behavior-level CPU/GPU scheduler parity tests. Existing source-string tests that assert
+   guide/promotion formulas are transitional and should be replaced as the live design changes.
+9. Extend capture diagnostics with target/final bucket populations, bucket budgets and retired
+   paths, priority/change percentiles, demand percentiles, exploration age, invalid samples,
+   scheduler timings, and root-list utilization.
+10. Validate in this order: Metal precompile, focused scheduler tests, odd-size accounting smoke,
+    equal-retired-path quality comparisons, then equal-wall-time performance captures. The current
+    serial allocator and current 60-second Teapot capture are not acceptance evidence for the new
+    algorithm.
+
+### Performance Constraints
+
+Reprioritization must be cheaper than the path tracing it enables. Start with a reclassification
+interval of four frames, measure intervals 1/2/4/8, and keep the shortest interval that meets the
+quality/performance gates. No image-sized single-thread scheduler kernel, CPU readback, global sort,
+or per-frame expensive diagnostic readback belongs in the interactive path. The scheduler should
+remain a small fraction of frame time, while root tracing remains the dominant GPU workload.
+
+### Future-Session Prompt
+
+The standalone compact prompt is in `AIDocs/18-adaptive-sampling-next-session-prompt.md`. Use that
+file as the starting request in a future implementation session; it intentionally repeats the
+current status and the performance constraints so the next session does not mistake this
+preparatory milestone for completion.
