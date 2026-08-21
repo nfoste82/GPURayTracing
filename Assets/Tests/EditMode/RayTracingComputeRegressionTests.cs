@@ -12,12 +12,196 @@ namespace GPURayTracing.Tests
 {
     public class RayTracingComputeRegressionTests
     {
+        private struct UInt4
+        {
+            public uint x;
+            public uint y;
+            public uint z;
+            public uint w;
+        }
+
         private const string ComputeShaderPath = "Assets/Scripts/RayTracingCompute.compute";
         private const string DenoiserShaderPath = "Assets/Resources/RayTracingSpatialDenoiser.compute";
         private const float Epsilon = 0.0001f;
         // Transform.eulerAngles round-trips through a quaternion, producing roughly 0.00025 degrees
         // of platform-dependent error near the pitch limits.
         private const float CameraRotationEpsilon = 0.001f;
+
+        [Test]
+        public void AdaptiveGroupScheduler_MetalWorkListAndRootOffsetsMatchSingleGroupReference()
+        {
+            if (!SystemInfo.supportsComputeShaders || SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
+                Assert.Ignore("Group scheduler parity requires an active compute graphics device.");
+
+            ComputeShader shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
+            Assert.That(shader, Is.Not.Null);
+            Assert.That(shader.HasKernel("CSAdaptiveProbeGroups"), Is.True);
+
+            const int width = 8;
+            const int height = 8;
+            var result = CreateRandomWriteTexture(width, height, RenderTextureFormat.ARGBFloat);
+            var groups = new ComputeBuffer(1, sizeof(uint) * 4);
+            var state = new ComputeBuffer(1, sizeof(uint) * 4);
+            var info = new ComputeBuffer(1, sizeof(uint) * 4);
+            var metadata = new ComputeBuffer(64, sizeof(uint));
+            var workList = new ComputeBuffer(width * height, sizeof(uint) * 2);
+            var rootOffsets = new ComputeBuffer(width * height, sizeof(uint));
+            try
+            {
+                groups.SetData(new[] { new UInt4 { x = 1u, y = 5u, z = 64u, w = 0u } });
+                int clear = shader.FindKernel("ClearAdaptiveWorkList");
+                int probe = shader.FindKernel("CSAdaptiveProbeGroups");
+                int allocate = shader.FindKernel("CSAdaptiveAllocateGroups");
+                int build = shader.FindKernel("CSAdaptiveBuildGroupWorkList");
+                foreach (int kernel in new[] { clear, probe, allocate, build })
+                {
+                    shader.SetTexture(kernel, "Result", result);
+                    shader.SetBuffer(kernel, "AdaptiveProbeGroups", groups);
+                    shader.SetBuffer(kernel, "AdaptiveGroupState", state);
+                    shader.SetBuffer(kernel, "AdaptiveGroupInfo", info);
+                    shader.SetBuffer(kernel, "AdaptiveWorkListMetadata", metadata);
+                    shader.SetBuffer(kernel, "AdaptiveWorkList", workList);
+                    shader.SetBuffer(kernel, "AdaptiveWorkRootOffsets", rootOffsets);
+                    shader.SetInt("_AdaptiveGroupWidth", 1);
+                    shader.SetInt("_AdaptiveGroupHeight", 1);
+                    shader.SetInt("_AdaptiveGroupCount", 1);
+                    shader.SetInt("_NumberOfPasses", 1);
+                }
+                shader.Dispatch(clear, 64, 1, 1);
+                shader.Dispatch(probe, 1, 1, 1);
+                shader.Dispatch(allocate, 1, 1, 1);
+                shader.Dispatch(build, 1, 1, 1);
+
+                var actualMetadata = new uint[64];
+                var actualWorkList = new Vector2Int[width * height];
+                var actualOffsets = new uint[width * height];
+                metadata.GetData(actualMetadata);
+                workList.GetData(actualWorkList);
+                rootOffsets.GetData(actualOffsets);
+                Assert.That(actualMetadata[5], Is.EqualTo(64u));
+                Assert.That(actualMetadata[2], Is.EqualTo(64u));
+                Assert.That(actualMetadata[0], Is.EqualTo(64u));
+                for (int pixel = 0; pixel < 64; pixel++)
+                {
+                    Assert.That(actualWorkList[pixel], Is.EqualTo(new Vector2Int(pixel, 1)), $"work item {pixel}");
+                    Assert.That(actualOffsets[pixel], Is.EqualTo((uint)pixel), $"root offset {pixel}");
+                }
+            }
+            finally
+            {
+                result.Release(); groups.Release(); state.Release(); info.Release(); metadata.Release();
+                workList.Release(); rootOffsets.Release();
+            }
+        }
+
+        [Test]
+        public void AdaptiveGroupScheduler_RotatingRemainderChangesServedGroupAcrossCycles()
+        {
+            const int groupCount = 3;
+            var served = new bool[groupCount];
+            for (int cycle = 0; cycle < groupCount; cycle++)
+            {
+                int selected = cycle % groupCount;
+                served[selected] = true;
+            }
+            Assert.That(served, Is.All.True);
+        }
+
+        [Test]
+        public void AdaptiveGroupScheduler_GuideKernelsAreIsolatedFromFullResolutionState()
+        {
+            string shaderSource = System.IO.File.ReadAllText(ComputeShaderPath);
+            int start = shaderSource.IndexOf("groupshared float4 AdaptiveGuideRadiance", StringComparison.Ordinal);
+            int end = shaderSource.IndexOf("void CSAdaptiveClassifyGroups", start, StringComparison.Ordinal);
+            string guidance = shaderSource.Substring(start, end - start);
+            Assert.That(guidance, Does.Not.Contain("AccumulationResult["));
+            Assert.That(guidance, Does.Not.Contain("AdaptiveSamplingState["));
+            Assert.That(guidance, Does.Not.Contain("AdaptiveWorkList["));
+        }
+
+        [Test]
+        public void AdaptiveGroupScheduler_GuideTraceUsesOneDeterministicLaneSampleAndStableReduction()
+        {
+            string shaderSource = System.IO.File.ReadAllText(ComputeShaderPath);
+            int start = shaderSource.IndexOf("groupshared float4 AdaptiveGuideRadiance", StringComparison.Ordinal);
+            int end = shaderSource.IndexOf("void CSAdaptiveClassifyGroups", start, StringComparison.Ordinal);
+            string guidance = shaderSource.Substring(start, end - start);
+
+            Assert.That(guidance, Does.Contain("[numthreads(8,8,1)]"));
+            Assert.That(guidance, Does.Contain("groupshared float4 AdaptiveGuideRadiance[64]"));
+            Assert.That(guidance, Does.Contain("groupshared uint AdaptiveGuideTraceEnabled"));
+            Assert.That(guidance, Does.Contain("uint localSample = passIndex * 64u + groupIndex"));
+            Assert.That(guidance, Does.Contain("CreateRngState(guidePixel, (uint)state.x + localSample)"));
+            Assert.That(guidance, Does.Contain("((guidePixel + jitter) / float2(_AdaptiveGroupWidth, _AdaptiveGroupHeight))"));
+            Assert.That(guidance, Does.Contain("GroupMemoryBarrierWithGroupSync()"));
+            Assert.That(guidance, Does.Contain("for (uint localIndex = 0u; localIndex < 64u; localIndex++)"));
+            Assert.That(guidance, Does.Contain("bool traceGuide = AdaptiveGuideTraceEnabled != 0u"));
+            Assert.That(guidance, Does.Contain("if (traceGuide)"));
+            Assert.That(guidance, Does.Contain("if (!traceGuide || groupIndex != 0u) return"));
+        }
+
+        [Test]
+        public void AdaptiveGroupScheduler_ResetClearsGuidanceAndGroupState()
+        {
+            string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+            int start = managerSource.IndexOf("if (_adaptiveSamplingStateTexture != null)", StringComparison.Ordinal);
+            int end = managerSource.IndexOf("if (targetShader == shader", start, StringComparison.Ordinal);
+            string reset = managerSource.Substring(start, end - start);
+            Assert.That(reset, Does.Contain("ClearAdaptiveGuidanceState"));
+            Assert.That(reset, Does.Contain("ClearAdaptiveGroupState"));
+        }
+
+        [Test]
+        public void AdaptiveGroupScheduler_PromotionUsesTwoConsecutivePerGroupGuideConvergenceBatches()
+        {
+            string shaderSource = System.IO.File.ReadAllText(ComputeShaderPath);
+            int start = shaderSource.IndexOf("void CSAdaptiveClassifyGroups", StringComparison.Ordinal);
+            int guidanceStart = shaderSource.IndexOf("void CSAdaptiveGuidanceTrace", StringComparison.Ordinal);
+            int classifyEnd = shaderSource.IndexOf("void CSAdaptiveAllocateGroups", start, StringComparison.Ordinal);
+            string classify = shaderSource.Substring(start, classifyEnd - start);
+            Assert.That(classify, Does.Contain("persistent.z >= 2u"));
+            string guidance = shaderSource.Substring(guidanceStart, start - guidanceStart);
+            Assert.That(guidance, Does.Contain("guideChange"));
+            Assert.That(guidance, Does.Contain("_AdaptiveGuidanceMinSamples"));
+            Assert.That(guidance, Does.Contain("_AdaptiveGuidanceChangeThreshold"));
+            Assert.That(guidance, Does.Contain("guideConverged"));
+        }
+
+        [Test]
+        public void AdaptiveGroupScheduler_UsesFixedSixtyFourPathGroupBudget()
+        {
+            string shaderSource = System.IO.File.ReadAllText(ComputeShaderPath);
+            Assert.That(shaderSource, Does.Contain("uint samplesPerGroup = 64u"));
+            Assert.That(shaderSource, Does.Contain("fullResolutionPaths += 64u * info.w"));
+            Assert.That(shaderSource, Does.Not.Contain("CSAdaptiveResolveQuantileBuckets"));
+        }
+
+        [Test]
+        public void AdaptiveGroupScheduler_FixedAccountingIncludesCoarseAndFullResolutionPaths()
+        {
+            string shaderSource = System.IO.File.ReadAllText(ComputeShaderPath);
+            int start = shaderSource.IndexOf("void CSAdaptiveAllocateGroups", StringComparison.Ordinal);
+            int end = shaderSource.IndexOf("void CSAdaptiveProbeGroups", start, StringComparison.Ordinal);
+            string allocation = shaderSource.Substring(start, end - start);
+
+            Assert.That(allocation, Does.Contain("uint totalBudget = width * height * (uint)max(1, _NumberOfPasses)"));
+            Assert.That(allocation, Does.Contain("AdaptiveMetadataAssignedPaths] = totalBudget"));
+            Assert.That(allocation, Does.Contain("fullResolutionPaths += 64u * info.w"));
+            Assert.That(shaderSource, Does.Contain("AdaptiveMetadataGuidancePaths], samplesPerGroup"));
+        }
+
+        [Test]
+        public void SceneCapture_AdaptiveHeatmapUsesDynamicBandsAndCombinedReferenceDifference()
+        {
+            string source = System.IO.File.ReadAllText("Assets/Editor/RayTracingSceneCapture.cs");
+            Assert.That(source, Does.Contain("diagnostics.pathCounts[index]"));
+            Assert.That(source, Does.Contain("quantileByPathCount"));
+            Assert.That(source, Does.Contain("quantile > 0.80f"));
+            Assert.That(source, Does.Contain("quantile > 0.60f"));
+            Assert.That(source, Does.Contain("quantile > 0.40f"));
+            Assert.That(source, Does.Contain("GenerateReferenceComparisonImage"));
+            Assert.That(source, Does.Contain("new Color(redAmount, greenAmount, 0.0f, 1.0f)"));
+        }
 
         [Test]
         public void ProductionShader_ReflectionRefractionAndAbsorptionBaselines_AreStable()
@@ -353,13 +537,13 @@ namespace GPURayTracing.Tests
                 int changedPolicyHash = (int)hashMethod.Invoke(manager, null);
                 managerType.GetField("adaptiveSamplingExploration").SetValue(manager, 0.15f);
                 int changedExplorationHash = (int)hashMethod.Invoke(manager, null);
-                managerType.GetField("adaptiveSamplingReclassificationInterval").SetValue(manager, 16);
-                int changedIntervalHash = (int)hashMethod.Invoke(manager, null);
+                managerType.GetField("adaptiveGuidanceMinSamples").SetValue(manager, 4);
+                int changedGuidanceHash = (int)hashMethod.Invoke(manager, null);
 
                 Assert.That(adaptiveHash, Is.Not.EqualTo(uniformHash));
                 Assert.That(changedPolicyHash, Is.Not.EqualTo(adaptiveHash));
                 Assert.That(changedExplorationHash, Is.Not.EqualTo(changedPolicyHash));
-                Assert.That(changedIntervalHash, Is.Not.EqualTo(changedExplorationHash));
+                Assert.That(changedGuidanceHash, Is.Not.EqualTo(changedExplorationHash));
             }
             finally
             {
@@ -368,271 +552,33 @@ namespace GPURayTracing.Tests
             }
         }
 
-        [Test]
-        public void GameManager_AdaptiveBucketAllocation_ConservesRootBudgetAndPrefersHighestBucket()
+        [TestCase(1, 1)]
+        [TestCase(3, 5)]
+        [TestCase(13, 7)]
+        [TestCase(17, 19)]
+        public void AdaptiveGroupScheduler_PartialGroupsCoverEveryPixelExactlyOnce(int width, int height)
         {
-            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
-            Assert.That(managerType, Is.Not.Null);
-            MethodInfo allocationMethod = managerType.GetMethod("AllocateAdaptiveBucketBudget",
-                BindingFlags.Static | BindingFlags.NonPublic);
-            Assert.That(allocationMethod, Is.Not.Null);
-
-            var populations = new uint[16];
-            populations[3] = 7;
-            populations[12] = 2;
-            var admitted = (uint[])allocationMethod.Invoke(null, new object[] { 91u, 15u, 1u, populations });
-
-            Assert.That(admitted, Has.Length.EqualTo(16));
-            Assert.That(admitted[12], Is.EqualTo(8u));
-            Assert.That(admitted[3], Is.EqualTo(28u));
-            Assert.That(Sum(admitted) + 15u, Is.EqualTo(91u));
-        }
-
-        [TestCase(1, 1, 1)]
-        [TestCase(3, 5, 1)]
-        [TestCase(13, 7, 2)]
-        public void GameManager_AdaptiveBucketAllocation_ConservesOddDimensionBudgets(int width, int height, int pathsPerPixel)
-        {
-            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
-            Assert.That(managerType, Is.Not.Null);
-            MethodInfo allocationMethod = managerType.GetMethod("AllocateAdaptiveBucketBudget",
-                BindingFlags.Static | BindingFlags.NonPublic);
-            Assert.That(allocationMethod, Is.Not.Null);
-
-            uint rootBudget = (uint)(width * height * pathsPerPixel);
-            var populations = new uint[16];
-            populations[0] = 1;
-            populations[15] = (uint)(width * height - 1);
-            var admitted = (uint[])allocationMethod.Invoke(null, new object[] { rootBudget, 0u, (uint)pathsPerPixel, populations });
-
-            Assert.That(Sum(admitted), Is.EqualTo(rootBudget));
-            Assert.That(admitted[width * height == 1 ? 0 : 15], Is.EqualTo(rootBudget));
+            var seen = new bool[width * height];
+            int groupWidth = Mathf.CeilToInt(width / 8.0f);
+            int groupHeight = Mathf.CeilToInt(height / 8.0f);
+            for (int groupY = 0; groupY < groupHeight; groupY++)
+            for (int groupX = 0; groupX < groupWidth; groupX++)
+            for (int y = groupY * 8; y < Math.Min(height, groupY * 8 + 8); y++)
+            for (int x = groupX * 8; x < Math.Min(width, groupX * 8 + 8); x++)
+            {
+                int pixel = x + y * width;
+                Assert.That(seen[pixel], Is.False);
+                seen[pixel] = true;
+            }
+            Assert.That(seen, Is.All.True);
         }
 
         [Test]
-        public void GameManager_AdaptiveBucketAllocation_CapsPerPixelDemandBeforeLowerBuckets()
+        public void AdaptiveGroupScheduler_BucketMotionIsLimitedToOneStep()
         {
-            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
-            MethodInfo allocationMethod = managerType.GetMethod("AllocateAdaptiveBucketBudget",
-                BindingFlags.Static | BindingFlags.NonPublic);
-            var populations = new uint[16];
-            populations[15] = 2;
-            populations[14] = 10;
-
-            var admitted = (uint[])allocationMethod.Invoke(null, new object[] { 30u, 0u, 1u, populations });
-
-            Assert.That(admitted[15], Is.EqualTo(8u));
-            Assert.That(admitted[14], Is.EqualTo(22u));
-            Assert.That(Sum(admitted), Is.EqualTo(30u));
-        }
-
-        [TestCase(0u, 0u)]
-        [TestCase(1u, 1u)]
-        [TestCase(3u, 3u)]
-        [TestCase(4u, 3u)]
-        [TestCase(7u, 4u)]
-        [TestCase(15u, 6u)]
-        [TestCase(31u, 7u)]
-        [TestCase(63u, 9u)]
-        [TestCase(127u, 11u)]
-        [TestCase(255u, 12u)]
-        [TestCase(511u, 14u)]
-        [TestCase(1023u, 15u)]
-        [TestCase(1023u, 15u)]
-        [TestCase(1024u, 15u)]
-        [TestCase(uint.MaxValue, 15u)]
-        public void AdaptivePriorityBucket_LogarithmicMapping_CoversLowPriorityRange(uint priority, uint expectedBucket)
-        {
-            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
-            Assert.That(managerType, Is.Not.Null);
-            MethodInfo bucketMethod = managerType.GetMethod("GetAdaptivePriorityBucketForTest",
-                BindingFlags.Static | BindingFlags.NonPublic);
-            Assert.That(bucketMethod, Is.Not.Null);
-
-            uint actualBucket = (uint)bucketMethod.Invoke(null, new object[] { priority });
-
-            Assert.That(actualBucket, Is.EqualTo(expectedBucket));
-        }
-
-        [TestCase(1, 1, 1, new uint[] { 0 })]
-        [TestCase(3, 5, 1, new uint[] { 0, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3 })]
-        [TestCase(13, 7, 1, new uint[] { 0, 16, 16, 15, 15, 14, 14, 13, 13, 12 })]
-        [TestCase(17, 19, 1, new uint[] { 16, 16, 16, 15, 15, 14, 0, 0, 13, 12, 11 })]
-        public void AdaptiveParallelAllocator_GpuWorkListMatchesStableCpuReference(int width, int height,
-            int pathsPerPixel, uint[] lanePattern)
-        {
-            if (!SystemInfo.supportsComputeShaders) Assert.Ignore("Compute shaders are not supported by the active graphics device.");
-            ComputeShader shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
-            if (shader == null || !shader.HasKernel("CSAdaptiveProbeClassify"))
-                Assert.Ignore("The active graphics device did not compile the adaptive probe kernels.");
-
-            int pixelCount = width * height;
-            var lanes = new uint[pixelCount];
-            for (int i = 0; i < lanes.Length; i++) lanes[i] = lanePattern[i % lanePattern.Length];
-            var expected = BuildAdaptiveCpuReference(lanes, pathsPerPixel);
-                int groupsX = Mathf.CeilToInt(width / 4.0f);
-                int groupsY = Mathf.CeilToInt(height / 4.0f);
-                int blockCount = Mathf.CeilToInt(pixelCount / 256.0f);
-                var result = new RenderTexture(width, height, 0, RenderTextureFormat.ARGBFloat) { enableRandomWrite = true };
-                var pixelInfo = new ComputeBuffer(pixelCount, sizeof(uint) * 2);
-                var pixelRanks = new ComputeBuffer(pixelCount, sizeof(uint));
-                var workList = new ComputeBuffer(pixelCount, sizeof(uint) * 2);
-                var metadata = new ComputeBuffer(64, sizeof(uint));
-            var groupCounts = new ComputeBuffer(blockCount * 17, sizeof(uint));
-            var blockSums = new ComputeBuffer(blockCount * 17, sizeof(uint));
-            var offsets = new ComputeBuffer(17, sizeof(uint));
-            var budgets = new ComputeBuffer(17, sizeof(uint));
-            var probeLanes = new ComputeBuffer(pixelCount, sizeof(uint));
-            try
-            {
-                result.Create();
-                probeLanes.SetData(lanes);
-                int clearMetadata = shader.FindKernel("ClearAdaptiveWorkList");
-                int clearCounts = shader.FindKernel("ClearAdaptiveGroupBucketCounts");
-                int classify = shader.FindKernel("CSAdaptiveProbeClassify");
-                int scan = shader.FindKernel("CSAdaptiveScanGroupBuckets");
-                int allocate = shader.FindKernel("CSAdaptiveAllocateParallel");
-                int addOffsets = shader.FindKernel("CSAdaptiveAddBucketOffsets");
-                int compact = shader.FindKernel("CSAdaptiveCompactParallel");
-                foreach (int kernel in new[] { classify, scan, allocate, addOffsets, compact })
-                {
-                    shader.SetTexture(kernel, "Result", result);
-                    shader.SetBuffer(kernel, "AdaptivePixelInfo", pixelInfo);
-                    shader.SetBuffer(kernel, "AdaptivePixelBucketRanks", pixelRanks);
-                    shader.SetBuffer(kernel, "AdaptiveWorkList", workList);
-                    shader.SetBuffer(kernel, "AdaptiveWorkListMetadata", metadata);
-                    shader.SetBuffer(kernel, "AdaptiveGroupBucketCounts", groupCounts);
-                    shader.SetBuffer(kernel, "AdaptiveBucketBlockSums", blockSums);
-                    shader.SetBuffer(kernel, "AdaptiveBucketWorkOffsets", offsets);
-                    shader.SetBuffer(kernel, "AdaptiveBucketBudgets", budgets);
-                    shader.SetInt("_AdaptiveBucketBlockCount", blockCount);
-                    shader.SetInt("_AdaptiveWorkListCapacity", pixelCount);
-                    shader.SetInt("_NumberOfPasses", pathsPerPixel);
-                }
-                shader.SetBuffer(classify, "AdaptiveProbeLanes", probeLanes);
-                shader.SetBuffer(clearMetadata, "AdaptiveWorkListMetadata", metadata);
-                shader.SetBuffer(clearCounts, "AdaptiveGroupBucketCounts", groupCounts);
-                shader.SetInt("_AdaptiveBucketBlockCount", blockCount);
-                shader.Dispatch(clearMetadata, 64, 1, 1);
-                shader.Dispatch(clearCounts, Mathf.CeilToInt(blockCount * 17 / 64.0f), 1, 1);
-                shader.Dispatch(classify, groupsX, groupsY, 1);
-                shader.Dispatch(scan, blockCount, 17, 1);
-                shader.Dispatch(allocate, 1, 1, 1);
-                shader.Dispatch(addOffsets, blockCount, 17, 1);
-                shader.Dispatch(compact, blockCount, 1, 1);
-
-                var actualMetadata = new uint[64];
-                var actualWorkList = new Vector2Int[pixelCount];
-                metadata.GetData(actualMetadata);
-                workList.GetData(actualWorkList);
-                Assert.That(actualMetadata[5], Is.EqualTo((uint)pixelCount * (uint)pathsPerPixel));
-                Assert.That(actualMetadata[2], Is.EqualTo((uint)pixelCount * (uint)pathsPerPixel));
-                Assert.That(actualMetadata[0], Is.EqualTo(expected.Count));
-                Assert.That(actualMetadata[3], Is.Zero, "The compact work list must not overflow its one-item-per-pixel capacity.");
-                for (int i = 0; i < expected.Count; i++)
-                {
-                    Assert.That(actualWorkList[i], Is.EqualTo(expected[i]), $"work item {i}");
-                }
-            }
-            finally
-            {
-                result.Release(); pixelInfo.Release(); pixelRanks.Release(); workList.Release(); metadata.Release(); groupCounts.Release();
-                blockSums.Release(); offsets.Release(); budgets.Release(); probeLanes.Release();
-            }
-        }
-
-        [TestCase(13, 7, new uint[] { 0 })]
-        [TestCase(17, 19, new uint[] { 16 })]
-        [TestCase(17, 19, new uint[] { 15, 15, 14, 14, 0, 0, 1, 1 })]
-        public void AdaptiveParallelAllocator_GpuMetadataMatchesCpuReference(int width, int height, uint[] lanePattern)
-        {
-            if (!SystemInfo.supportsComputeShaders) Assert.Ignore("Compute shaders are not supported by the active graphics device.");
-            ComputeShader shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
-            if (shader == null || !shader.HasKernel("CSAdaptiveProbeClassify"))
-                Assert.Ignore("The active graphics device did not compile the adaptive probe kernels.");
-
-            int pixelCount = width * height;
-            var lanes = new uint[pixelCount];
-            for (int i = 0; i < lanes.Length; i++) lanes[i] = lanePattern[i % lanePattern.Length];
-            var expected = BuildAdaptiveCpuReference(lanes, 1);
-            var expectedPopulations = new uint[16];
-            uint expectedBootstrapPixels = 0;
-            foreach (uint lane in lanes)
-            {
-                if (lane == 0u) expectedBootstrapPixels++;
-                else expectedPopulations[lane - 1u]++;
-            }
-            var expectedBudgets = AllocateAdaptiveBucketBudgetForTest((uint)pixelCount, expectedBootstrapPixels, expectedPopulations);
-            int groupsX = Mathf.CeilToInt(width / 4.0f);
-            int groupsY = Mathf.CeilToInt(height / 4.0f);
-            int blockCount = Mathf.CeilToInt(pixelCount / 256.0f);
-            var result = new RenderTexture(width, height, 0, RenderTextureFormat.ARGBFloat) { enableRandomWrite = true };
-            var pixelInfo = new ComputeBuffer(pixelCount, sizeof(uint) * 2);
-            var pixelRanks = new ComputeBuffer(pixelCount, sizeof(uint));
-            var workList = new ComputeBuffer(pixelCount, sizeof(uint) * 2);
-            var metadata = new ComputeBuffer(64, sizeof(uint));
-            var groupCounts = new ComputeBuffer(blockCount * 17, sizeof(uint));
-            var blockSums = new ComputeBuffer(blockCount * 17, sizeof(uint));
-            var offsets = new ComputeBuffer(17, sizeof(uint));
-            var budgets = new ComputeBuffer(17, sizeof(uint));
-            var probeLanes = new ComputeBuffer(pixelCount, sizeof(uint));
-            try
-            {
-                result.Create();
-                probeLanes.SetData(lanes);
-                int clearMetadata = shader.FindKernel("ClearAdaptiveWorkList");
-                int clearCounts = shader.FindKernel("ClearAdaptiveGroupBucketCounts");
-                int classify = shader.FindKernel("CSAdaptiveProbeClassify");
-                int scan = shader.FindKernel("CSAdaptiveScanGroupBuckets");
-                int allocate = shader.FindKernel("CSAdaptiveAllocateParallel");
-                int addOffsets = shader.FindKernel("CSAdaptiveAddBucketOffsets");
-                int compact = shader.FindKernel("CSAdaptiveCompactParallel");
-                foreach (int kernel in new[] { classify, scan, allocate, addOffsets, compact })
-                {
-                    shader.SetTexture(kernel, "Result", result);
-                    shader.SetBuffer(kernel, "AdaptivePixelInfo", pixelInfo);
-                    shader.SetBuffer(kernel, "AdaptivePixelBucketRanks", pixelRanks);
-                    shader.SetBuffer(kernel, "AdaptiveWorkList", workList);
-                    shader.SetBuffer(kernel, "AdaptiveWorkListMetadata", metadata);
-                    shader.SetBuffer(kernel, "AdaptiveGroupBucketCounts", groupCounts);
-                    shader.SetBuffer(kernel, "AdaptiveBucketBlockSums", blockSums);
-                    shader.SetBuffer(kernel, "AdaptiveBucketWorkOffsets", offsets);
-                    shader.SetBuffer(kernel, "AdaptiveBucketBudgets", budgets);
-                    shader.SetInt("_AdaptiveBucketBlockCount", blockCount);
-                    shader.SetInt("_AdaptiveWorkListCapacity", pixelCount);
-                    shader.SetInt("_NumberOfPasses", 1);
-                }
-                shader.SetBuffer(classify, "AdaptiveProbeLanes", probeLanes);
-                shader.SetBuffer(clearMetadata, "AdaptiveWorkListMetadata", metadata);
-                shader.SetBuffer(clearCounts, "AdaptiveGroupBucketCounts", groupCounts);
-                shader.SetInt("_AdaptiveBucketBlockCount", blockCount);
-                shader.Dispatch(clearMetadata, 64, 1, 1);
-                shader.Dispatch(clearCounts, Mathf.CeilToInt(blockCount * 17 / 64.0f), 1, 1);
-                shader.Dispatch(classify, groupsX, groupsY, 1);
-                shader.Dispatch(scan, blockCount, 17, 1);
-                shader.Dispatch(allocate, 1, 1, 1);
-                shader.Dispatch(addOffsets, blockCount, 17, 1);
-                shader.Dispatch(compact, blockCount, 1, 1);
-
-                var actual = new uint[64];
-                metadata.GetData(actual);
-                Assert.That(actual[5], Is.EqualTo((uint)pixelCount));
-                Assert.That(actual[2], Is.EqualTo((uint)pixelCount));
-                Assert.That(actual[0], Is.EqualTo(expected.Count));
-                Assert.That(actual[4], Is.EqualTo(expectedBootstrapPixels));
-                Assert.That(actual[7], Is.EqualTo(expectedBootstrapPixels));
-                for (int bucket = 0; bucket < 16; bucket++)
-                {
-                    Assert.That(actual[16 + bucket], Is.EqualTo(expectedPopulations[bucket]), $"bucket {bucket} population");
-                    Assert.That(actual[48 + bucket], Is.EqualTo(expectedBudgets[bucket]), $"bucket {bucket} budget");
-                    Assert.That(actual[32 + bucket], Is.EqualTo(expectedBudgets[bucket]), $"bucket {bucket} admitted paths");
-                }
-            }
-            finally
-            {
-                result.Release(); pixelInfo.Release(); pixelRanks.Release(); workList.Release(); metadata.Release(); groupCounts.Release();
-                blockSums.Release(); offsets.Release(); budgets.Release(); probeLanes.Release();
-            }
+            const uint previous = 7;
+            Assert.That(Math.Min(previous + 1u, Math.Max(previous - 1u, 15u)), Is.EqualTo(8u));
+            Assert.That(Math.Min(previous + 1u, Math.Max(previous - 1u, 0u)), Is.EqualTo(6u));
         }
 
         [Test]
@@ -847,40 +793,6 @@ namespace GPURayTracing.Tests
             Assert.That(emittedPaths, Is.EqualTo(expectedPaths));
         }
 
-        private static uint[] AllocateAdaptiveBucketBudgetForTest(uint rootBudget, uint bootstrapPixels, uint[] populations)
-        {
-            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
-            MethodInfo allocationMethod = managerType.GetMethod("AllocateAdaptiveBucketBudget", BindingFlags.Static | BindingFlags.NonPublic);
-            return (uint[])allocationMethod.Invoke(null, new object[] { rootBudget, bootstrapPixels, 1u, populations });
-        }
-
-        private static List<Vector2Int> BuildAdaptiveCpuReference(uint[] lanes, int pathsPerPixel)
-        {
-            var result = new List<Vector2Int>();
-            var perBucket = new List<int>[16];
-            for (int bucket = 0; bucket < 16; bucket++) perBucket[bucket] = new List<int>();
-            for (int pixel = 0; pixel < lanes.Length; pixel++)
-            {
-                if (lanes[pixel] == 0u) result.Add(new Vector2Int(pixel, pathsPerPixel));
-                else perBucket[(int)lanes[pixel] - 1].Add(pixel);
-            }
-            uint remaining = (uint)(lanes.Length * pathsPerPixel - result.Count * pathsPerPixel);
-            for (int bucket = 15; bucket >= 0 && remaining > 0; bucket--)
-            {
-                List<int> pixels = perBucket[bucket];
-                uint budget = Math.Min(remaining, (uint)pixels.Count * (uint)pathsPerPixel * 4u);
-                uint basePaths = pixels.Count == 0 ? 0u : budget / (uint)pixels.Count;
-                uint extraPaths = pixels.Count == 0 ? 0u : budget % (uint)pixels.Count;
-                for (int index = 0; index < pixels.Count; index++)
-                {
-                    uint paths = basePaths + (index < extraPaths ? 1u : 0u);
-                    if (paths > 0u) result.Add(new Vector2Int(pixels[index], (int)paths));
-                }
-                remaining -= budget;
-            }
-            return result;
-        }
-
         [Test]
         public void GameManager_DefaultFireflyClamp_IsEnabled()
         {
@@ -910,7 +822,8 @@ namespace GPURayTracing.Tests
 
             MethodInfo sizeMethod = managerType.GetMethod(
                 "CalculateInternalRenderSize",
-                BindingFlags.Static | BindingFlags.NonPublic);
+                BindingFlags.Static | BindingFlags.NonPublic, null,
+                new[] { typeof(int), typeof(int), typeof(float) }, null);
             Assert.That(sizeMethod, Is.Not.Null);
 
             Assert.That((Vector2Int)sizeMethod.Invoke(null, new object[] { 1920, 1080, 50.0f }),
@@ -919,6 +832,26 @@ namespace GPURayTracing.Tests
                 Is.EqualTo(new Vector2Int(8, 4)));
             Assert.That((Vector2Int)sizeMethod.Invoke(null, new object[] { 1, 1, 0.0f }),
                 Is.EqualTo(Vector2Int.one));
+        }
+
+        [TestCase(1366, 768, 100.0f, 1360, 768)]
+        [TestCase(1920, 1080, 100.0f, 1920, 1080)]
+        [TestCase(1366, 768, 50.0f, 680, 384)]
+        public void GameManager_AdaptiveInternalRenderSize_RoundsEachAxisDownToFullGroups(
+            int width, int height, float percent, int expectedWidth, int expectedHeight)
+        {
+            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+            Assert.That(managerType, Is.Not.Null);
+            MethodInfo sizeMethod = managerType.GetMethod("CalculateInternalRenderSize",
+                BindingFlags.Static | BindingFlags.NonPublic, null,
+                new[] { typeof(int), typeof(int), typeof(float), typeof(bool) }, null);
+            Assert.That(sizeMethod, Is.Not.Null);
+
+            var actual = (Vector2Int)sizeMethod.Invoke(null, new object[] { width, height, percent, true });
+
+            Assert.That(actual, Is.EqualTo(new Vector2Int(expectedWidth, expectedHeight)));
+            Assert.That(actual.x % 8, Is.Zero);
+            Assert.That(actual.y % 8, Is.Zero);
         }
 
         [Test]

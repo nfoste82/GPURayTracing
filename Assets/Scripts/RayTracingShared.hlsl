@@ -11,23 +11,20 @@ RWTexture2D<float> FeatureDepth;
 RWTexture2D<float> FeatureIdentity;
 RWTexture2D<float> FeatureValidity;
 RWTexture2D<float4> AdaptiveSamplingState;
+RWTexture2D<float4> AdaptiveGuidanceState;
+RWTexture2D<float4> AdaptiveGuidancePreview;
 RWStructuredBuffer<uint2> AdaptiveWorkList;
 StructuredBuffer<uint2> AdaptiveTraceWorkList;
 RWStructuredBuffer<uint2> AdaptiveRootWorkList;
 StructuredBuffer<uint2> AdaptiveTraceRootWorkList;
 RWStructuredBuffer<float4> AdaptiveRootRadiance;
 RWStructuredBuffer<uint> AdaptiveWorkRootOffsets;
-RWStructuredBuffer<uint2> AdaptivePixelInfo;
-RWStructuredBuffer<uint> AdaptivePixelBucketRanks;
+RWStructuredBuffer<uint4> AdaptiveGroupState;
+RWStructuredBuffer<uint4> AdaptiveGroupInfo;
+StructuredBuffer<uint4> AdaptiveProbeGroups;
 RWStructuredBuffer<uint> AdaptiveWorkListMetadata;
 RWStructuredBuffer<uint> AdaptiveDispatchArgs;
 RWStructuredBuffer<uint> AdaptiveResolveDispatchArgs;
-RWStructuredBuffer<uint> AdaptiveGroupBucketCounts;
-RWStructuredBuffer<uint> AdaptiveBucketBlockSums;
-RWStructuredBuffer<uint> AdaptiveBucketWorkOffsets;
-RWStructuredBuffer<uint> AdaptiveBucketRootOffsets;
-RWStructuredBuffer<uint> AdaptiveBucketBudgets;
-StructuredBuffer<uint> AdaptiveProbeLanes;
 
 #define AdaptiveMetadataWorkItemCount 0u
 #define AdaptiveMetadataPrioritySum 1u
@@ -45,6 +42,9 @@ StructuredBuffer<uint> AdaptiveProbeLanes;
 #define AdaptiveMetadataBucketPopulationStart 16u
 #define AdaptiveMetadataBucketAdmittedPathsStart 32u
 #define AdaptiveMetadataBucketBudgetStart 48u
+#define AdaptiveMetadataFullResolutionPaths 13u
+#define AdaptiveMetadataGuidancePaths 14u
+#define AdaptiveMetadataCoarseGroups 15u
 #define AdaptiveMetadataCount 64u
 
 RWStructuredBuffer<float4> RegressionResults;
@@ -89,10 +89,13 @@ int _UseFrameAccumulation;
 int _AccumulatedFrameCount;
 int _AdaptiveSamplingMinSamples;
 float _AdaptiveSamplingExploration;
-int _AdaptiveSamplingReclassificationInterval;
+int _AdaptiveGuidanceMinSamples;
+float _AdaptiveGuidanceChangeThreshold;
 uint _AdaptiveWorkListCapacity;
 uint _AdaptiveRootPathCapacity;
-uint _AdaptiveBucketBlockCount;
+uint _AdaptiveGroupWidth;
+uint _AdaptiveGroupHeight;
+uint _AdaptiveGroupCount;
 float _ShadowRandomness;
 float _LightFalloffScale;
 float _ParallaxMaximumStrengthCosine;

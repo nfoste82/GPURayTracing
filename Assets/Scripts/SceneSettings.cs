@@ -20,7 +20,8 @@ public sealed class SceneSettings
     public bool EnableAdaptiveSampling = false;
     public int AdaptiveSamplingMinSamples = 8;
     public float AdaptiveSamplingExploration = 0.05f;
-    public int AdaptiveSamplingReclassificationInterval = 8;
+    public int AdaptiveGuidanceMinSamples = 2;
+    public float AdaptiveGuidanceChangeThreshold = 0.02f;
 
     public int NumBounces = 6;
     public int ShadowQuality = 0;

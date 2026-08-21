@@ -691,6 +691,447 @@ Adaptive sampling has correct unequal-sample accumulation, deterministic per-pix
 
 **Session update, same day:** Diagnosis 1 (max-to-mean block reduction) is now implemented in `CSAdaptiveClassify` and verified in isolation to change nothing else — see "Diagnosis 1 Fix Implemented, Session Stopped Before Capture" above. That same isolation testing surfaced 8 previously-undocumented EditMode test failures in the parallel allocator's own CPU/GPU parity coverage (`AdaptiveParallelAllocator_GpuMetadataMatchesCpuReference`, `AdaptiveParallelAllocator_GpuWorkListMatchesStableCpuReference`, `GameManager_AdaptiveBucketAllocation_ConservesRootBudgetAndPrefersHighestBucket`), confirmed pre-existing and unrelated to the Diagnosis 1 change. The requested precompile/diagnostic-histogram/equal-retired-path-RMSE steps were **not run this session**; the user is running their own tests and will direct the next step. **Do not treat the "42.0% worse RGB RMSE" number as current** — it predates the Diagnosis 1 fix and has not yet been re-measured. The next session should either fix the 8 allocator parity failures first (likely a Diagnosis-2-adjacent bug in `AllocateAdaptiveBucketBudget`/`CSAdaptiveAllocateParallel`/bucket-lane indexing, budget/assigned-paths mismatches of exactly the kind those tests check) or explicitly accept running the capture against a known-broken allocator and label the resulting numbers provisional.
 
+## Group Scheduler Replacement Specification (August 20, 2026)
+
+This section is the approved next implementation. It deliberately **replaces** the current
+pixel-level bucket-cutoff allocator; do not attempt to layer the design onto its existing
+`CSAdaptiveScanGroupBuckets` / `CSAdaptiveAllocateParallel` / `CSAdaptiveCompactParallel`
+semantics. The user committed the prior work to a branch and explicitly authorized removal of
+obsolete allocator code and tests.
+
+### Goals
+
+1. Schedule full-resolution work by spatial `8x8` groups, not independently admitted pixels.
+2. Never let a non-empty priority bucket receive zero allocation.
+3. Give pixels in a selected group an equal number of paths; do not partially admit a group.
+4. Dynamically distribute groups among the 16 priority buckets as the image converges. Fixed
+   absolute thresholds that leave most buckets empty are a defect, not expected behavior.
+5. Limit a group's priority change to one bucket per reclassification. A firefly or outlier may
+   nudge a group, but cannot jump it from one extreme to the other in one update.
+6. Use a guidance-only `1/8`-resolution bootstrap that is shown as an upscaled preview until a
+   group is promoted to full resolution. Coarse samples must never bias full-resolution beauty
+   accumulation.
+7. Keep scheduling overhead low enough that adaptive has a realistic chance to overcome its
+   measured 20-30% per-frame overhead relative to uniform rendering.
+
+### Baseline Evidence
+
+Use these user-provided captures as the baseline for any quality claim:
+
+```text
+TestCaptures/adaptive_rootlist_reference_30s_3/TeapotMaterials/
+TestCaptures/adaptive_rootlist_reference_45s/TeapotMaterials/
+```
+
+At `1024x1024`, `numberOfPasses = 1`:
+
+```text
+30s uniform:  61,865,984 retired paths, RGB RMSE 0.01533497, 36.286 dB
+30s adaptive: 40,894,464 retired paths, RGB RMSE 0.03533929, 29.035 dB
+
+45s uniform:  82,837,504 retired paths, RGB RMSE 0.01262559, 37.975 dB
+45s adaptive: 54,525,952 retired paths, RGB RMSE 0.02615932, 31.647 dB
+```
+
+The existing allocator is slower and materially worse in raw linear RGB error. A visually
+plausible result is not success. Compare equal total retired paths first, then equal wall-clock
+time. Include all coarse guidance paths in total retired paths.
+
+### Budget Contract
+
+The normal full-resolution adaptive budget remains equal to a uniform frame:
+
+```text
+fullResolutionBudget = width * height * max(1, numberOfPasses)
+```
+
+The guide is an additional, temporary cost only for groups still in coarse bootstrap:
+
+```text
+guidanceBudget = numberOfCoarseGroups
+totalRetiredPaths = fullResolutionRetiredPaths + guidanceRetiredPaths
+```
+
+At `1024x1024`, there are `128 * 128 = 16,384` groups, so the maximum initial guidance cost is
+only `1.5625%` of a `1,048,576`-path full-resolution frame. It shrinks to zero as groups promote.
+Do **not** permanently trace a whole-image guidance pass after full-resolution promotion.
+
+The normal full-resolution budget cannot give every group one complete `8x8` update in the same
+frame and also give high-priority groups extras: one update for every group already consumes the
+whole budget. "No starvation" therefore means bounded, rotating service across scheduling cycles,
+not one full group update every frame. A selected group receives all its valid pixels equally;
+within a group do not use per-pixel cutoff admission.
+
+### Per-Group Lifecycle
+
+Each group is exactly `8x8` full-resolution pixels, with partial groups allowed at the right and
+bottom image edges.
+
+```text
+coarse guidance
+-> full-resolution bootstrap
+-> full-resolution adaptive refinement
+```
+
+**Coarse guidance**:
+
+- Trace one representative ray per coarse group only at reclassification cadence initially.
+- Accumulate independent guidance RGB/luminance mean, Welford variance, brightness, and recent
+  change in separate guide state.
+- Display the guide upscaled for a group only while that group's full-resolution beauty count is
+  zero.
+- Promote a group after a minimum guide count and stable guide score, or after a bounded maximum
+  guide count. Add structural early-promotion safeguards for discontinuities when feature data is
+  available (depth, normal, object identity, transparent/emissive/high-smoothness first hit).
+
+**Full-resolution bootstrap/refinement**:
+
+- On promotion, stop guidance tracing for that group forever in a static render.
+- Full-resolution samples alone write `AccumulationResult`, `Beauty`, and
+  `AdaptiveSamplingState`.
+- Derive subsequent group priority from actual full-resolution group statistics.
+- Never copy, seed, or blend the coarse result into `AccumulationResult` or the full-resolution
+  Welford state. The preview is allowed for display, but is not unbiased beauty.
+
+### Priority And Buckets
+
+Compute a continuous, linear-HDR group score. Initial components:
+
+```text
+score = uncertainty
+      + bounded(smoothed relative mean change)
+      + bounded(linear-HDR brightness boost)
+```
+
+- The uncertainty term must be based on linear HDR Welford statistics, not ACES confidence width.
+  The capture acceptance metric is linear RGB RMSE, and bright-pixel underallocation is a current
+  observed failure.
+- A large positive change means the estimate is unstable and should raise priority, not that it is
+  converging quickly.
+- Smooth and clamp change. Then cap bucket motion:
+
+```text
+stableBucket = clamp(targetBucket, previousBucket - 1, previousBucket + 1)
+```
+
+- Apply brightness as a modest bounded multiplier/term before ranking, not as an unconditional
+  material prior or fixed bucket jump.
+- Reject non-finite radiance and use an explicit firefly policy for adaptive captures. A rare
+  firefly may temporarily elevate a group but must not poison persistent state or monopolize
+  budget.
+
+Map continuous scores to buckets by **current-frame quantile rank**, not fixed absolute ranges:
+
+```text
+rank(score among active groups) -> target bucket 0..15
+```
+
+Use a small GPU histogram and prefix scan, not global sorting. Ties may prevent perfect 1/16
+population, but the desired outcome is broadly populated buckets whose relative meaning survives
+as all absolute errors shrink. Bucket `15` is the most urgent tier and bucket `0` the least.
+
+### Allocation
+
+Allocate whole group updates. A complete update costs:
+
+```text
+validPixelsInGroup * pathsPerPixel
+```
+
+For normal groups this is `64 * pathsPerPixel` root paths. Partial edge groups use their actual
+valid-pixel count. The allocator must:
+
+1. Reserve a positive allocation for every non-empty bucket when the budget permits.
+2. Distribute the remaining group-update quanta by bucket population and monotonically increasing
+   bucket weight. Use a smooth logarithmic/exponential tier curve, not high-to-low cutoff filling.
+3. Give every group in a selected bucket the same update count for the current cycle.
+4. Rotate bucket/group remainder assignment each cycle, rather than permanently favoring
+   row-major low-index groups.
+5. Rotate any unavoidable sparse group service across cycles, so every group gets a bounded turn.
+6. Emit all valid pixels in an admitted group with the group's equal path count.
+7. Preserve:
+
+```text
+fullResolutionRequested == assigned == sum(compactWorkItemPaths) == fullResolutionRetired
+totalRetired == fullResolutionRetired + guidanceRetired
+```
+
+Keep one compact root item per actual full-resolution path and retain the existing deterministic
+per-pixel sequence:
+
+```text
+sampleIndex = oldPixelPathCount + localSampleIndex
+```
+
+### Required Resources
+
+Allocate, clear on every progressive reset, resize with output, release on teardown, and bind only
+to kernels that need them:
+
+```text
+AdaptiveGuidanceState   ARGBFloat at ceil(width/8) x ceil(height/8)
+  R count, G luminance mean, B M2, A uncertainty/change auxiliary
+
+AdaptiveGuidancePreview ARGBFloat at the same dimensions
+  guidance RGB mean; presentation-only for currently coarse groups
+
+AdaptiveGroupState      structured uint4 per group
+  stable bucket, stage (coarse/full), rotating service cursor, persistent score/mean bits
+
+AdaptiveGroupInfo       structured uint4 per group, frame-local
+  score/rank bin, target/current bucket, valid-pixel count, allocated group updates
+
+AdaptiveScoreHistogram  small structured uint buffer (16-64 bins)
+```
+
+The existing root work list, root radiance, indirect trace, and per-pixel resolver should remain
+where possible. Replace the pixel-level bucket scan, hard-cutoff allocator, and pixel bucket
+compaction resources after the new group path has parity coverage; do not maintain two production
+allocator paths indefinitely.
+
+### Required Kernels And Dispatch Flow
+
+Suggested replacement kernels:
+
+```text
+ClearAdaptiveGuidanceState
+ClearAdaptiveGroupState
+ClearAdaptiveScoreHistogram
+CSAdaptiveGuidanceTrace
+CSAdaptiveClassifyGroups
+CSAdaptiveResolveQuantileBuckets
+CSAdaptiveAllocateGroups
+CSAdaptiveExpandGroupsToPixelRequests
+CSAdaptiveScanCompactPixelRequests
+CSAdaptiveCompactPixelWorkList
+CSAdaptiveBuildRootWorkList
+CSBuildAdaptiveDispatchArgs
+CSAdaptiveTraceRoot
+CSAdaptiveResolveRoot
+CSAdaptiveComposePreview
+```
+
+Avoid a global sort. The low-cost reclassification path is:
+
+```text
+clear reclassification metadata / histogram
+-> guide trace only coarse groups
+-> classify groups and histogram scores
+-> resolve quantile thresholds
+-> bounded bucket movement and group allocation
+-> expand selected groups to full-resolution per-pixel requests
+-> compact requests and build root list
+-> indirect root trace and pixel resolve
+-> compose guide preview only for coarse/no-full-resolution pixels
+```
+
+On reuse frames, retain the compact full-resolution work list and avoid classification/compaction.
+Do not update guide state every frame initially; use the reclassification cadence so the guide
+does not add a persistent dispatch cost. Revisit guide cadence only after equal-path quality works.
+
+### Presentation
+
+The user selected the displayed coarse-preview option. It is valid only under this separation:
+
+```text
+coarse guide: presentation preview / scheduling guidance only
+full-resolution paths: only source of final unbiased beauty accumulation
+```
+
+`CSAdaptiveComposePreview` may fill visual output from the upscaled guide where a pixel has no
+full-resolution sample. It must never write guide data into `AccumulationResult` or
+`AdaptiveSamplingState`. Once a group has full-resolution beauty, presentation must use beauty
+for that group.
+
+### Tests And Diagnostics
+
+The old CPU/GPU tests target the intentionally removed pixel-cutoff allocator. Replace them with
+group scheduler tests before accepting capture metrics:
+
+1. CPU tests for quantile mapping, ties, all-equal scores, one-step bucket clamp, population
+   balance, whole-group quanta, no-empty-bucket allocation, cycle rotation, and budget
+   conservation.
+2. CPU tests for `1x1`, `3x5`, `13x7`, and `17x19` partial groups.
+3. GPU probe tests that compare compact pixel work items and root offsets to a stable CPU group
+   reference for the same group states/scores.
+4. A multi-cycle probe proving fair rotation when budget cannot service every group per frame.
+5. Preserve controlled root-trace parity: equal per-pixel sample indices must produce equal RGB
+   means and Welford state to the reference path.
+6. Prove guide-only kernels do not modify full-resolution accumulation/state/work-list resources.
+7. Reset tests: camera, resolution, geometry/material/light, adaptive settings, and adaptive
+   toggle clear group and guidance state together.
+8. Capture diagnostics must report full-resolution paths, guidance paths, total retired paths,
+   coarse versus promoted group counts, group bucket populations, allocation min/mean/max,
+   promotion count, and zero-service age/max age.
+
+### Performance Requirements
+
+The current adaptive path was roughly 20-30% slower per frame than uniform. Treat the following
+as hard engineering constraints:
+
+- persistent group state: `ceil(width/8) * ceil(height/8)` records, not pixel-level policy state;
+- histogram/prefix quantiles, not sorting;
+- guide rays only for coarse groups and only at reclassification cadence;
+- no synchronous GPU readbacks outside capture diagnostics;
+- reuse compact work and indirect arguments between reclassifications;
+- do not duplicate expensive path tracing in more kernels than guidance and existing root trace;
+- keep Metal threadgroups conservative (`4x4` for new path tracing kernels); and
+- benchmark scheduler overhead separately from retired paths.
+
+### Verification Order
+
+1. Compile/precompile Metal with a generous timeout (20 minutes; cold compiles may take 7-8
+   minutes or more).
+2. Run focused CPU and GPU group-scheduler parity tests.
+3. Run a small equal-total-path smoke test with odd dimensions and validate all accounting.
+4. Run 512x512 equal-total-retired-path comparisons after coarse promotion is exercised.
+5. Run 1024x1024 equal-total-retired-path comparisons against the user baseline/reference.
+6. Only then run 30s and 45s equal-wall-clock captures using the same TeapotMaterials reference.
+7. Compare at least diffuse, glass/water, glossy, bright-emissive, and caustic fixtures before
+   treating the scheduler as generally beneficial.
+
+### Implementation Update: Group Scheduler WIP (August 21, 2026)
+
+The approved group-scheduler replacement is partially implemented but is **not ready for quality
+claims or the requested reference captures**. The working tree is intentionally uncommitted and
+contains the following changes:
+
+- `GameManager` rounds adaptive internal dimensions down independently to complete 8x8 groups
+  while retaining the requested display resolution for reconstruction. Example: `1366x768` traces
+  at `1360x768` and presents at `1366x768`. Uniform rendering retains its existing sizing.
+- Separate `AdaptiveGuidanceState` and `AdaptiveGuidancePreview` textures exist at 1/8 resolution.
+  Guide tracing and preview composition do not write `AccumulationResult` or
+  `AdaptiveSamplingState`.
+- Group state/info and a score histogram replaced the production C# resource bindings for the
+  pixel-level allocator. The root work list and trace/resolve kernels remain in use.
+- Full-resolution group score uses linear-HDR standard error with a bounded brightness factor;
+  group bucket movement is clamped to one tier per reclassification. Non-finite root radiance is
+  written as zero rather than poisoning Welford state.
+- Capture telemetry now has `guidance_paths` and `total_retired_paths` columns. The capture-wide
+  retired-path calculation sums guidance telemetry across frames, rather than using only the final
+  metadata snapshot.
+
+#### Latest Verified Results
+
+- `RayTracingShaderPrecompiler.PrecompileFromCommandLine` succeeded after the earlier interrupted
+  editor crash: `/tmp/gpuraytracing-group-scheduler-diagnostic-compile.log` reports first dispatch
+  `3 ms`, warm dispatch `0 ms`, total `42 ms`, with no shader errors.
+- Focused size tests passed (`4/4`):
+  `/tmp/gpuraytracing-adaptive-size-tests-2.xml`.
+- Earlier focused group coverage/movement tests passed (`5/5`):
+  `/tmp/gpuraytracing-group-scheduler-tests.xml`.
+- A `512x512`, three-sample adaptive comparison completed:
+  `TestCaptures/group_scheduler_smoke_fixed/TeapotMaterials/`.
+  It wrote on/off images, heatmap, telemetry, and diagnostics without a runtime hang.
+- The smoke showed `4096` guide paths on its first reclassification frame and zero full-resolution
+  paths, which is expected at only three frames: guide promotion requires the second guide sample,
+  while the default reclassification interval is eight frames.
+
+#### Fixed-Budget Update And Next Performance Milestone (August 21, 2026)
+
+This subsection supersedes the preceding group-bucket/reclassification design. The implementation
+now uses a fixed group budget rather than global bucket allocation:
+
+```text
+one 8x8 group = 64 paths per frame per NumberOfPasses
+
+unpromoted group: 64 guide samples at its corresponding 1/8-resolution pixel
+promoted group:   one full-resolution sample per pixel in its 8x8 block
+```
+
+Therefore every adaptive frame must preserve the uniform path budget:
+
+```text
+guidance paths + full-resolution paths
+    == width * height * max(1, numberOfPasses)
+```
+
+There is no hard-coded startup/reclassification interval and no maximum guide-count promotion.
+Every coarse group receives a guide batch each frame. Each group tracks its own relative change
+between completed 64-sample guide batches and promotes permanently only after at least two
+consecutive batches meet `AdaptiveGuidanceChangeThreshold` and the configured minimum guide-batch
+count. Guide results remain presentation-only and never seed full-resolution accumulation.
+
+The initial implementation used one shader invocation per coarse group with a serial loop of 64
+`TracePath()` calls. It corrected accounting but badly underutilizes the GPU. The verified
+five-frame `512x512` capture is:
+
+```text
+TestCaptures/group_scheduler_fixed_budget_smoke/TeapotMaterials/
+
+frame 1: 262,144 guide +       0 full-resolution = 262,144 total paths
+frame 2: 262,144 guide +       0 full-resolution = 262,144 total paths
+frame 3: 262,144 guide +       0 full-resolution = 262,144 total paths
+frame 4: 222,848 guide +  39,296 full-resolution = 262,144 total paths
+frame 5: 174,144 guide +  88,000 full-resolution = 262,144 total paths
+```
+
+This proves independent group promotion and 100% budget use. It is not a performance success:
+the adaptive run averaged `777.671 ms/frame`, because each coarse group still serializes its 64
+path traces.
+
+##### Next Implementation: Parallel Coarse Trace
+
+Replace the serial `CSAdaptiveGuidanceTrace` loop with 64 parallel guide paths per unpromoted
+group. Start with one `[numthreads(8,8,1)]` threadgroup per guide pixel/group:
+
+```text
+group ID             -> coarse guide pixel / 8x8 full-resolution block
+group thread index   -> one of the block's 64 guide samples
+```
+
+Each lane must:
+
+1. Return before tracing if its group is already promoted.
+2. Use the guide pixel and guide texture dimensions to construct the coarse pixel footprint:
+
+   ```hlsl
+   uv = ((guidePixel + jitter) / guideDimensions) * 2.0f - 1.0f;
+   ```
+
+3. Use the deterministic sample index `previousGuideCount + localSampleIndex`.
+4. Trace exactly one path and write its finite radiance to `groupshared float4 guideRadiance[64]`.
+5. Synchronize; one lane then reduces the contiguous 64 samples in deterministic local-index
+   order into guide Welford state, preview RGB, relative change, and the consecutive-stable-batch
+   counter.
+
+Do not initially introduce a global guide-radiance buffer, compaction pipeline, or separate guide
+resolve dispatch. A groupshared reduction keeps guide roots local, avoids intermediate global
+memory traffic, and makes the coarse stage one dispatch.
+
+At `512x512`, this schedules `64 * 64 = 4,096` threadgroups of 64 lanes: `262,144` independent
+guide paths, equal to a one-sample full-resolution frame. This should provide enough work to
+saturate the GPU while every group remains coarse.
+
+`8x8` is valid in this project: the spatial denoiser already uses it throughout and the adaptive
+classifier uses it. It is still an experiment for the register-heavy `TracePath()` body. The main
+renderer deliberately uses `[numthreads(4,4,1)]` (16 threads) on Metal to control group register
+pressure. Implement and benchmark the natural `8x8` path first, then compare it against a
+functionally identical `4x4`/16-thread guide-trace kernel if Metal compilation warnings or timing
+show lower occupancy. Both candidates must trace the identical fixed path count; choose based on
+warm representative-scene timings, not threadgroup count alone.
+
+##### Required Validation After Parallelization
+
+1. Preserve the accounting invariant above for all-coarse, mixed, and all-promoted frames.
+2. Add a GPU test that verifies one coarse group produces 64 distinct deterministic guide sample
+   indices and that its resolver updates only guidance resources.
+3. Confirm the same promotion pattern/results as the serial path for a controlled deterministic
+   fixture.
+4. Precompile Metal, inspect register-pressure/compiler warnings, and benchmark `8x8` against a
+   `4x4` alternative if necessary.
+5. Repeat the short `512x512` smoke, then proceed to equal-retired-path quality comparisons only
+   after accounting and trace-state parity hold.
+
+#### Operational Notes
+
+- Batch Unity requires the project not be open in another Unity instance.
+- An interrupted precompile produced the untracked diagnostic file
+  `mono_crash.137d23bcc6.0.json`; preserve it unless the user asks to remove generated crash data.
+- The initial one-sample capture timed out because the allocator's no-population case entered a
+  dynamic zero-bucket search. A `totalWeight == 0` early return fixed that specific first-cycle
+  hang; the bounded remainder-loop fix above is still required.
+
 ## Historical Diagnostics Handoff: Pre-Fix Under-Allocation
 
 This section records the failed implementation state that motivated the completed accounting work above. It is retained so future sessions do not repeat the same debugging path.

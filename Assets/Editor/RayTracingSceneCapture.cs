@@ -314,6 +314,8 @@ public static class RayTracingSceneCapture
                 Path.Combine(comparisonRoot, "adaptive_off_vs_reference_difference.png"));
             GenerateDifferenceImage(adaptiveOn.imagePath, referenceImagePath,
                 Path.Combine(comparisonRoot, "adaptive_on_vs_reference_difference.png"));
+            GenerateReferenceComparisonImage(adaptiveOff.imagePath, adaptiveOn.imagePath, referenceImagePath,
+                Path.Combine(comparisonRoot, "adaptive_on_red_off_green_vs_reference.png"));
         }
         WriteCaptureLog(comparisonRoot, label);
     }
@@ -420,7 +422,7 @@ public static class RayTracingSceneCapture
         SynchronizeDurationCaptureGpu();
         var adaptiveDiagnostics = adaptiveSampling ? manager.ReadAdaptiveDiagnosticsForCapture() : null;
         ulong retiredPaths = adaptiveSampling
-            ? SumPathCounts(adaptiveDiagnostics.pathCounts)
+            ? SumPathCounts(adaptiveDiagnostics.pathCounts) + SumGuidancePaths(adaptiveFrames)
             : (ulong)captureWidth * (ulong)captureHeight * (ulong)measuredFrames;
 
         Directory.CreateDirectory(outputRoot);
@@ -430,7 +432,7 @@ public static class RayTracingSceneCapture
         {
             WriteTimingReport(outputRoot, label, sceneName, adaptiveSampling, measuredFrames, durationSeconds,
                 captureWidth, captureHeight, stopwatch.Elapsed.TotalMilliseconds, retiredPaths);
-            if (adaptiveDiagnostics != null) WriteAdaptiveDiagnostics(outputRoot, adaptiveDiagnostics);
+            if (adaptiveDiagnostics != null) WriteAdaptiveDiagnostics(outputRoot, adaptiveDiagnostics, adaptiveFrames);
             if (adaptiveDiagnostics != null)
             {
                 WriteAdaptiveFrameTelemetry(outputRoot, adaptiveFrames);
@@ -442,7 +444,8 @@ public static class RayTracingSceneCapture
         return new CaptureResult(outputPath, measuredFrames, stopwatch.Elapsed.TotalMilliseconds, retiredPaths, adaptiveDiagnostics);
     }
 
-    private static void WriteAdaptiveDiagnostics(string outputRoot, GameManager.AdaptiveDiagnosticsData diagnostics)
+    private static void WriteAdaptiveDiagnostics(string outputRoot, GameManager.AdaptiveDiagnosticsData diagnostics,
+        List<AdaptiveCaptureFrame> frames)
     {
         uint[] metadata = diagnostics.metadata;
         var pathCounts = (float[])diagnostics.pathCounts.Clone();
@@ -456,7 +459,12 @@ public static class RayTracingSceneCapture
         }
         uint requestedPaths = metadata[GameManager.AdaptiveMetadataRequestedPaths];
         uint assignedPaths = metadata[GameManager.AdaptiveMetadataAssignedPaths];
-        uint retiredPaths = metadata[GameManager.AdaptiveMetadataRetiredPaths];
+        uint fullResolutionRetiredPaths = metadata[GameManager.AdaptiveMetadataRetiredPaths];
+        uint finalFrameGuidancePaths = metadata[GameManager.AdaptiveMetadataGuidancePaths];
+        uint finalFrameRetiredPaths = fullResolutionRetiredPaths + finalFrameGuidancePaths;
+        ulong cumulativeGuidancePaths = SumGuidancePaths(frames);
+        ulong cumulativeFullResolutionPaths = SumFullResolutionPaths(frames);
+        ulong cumulativeRetiredPaths = cumulativeFullResolutionPaths + cumulativeGuidancePaths;
         uint activeWorkItems = metadata[GameManager.AdaptiveMetadataWorkItemCount];
         uint overflow = metadata[GameManager.AdaptiveMetadataWorkListOverflow];
         ulong workItemPaths = 0;
@@ -471,12 +479,12 @@ public static class RayTracingSceneCapture
             assignedPixels[pixel] = true;
             workItemPaths += diagnostics.workItemPathCounts[index];
         }
-        if (requestedPaths != assignedPaths || assignedPaths != retiredPaths || overflow != 0u
-            || activeWorkItems > pixels || workItemPaths != assignedPaths)
+        if (requestedPaths != assignedPaths || requestedPaths != fullResolutionRetiredPaths + finalFrameGuidancePaths
+            || overflow != 0u || activeWorkItems > pixels || workItemPaths != fullResolutionRetiredPaths)
         {
             throw new InvalidOperationException(
-                $"Adaptive allocation invariant failed: requested={requestedPaths}, assigned={assignedPaths}, " +
-                $"workItemPaths={workItemPaths}, retired={retiredPaths}, workItems={activeWorkItems}, " +
+                $"Adaptive allocation invariant failed: requested={requestedPaths}, assigned={assignedPaths}, guidance={finalFrameGuidancePaths}, " +
+                $"workItemPaths={workItemPaths}, fullResolutionRetired={fullResolutionRetiredPaths}, workItems={activeWorkItems}, " +
                 $"pixels={pixels}, overflow={overflow}.");
         }
         string report = "{\n" +
@@ -484,7 +492,14 @@ public static class RayTracingSceneCapture
             $"  \"height\": {diagnostics.height},\n" +
             $"  \"requestedRootPaths\": {requestedPaths},\n" +
             $"  \"assignedPaths\": {assignedPaths},\n" +
-            $"  \"retiredPaths\": {retiredPaths},\n" +
+            $"  \"retiredPaths\": {finalFrameRetiredPaths},\n" +
+            $"  \"fullResolutionRetiredPaths\": {fullResolutionRetiredPaths},\n" +
+            $"  \"guidanceRetiredPaths\": {finalFrameGuidancePaths},\n" +
+            $"  \"totalRetiredPaths\": {finalFrameRetiredPaths},\n" +
+            $"  \"captureCumulativeFullResolutionRetiredPaths\": {cumulativeFullResolutionPaths},\n" +
+            $"  \"captureCumulativeGuidanceRetiredPaths\": {cumulativeGuidancePaths},\n" +
+            $"  \"captureCumulativeTotalRetiredPaths\": {cumulativeRetiredPaths},\n" +
+            $"  \"coarseGroups\": {metadata[GameManager.AdaptiveMetadataCoarseGroups]},\n" +
             $"  \"activeWorkItems\": {activeWorkItems},\n" +
             $"  \"workItemPaths\": {workItemPaths},\n" +
             $"  \"workListOverflow\": {overflow},\n" +
@@ -526,6 +541,22 @@ public static class RayTracingSceneCapture
         return total;
     }
 
+    private static ulong SumGuidancePaths(List<AdaptiveCaptureFrame> frames)
+    {
+        ulong total = 0;
+        if (frames == null) return total;
+        foreach (AdaptiveCaptureFrame frame in frames) total += frame.telemetry.guidancePaths;
+        return total;
+    }
+
+    private static ulong SumFullResolutionPaths(List<AdaptiveCaptureFrame> frames)
+    {
+        ulong total = 0;
+        if (frames == null) return total;
+        foreach (AdaptiveCaptureFrame frame in frames) total += frame.telemetry.retiredPaths;
+        return total;
+    }
+
     private static float Percentile(float[] sortedValues, float percentile)
     {
         if (sortedValues.Length == 0) return 0.0f;
@@ -546,12 +577,12 @@ public static class RayTracingSceneCapture
 
         var lines = new List<string>(frames.Count + 1)
         {
-            "frame,accumulated_frame,reclassified,frame_ms,active_work_items,assigned_paths,retired_paths"
+            "frame,accumulated_frame,classified,frame_ms,active_work_items,full_resolution_paths,retired_paths,guidance_paths,total_retired_paths"
         };
         foreach (AdaptiveCaptureFrame frame in frames)
         {
             lines.Add($"{frame.frame},{frame.telemetry.accumulatedFrameCount},{frame.telemetry.reclassified}," +
-                $"{frame.milliseconds:R},{frame.telemetry.activeWorkItems},{frame.telemetry.assignedPaths},{frame.telemetry.retiredPaths}");
+                $"{frame.milliseconds:R},{frame.telemetry.activeWorkItems},{frame.telemetry.assignedPaths},{frame.telemetry.retiredPaths},{frame.telemetry.guidancePaths},{frame.telemetry.retiredPaths + frame.telemetry.guidancePaths}");
         }
         File.WriteAllLines(Path.Combine(outputRoot, "adaptive_frame_telemetry.csv"), lines);
 
@@ -592,26 +623,39 @@ public static class RayTracingSceneCapture
     {
         int width = diagnostics.width;
         int height = diagnostics.height;
-        var allocatedPaths = new uint[width * height];
+        var cumulativePaths = new uint[width * height];
+        var nonZeroPaths = new List<uint>(cumulativePaths.Length);
         uint maxPaths = 0;
-        for (int index = 0; index < diagnostics.workItemPixels.Length; index++)
+        for (int index = 0; index < cumulativePaths.Length; index++)
         {
-            uint pixel = diagnostics.workItemPixels[index];
-            uint paths = diagnostics.workItemPathCounts[index];
-            allocatedPaths[pixel] = paths;
+            uint paths = (uint)Mathf.Max(0.0f, diagnostics.pathCounts[index]);
+            cumulativePaths[index] = paths;
+            if (paths == 0u) continue;
+            nonZeroPaths.Add(paths);
             maxPaths = Math.Max(maxPaths, paths);
         }
 
+        var quantileByPathCount = new Dictionary<uint, float>();
+        nonZeroPaths.Sort();
+        for (int start = 0; start < nonZeroPaths.Count;)
+        {
+            int end = start + 1;
+            while (end < nonZeroPaths.Count && nonZeroPaths[end] == nonZeroPaths[start]) end++;
+            // Map ties to their CDF midpoint. This reveals meaningful variation when the final
+            // allocation is uniform but the cumulative path counts differ by only a few samples.
+            quantileByPathCount[nonZeroPaths[start]] = (start + (end - start) * 0.5f) / nonZeroPaths.Count;
+            start = end;
+        }
+
         var texture = new Texture2D(width, height, TextureFormat.RGB24, false, true);
-        var pixels = new Color[allocatedPaths.Length];
+        var pixels = new Color[cumulativePaths.Length];
         for (int y = 0; y < height; y++)
         {
             for (int x = 0; x < width; x++)
             {
-                uint paths = allocatedPaths[x + y * width];
-                float normalized = maxPaths == 0 ? 0.0f : paths / (float)maxPaths;
-                // Black = not selected, blue/green/yellow/red = increasing paths this allocation.
-                pixels[x + y * width] = HeatmapColor(normalized);
+                uint paths = cumulativePaths[x + y * width];
+                float quantile = paths == 0u ? 0.0f : quantileByPathCount[paths];
+                pixels[x + y * width] = HeatmapColor(paths, quantile);
             }
         }
         texture.SetPixels(pixels);
@@ -621,17 +665,21 @@ public static class RayTracingSceneCapture
 
         File.WriteAllText(Path.Combine(outputRoot, "adaptive_allocation_heatmap.txt"),
             "Adaptive allocation heatmap\n" +
-            "Black pixels receive no path in the current allocation. Blue through red denotes increasing paths per selected pixel.\n" +
-            $"Maximum paths per selected pixel: {maxPaths}\n");
+            "Black pixels have no full-resolution path. Other colors show cumulative full-resolution paths ranked among selected pixels.\n" +
+            $"Maximum cumulative paths per pixel: {maxPaths}\n" +
+            "Bands: >80th percentile red, >60th yellow, >40th cyan, >20th cyan-blue, >10th blue, >5th dark-blue, otherwise navy.\n");
     }
 
-    private static Color HeatmapColor(float value)
+    private static Color HeatmapColor(uint paths, float quantile)
     {
-        if (value <= 0.0f) return Color.black;
-        if (value < 0.25f) return Color.Lerp(new Color(0.0f, 0.0f, 0.25f), Color.blue, value * 4.0f);
-        if (value < 0.5f) return Color.Lerp(Color.blue, Color.cyan, (value - 0.25f) * 4.0f);
-        if (value < 0.75f) return Color.Lerp(Color.cyan, Color.yellow, (value - 0.5f) * 4.0f);
-        return Color.Lerp(Color.yellow, Color.red, (value - 0.75f) * 4.0f);
+        if (paths == 0u) return Color.black;
+        if (quantile > 0.80f) return Color.red;
+        if (quantile > 0.60f) return Color.yellow;
+        if (quantile > 0.40f) return Color.cyan;
+        if (quantile > 0.20f) return new Color(0.0f, 0.45f, 1.0f);
+        if (quantile > 0.10f) return Color.blue;
+        if (quantile > 0.05f) return new Color(0.0f, 0.0f, 0.55f);
+        return new Color(0.0f, 0.0f, 0.25f);
     }
 
     private static void SynchronizeDurationCaptureGpu()
@@ -908,6 +956,77 @@ public static class RayTracingSceneCapture
                 UnityEngine.Object.DestroyImmediate(difference);
             }
         }
+    }
+
+    private static void GenerateReferenceComparisonImage(string offPath, string onPath, string referencePath,
+        string outputPath)
+    {
+        var off = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+        var on = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+        var reference = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+        Texture2D comparison = null;
+        try
+        {
+            if (!off.LoadImage(File.ReadAllBytes(offPath), false)
+                || !on.LoadImage(File.ReadAllBytes(onPath), false)
+                || !reference.LoadImage(File.ReadAllBytes(referencePath), false)
+                || off.width != on.width || off.width != reference.width
+                || off.height != on.height || off.height != reference.height)
+            {
+                throw new InvalidOperationException(
+                    $"Reference comparison images must be readable and have matching dimensions: '{offPath}', '{onPath}', '{referencePath}'.");
+            }
+
+            Color[] offPixels = off.GetPixels();
+            Color[] onPixels = on.GetPixels();
+            Color[] referencePixels = reference.GetPixels();
+            var offDifferences = new float[offPixels.Length];
+            var onDifferences = new float[offPixels.Length];
+            var allDifferences = new float[offPixels.Length * 2];
+            for (int i = 0; i < offPixels.Length; i++)
+            {
+                offDifferences[i] = DifferenceMagnitude(offPixels[i], referencePixels[i]);
+                onDifferences[i] = DifferenceMagnitude(onPixels[i], referencePixels[i]);
+                allDifferences[i * 2] = offDifferences[i];
+                allDifferences[i * 2 + 1] = onDifferences[i];
+            }
+
+            Array.Sort(allDifferences);
+            int redIndex = Mathf.Min(allDifferences.Length - 1,
+                Mathf.FloorToInt((allDifferences.Length - 1) * DifferenceHeatmapRedPercentile));
+            float redDifference = allDifferences[redIndex];
+            comparison = new Texture2D(off.width, off.height, TextureFormat.RGB24, false, true);
+            Color[] outputPixels = new Color[offPixels.Length];
+            for (int i = 0; i < outputPixels.Length; i++)
+            {
+                float greenAmount = redDifference > 0.0f ? Mathf.Clamp01(offDifferences[i] / redDifference) : 0.0f;
+                float redAmount = redDifference > 0.0f ? Mathf.Clamp01(onDifferences[i] / redDifference) : 0.0f;
+                outputPixels[i] = new Color(redAmount, greenAmount, 0.0f, 1.0f);
+            }
+            comparison.SetPixels(outputPixels);
+            comparison.Apply(false, false);
+
+            string directory = Path.GetDirectoryName(outputPath);
+            if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+            File.WriteAllBytes(outputPath, comparison.EncodeToPNG());
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(off);
+            UnityEngine.Object.DestroyImmediate(on);
+            UnityEngine.Object.DestroyImmediate(reference);
+            if (comparison != null) UnityEngine.Object.DestroyImmediate(comparison);
+        }
+    }
+
+    private static float DifferenceMagnitude(Color first, Color second)
+    {
+        Color a = first.linear;
+        Color b = second.linear;
+        float dr = a.r - b.r;
+        float dg = a.g - b.g;
+        float db = a.b - b.b;
+        return Mathf.Sqrt((dr * dr + dg * dg + db * db) / 3.0f);
     }
 
     private static void InitializeBatchRenderer(GameManager manager, int width, int height)
