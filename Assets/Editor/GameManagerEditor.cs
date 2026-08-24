@@ -62,6 +62,7 @@ public sealed class GameManagerEditor : Editor
             if (manager.enableAdaptiveSampling)
             {
                 DrawProperty("adaptiveSamplingMinSamples", "Bootstrap Samples Per Pixel");
+                DrawProperty("adaptivePriorityMode", "Priority Mode");
                 DrawProperty("adaptiveReclassificationInterval", "Reclassification Interval");
                 DrawProperty("adaptiveRecentChangeWeight", "Recent Change Weight");
                 DrawProperty("adaptiveBucketStrength", "Bucket Allocation Strength");

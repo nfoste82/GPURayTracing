@@ -4,6 +4,7 @@ using UnityEditor.SceneManagement;
 [InitializeOnLoad]
 public static class RayTracingQuickControlsAutoOpen
 {
+    private const string GalleryOpenedThisSession = "RayTracing.SceneGalleryOpenedThisSession";
     static RayTracingQuickControlsAutoOpen()
     {
         EditorSceneManager.sceneOpened += OnSceneOpened;
@@ -22,7 +23,11 @@ public static class RayTracingQuickControlsAutoOpen
 
     private static void OpenProjectWindows()
     {
-        RayTracingSceneGalleryWindow.Open();
+        if (!SessionState.GetBool(GalleryOpenedThisSession, false))
+        {
+            SessionState.SetBool(GalleryOpenedThisSession, true);
+            RayTracingSceneGalleryWindow.Open();
+        }
         OpenForActiveScene();
     }
 }

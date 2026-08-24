@@ -18,7 +18,7 @@ The project uses EditMode tests under `Assets/Tests/EditMode/` to make rendering
 - Medium-identity and stack probes for air -> water -> sphere glass -> water -> air, parent lookup, matching exits, overflow, unmatched exits, underwater initialization, and flat water-volume side/bottom intersections.
 - Deterministic randomized CPU reference comparisons for per-mesh, top-level, and shadow BVH traversal against brute force, with maximum build depth checked against the fixed stack capacity of `32`.
 - GPU dispatch smoke coverage at `1x1`, `3x5`, and `13x7`; `CSMain` returns before accessing output textures for partial 8x4 thread groups outside their dimensions.
-- Adaptive group-scheduler coverage verifies the fixed 64-path group budget, guide/full-resolution state isolation, two-batch promotion, logarithmic bright/direct-light group promotion biases, compact work-list/root-offset parity, and reset/hash invalidation. Controlled trace parity validates the deterministic sample-index and Welford/RGB accumulation contract.
+- Adaptive group-scheduler coverage verifies fixed exact full-resolution group budgets, RGB Welford standard-error scoring, quantile-bucket tie rotation, compact work-list/root-offset parity, partial dimensions, and reset/hash invalidation. Controlled trace parity validates the deterministic sample-index and Welford/RGB accumulation contract.
 - Camera coverage verifies that the serialized lens defaults preserve the previous `0.005` blur scale and enable click-to-focus with clicked focus-point tracking. Existing image fixtures explicitly use the pinhole path; deterministic focus-plane and aperture-shape image fixtures remain future coverage.
 - Production GPU probes cover shared Lambert/GGX BRDF values, PDFs, and finite positive sampled throughput.
 - Production GPU probes cover the MIS power heuristic and triangle area-to-solid-angle PDF conversion.
@@ -70,6 +70,8 @@ The tool can also be run non-interactively, which allows automated change workfl
 ```
 
 `-rayTracingScenes` is required and accepts semicolon-separated project-relative scene paths. `-rayTracingGenerateScenes` is optional; when supplied, it overwrites only the requested generated scene paths before capture. `-rayTracingWidth`, `-rayTracingHeight`, and `-rayTracingSamples` each accept a positive integer and default to `512`, `512`, and `200`, respectively. Run the same command with `-rayTracingCaptureLabel after` after the renderer change. Compare like-named PNGs in the two output folders. GPU output is not pixel-identical across all platforms, so use the same graphics backend for a meaningful comparison.
+
+Use `-rayTracingGenerateReference` instead of `-rayTracingCompareAdaptiveSampling` to render one adaptive-off reference without comparison artifacts. It requires a positive floating-point `-rayTracingDurationSeconds`; the reference filename and JSON sidecar record the resolution and duration. References at the same scene and resolution can coexist, and adaptive reference-metrics captures select the longest valid duration. Use `-rayTracingRefreshReferences` to intentionally replace a reference with the same resolution and duration.
 
 The GPU probe is skipped if the active graphics device does not support compute shaders or does not compile the probe kernel. On macOS, `-nographics` imports the compute shader without an executable Metal kernel, so it runs the CPU suite and skips the GPU probe. Run through the Test Runner or omit `-nographics` to validate all tests.
 

@@ -14,6 +14,152 @@ Do not implement automatic render stopping. The user decides when to pause rende
 
 The uniform `CSMain` path is the production reference and must remain unchanged when adaptive sampling is off.
 
+## Dammertz Fixed-8x8 Priority Milestone (August 21, 2026)
+
+The experimental scheduler exposes two explicit post-bootstrap priority modes:
+
+```text
+WelfordStandardError       existing linear-RGB standard-error A/B baseline
+DammertzSplitEstimator     all-sample versus deterministic alternating-sample RGB RMS
+```
+
+`CSMain` remains the unchanged baseline while adaptive sampling is disabled. The alternating
+estimator uses persistent scheduling-only channels: `AdaptiveSamplingState.yzw` stores its RGB
+mean and `AdaptiveSamplingM2.a` stores its count. Its RGB channels store the mean of
+samples for which `oldPixelPathCount + localSample` is odd; A stores that subset count. It is
+updated in the resolver from deterministic sample-index parity, never frame parity, and is never
+read by beauty/presentation or blended into `AccumulationResult`.
+
+In `DammertzSplitEstimator` mode, classification computes the absolute linear-RGB RMS disagreement
+between `AccumulationResult` (all samples) and that alternating mean, then averages it over each
+valid fixed `8x8` group. This intentionally matches the linear RGB RMSE acceptance metric for the
+first validation milestone. Bootstrap remains uniform until the all-sample count reaches the
+configured threshold and the alternating subset has at least two samples. Invalid samples are
+zeroed at trace output; non-finite state-derived scores become zero. Reset, resolution changes,
+and priority-mode changes clear/hash this state with the other adaptive state.
+
+`RayTracingSceneCapture -rayTracingCompareAdaptiveSampling` now renders `adaptive_off`,
+`adaptive_welford`, and `adaptive_dammertz`. It writes per-candidate images/timing/reports,
+candidate-to-reference differences, all three pairwise candidate differences, a combined
+`adaptive_three_way_comparison.json`, one row per candidate in
+`adaptive_variant_comparison.csv`, and capture-only fixed-8x8 diagnostics. The CSV combines
+timing, retired paths, and all reference metrics in columns so candidates can be compared without
+opening separate reports. The diagnostics
+report Welford score, Dammertz score, assigned paths, reference error percentiles, and Spearman
+score/error rank correlation for direct investigation of rough diffuse over-prioritization.
+When reference metrics are enabled, `adaptive_group_diagnostics.csv` provides two rows per fixed
+8x8 group (one per adaptive variant), including both scores, assigned paths, mean linear luminance,
+and actual reference RGB RMSE. This is capture-only readback and is not part of interactive
+scheduling.
+
+Do not build hierarchical subdivision yet. First retain the fixed-8x8 split path only if its
+reference-error correlation or equal-retired-path quality demonstrates an improvement over the
+Welford A/B baseline.
+
+### First Validation Results
+
+Focused Metal parity passed (`25/25` adaptive tests), and the default final-color Metal variant
+precompiled successfully. Accounting passed in a `512x512`, eight-frame three-way smoke and a
+`1024x1024`, eight-frame equal-retired-path reference comparison. Each candidate retired
+`8,388,608` paths.
+
+```text
+1024x1024 TeapotMaterials, 8 frames, equal retired paths
+candidate             RGB RMSE       render time
+adaptive_welford      0.05217450     5384.798 ms
+adaptive_dammertz     0.05215506     5307.836 ms
+```
+
+The split estimator is a marginal equal-path improvement (`0.037%` lower RGB RMSE), but its
+reference-error rank correlation was slightly lower (`0.6608` versus Welford `0.6641`). At this
+short capture all groups were still assigned 64 paths, so it does not yet demonstrate useful
+redistribution or a hierarchy justification. A subsequent five-second three-way duration capture
+completed with exact `8,388,608` retired paths for all candidates in that run. Hierarchical block
+subdivision remains deferred pending a longer post-bootstrap equal-path comparison that shows
+either materially better score/error correlation or quality.
+
+### 60-Second Three-Way Diagnosis (August 22, 2026)
+
+`TestCaptures/dammertz_three_way_60s_4/TeapotMaterials/` is the first useful post-bootstrap
+three-way duration result. It includes `adaptive_variant_comparison.csv` and the capture-only
+per-group `adaptive_group_diagnostics.csv`. This result rejects the current fixed-8x8 Dammertz
+priority as an allocation policy, although its raw score is more predictive than Welford's.
+
+```text
+1024x1024 TeapotMaterials, 60-second duration
+candidate             retired paths   RGB RMSE     RGB PSNR    average FPS
+adaptive_off           114,294,784    0.00853382   41.3771     1.8138
+adaptive_welford       105,906,176    0.00958030   40.3724     1.6826
+adaptive_dammertz       87,031,808    0.01083300   39.3050     1.3787
+```
+
+Dammertz is `26.9%` worse than uniform in RGB RMSE at equal wall-clock duration, and it retires
+`23.9%` fewer paths. Welford is `12.3%` worse and retires `7.3%` fewer paths. This is both a
+quality-allocation regression and a scheduler-cost regression; do not present either adaptive
+policy as a success based on this scene.
+
+The final Dammertz schedule is a discontinuous group cutoff:
+
+```text
+served groups:       4,100 / 16,384 (25.0%)
+unserved groups:    12,284 / 16,384 (75.0%)
+mean served grant:     255.75 paths per valid 8x8 group
+mean unserved grant:     0 paths
+```
+
+The group CSV supports the reported bright-diffuse misallocation concern:
+
+```text
+Dammertz served groups:    mean luminance 0.6743, mean reference RGB RMSE 0.00969
+Dammertz unserved groups:  mean luminance 0.5984, mean reference RGB RMSE 0.00994
+Welford served groups:     mean luminance 0.6963, mean reference RGB RMSE 0.00922
+Welford unserved groups:   mean luminance 0.5911, mean reference RGB RMSE 0.00858
+```
+
+Both policies systematically serve brighter groups without a corresponding increase in actual
+reference error. The final allocation's Pearson correlation with reference group RMSE is only
+`~0.079` for both policies. Dammertz score/error Spearman is better than Welford (`0.3022` versus
+`0.1790`) but remains far too weak to justify a zero-versus-four-path decision for 75% of groups.
+The allocation heatmap's high upper checkerboard allocation is therefore a real policy failure,
+not just a misleading visualization.
+
+## Next Scheduler Experiment
+
+Do not add hierarchical subdivision, material priors, a new Dammertz formula, CPU readback in the
+interactive loop, a global sort, or an image-sized serial allocation pass. Preserve the currently
+validated compact scheduler mechanics: group classification, buckets, compaction, bounded service,
+root work list, indirect trace, and exact accounting.
+
+The next isolated experiment is to make service **less discontinuous**. The current policy turns
+a weakly predictive score into a binary `0 or 4 paths/pixel` group choice. Replace that behavior
+with bounded complete-group service quanta so more than 25% of groups are served each scheduling
+epoch, while higher-score groups receive additional group quanta. This must remain GPU-native and
+use only full valid 8x8 group updates; partial edge groups use their true pixel count.
+
+Required properties:
+
+```text
+requested == assigned == compact work-item paths == root paths == retired
+no zero-path compact work item
+no permanent per-pixel floor
+no hard bucket cutoff that leaves most groups unserved
+no claim of convergence based on mean movement sign
+```
+
+Before accepting the experiment as a quality candidate, require from
+`adaptive_group_diagnostics.csv`:
+
+1. Served groups are not brighter on average than unserved groups unless their reference RGB RMSE
+   is correspondingly higher.
+2. Assigned-path versus actual-reference-RMSE correlation is materially above the current `~0.079`.
+3. More groups receive work than the current 25% cutoff behavior.
+4. Dammertz remains at least as score/error-correlated as Welford.
+5. Equal-retired-path RGB RMSE improves over the current Dammertz policy before interpreting
+   fixed-duration results.
+
+Hierarchy remains explicitly deferred until the fixed-8x8 policy demonstrates better
+score/reference-error correlation or equal-path quality.
+
 ## Read Before Editing
 
 - `03-compute-shader-renderer.md`: renderer kernels, sampling, HDR accumulation, and presentation.
@@ -23,6 +169,29 @@ The uniform `CSMain` path is the production reference and must remain unchanged 
 - `13-denoising-and-upscaling.md` and `14-svgf-implementation-plan.md`: feature and temporal-history semantics.
 
 ## Current Implementation
+
+### Global Group-Bucket Milestone (August 21, 2026)
+
+The current uncommitted implementation replaces the unsafe local `8x8` path allocator with a
+global group-bucket milestone. `CSAdaptiveClassifyGroups` reduces full-resolution RGB Welford
+standard-error scores into one score per spatial group and places the group in a fixed global
+logarithmic bucket. `CSAdaptiveAllocateGroupBuckets` assigns the exact image-wide remainder after
+the mandatory one-path-per-pixel floor across only 16 bucket totals. `CSAdaptiveAssignGroups` then
+atomically reserves each group's share from its bucket, distributes that reservation across its
+pixels with a rotating tie order, performs an in-group parallel prefix for root offsets, and emits
+the existing full-resolution work list.
+
+This preserves `requested == assigned == sum(work item paths) == root paths`; a group can only
+claim from its global bucket budget, and the final partial group claim consumes the exact remaining
+budget. There is no image-sized lane-zero allocation loop and no local bucket normalization.
+
+Limitations: this is a coherent correctness/performance milestone, not the final quantile design.
+Groups inside a bucket are admitted by GPU atomic reservation order, so equal-score group service
+is rotating within a group but not globally stable across groups. Group classification still uses a
+lane-zero 64-value reduction and allocation uses a bounded one-thread 16-bucket loop; replacing
+those with fully parallel reductions/scans is the next scheduler-overhead milestone. The legacy
+`CSAdaptiveAllocateGroups` kernel remains only as the existing small Metal probe oracle and is not
+dispatched by `GameManager`.
 
 `GameManager.enableAdaptiveSampling` is now a real experimental render path. It is off by default and is only eligible for static final-color progressive accumulation. Animated-water, temporal-accumulation, and non-final/debug paths fall back to uniform sampling through `ShouldUseFrameAccumulation()` / `ShouldUseAdaptiveSampling()`.
 
@@ -36,6 +205,27 @@ Short adaptive captures now write human-readable evidence beside the image:
 - `adaptive_frame_telemetry.txt`: first/second-half and reclassification/reuse timing summaries.
 - `adaptive_allocation_heatmap.png`: black pixels receive no current-frame path; blue through red indicates increasing paths per selected pixel.
 - `adaptive_allocation_heatmap.txt`: heatmap legend and maximum per-pixel assignment.
+
+Adaptive capture diagnostics write `TestCaptures/Heatmaps/<scene>/frame_000001.png` and a matching
+`.txt` metadata file for every measured frame. The frames are 1/8 scene resolution, one pixel per
+8x8 allocation block, and the monitor previews them at 4x (about 1/2 scene resolution). They show paths assigned in
+that frame only, rather than cumulative path counts. Black blocks received no full-resolution path
+in that frame; colors rank selected blocks by current-frame assignment. The per-frame readback and
+PNG output are diagnostic overhead and are kept outside the render stopwatch. Use `Window > Ray
+Tracing > Adaptive Allocation Monitor` to watch the newest image during an interactive capture or
+inspect a completed capture folder.
+
+The monitor also has `Generate heatmaps while playing`. Enable it before entering Play mode, or
+while the current scene is already playing, to turn on adaptive sampling and capture diagnostics
+for that scene starting with its first accumulated frame. Live files are
+written automatically to `TestCaptures/Heatmaps/<scene>/`. When a same-resolution validated
+reference exists, live captures also write `difference_000001.png` beside each heatmap and show it
+below the heatmap in the monitor. The difference uses the same 99th-percentile blue-to-red scale as
+the adaptive/reference comparison images.
+the folder field is disabled because the monitor owns this path. The manager's adaptive-sampling,
+frame-accumulation, and capture-diagnostics settings are restored when the option is disabled or
+Play mode exits. Live generation performs synchronous GPU readback and PNG output after each
+accumulated frame, so it is intentionally a debugging mode and will reduce interactive frame rate.
 
 Timed command-line captures are capped at ten seconds to avoid a pathological adaptive candidate consuming the test budget. Use equal-path sample captures for longer convergence checks.
 
@@ -1342,3 +1532,12 @@ The standalone compact prompt is in `AIDocs/18-adaptive-sampling-next-session-pr
 file as the starting request in a future implementation session; it intentionally repeats the
 current status and the performance constraints so the next session does not mistake this
 preparatory milestone for completion.
+
+### Accounting-Repair Update
+
+The subsequent bounded-service experiment is currently invalid: a shortened `1024x1024` capture
+reported `1,048,576` requested/assigned paths but emitted and retired only `524,288`. This is an
+accounting and work-list correctness failure, not a tuning result. See
+`AIDocs/19-adaptive-scheduler-accounting-repair.md` for the reproduction command, exact failed
+invariant, required repair design, test matrix, and compact future-session prompt. Do not run quality
+comparisons until that document's accounting smoke tests pass.

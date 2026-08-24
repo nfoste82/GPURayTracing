@@ -11,6 +11,10 @@ RWTexture2D<float> FeatureDepth;
 RWTexture2D<float> FeatureIdentity;
 RWTexture2D<float> FeatureValidity;
 RWTexture2D<float4> AdaptiveSamplingState;
+RWTexture2D<float4> AdaptiveSamplingM2;
+// Scheduling-only mean/count for samples whose deterministic sample index has odd parity.
+// This repurposes the retired guide-state texture to remain within Metal's per-kernel UAV limit.
+// It must never be presented or blended into the beauty accumulator.
 RWTexture2D<float4> AdaptiveGuidanceState;
 RWTexture2D<float4> AdaptiveGuidancePreview;
 RWStructuredBuffer<uint2> AdaptiveWorkList;
@@ -22,6 +26,16 @@ RWStructuredBuffer<uint> AdaptiveWorkRootOffsets;
 RWStructuredBuffer<uint4> AdaptiveGroupState;
 RWStructuredBuffer<uint4> AdaptiveGroupInfo;
 StructuredBuffer<uint4> AdaptiveProbeGroups;
+RWStructuredBuffer<uint> AdaptiveGroupBucket;
+RWStructuredBuffer<uint> AdaptiveGroupExtraDemand;
+RWStructuredBuffer<uint> AdaptiveGroupExtraGrant;
+RWStructuredBuffer<uint> AdaptiveBucketDemand;
+RWStructuredBuffer<uint> AdaptiveBucketBudget;
+RWStructuredBuffer<uint> AdaptiveBucketUsage;
+RWStructuredBuffer<uint> AdaptiveBucketPrimaryDemand;
+RWStructuredBuffer<uint> AdaptiveBucketExtraDemand;
+RWStructuredBuffer<uint> AdaptiveBucketExtraBudget;
+RWStructuredBuffer<uint> AdaptiveBucketExtraUsage;
 RWStructuredBuffer<uint> AdaptiveWorkListMetadata;
 RWStructuredBuffer<uint> AdaptiveDispatchArgs;
 RWStructuredBuffer<uint> AdaptiveResolveDispatchArgs;
@@ -99,6 +113,10 @@ uint _AdaptiveGroupWidth;
 uint _AdaptiveGroupHeight;
 uint _AdaptiveGroupCount;
 int _AdaptiveCaptureDiagnostics;
+uint _AdaptiveScheduleRotation;
+float _AdaptiveBucketStrength;
+uint _AdaptiveMaxPathsPerPixel;
+uint _AdaptivePriorityMode;
 float _ShadowRandomness;
 float _LightFalloffScale;
 float _ParallaxMaximumStrengthCosine;

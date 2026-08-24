@@ -19,6 +19,7 @@ public sealed class SceneSettings
 
     public bool EnableAdaptiveSampling = false;
     public int AdaptiveSamplingMinSamples = 8;
+    public GameManager.AdaptivePriorityMode AdaptivePriorityMode = GameManager.AdaptivePriorityMode.WelfordStandardError;
     public int AdaptiveReclassificationInterval = 4;
     public float AdaptiveRecentChangeWeight = 1.0f;
     public float AdaptiveBucketStrength = 2.0f;
