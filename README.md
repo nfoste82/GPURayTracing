@@ -108,8 +108,10 @@ Useful next scenes include:
 | `ManySpheres.unity`, `ManyMeshes.unity`, `ManyLights.unity` | Stress and benchmark workloads |
 
 ### Special Thanks
-Thanks to these projects which have been great reference and learning material:
+Thanks to these projects and blogs which have been great reference and learning material:
 
 * https://github.com/gkjohnson/three-gpu-pathtracer
 * https://github.com/knightcrawler25/GLSL-PathTracer/
+* https://raytracing.github.io/
+* https://schuttejoe.github.io/post/ggximportancesamplingpart2/
 * https://github.com/tylertms/vkrt
