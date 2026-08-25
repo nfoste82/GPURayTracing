@@ -20,9 +20,10 @@ public sealed class SceneSettings
     public bool EnableAdaptiveSampling = false;
     public int AdaptiveSamplingMinSamples = 8;
     public GameManager.AdaptivePriorityMode AdaptivePriorityMode = GameManager.AdaptivePriorityMode.WelfordStandardError;
+    public float AdaptiveNormalizePriorityByLuminance = 0.0f;
     public int AdaptiveReclassificationInterval = 4;
     public float AdaptiveRecentChangeWeight = 1.0f;
-    public float AdaptiveBucketStrength = 2.0f;
+    public float AdaptiveHighestBucketSampleRate = 2.0f;
     public int AdaptiveMaxPathsPerPixel = 4;
 
     public int NumBounces = 6;

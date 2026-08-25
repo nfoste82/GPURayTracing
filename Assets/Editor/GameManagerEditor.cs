@@ -63,9 +63,10 @@ public sealed class GameManagerEditor : Editor
             {
                 DrawProperty("adaptiveSamplingMinSamples", "Bootstrap Samples Per Pixel");
                 DrawProperty("adaptivePriorityMode", "Priority Mode");
+                DrawProperty("adaptiveNormalizePriorityByLuminance", "Luminance Priority Normalization Strength");
                 DrawProperty("adaptiveReclassificationInterval", "Reclassification Interval");
                 DrawProperty("adaptiveRecentChangeWeight", "Recent Change Weight");
-                DrawProperty("adaptiveBucketStrength", "Bucket Allocation Strength");
+                DrawProperty("adaptiveHighestBucketSampleRate", "Highest Bucket Sample Rate");
                 DrawProperty("adaptiveMaxPathsPerPixel", "Max Paths Per Pixel");
             }
         });

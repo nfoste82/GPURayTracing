@@ -10,17 +10,22 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
     private const string WindowTitle = "Adaptive Allocation Monitor";
     private const string FolderPreference = "RayTracing.AdaptiveAllocationHeatmapFolder";
     private const string LiveGenerationPreference = "RayTracing.AdaptiveAllocationLiveGeneration";
+    private const string HeatmapPreference = "RayTracing.AdaptiveAllocationShowHeatmap";
+    private const string DifferencePreference = "RayTracing.AdaptiveAllocationShowDifference";
     private const string HeatmapFolderName = "TestCaptures/Heatmaps";
     private const int AdaptiveAllocationBlockSize = 8;
     private const int HeatmapPreviewScale = 4;
     private string _folder;
     private string _latestPath;
+    private string _latestMetadataPath;
     private Texture2D _latestTexture;
     private Texture2D _differenceTexture;
     private string _differenceStatus;
     private string _metadata;
     private double _nextPoll;
     private bool _liveGeneration;
+    private bool _showHeatmap;
+    private bool _showDifference;
     private GameManager _liveManager;
     private bool _previousAdaptiveSampling;
     private bool _previousFrameAccumulation;
@@ -38,6 +43,8 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         titleContent = new GUIContent(WindowTitle);
         minSize = new Vector2(360.0f, 500.0f);
         _liveGeneration = SessionState.GetBool(LiveGenerationPreference, false);
+        _showHeatmap = SessionState.GetBool(HeatmapPreference, true);
+        _showDifference = SessionState.GetBool(DifferencePreference, false);
         _folder = _liveGeneration ? GetLiveFolder() : ResolveDefaultFolder();
         if (string.IsNullOrEmpty(_folder))
         {
@@ -87,15 +94,17 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
     {
         EditorGUILayout.LabelField("Adaptive Allocation Monitor", EditorStyles.boldLabel);
         EditorGUILayout.HelpBox(
-            "Enable live generation before or during Play mode to capture allocation heatmaps and current-render reference differences. Existing heatmap folders can still be selected below.",
+            "Live monitoring reports adaptive allocation statistics while playing. Heatmap and reference images are optional diagnostics and can be disabled to avoid their readback and file-generation cost.",
             MessageType.Info);
 
-        bool liveGeneration = EditorGUILayout.ToggleLeft("Generate heatmaps while playing", _liveGeneration);
+        bool liveGeneration = EditorGUILayout.ToggleLeft("Monitor allocation while playing", _liveGeneration);
         if (liveGeneration != _liveGeneration)
         {
             if (liveGeneration) StartLiveGeneration();
             else StopLiveGeneration();
         }
+
+        DrawAdaptiveSamplingControls();
 
         using (new EditorGUI.DisabledScope(_liveGeneration))
         using (new EditorGUILayout.HorizontalScope())
@@ -109,21 +118,51 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         }
 
         if (GUILayout.Button("Refresh")) PollForLatestFrame(true);
-        EditorGUILayout.LabelField("Latest", string.IsNullOrEmpty(_latestPath) ? "No frame found" : Path.GetFileName(_latestPath));
+        EditorGUILayout.LabelField("Latest", string.IsNullOrEmpty(_latestMetadataPath) ? "No frame found" : Path.GetFileNameWithoutExtension(_latestMetadataPath));
         if (!string.IsNullOrEmpty(_metadata))
         {
             EditorGUILayout.LabelField(_metadata, EditorStyles.wordWrappedMiniLabel);
         }
 
-        if (_latestTexture == null)
+        EditorGUILayout.Space();
+        bool showHeatmap = EditorGUILayout.ToggleLeft("Show allocation heatmap (generate while playing)", _showHeatmap);
+        if (showHeatmap != _showHeatmap)
         {
-            EditorGUILayout.HelpBox("Start an adaptive capture or select a completed heatmap folder.", MessageType.Info);
-            return;
+            _showHeatmap = showHeatmap;
+            SessionState.SetBool(HeatmapPreference, _showHeatmap);
+            _latestMetadataPath = null;
+            DestroyLatestTexture();
+            DestroyDifferenceTexture();
+            PollForLatestFrame(true);
         }
 
-        Rect imageRect = GUILayoutUtility.GetRect(_latestTexture.width * HeatmapPreviewScale,
-            _latestTexture.height * HeatmapPreviewScale, GUILayout.ExpandWidth(false), GUILayout.ExpandHeight(false));
-        GUI.DrawTexture(imageRect, _latestTexture, ScaleMode.ScaleToFit, false);
+        bool showDifference = EditorGUILayout.ToggleLeft("Show Current Render vs Reference", _showDifference);
+        if (showDifference != _showDifference)
+        {
+            _showDifference = showDifference;
+            SessionState.SetBool(DifferencePreference, _showDifference);
+            _latestMetadataPath = null;
+            DestroyDifferenceTexture();
+            PollForLatestFrame(true);
+        }
+
+        if (!_showHeatmap)
+        {
+            EditorGUILayout.HelpBox("Heatmap display and generation are disabled. Allocation statistics above continue to update while live monitoring is enabled.", MessageType.Info);
+        }
+        else if (_latestTexture == null)
+        {
+            EditorGUILayout.HelpBox("Start an adaptive capture or select a completed heatmap folder to show the heatmap.", MessageType.Info);
+        }
+
+        if (_showHeatmap && _latestTexture != null)
+        {
+            Rect imageRect = GUILayoutUtility.GetRect(_latestTexture.width * HeatmapPreviewScale,
+                _latestTexture.height * HeatmapPreviewScale, GUILayout.ExpandWidth(false), GUILayout.ExpandHeight(false));
+            GUI.DrawTexture(imageRect, _latestTexture, ScaleMode.ScaleToFit, false);
+        }
+
+        if (!_showDifference) return;
 
         EditorGUILayout.Space();
         EditorGUILayout.LabelField("Current Render vs Reference", EditorStyles.boldLabel);
@@ -140,11 +179,50 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         GUI.DrawTexture(differenceRect, _differenceTexture, ScaleMode.ScaleToFit, false);
     }
 
+    private static void DrawAdaptiveSamplingControls()
+    {
+        GameManager manager = UnityEngine.Object.FindFirstObjectByType<GameManager>();
+        if (manager == null)
+        {
+            EditorGUILayout.HelpBox("Add a GameManager to the active scene to edit adaptive sampling settings.",
+                MessageType.Info);
+            return;
+        }
+
+        EditorGUILayout.Space();
+        EditorGUILayout.LabelField("Adaptive Sampling", EditorStyles.boldLabel);
+        var serializedManager = new SerializedObject(manager);
+        serializedManager.Update();
+
+        SerializedProperty enabled = serializedManager.FindProperty("enableAdaptiveSampling");
+        EditorGUILayout.PropertyField(enabled, new GUIContent("Adaptive Sampling (Experimental)"));
+        if (enabled.boolValue)
+        {
+            EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveSamplingMinSamples"),
+                new GUIContent("Bootstrap Samples Per Pixel"));
+            EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptivePriorityMode"),
+                new GUIContent("Priority Mode"));
+            EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveNormalizePriorityByLuminance"),
+                new GUIContent("Luminance Priority Normalization Strength"));
+            EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveReclassificationInterval"),
+                new GUIContent("Reclassification Interval"));
+            EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveRecentChangeWeight"),
+                new GUIContent("Recent Change Weight"));
+            EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveHighestBucketSampleRate"),
+                new GUIContent("Highest Bucket Sample Rate"));
+            EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveMaxPathsPerPixel"),
+                new GUIContent("Max Paths Per Pixel"));
+        }
+
+        serializedManager.ApplyModifiedProperties();
+    }
+
     private void SetFolder(string folder)
     {
         _folder = folder;
         EditorPrefs.SetString(FolderPreference, folder);
         _latestPath = null;
+        _latestMetadataPath = null;
         DestroyLatestTexture();
         DestroyDifferenceTexture();
         PollForLatestFrame(true);
@@ -157,6 +235,7 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         _folder = GetLiveFolder();
         Directory.CreateDirectory(_folder);
         _latestPath = null;
+        _latestMetadataPath = null;
         DestroyLatestTexture();
         DestroyDifferenceTexture();
 
@@ -183,6 +262,7 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         _folder = GetLiveFolder();
         Directory.CreateDirectory(_folder);
         _latestPath = null;
+        _latestMetadataPath = null;
         DestroyLatestTexture();
         DestroyDifferenceTexture();
         _liveManager = manager;
@@ -225,20 +305,33 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         }
 
         GameManager.AdaptiveAllocationFrameData allocation =
-            _liveManager.ReadAdaptiveCumulativeAllocationForCapture();
+            _liveManager.ReadAdaptiveAllocationStatsForCapture();
         int frame = _liveManager.AccumulatedFrameCount;
-        string path = Path.Combine(_folder, $"frame_{frame:000000}.png");
-        WriteHeatmap(path, allocation);
-        string differencePath = Path.Combine(_folder, $"difference_{frame:000000}.png");
-        if (!RayTracingSceneCapture.TryWriteCurrentReferenceDifference(_liveManager, SceneManager.GetActiveScene().path,
-                differencePath, out _differenceStatus) && File.Exists(differencePath))
+        string metadataPath = Path.Combine(_folder, $"frame_{frame:000000}.txt");
+        if (_showHeatmap)
         {
-            File.Delete(differencePath);
+            allocation = _liveManager.ReadAdaptiveCumulativeAllocationForCapture();
+            string path = Path.Combine(_folder, $"frame_{frame:000000}.png");
+            WriteHeatmap(path, allocation);
         }
-        File.WriteAllText(Path.ChangeExtension(path, ".txt"),
+        if (_showDifference)
+        {
+            string differencePath = Path.Combine(_folder, $"difference_{frame:000000}.png");
+            if (!RayTracingSceneCapture.TryWriteCurrentReferenceDifference(_liveManager, SceneManager.GetActiveScene().path,
+                    differencePath, out _differenceStatus) && File.Exists(differencePath))
+            {
+                File.Delete(differencePath);
+            }
+        }
+        else
+        {
+            DestroyDifferenceTexture();
+        }
+        File.WriteAllText(metadataPath,
             $"Adaptive allocation heatmap\nFrame: {frame}\n" +
             $"Active work items: {allocation.activeWorkItems}\n" +
             $"Cumulative retired paths: {allocation.assignedPaths}\n" +
+            FormatBucketGroupCounts(allocation.bucketGroupCounts) +
             "Colors rank pixels by their cumulative retired-path count.\n");
         _lastLiveFrame = frame;
         PollForLatestFrame(true);
@@ -294,6 +387,18 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         if (quantile > 0.10f) return Color.blue;
         if (quantile > 0.05f) return new Color(0.0f, 0.0f, 0.55f);
         return new Color(0.0f, 0.0f, 0.25f);
+    }
+
+    internal static string FormatBucketGroupCounts(uint[] bucketGroupCounts)
+    {
+        if (bucketGroupCounts == null || bucketGroupCounts.Length == 0) return string.Empty;
+
+        var counts = new string[bucketGroupCounts.Length];
+        for (int bucket = 0; bucket < bucketGroupCounts.Length; bucket++)
+        {
+            counts[bucket] = $"{bucket}: {bucketGroupCounts[bucket]}";
+        }
+        return "Pixel groups per bucket (8x8): " + string.Join(", ", counts) + "\n";
     }
 
     private static string ResolveDefaultFolder()
@@ -359,49 +464,57 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
             return;
         }
 
-        string latest = null;
+        string latestMetadata = null;
         DateTime latestWrite = DateTime.MinValue;
-        foreach (string path in Directory.GetFiles(_folder, "frame_*.png"))
+        foreach (string path in Directory.GetFiles(_folder, "frame_*.txt"))
         {
             DateTime writeTime = File.GetLastWriteTimeUtc(path);
             if (writeTime > latestWrite)
             {
-                latest = path;
+                latestMetadata = path;
                 latestWrite = writeTime;
             }
         }
-        if (latest == null || string.Equals(latest, _latestPath, StringComparison.Ordinal))
+        if (latestMetadata == null || string.Equals(latestMetadata, _latestMetadataPath, StringComparison.Ordinal))
         {
             if (force) Repaint();
             return;
         }
 
-        byte[] bytes;
-        try
+        _latestMetadataPath = latestMetadata;
+        _metadata = File.ReadAllText(latestMetadata);
+        string latest = Path.ChangeExtension(latestMetadata, ".png");
+        if (_showHeatmap && File.Exists(latest))
         {
-            bytes = File.ReadAllBytes(latest);
+            try
+            {
+                var texture = new Texture2D(2, 2, TextureFormat.RGB24, false);
+                if (!texture.LoadImage(File.ReadAllBytes(latest), false))
+                {
+                    DestroyImmediate(texture);
+                    return;
+                }
+                texture.filterMode = FilterMode.Point;
+                DestroyLatestTexture();
+                _latestTexture = texture;
+                _latestPath = latest;
+            }
+            catch (IOException)
+            {
+                return;
+            }
         }
-        catch (IOException)
+        else
         {
-            return;
+            DestroyLatestTexture();
+            _latestPath = null;
         }
-
-        var texture = new Texture2D(2, 2, TextureFormat.RGB24, false);
-        if (!texture.LoadImage(bytes, false))
+        if (_showDifference)
         {
-            DestroyImmediate(texture);
-            return;
+            string differencePath = Path.Combine(_folder,
+                Path.GetFileName(latest).Replace("frame_", "difference_"));
+            LoadDifferenceTexture(differencePath);
         }
-        texture.filterMode = FilterMode.Point;
-
-        DestroyLatestTexture();
-        _latestTexture = texture;
-        _latestPath = latest;
-        string metadataPath = Path.ChangeExtension(latest, ".txt");
-        _metadata = File.Exists(metadataPath) ? File.ReadAllText(metadataPath) : string.Empty;
-        string differencePath = Path.Combine(_folder,
-            Path.GetFileName(latest).Replace("frame_", "difference_"));
-        LoadDifferenceTexture(differencePath);
         Repaint();
     }
 

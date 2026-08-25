@@ -3,6 +3,7 @@
 #pragma kernel CSAdaptiveGuidanceTrace
 #pragma kernel CSAdaptiveAllocateGroups
 #pragma kernel CSAdaptiveClassifyGroups
+#pragma kernel CSAdaptiveApplyBucketRemap
 #pragma kernel CSAdaptiveAllocateGroupBuckets
 #pragma kernel CSAdaptiveAssignGroups
 #pragma kernel CSAdaptiveAssignGroupExtras
@@ -375,7 +376,7 @@ void ClearAdaptiveScheduler(uint3 id : SV_DispatchThreadID)
         AdaptiveGroupExtraDemand[id.x] = 0u;
         AdaptiveGroupExtraGrant[id.x] = 0u;
     }
-    if (id.x < 16u)
+    if (id.x < _AdaptiveBucketCount)
     {
         AdaptiveBucketDemand[id.x] = 0u;
         AdaptiveBucketBudget[id.x] = 0u;
@@ -384,6 +385,7 @@ void ClearAdaptiveScheduler(uint3 id : SV_DispatchThreadID)
         AdaptiveBucketExtraDemand[id.x] = 0u;
         AdaptiveBucketExtraBudget[id.x] = 0u;
         AdaptiveBucketExtraUsage[id.x] = 0u;
+        AdaptiveRawBucketDemand[id.x] = 0u;
     }
 }
 
@@ -545,8 +547,17 @@ uint2 GetAdaptiveLogicalGroup(uint2 physicalGroup)
     return uint2(logicalFlat % _AdaptiveGroupWidth, logicalFlat / _AdaptiveGroupWidth);
 }
 
-// Classify spatial groups in parallel. The bucket is global (fixed logarithmic RGB standard-error
-// bands), not normalized against the other pixels in this local 8x8 group.
+float GetAdaptiveBucketRateFloat(uint bucket)
+{
+    uint priorityBucketCount = max(1u, _AdaptiveBucketCount - 1u);
+    float position = priorityBucketCount <= 1u ? 0.5f : (float)bucket / (float)(priorityBucketCount - 1u);
+    float highestRate = min(_AdaptiveHighestBucketSampleRate, (float)_AdaptiveMaxPathsPerPixel);
+    return exp2(lerp(-log2(highestRate), log2(highestRate), position));
+}
+
+// Classify spatial groups into logarithmic source bands. The next stage divides each source band
+// across overlapping inverse-rate target tiers, so a concentrated score band cannot collapse into
+// one output bucket.
 [numthreads(8,8,1)]
 void CSAdaptiveClassifyGroups(uint3 id : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex,
     uint3 groupId : SV_GroupID)
@@ -577,6 +588,11 @@ void CSAdaptiveClassifyGroups(uint3 id : SV_DispatchThreadID, uint groupIndex : 
             score = count > 1.0f ? sqrt(max(0.0f, (m2.x + m2.y + m2.z) / (count * (count - 1.0f)))) : 1.0f;
             bootstrap = count < (float)max(1, _AdaptiveSamplingMinSamples);
         }
+        // Blend between absolute-RGB priority and the existing luminance-normalized correction.
+        // The floor prevents dark-noise spikes when the correction is enabled.
+        float luminance = dot(max(0.0f, AccumulationResult[pixel].rgb), float3(0.2126f, 0.7152f, 0.0722f));
+        float normalizedScore = score * (0.2f + 0.8f / max(0.25f, luminance));
+        score = lerp(score, normalizedScore, saturate(_AdaptiveNormalizePriorityByLuminance));
         score = isfinite(score) ? score : 0.0f;
     }
     AdaptiveGroupScore[groupIndex] = score;
@@ -597,43 +613,92 @@ void CSAdaptiveClassifyGroups(uint3 id : SV_DispatchThreadID, uint groupIndex : 
     }
 
     uint passes = (uint)max(1, _NumberOfPasses);
-    uint bucket = 15u;
+    uint bucket = _AdaptiveBucketCount - 1u;
 
     if (!groupBootstrap)
     {
         float meanScore = scoreSum / max(1u, validPixels);
-        // Log bands remain meaningful as absolute errors shrink; bucket 15 is reserved for bootstrap.
-        bucket = min(14u, (uint)floor(log2(1.0f + meanScore * 4096.0f)));
+        uint priorityBucketCount = max(1u, _AdaptiveBucketCount - 1u);
+        bucket = min(priorityBucketCount - 1u,
+            (uint)floor(log2(1.0f + meanScore * 4096.0f) * priorityBucketCount / 15.0f));
     }
 
-    // A rotating three-in-four first-service layer is deliberately score-independent. Hashing the
-    // group ID avoids both a fixed stripe pattern and GPU atomic-arrival locality; score only
-    // controls bounded extra quanta after that broad service layer has been reserved.
     uint flatGroup = logicalGroup.x + logicalGroup.y * _AdaptiveGroupWidth;
-    uint serviceHash = Hash(flatGroup ^ (_AdaptiveScheduleRotation * 747796405u));
-    bool primaryEligible = groupBootstrap || (serviceHash & 3u) != 0u;
-
-    // The frame budget is one batch per pixel times _NumberOfPasses. Do not let the
-    // configurable cap create demand beyond that budget, or bucket admission can
-    // report paths that are never emitted into the compact work list.
-    // A selected group may consume several paths per pixel even when the uniform baseline is one
-    // pass. Limiting this to _NumberOfPasses would make sparse service leave part of the fixed
-    // frame budget unused.
-    // Bootstrap is deliberately a uniform full-resolution pass. Until every pixel has enough
-    // samples for a meaningful variance estimate, allowing a multi-path group cap would consume
-    // the whole frame budget before other bootstrap groups are served.
-    uint updateCap = groupBootstrap ? passes : max(1u, _AdaptiveMaxPathsPerPixel);
-    // First service is separate from bounded extras. A distinct rotating hashed third competes
-    // for one extra quantum only: allowing one winner to claim all three cap quanta reintroduced
-    // launch-order clusters even after first-service eligibility was spatially decorrelated.
-    uint primaryDemand = primaryEligible ? validPixels * (groupBootstrap ? passes : 1u) : 0u;
-    bool extraEligible = (Hash(serviceHash ^ 2891336453u) % 3u) == 0u;
-    uint extraDemand = !groupBootstrap && extraEligible && updateCap > 1u ? validPixels : 0u;
     AdaptiveGroupBucket[flatGroup] = bucket;
-    AdaptiveGroupExtraDemand[flatGroup] = extraDemand;
-    InterlockedAdd(AdaptiveBucketDemand[bucket], primaryDemand);
-    InterlockedAdd(AdaptiveBucketPrimaryDemand[bucket], primaryDemand);
-    InterlockedAdd(AdaptiveBucketExtraDemand[bucket], extraDemand);
+    AdaptiveGroupExtraDemand[flatGroup] = groupBootstrap ? 1u : 0u;
+    InterlockedAdd(AdaptiveRawBucketDemand[bucket], validPixels);
+}
+
+// Assign a source-band group to a target tier based on the overlap of their population intervals.
+// A hashed position breaks ties inside a quantized source band without changing the score ordering
+// between bands. This is a bounded 15-bucket calculation, not an image-sized sort or scan.
+uint GetAdaptiveTargetBucket(uint sourceBucket, uint flatGroup)
+{
+    uint priorityBucketCount = max(1u, _AdaptiveBucketCount - 1u);
+    uint totalPixels = 0u;
+    uint sourceBegin = 0u;
+    float rateSum = 0.0f;
+    float inverseRateSum = 0.0f;
+    [unroll] for (uint bucket = 0u; bucket < 16u; bucket++)
+    {
+        if (bucket >= priorityBucketCount) break;
+        uint demand = AdaptiveRawBucketDemand[bucket];
+        totalPixels += demand;
+        if (bucket < sourceBucket) sourceBegin += demand;
+        float rate = GetAdaptiveBucketRateFloat(bucket);
+        rateSum += rate;
+        inverseRateSum += rcp(rate);
+    }
+
+    uint sourceDemand = AdaptiveRawBucketDemand[sourceBucket];
+    if (sourceDemand == 0u || totalPixels == 0u) return sourceBucket;
+
+    // Pure inverse-rate populations under-spend the frame for a geometric rate curve. Add the
+    // minimum uniform component required for the tier-weighted expected rate to equal one.
+    float uniformWeight = max(0.0f, (inverseRateSum - priorityBucketCount)
+        / max(0.000001f, rateSum - priorityBucketCount));
+    float random = (float)Hash(flatGroup ^ (_AdaptiveScheduleRotation * 747796405u)) / 4294967296.0f;
+    float sourcePosition = sourceBegin + random * sourceDemand;
+    float weightSum = inverseRateSum + uniformWeight * priorityBucketCount;
+    float targetEnd = totalPixels * (rcp(GetAdaptiveBucketRateFloat(0u)) + uniformWeight) / max(weightSum, 0.000001f);
+    [unroll] for (uint bucket = 0u; bucket < 16u; bucket++)
+    {
+        if (bucket >= priorityBucketCount - 1u || sourcePosition < targetEnd) return bucket;
+        targetEnd += totalPixels * (rcp(GetAdaptiveBucketRateFloat(bucket + 1u)) + uniformWeight)
+            / max(weightSum, 0.000001f);
+    }
+    return priorityBucketCount - 1u;
+}
+
+[numthreads(8,8,1)]
+void CSAdaptiveApplyBucketRemap(uint3 id : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex,
+    uint3 groupId : SV_GroupID)
+{
+    if (groupIndex != 0u) return;
+    uint width, height;
+    Result.GetDimensions(width, height);
+    uint2 logicalGroup = GetAdaptiveLogicalGroup(groupId.xy);
+    uint flatGroup = logicalGroup.x + logicalGroup.y * _AdaptiveGroupWidth;
+    uint sourceBucket = AdaptiveGroupBucket[flatGroup];
+    bool bootstrap = AdaptiveGroupExtraDemand[flatGroup] != 0u;
+    uint bucket = bootstrap ? _AdaptiveBucketCount - 1u : GetAdaptiveTargetBucket(sourceBucket, flatGroup);
+    uint validPixels = min(8u, width - logicalGroup.x * 8u) * min(8u, height - logicalGroup.y * 8u);
+    uint samples = (uint)max(1, _NumberOfPasses);
+    if (!bootstrap)
+    {
+        float rate = GetAdaptiveBucketRateFloat(bucket);
+        uint wholePaths = (uint)floor(rate);
+        float fraction = frac(rate);
+        // Use a separate sequence from tier selection so fractional-rate admission remains
+        // unbiased after lower-rate tiers consume the lower part of the selection interval.
+        float random = (float)Hash(flatGroup ^ (_AdaptiveScheduleRotation * 2891336453u)) / 4294967296.0f;
+        samples = min(_AdaptiveMaxPathsPerPixel, wholePaths + (random < fraction ? 1u : 0u));
+    }
+    uint paths = validPixels * samples;
+    AdaptiveGroupBucket[flatGroup] = bucket;
+    AdaptiveGroupExtraDemand[flatGroup] = paths;
+    InterlockedAdd(AdaptiveBucketDemand[bucket], paths);
+    InterlockedAdd(AdaptiveBucketPrimaryDemand[bucket], paths);
     InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataBucketPopulationStart + bucket], validPixels);
 }
 
@@ -645,39 +710,17 @@ void CSAdaptiveAllocateGroupBuckets(uint3 id : SV_DispatchThreadID)
 {
     uint width, height;
     Result.GetDimensions(width, height);
-    uint passes = (uint)max(1, _NumberOfPasses);
-    uint remaining = width * height * passes;
-    // Reserve one complete normal group update for every non-empty bucket. The classifier counts
-    // only complete group quanta, so a reservation cannot create a partial group grant.
     [unroll] for (uint bucket = 0u; bucket < 16u; bucket++)
     {
-        uint reservation = min(AdaptiveBucketPrimaryDemand[bucket], min(64u, remaining));
-        AdaptiveBucketBudget[bucket] = reservation;
-        remaining -= reservation;
-    }
-    // Finish first-quantum service before allocating any extras. This keeps low-score groups in
-    // bounded rotation rather than expressing a weak score as a 0-or-4 decision.
-    [unroll] for (int bucket = 15; bucket >= 0 && remaining > 0u; bucket--)
-    {
-        uint additionalDemand = AdaptiveBucketPrimaryDemand[bucket] - AdaptiveBucketBudget[bucket];
-        uint granted = min(remaining, additionalDemand);
-        AdaptiveBucketBudget[bucket] += granted;
-        remaining -= granted;
-    }
-    // Higher-score buckets receive extra complete group updates only after broad first service.
-    [unroll] for (int bucket = 15; bucket >= 0 && remaining > 0u; bucket--)
-    {
-        uint granted = min(remaining, AdaptiveBucketExtraDemand[bucket]);
-        AdaptiveBucketExtraBudget[bucket] = granted;
-        remaining -= granted;
+        if (bucket >= _AdaptiveBucketCount) break;
+        AdaptiveBucketBudget[bucket] = AdaptiveBucketPrimaryDemand[bucket];
     }
     [unroll] for (uint bucket = 0u; bucket < 16u; bucket++)
         InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataBucketBudgetStart + bucket], AdaptiveBucketBudget[bucket]);
 }
 
-// First service claims exactly one complete group quantum (or the uniform bootstrap batch). It
-// cannot be consumed by an earlier group as multiple paths per pixel, which caused the former
-// 0-or-4 cutoff.
+// Each group requests a whole number of paths derived from its literal tier rate. Atomic admission
+// remains only to compact the independently requested groups into per-bucket contiguous ranges.
 [numthreads(8,8,1)]
 void CSAdaptiveAssignGroups(uint3 id : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex,
     uint3 groupId : SV_GroupID)
@@ -693,7 +736,7 @@ void CSAdaptiveAssignGroups(uint3 id : SV_DispatchThreadID, uint groupIndex : SV
         uint validWidth = min(8u, width - logicalGroup.x * 8u);
         uint validHeight = min(8u, height - logicalGroup.y * 8u);
         uint validPixels = validWidth * validHeight;
-        uint quantum = validPixels * (bucket == 15u ? (uint)max(1, _NumberOfPasses) : 1u);
+        uint quantum = AdaptiveGroupExtraDemand[flatGroup];
         uint grant = 0u;
         uint observed = AdaptiveBucketUsage[bucket];
         [loop]
@@ -716,30 +759,7 @@ void CSAdaptiveAssignGroups(uint3 id : SV_DispatchThreadID, uint groupIndex : SV
 void CSAdaptiveAssignGroupExtras(uint3 id : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex,
     uint3 groupId : SV_GroupID)
 {
-    if (groupIndex != 0u) return;
-    uint width, height;
-    Result.GetDimensions(width, height);
-    uint2 logicalGroup = GetAdaptiveLogicalGroup(groupId.xy);
-    uint flatGroup = logicalGroup.x + logicalGroup.y * _AdaptiveGroupWidth;
-    uint requested = AdaptiveGroupExtraDemand[flatGroup];
-    if (requested == 0u) return;
-    uint validPixels = min(8u, width - logicalGroup.x * 8u) * min(8u, height - logicalGroup.y * 8u);
-    uint bucket = AdaptiveGroupBucket[flatGroup];
-    uint budget = AdaptiveBucketExtraBudget[bucket];
-    uint observed = AdaptiveBucketExtraUsage[bucket];
-    uint grant = 0u;
-    [loop]
-    while (validPixels != 0u && observed < budget)
-    {
-        uint candidate = min(requested, budget - observed);
-        candidate -= candidate % validPixels;
-        if (candidate == 0u) break;
-        uint original;
-        InterlockedCompareExchange(AdaptiveBucketExtraUsage[bucket], observed, observed + candidate, original);
-        if (original == observed) { grant = candidate; break; }
-        observed = original;
-    }
-    AdaptiveGroupExtraGrant[flatGroup] += grant;
+    // Kept as a no-op kernel so the existing dispatch sequence and editor probes remain valid.
 }
 
 // Publish offsets after both service layers so compact work and root counts derive from final grants.

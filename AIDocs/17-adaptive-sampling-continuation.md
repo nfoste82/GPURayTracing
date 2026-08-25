@@ -236,10 +236,19 @@ Timed command-line captures are capped at ten seconds to avoid a pathological ad
 ```text
 enableAdaptiveSampling       default false
 adaptiveSamplingMinSamples  default 8
-adaptiveGuidanceBrightnessPriority default 0.5
+ adaptiveNormalizePriorityByLuminance default 0.0
 ```
 
 The inspector exposes the bootstrap count and exploration floor when adaptive sampling is enabled. Any of these settings changes the accumulation-state hash, so progressive and adaptive state reset together.
+
+`Highest Bucket Sample Rate` is a literal rate endpoint after bootstrap, capped by `Max Paths Per
+Pixel`. With a value `H`, the lowest adaptive tier is sampled at `1 / H` and the highest at `H`;
+intermediate tiers are spaced logarithmically. The scheduler remaps its score bands into tiers with populations proportional to
+`1 / rate`, which keeps the expected total tracing work close to uniform sampling while giving the
+smallest, highest-priority tier the highest rate. Whole paths are selected with deterministic
+hashed temporal rounding, so fractional rates converge over multiple frames. The current active
+bucket count remains 16, but shader loops use `_AdaptiveBucketCount` and reserve its final bucket
+for bootstrap, allowing a future power-of-two bucket-count setting without changing rate math.
 
 ### Persistent State
 
