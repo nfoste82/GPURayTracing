@@ -13,6 +13,12 @@ public static class GameViewPauseFocus
 
     private static void OnPauseStateChanged(PauseState state)
     {
+        GameManager manager = UnityEngine.Object.FindFirstObjectByType<GameManager>();
+        if (manager != null)
+        {
+            manager.SetRenderingPaused(state == PauseState.Paused);
+        }
+
         if (state != PauseState.Paused)
         {
             return;

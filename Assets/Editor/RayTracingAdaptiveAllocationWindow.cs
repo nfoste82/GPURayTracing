@@ -52,6 +52,7 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         }
         EditorSceneManager.activeSceneChangedInEditMode += OnActiveSceneChanged;
         EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
+        EditorApplication.pauseStateChanged += OnPauseStateChanged;
         EditorApplication.update += PollForLatestFrame;
         PollForLatestFrame();
     }
@@ -60,6 +61,7 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
     {
         EditorSceneManager.activeSceneChangedInEditMode -= OnActiveSceneChanged;
         EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
+        EditorApplication.pauseStateChanged -= OnPauseStateChanged;
         EditorApplication.update -= PollForLatestFrame;
         DestroyLatestTexture();
         DestroyDifferenceTexture();
@@ -90,11 +92,19 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         }
     }
 
+    private void OnPauseStateChanged(PauseState state)
+    {
+        if (_liveManager != null && _liveSettingsApplied)
+        {
+            _liveManager.SetAdaptiveCaptureDiagnostics(state != PauseState.Paused);
+        }
+    }
+
     private void OnGUI()
     {
         EditorGUILayout.LabelField("Adaptive Allocation Monitor", EditorStyles.boldLabel);
         EditorGUILayout.HelpBox(
-            "Live monitoring reports adaptive allocation statistics while playing. Heatmap and reference images are optional diagnostics and can be disabled to avoid their readback and file-generation cost.",
+            "Live monitoring reports adaptive allocation statistics while playing. Heatmap and reference images are optional diagnostics and can be disabled to avoid their readback and file-generation cost. Monitoring pauses its diagnostics while Play mode is paused.",
             MessageType.Info);
 
         bool liveGeneration = EditorGUILayout.ToggleLeft("Monitor allocation while playing", _liveGeneration);
@@ -198,16 +208,23 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         EditorGUILayout.PropertyField(enabled, new GUIContent("Adaptive Sampling (Experimental)"));
         if (enabled.boolValue)
         {
+            EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveBootstrapFrames"),
+                new GUIContent("Low-Resolution Bootstrap Frames"));
+            EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveBootstrapResolutionScale"),
+                new GUIContent("Bootstrap Resolution Scale"));
+            EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveGuidanceHistoryFrames"),
+                new GUIContent("Coarse History Passed to Fine",
+                    "Approximate fine accumulation samples initialized from the upscaled bootstrap image."));
             EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveSamplingMinSamples"),
-                new GUIContent("Bootstrap Samples Per Pixel"));
+                new GUIContent("Minimum Fine Samples"));
+            EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveBootstrapGroupDivisor"),
+                new GUIContent("Fine Bootstrap Group Batches"));
             EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptivePriorityMode"),
                 new GUIContent("Priority Mode"));
             EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveNormalizePriorityByLuminance"),
                 new GUIContent("Luminance Priority Normalization Strength"));
             EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveReclassificationInterval"),
                 new GUIContent("Reclassification Interval"));
-            EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveRecentChangeWeight"),
-                new GUIContent("Recent Change Weight"));
             EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveHighestBucketSampleRate"),
                 new GUIContent("Highest Bucket Sample Rate"));
             EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveMaxPathsPerPixel"),
@@ -297,7 +314,7 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
 
     private void CaptureLiveFrame()
     {
-        if (!_liveGeneration || !EditorApplication.isPlaying || _liveManager == null
+        if (!_liveGeneration || !EditorApplication.isPlaying || EditorApplication.isPaused || _liveManager == null
             || !_liveManager.enableAdaptiveSampling || _liveManager.AccumulatedFrameCount <= 0
             || _liveManager.AccumulatedFrameCount == _lastLiveFrame)
         {
@@ -310,7 +327,7 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         string metadataPath = Path.Combine(_folder, $"frame_{frame:000000}.txt");
         if (_showHeatmap)
         {
-            allocation = _liveManager.ReadAdaptiveCumulativeAllocationForCapture();
+            allocation = _liveManager.ReadAdaptiveAllocationForCapture();
             string path = Path.Combine(_folder, $"frame_{frame:000000}.png");
             WriteHeatmap(path, allocation);
         }
@@ -330,9 +347,9 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         File.WriteAllText(metadataPath,
             $"Adaptive allocation heatmap\nFrame: {frame}\n" +
             $"Active work items: {allocation.activeWorkItems}\n" +
-            $"Cumulative retired paths: {allocation.assignedPaths}\n" +
+            $"Current scheduled paths: {allocation.assignedPaths}\n" +
             FormatBucketGroupCounts(allocation.bucketGroupCounts) +
-            "Colors rank pixels by their cumulative retired-path count.\n");
+            "Colors rank pixels by their current scheduled-path count.\n");
         _lastLiveFrame = frame;
         PollForLatestFrame(true);
     }

@@ -1,13 +1,14 @@
-// Final-color renderer kernel. Shared scene and material code lives in RayTracingShared.hlsl.
-#pragma kernel CSMain
+// Geometry diagnostic renderer. Shared scene and material code lives in RayTracingShared.hlsl.
+#pragma kernel CSDebugMain
 #pragma multi_compile _ FOG_ENABLED
 #pragma multi_compile _ TERRAIN_ENABLED
-#include "RayTracingShared.hlsl"
+#define DEBUG_RENDER 1
+#define WATER_ENABLED 1
+#include "../Scripts/RayTracingShared.hlsl"
 
 [numthreads(4,4,1)]
-void CSMain (uint3 id : SV_DispatchThreadID)
+void CSDebugMain(uint3 id : SV_DispatchThreadID)
 {
-    // Get the dimensions of the RenderTexture
     uint width, height;
     Result.GetDimensions(width, height);
 
@@ -18,15 +19,12 @@ void CSMain (uint3 id : SV_DispatchThreadID)
     }
 
     int samplesThisPixel = max(1, _NumberOfPasses);
-    // Transform pixel to [-1,1] range
     float3 result = float3(0.0f, 0.0f, 0.0f);
     [loop]
     for (int i = 0; i < samplesThisPixel; i++)
     {
         uint rngState = CreateRngState(pixel, _SampleOffset + (uint)i);
         float2 pixelJitter = float2(rand(rngState), rand(rngState));
-        // Keep the default sequence and pixel footprint bit-for-bit unchanged for existing
-        // renders. Wider filters trade aliasing for deliberate cross-pixel blur.
         if (_SubpixelJitterScale != 1.0f)
         {
             pixelJitter = (pixelJitter - 0.5f) * _SubpixelJitterScale + 0.5f;
@@ -51,7 +49,6 @@ void CSMain (uint3 id : SV_DispatchThreadID)
         }
         else
         {
-            // Preserve the established downstream path-sampling sequence when the lens is pinhole.
             rand(rngState);
             rand(rngState);
             rand(rngState);
@@ -60,24 +57,10 @@ void CSMain (uint3 id : SV_DispatchThreadID)
             rand(rngState);
         }
 
-        float3 sampleRadiance = ClampFirefly(TracePath(ray, rngState));
-        result += sampleRadiance;
+        result += GetDebugRenderColor(ray, rngState);
     }
 
     float3 color = result / samplesThisPixel;
-
-    if (_UseFrameAccumulation != 0)
-    {
-        float previousSampleCount = max(0, _AccumulatedFrameCount);
-        if (previousSampleCount > 0.0f)
-        {
-            color = (AccumulationResult[id.xy].rgb * previousSampleCount + color) / (previousSampleCount + 1.0f);
-        }
-        AccumulationResult[pixel] = float4(color, 1);
-
-    }
-
     Beauty[pixel] = float4(color, 1.0f);
-
-    Result[pixel] = float4(color, 1);
+    Result[pixel] = float4(color, 1.0f);
 }

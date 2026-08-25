@@ -21,6 +21,13 @@ namespace GPURayTracing.Tests
         }
 
         private const string ComputeShaderPath = "Assets/Scripts/RayTracingCompute.compute";
+        private const string DebugShaderPath = "Assets/Resources/RayTracingDebug.compute";
+        private const string UtilityShaderPath = "Assets/Resources/RayTracingUtility.compute";
+        private const string FeaturesShaderPath = "Assets/Resources/RayTracingFeatures.compute";
+        private const string FocusShaderPath = "Assets/Resources/RayTracingFocus.compute";
+        private const string AdaptiveSchedulerShaderPath = "Assets/Resources/RayTracingAdaptiveScheduler.compute";
+        private const string AdaptiveTraceShaderPath = "Assets/Resources/RayTracingAdaptiveTrace.compute";
+        private const string RegressionProbeShaderPath = "Assets/Resources/RayTracingRegressionProbe.compute";
         private const string DenoiserShaderPath = "Assets/Resources/RayTracingSpatialDenoiser.compute";
         private const float Epsilon = 0.0001f;
         // Transform.eulerAngles round-trips through a quaternion, producing roughly 0.00025 degrees
@@ -33,7 +40,7 @@ namespace GPURayTracing.Tests
             if (!SystemInfo.supportsComputeShaders || SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
                 Assert.Ignore("Group scheduler parity requires an active compute graphics device.");
 
-            ComputeShader shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
+            ComputeShader shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(AdaptiveSchedulerShaderPath);
             Assert.That(shader, Is.Not.Null);
             Assert.That(shader.HasKernel("CSAdaptiveProbeGroups"), Is.True);
 
@@ -171,7 +178,7 @@ namespace GPURayTracing.Tests
         [Test]
         public void AdaptiveGroupScheduler_ExtraAdmissionIsOneCompleteQuantumPerGroup()
         {
-            string shaderSource = System.IO.File.ReadAllText(ComputeShaderPath);
+            string shaderSource = System.IO.File.ReadAllText(AdaptiveSchedulerShaderPath);
             int classifyStart = shaderSource.IndexOf("void CSAdaptiveClassifyGroups", StringComparison.Ordinal);
             int allocateStart = shaderSource.IndexOf("uint GetAdaptiveTargetBucket", classifyStart, StringComparison.Ordinal);
             string classify = shaderSource.Substring(classifyStart, allocateStart - classifyStart);
@@ -183,7 +190,7 @@ namespace GPURayTracing.Tests
         [Test]
         public void AdaptiveGroupScheduler_UsesInverseRatePopulationTiers()
         {
-            string shaderSource = System.IO.File.ReadAllText(ComputeShaderPath);
+            string shaderSource = System.IO.File.ReadAllText(AdaptiveSchedulerShaderPath);
             int remapStart = shaderSource.IndexOf("uint GetAdaptiveTargetBucket", StringComparison.Ordinal);
             int remapEnd = shaderSource.IndexOf("void CSAdaptiveApplyBucketRemap", remapStart, StringComparison.Ordinal);
             string remap = shaderSource.Substring(remapStart, remapEnd - remapStart);
@@ -246,7 +253,7 @@ namespace GPURayTracing.Tests
         [Test]
         public void AdaptiveGroupScheduler_PermutesLogicalGroupsBeforeOffsetReservation()
         {
-            string shaderSource = System.IO.File.ReadAllText(ComputeShaderPath);
+            string shaderSource = System.IO.File.ReadAllText(AdaptiveSchedulerShaderPath);
             Assert.That(shaderSource, Does.Contain("uint2 GetAdaptiveLogicalGroup(uint2 physicalGroup)"));
             Assert.That(shaderSource, Does.Contain("GetAdaptiveGroupPermutationStride(groupCount)"));
 
@@ -264,7 +271,7 @@ namespace GPURayTracing.Tests
         [Test]
         public void AdaptiveScheduler_UsesFullResolutionRgbWelfordScores()
         {
-            string shaderSource = System.IO.File.ReadAllText(ComputeShaderPath);
+            string shaderSource = System.IO.File.ReadAllText(AdaptiveSchedulerShaderPath);
             int start = shaderSource.IndexOf("void CSAdaptiveClassifyGroups", StringComparison.Ordinal);
             int end = shaderSource.IndexOf("void CSAdaptiveCompactGroupWorkList", start, StringComparison.Ordinal);
             string allocation = shaderSource.Substring(start, end - start);
@@ -280,13 +287,14 @@ namespace GPURayTracing.Tests
         [Test]
         public void AdaptiveDammertzPriority_UsesPersistentSampleIndexSplitEstimatorAndFiniteRgbRms()
         {
-            string shaderSource = System.IO.File.ReadAllText(ComputeShaderPath);
-            int classifyStart = shaderSource.IndexOf("void CSAdaptiveClassifyGroups", StringComparison.Ordinal);
-            int classifyEnd = shaderSource.IndexOf("uint GetAdaptiveTargetBucket", classifyStart, StringComparison.Ordinal);
-            int resolveStart = shaderSource.IndexOf("void CSAdaptiveResolveRoot", StringComparison.Ordinal);
-            int resolveEnd = shaderSource.IndexOf("void CSAdaptiveTraceReference", resolveStart, StringComparison.Ordinal);
-            string classify = shaderSource.Substring(classifyStart, classifyEnd - classifyStart);
-            string resolve = shaderSource.Substring(resolveStart, resolveEnd - resolveStart);
+            string schedulerSource = System.IO.File.ReadAllText(AdaptiveSchedulerShaderPath);
+            string traceSource = System.IO.File.ReadAllText(AdaptiveTraceShaderPath);
+            int classifyStart = schedulerSource.IndexOf("void CSAdaptiveClassifyGroups", StringComparison.Ordinal);
+            int classifyEnd = schedulerSource.IndexOf("uint GetAdaptiveTargetBucket", classifyStart, StringComparison.Ordinal);
+            int resolveStart = traceSource.IndexOf("void CSAdaptiveResolveRoot", StringComparison.Ordinal);
+            int resolveEnd = traceSource.IndexOf("void CSAdaptiveTraceReference", resolveStart, StringComparison.Ordinal);
+            string classify = schedulerSource.Substring(classifyStart, classifyEnd - classifyStart);
+            string resolve = traceSource.Substring(resolveStart, resolveEnd - resolveStart);
 
             Assert.That(classify, Does.Contain("_AdaptivePriorityMode == 1u"));
             Assert.That(classify, Does.Contain("AccumulationResult[pixel].rgb - alternating.rgb"));
@@ -300,20 +308,63 @@ namespace GPURayTracing.Tests
         [Test]
         public void AdaptiveDammertzPriority_UsesBothEstimatorsForBootstrapAndKeepsBeautyIndependent()
         {
-            string shaderSource = System.IO.File.ReadAllText(ComputeShaderPath);
-            int classifyStart = shaderSource.IndexOf("void CSAdaptiveClassifyGroups", StringComparison.Ordinal);
-            int classifyEnd = shaderSource.IndexOf("uint GetAdaptiveTargetBucket", classifyStart, StringComparison.Ordinal);
-            string classify = shaderSource.Substring(classifyStart, classifyEnd - classifyStart);
+            string schedulerSource = System.IO.File.ReadAllText(AdaptiveSchedulerShaderPath);
+            string traceSource = System.IO.File.ReadAllText(AdaptiveTraceShaderPath);
+            int classifyStart = schedulerSource.IndexOf("void CSAdaptiveClassifyGroups", StringComparison.Ordinal);
+            int classifyEnd = schedulerSource.IndexOf("uint GetAdaptiveTargetBucket", classifyStart, StringComparison.Ordinal);
+            string classify = schedulerSource.Substring(classifyStart, classifyEnd - classifyStart);
             Assert.That(classify, Does.Contain("count < (float)max(2, _AdaptiveSamplingMinSamples) || alternating.a < 2.0f"));
-            Assert.That(shaderSource, Does.Contain("all(isfinite(radiance)) ? radiance : 0.0f"));
-            Assert.That(shaderSource, Does.Not.Contain("AccumulationResult[pixel] = float4(alternating"));
-            Assert.That(shaderSource, Does.Not.Contain("Beauty[pixel] = float4(alternating"));
+            Assert.That(traceSource, Does.Contain("all(isfinite(radiance)) ? radiance : 0.0f"));
+            Assert.That(traceSource, Does.Not.Contain("AccumulationResult[pixel] = float4(alternating"));
+            Assert.That(traceSource, Does.Not.Contain("Beauty[pixel] = float4(alternating"));
+        }
+
+        [Test]
+        public void AdaptiveBootstrap_UsesTheUniformRenderer()
+        {
+            string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+
+            Assert.That(managerSource, Does.Contain("private void DispatchAdaptiveBootstrap()"));
+            Assert.That(managerSource, Does.Contain("bootstrapShader.FindKernel(\"CSMain\")"));
+            Assert.That(managerSource, Does.Contain("UpscaleAdaptiveBootstrap"));
+        }
+
+        [Test]
+        public void SplitTraceAssetsReceiveActiveGeometryCounts()
+        {
+            string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+            int bindStart = managerSource.IndexOf("private void BindShaderEnvironmentAndSceneParameters", StringComparison.Ordinal);
+            int bindEnd = managerSource.IndexOf("private void SetTerrainShaderParameters", bindStart, StringComparison.Ordinal);
+            string binding = managerSource.Substring(bindStart, bindEnd - bindStart);
+
+            Assert.That(binding, Does.Contain("targetShader.SetInt(NumSpheres, _spheres.Count)"));
+            Assert.That(binding, Does.Contain("targetShader.SetInt(NumTriangles, _triangles.Count)"));
+            Assert.That(binding, Does.Contain("targetShader.SetInt(NumMeshes, _meshInfos.Count)"));
+        }
+
+        [Test]
+        public void AdaptiveBootstrap_UpscalesBeforeFineScheduling()
+        {
+            string utilitySource = System.IO.File.ReadAllText("Assets/Resources/RayTracingUtility.compute");
+
+            Assert.That(utilitySource, Does.Contain("void UpscaleAdaptiveBootstrap"));
+            Assert.That(utilitySource, Does.Contain("SampleAdaptiveBootstrap"));
+        }
+
+        [Test]
+        public void AdaptiveBootstrap_SeedsFineHistoryFromUpscaledData()
+        {
+            string utilitySource = System.IO.File.ReadAllText("Assets/Resources/RayTracingUtility.compute");
+
+            Assert.That(utilitySource, Does.Contain("void SeedAdaptiveBootstrap"));
+            Assert.That(utilitySource, Does.Contain("_AdaptiveBootstrapHistorySamples"));
+            Assert.That(utilitySource, Does.Contain("AccumulationResult[id.xy] = float4(color, 1.0f)"));
         }
 
         [Test]
         public void AdaptiveScheduler_MapsGroupsAndPublishesOffsetsInOnePass()
         {
-            string shaderSource = System.IO.File.ReadAllText(ComputeShaderPath);
+            string shaderSource = System.IO.File.ReadAllText(AdaptiveTraceShaderPath);
             int start = shaderSource.IndexOf("void CSAdaptiveApplyBucketRemap", StringComparison.Ordinal);
             int attributeStart = shaderSource.LastIndexOf("[numthreads", start, StringComparison.Ordinal);
             int end = shaderSource.IndexOf("void CSAdaptiveCompactGroupWorkList", start, StringComparison.Ordinal);
@@ -337,21 +388,22 @@ namespace GPURayTracing.Tests
         {
             string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
             int start = managerSource.IndexOf("if (_adaptiveSamplingStateTexture != null)", StringComparison.Ordinal);
-            int end = managerSource.IndexOf("if (targetShader == shader", start, StringComparison.Ordinal);
+            int end = managerSource.IndexOf("if (targetShader == adaptiveTraceShader", start, StringComparison.Ordinal);
             string reset = managerSource.Substring(start, end - start);
             Assert.That(reset, Does.Contain("ClearAdaptiveSamplingState"));
             Assert.That(reset, Does.Contain("ClearAdaptiveGroupState"));
         }
 
         [Test]
-        public void AdaptiveScheduler_DoesNotDispatchLegacyGuidanceOrLocalAllocator()
+        public void AdaptiveScheduler_UsesUniformBootstrapBeforeFullResolutionScheduling()
         {
-            string shaderSource = System.IO.File.ReadAllText(ComputeShaderPath);
             string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
             int dispatchStart = managerSource.IndexOf("private void DispatchAdaptiveSampling", StringComparison.Ordinal);
             int dispatchEnd = managerSource.IndexOf("private void DispatchAdaptiveDiagnostics", dispatchStart, StringComparison.Ordinal);
             string dispatch = managerSource.Substring(dispatchStart, dispatchEnd - dispatchStart);
+            Assert.That(dispatch, Does.Contain("DispatchAdaptiveBootstrap"));
             Assert.That(dispatch, Does.Not.Contain("CSAdaptiveGuidanceTrace"));
+            Assert.That(dispatch, Does.Contain("ComposeAdaptiveBootstrap"));
             Assert.That(dispatch, Does.Not.Contain("CSAdaptiveAllocateGroups"));
             Assert.That(dispatch, Does.Contain("CSAdaptiveClassifyGroups"));
             Assert.That(dispatch, Does.Contain("CSAdaptiveApplyBucketRemap"));
@@ -359,9 +411,106 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void AdaptiveTraceWarmup_WaitsForTheLowResolutionBootstrapHandoff()
+        {
+            string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+            int start = managerSource.IndexOf("private bool TryDeferShaderVariantWarmup", StringComparison.Ordinal);
+            int end = managerSource.IndexOf("private void PrepareRenderFrame", start, StringComparison.Ordinal);
+            string warmup = managerSource.Substring(start, end - start);
+
+            Assert.That(warmup, Does.Contain("_adaptiveBootstrapFrameCount >= Mathf.Clamp(adaptiveBootstrapFrames, 1, 8)"));
+            Assert.That(warmup, Does.Contain("useAdaptiveTraceShader ? 4"));
+        }
+
+        [Test]
+        public void ShaderWarmupKeys_KeepAssetAndVariantBitsDisjoint()
+        {
+            string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+
+            Assert.That(managerSource, Does.Contain("return shaderKind << 2 | (fogEnabled ? 1 : 0)"));
+        }
+
+        [Test]
+        public void AdaptiveBootstrapPreview_RemainsVisibleUntilEachFinePixelReceivesItsFirstPath()
+        {
+            string utilitySource = System.IO.File.ReadAllText("Assets/Resources/RayTracingUtility.compute");
+
+            Assert.That(utilitySource, Does.Contain("void ComposeAdaptiveBootstrap"));
+            Assert.That(utilitySource, Does.Contain("AdaptiveSamplingState[id.xy].x > 0.0f"));
+        }
+
+        [Test]
+        public void AdaptiveScheduler_UsesBootstrapPriorityOnlyForTheFirstFineSchedule()
+        {
+            string shaderSource = System.IO.File.ReadAllText(AdaptiveSchedulerShaderPath);
+            int start = shaderSource.IndexOf("void CSAdaptiveApplyBucketRemap", StringComparison.Ordinal);
+            int end = shaderSource.IndexOf("void CSAdaptiveCompactGroupWorkList", start, StringComparison.Ordinal);
+            string remap = shaderSource.Substring(start, end - start);
+
+            Assert.That(shaderSource, Does.Contain("bootstrapPriority"));
+            Assert.That(shaderSource, Does.Contain("if (_UseAdaptiveBootstrapPriority != 0 && !bootstrap)"));
+        }
+
+        [Test]
+        public void AdaptiveScheduler_DoesNotRemapBootstrapGroupsExcludedFromTheCurrentBatch()
+        {
+            string shaderSource = System.IO.File.ReadAllText(AdaptiveSchedulerShaderPath);
+            int start = shaderSource.IndexOf("void CSAdaptiveApplyBucketRemap", StringComparison.Ordinal);
+            int end = shaderSource.IndexOf("void CSAdaptiveCompactGroupWorkList", start, StringComparison.Ordinal);
+            string remap = shaderSource.Substring(start, end - start);
+
+            Assert.That(remap, Does.Contain("if (AdaptiveGroupExtraDemand[flatGroup] == 0u)"));
+            Assert.That(remap, Does.Contain("AdaptiveGroupInfo[flatGroup] = 0u"));
+        }
+
+        [Test]
+        public void AdaptiveScheduler_KeepsEstablishedGroupsEligibleAfterFineBootstrap()
+        {
+            string shaderSource = System.IO.File.ReadAllText(AdaptiveSchedulerShaderPath);
+            int classifyStart = shaderSource.IndexOf("void CSAdaptiveClassifyGroups", StringComparison.Ordinal);
+            int remapStart = shaderSource.IndexOf("void CSAdaptiveApplyBucketRemap", classifyStart, StringComparison.Ordinal);
+            int compactStart = shaderSource.IndexOf("void CSAdaptiveCompactGroupWorkList", remapStart, StringComparison.Ordinal);
+            string classify = shaderSource.Substring(classifyStart, remapStart - classifyStart);
+            string remap = shaderSource.Substring(remapStart, compactStart - remapStart);
+
+            Assert.That(classify, Does.Contain("AdaptiveGroupState[flatGroup] = uint4(groupBootstrap ? 1u : 2u"));
+            Assert.That(classify, Does.Contain("AdaptiveGroupExtraDemand[flatGroup] = validPixels"));
+            Assert.That(remap, Does.Contain("bool bootstrap = AdaptiveGroupState[flatGroup].x == 1u"));
+        }
+
+        [Test]
+        public void AdaptiveScheduler_RotatesFineBootstrapGroupsDeterministically()
+        {
+            string shaderSource = System.IO.File.ReadAllText(AdaptiveSchedulerShaderPath);
+
+            Assert.That(shaderSource, Does.Contain("uint bootstrapBatch = (flatGroup + _AdaptiveScheduleRotation)"));
+            Assert.That(shaderSource, Does.Not.Contain("Hash(flatGroup ^ (_AdaptiveScheduleRotation * 1597334677u))"));
+        }
+
+        [Test]
+        public void AdaptiveScheduler_GivesEveryUntouchedGroupOneFineSampleBeforeRotatingBootstrap()
+        {
+            string shaderSource = System.IO.File.ReadAllText(AdaptiveSchedulerShaderPath);
+
+            Assert.That(shaderSource, Does.Contain("bool needsFirstFineSample = groupBootstrap"));
+            Assert.That(shaderSource, Does.Contain("AdaptiveSamplingState[logicalGroup * 8u].x == 0.0f"));
+            Assert.That(shaderSource, Does.Contain("groupBootstrap && !needsFirstFineSample"));
+        }
+
+        [Test]
+        public void AdaptiveScheduler_SeedsFinePixelsFromConfiguredUpscaledBootstrapHistory()
+        {
+            string shaderSource = System.IO.File.ReadAllText(AdaptiveSchedulerShaderPath);
+            string utilitySource = System.IO.File.ReadAllText("Assets/Resources/RayTracingUtility.compute");
+            Assert.That(utilitySource, Does.Contain("void SeedAdaptiveBootstrap"));
+            Assert.That(utilitySource, Does.Contain("if (count > 0.0f)"));
+            Assert.That(utilitySource, Does.Contain("AdaptiveSamplingState[id.xy] = float4(count, 0.0f, 0.0f, 0.0f)"));
+        }
+
+        [Test]
         public void AdaptiveScheduler_UsesRequestedWholeGroupRateBudget()
         {
-            string shaderSource = System.IO.File.ReadAllText(ComputeShaderPath);
+            string shaderSource = System.IO.File.ReadAllText(AdaptiveSchedulerShaderPath);
             Assert.That(shaderSource, Does.Contain("uint paths = validPixels * samples"));
             Assert.That(shaderSource, Does.Contain("AdaptiveGroupExtraDemand[flatGroup] = paths"));
             Assert.That(shaderSource, Does.Contain("AdaptiveMetadataBucketBudgetStart + bucket], paths"));
@@ -372,7 +521,7 @@ namespace GPURayTracing.Tests
         [Test]
         public void AdaptiveScheduler_CompactsFullResolutionPixelsInParallel()
         {
-            string shaderSource = System.IO.File.ReadAllText(ComputeShaderPath);
+            string shaderSource = System.IO.File.ReadAllText(AdaptiveSchedulerShaderPath);
             int start = shaderSource.IndexOf("void CSAdaptiveCompactGroupWorkList", StringComparison.Ordinal);
             int end = shaderSource.IndexOf("void CSAdaptiveAllocateGroups", start, StringComparison.Ordinal);
             string workList = shaderSource.Substring(start, end - start);
@@ -386,7 +535,7 @@ namespace GPURayTracing.Tests
         [Test]
         public void AdaptiveScheduler_DerivesAccountingFromCompactGroupGrants()
         {
-            string shaderSource = System.IO.File.ReadAllText(ComputeShaderPath);
+            string shaderSource = System.IO.File.ReadAllText(AdaptiveSchedulerShaderPath);
             int remapStart = shaderSource.IndexOf("void CSAdaptiveApplyBucketRemap", StringComparison.Ordinal);
             int compactStart = shaderSource.IndexOf("void CSAdaptiveCompactGroupWorkList", remapStart, StringComparison.Ordinal);
             int argsStart = shaderSource.IndexOf("void CSBuildAdaptiveDispatchArgs", StringComparison.Ordinal);
@@ -396,8 +545,7 @@ namespace GPURayTracing.Tests
             Assert.That(remap, Does.Contain("InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataWorkItemCount], validPixels, workBase)"));
             Assert.That(remap, Does.Contain("AdaptiveGroupInfo[flatGroup] = uint4(workBase, rootBase"));
             Assert.That(remap, Does.Contain("paths / validPixels"));
-            Assert.That(args, Does.Contain("AdaptiveMetadataRequestedPaths] = assigned"));
-            Assert.That(args, Does.Contain("AdaptiveMetadataGuidancePaths] = 0u"));
+            Assert.That(args, Does.Contain("AdaptiveMetadataFullResolutionPaths] = assigned"));
         }
 
         [Test]
@@ -413,22 +561,22 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
-        public void AdaptiveScheduler_FixedAccountingExcludesCoarseGuidePaths()
+        public void AdaptiveScheduler_AccountsForFullResolutionPaths()
         {
-            string shaderSource = System.IO.File.ReadAllText(ComputeShaderPath);
+            string shaderSource = System.IO.File.ReadAllText(AdaptiveSchedulerShaderPath);
             int start = shaderSource.IndexOf("void CSAdaptiveApplyBucketRemap", StringComparison.Ordinal);
             int end = shaderSource.IndexOf("void CSAdaptiveCompactGroupWorkList", start, StringComparison.Ordinal);
             string allocation = shaderSource.Substring(start, end - start);
 
             Assert.That(allocation, Does.Contain("InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataAssignedPaths]"));
             Assert.That(allocation, Does.Contain("InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataFullResolutionPaths]"));
-            Assert.That(allocation, Does.Not.Contain("AdaptiveMetadataGuidancePaths"));
+            Assert.That(shaderSource, Does.Not.Contain("InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataGuidancePaths], samplesPerGroup)"));
         }
 
         [Test]
         public void AdaptiveResolve_DiagnosticsAtomicIsCaptureOnly()
         {
-            string shaderSource = System.IO.File.ReadAllText(ComputeShaderPath);
+            string shaderSource = System.IO.File.ReadAllText(AdaptiveTraceShaderPath);
             int start = shaderSource.IndexOf("void CSAdaptiveResolveRoot", StringComparison.Ordinal);
             int end = shaderSource.IndexOf("void CSAdaptiveTraceReference", start, StringComparison.Ordinal);
             string resolve = shaderSource.Substring(start, end - start);
@@ -445,23 +593,22 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("if (reclassify)"));
             Assert.That(source, Does.Contain("_adaptiveScheduleFrame = reclassify ? 0 : _adaptiveScheduleFrame + 1"));
             int dispatchStart = source.IndexOf("private void DispatchAdaptiveSampling", StringComparison.Ordinal);
-            int traceStart = source.IndexOf("SetShaderParameters(traceKernel)", dispatchStart, StringComparison.Ordinal);
+            int traceStart = source.IndexOf("SetShaderParameters(adaptiveTraceShader, traceKernel)", dispatchStart, StringComparison.Ordinal);
             string dispatch = source.Substring(dispatchStart, traceStart - dispatchStart);
-            Assert.That(dispatch, Does.Contain("ComputeDispatch.Dispatch(shader, classifyKernel, groupWidth, groupHeight, 1)"));
-            Assert.That(dispatch, Does.Contain("ComputeDispatch.Dispatch(shader, applyBucketRemapKernel, groupWidth, groupHeight, 1)"));
-            Assert.That(dispatch, Does.Not.Contain("guidanceKernel"));
+            Assert.That(dispatch, Does.Contain("ComputeDispatch.Dispatch(adaptiveSchedulerShader, classifyKernel, groupWidth, groupHeight, 1)"));
+            Assert.That(dispatch, Does.Contain("ComputeDispatch.Dispatch(adaptiveSchedulerShader, applyBucketRemapKernel, groupWidth, groupHeight, 1)"));
+            Assert.That(dispatch, Does.Contain("guidanceKernel"));
         }
 
         [Test]
         public void AdaptiveScheduler_ReusesOnlyFullResolutionAllocation()
         {
-            string shaderSource = System.IO.File.ReadAllText(ComputeShaderPath);
             string source = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
             int start = source.IndexOf("private void DispatchAdaptiveSampling", StringComparison.Ordinal);
             int end = source.IndexOf("private void DispatchAdaptiveDiagnostics", start, StringComparison.Ordinal);
             string dispatch = source.Substring(start, end - start);
-            Assert.That(dispatch, Does.Contain("DispatchIndirect(shader, traceKernel"));
-            Assert.That(dispatch, Does.Not.Contain("guidanceKernel"));
+            Assert.That(dispatch, Does.Contain("DispatchIndirect(adaptiveTraceShader, traceKernel"));
+            Assert.That(dispatch, Does.Contain("guidanceKernel"));
         }
 
         [Test]
@@ -554,8 +701,9 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("SessionState.GetBool"));
             Assert.That(source, Does.Contain("_folder = GetLiveFolder()"));
             Assert.That(source, Does.Contain("PollForLatestFrame(true)"));
-            Assert.That(source, Does.Contain("ReadAdaptiveCumulativeAllocationForCapture"));
+            Assert.That(source, Does.Contain("ReadAdaptiveAllocationForCapture"));
             Assert.That(source, Does.Contain("ReadAdaptiveAllocationStatsForCapture"));
+            Assert.That(source, Does.Contain("EditorApplication.isPaused"));
             Assert.That(source, Does.Contain("TryWriteCurrentReferenceDifference"));
             Assert.That(source, Does.Contain("Current Render vs Reference"));
             Assert.That(source, Does.Contain("HeatmapPreviewScale = 4"));
@@ -568,8 +716,8 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("adaptiveSamplingMinSamples"));
             Assert.That(source, Does.Contain("adaptivePriorityMode"));
             Assert.That(source, Does.Contain("adaptiveNormalizePriorityByLuminance"));
+            Assert.That(source, Does.Contain("adaptiveGuidanceChangeThreshold"));
             Assert.That(source, Does.Contain("adaptiveReclassificationInterval"));
-            Assert.That(source, Does.Contain("adaptiveRecentChangeWeight"));
             Assert.That(source, Does.Contain("adaptiveHighestBucketSampleRate"));
             Assert.That(source, Does.Contain("adaptiveMaxPathsPerPixel"));
         }
@@ -619,7 +767,6 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("TryGetAdaptiveComparisonType"));
             Assert.That(source, Does.Contain("-rayTracingAdaptiveNormalizePriorityByLuminance"));
             Assert.That(source, Does.Contain("-rayTracingAdaptiveReclassificationInterval"));
-            Assert.That(source, Does.Contain("-rayTracingAdaptiveRecentChangeWeight"));
             Assert.That(source, Does.Contain("-rayTracingAdaptiveHighestBucketSampleRate"));
             Assert.That(source, Does.Contain("-rayTracingAdaptiveMaxPathsPerPixel"));
             Assert.That(source, Does.Contain("Enum.IsDefined"));
@@ -663,8 +810,8 @@ namespace GPURayTracing.Tests
                 Assert.Ignore("Compute shaders are not supported by the active graphics device.");
             }
 
-            ComputeShader shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
-            Assert.That(shader, Is.Not.Null, $"Missing compute shader at {ComputeShaderPath}");
+            ComputeShader shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(RegressionProbeShaderPath);
+            Assert.That(shader, Is.Not.Null, $"Missing compute shader at {RegressionProbeShaderPath}");
             if (!shader.HasKernel("CSRegressionProbe"))
             {
                 Assert.Ignore("The active graphics device did not compile the GPU regression kernel. Run without -nographics to validate GPU probes.");
@@ -812,8 +959,27 @@ namespace GPURayTracing.Tests
             Assert.That(denoiser.HasKernel("CSGlarePrefilter"), Is.True);
             Assert.That(denoiser.HasKernel("CSGlareDownsample"), Is.True);
 
+            ComputeShader features = AssetDatabase.LoadAssetAtPath<ComputeShader>(FeaturesShaderPath);
+            Assert.That(features.HasKernel("CSFeatures"), Is.True);
+        }
+
+        [Test]
+        public void ProductionComputeKernels_AreOwnedByTheirSplitAssets()
+        {
             ComputeShader renderer = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
-            Assert.That(renderer.HasKernel("CSFeatures"), Is.True);
+            ComputeShader debug = AssetDatabase.LoadAssetAtPath<ComputeShader>(DebugShaderPath);
+            ComputeShader utility = AssetDatabase.LoadAssetAtPath<ComputeShader>(UtilityShaderPath);
+            ComputeShader features = AssetDatabase.LoadAssetAtPath<ComputeShader>(FeaturesShaderPath);
+            ComputeShader focus = AssetDatabase.LoadAssetAtPath<ComputeShader>(FocusShaderPath);
+
+            Assert.That(renderer.HasKernel("CSMain"), Is.True);
+            Assert.That(renderer.HasKernel("ClearAccumulation"), Is.False);
+            Assert.That(renderer.HasKernel("CSFeatures"), Is.False);
+            Assert.That(renderer.HasKernel("CSFocusQuery"), Is.False);
+            Assert.That(debug.HasKernel("CSDebugMain"), Is.True);
+            Assert.That(utility.HasKernel("ClearAccumulation"), Is.True);
+            Assert.That(features.HasKernel("CSFeatures"), Is.True);
+            Assert.That(focus.HasKernel("CSFocusQuery"), Is.True);
         }
 
         [Test]
@@ -1018,10 +1184,12 @@ namespace GPURayTracing.Tests
                 int adaptiveHash = (int)hashMethod.Invoke(manager, null);
                 managerType.GetField("adaptiveSamplingMinSamples").SetValue(manager, 16);
                 int changedPolicyHash = (int)hashMethod.Invoke(manager, null);
+                managerType.GetField("adaptiveGuidanceChangeThreshold").SetValue(manager, 0.05f);
+                int changedCoarseThresholdHash = (int)hashMethod.Invoke(manager, null);
+                managerType.GetField("adaptiveGuidanceMaxUpdates").SetValue(manager, 3);
+                int changedCoarseUpdateLimitHash = (int)hashMethod.Invoke(manager, null);
                 managerType.GetField("adaptiveReclassificationInterval").SetValue(manager, 2);
                 int changedIntervalHash = (int)hashMethod.Invoke(manager, null);
-                managerType.GetField("adaptiveRecentChangeWeight").SetValue(manager, 0.5f);
-                int changedChangeWeightHash = (int)hashMethod.Invoke(manager, null);
                 managerType.GetField("adaptiveNormalizePriorityByLuminance").SetValue(manager, 0.5f);
                 int changedLuminanceNormalizationHash = (int)hashMethod.Invoke(manager, null);
                 managerType.GetField("adaptiveHighestBucketSampleRate").SetValue(manager, 4.0f);
@@ -1033,9 +1201,10 @@ namespace GPURayTracing.Tests
 
                 Assert.That(adaptiveHash, Is.Not.EqualTo(uniformHash));
                 Assert.That(changedPolicyHash, Is.Not.EqualTo(adaptiveHash));
-                Assert.That(changedIntervalHash, Is.Not.EqualTo(changedPolicyHash));
-                Assert.That(changedChangeWeightHash, Is.Not.EqualTo(changedIntervalHash));
-                Assert.That(changedLuminanceNormalizationHash, Is.Not.EqualTo(changedChangeWeightHash));
+                Assert.That(changedCoarseThresholdHash, Is.Not.EqualTo(changedPolicyHash));
+                Assert.That(changedCoarseUpdateLimitHash, Is.Not.EqualTo(changedCoarseThresholdHash));
+                Assert.That(changedIntervalHash, Is.Not.EqualTo(changedCoarseUpdateLimitHash));
+                Assert.That(changedLuminanceNormalizationHash, Is.Not.EqualTo(changedIntervalHash));
                 Assert.That(changedHighestRateHash, Is.Not.EqualTo(changedLuminanceNormalizationHash));
                 Assert.That(changedModeHash, Is.Not.EqualTo(changedHighestRateHash));
             }
@@ -1082,7 +1251,7 @@ namespace GPURayTracing.Tests
             if (!SystemInfo.supportsComputeShaders || SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
                 Assert.Ignore("Adaptive trace parity requires an active compute graphics device.");
 
-            ComputeShader shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
+            ComputeShader shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(AdaptiveTraceShaderPath);
             if (shader == null || !shader.HasKernel("CSAdaptiveTraceReference"))
                 Assert.Ignore("The active graphics device did not compile the adaptive trace parity kernels.");
 
@@ -1459,13 +1628,11 @@ namespace GPURayTracing.Tests
         [Test]
         public void FocusQuery_SelectsFirstIntersectionRegardlessOfOpacity()
         {
-            string shaderSource = System.IO.File.ReadAllText(ComputeShaderPath);
+            string shaderSource = System.IO.File.ReadAllText(FocusShaderPath);
             int kernelStart = shaderSource.IndexOf("void CSFocusQuery", StringComparison.Ordinal);
-            int mainKernelStart = shaderSource.IndexOf("void CSMain", kernelStart, StringComparison.Ordinal);
 
             Assert.That(kernelStart, Is.GreaterThanOrEqualTo(0));
-            Assert.That(mainKernelStart, Is.GreaterThan(kernelStart));
-            string focusKernel = shaderSource.Substring(kernelStart, mainKernelStart - kernelStart);
+            string focusKernel = shaderSource.Substring(kernelStart);
             Assert.That(focusKernel, Does.Contain("GetNearestIntersection(ray)"));
             Assert.That(focusKernel, Does.Not.Contain("hit.opacity"));
             Assert.That(focusKernel, Does.Not.Contain("TransparentOpacityThreshold"));

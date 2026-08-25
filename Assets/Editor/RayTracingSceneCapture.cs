@@ -36,23 +36,26 @@ public static class RayTracingSceneCapture
     private readonly struct AdaptiveSamplingOverrides
     {
         public readonly int? minSamples;
+        public readonly float? guidanceChangeThreshold;
+        public readonly int? guidanceMaxUpdates;
         public readonly GameManager.AdaptivePriorityMode? priorityMode;
         public readonly float? normalizePriorityByLuminance;
         public readonly int? reclassificationInterval;
-        public readonly float? recentChangeWeight;
         public readonly float? highestBucketSampleRate;
         public readonly int? maxPathsPerPixel;
 
-        public AdaptiveSamplingOverrides(int? minSamples, GameManager.AdaptivePriorityMode? priorityMode,
+        public AdaptiveSamplingOverrides(int? minSamples, float? guidanceChangeThreshold, int? guidanceMaxUpdates,
+            GameManager.AdaptivePriorityMode? priorityMode,
             float? normalizePriorityByLuminance,
-            int? reclassificationInterval, float? recentChangeWeight, float? highestBucketSampleRate,
+            int? reclassificationInterval, float? highestBucketSampleRate,
             int? maxPathsPerPixel)
         {
             this.minSamples = minSamples;
+            this.guidanceChangeThreshold = guidanceChangeThreshold;
+            this.guidanceMaxUpdates = guidanceMaxUpdates;
             this.priorityMode = priorityMode;
             this.normalizePriorityByLuminance = normalizePriorityByLuminance;
             this.reclassificationInterval = reclassificationInterval;
-            this.recentChangeWeight = recentChangeWeight;
             this.highestBucketSampleRate = highestBucketSampleRate;
             this.maxPathsPerPixel = maxPathsPerPixel;
         }
@@ -724,7 +727,7 @@ public static class RayTracingSceneCapture
             assignedPixels[pixel] = true;
             workItemPaths += diagnostics.workItemPathCounts[index];
         }
-        if (requestedPaths != assignedPaths || requestedPaths != fullResolutionRetiredPaths + finalFrameGuidancePaths
+        if (requestedPaths != assignedPaths || assignedPaths != fullResolutionRetiredPaths
             || overflow != 0u || activeWorkItems > pixels || workItemPaths != fullResolutionRetiredPaths)
         {
             throw new InvalidOperationException(
@@ -1717,6 +1720,22 @@ public static class RayTracingSceneCapture
 
     private static void InitializeBatchRenderer(GameManager manager, int width, int height)
     {
+        // Command-line capture opens a scene and renders it in the same editor update, before
+        // Unity invokes MonoBehaviour.Start. Run the renderer's normal initialization explicitly
+        // so the split compute assets and feature buffers are available to the capture.
+        MethodInfo start = typeof(GameManager).GetMethod("Start", BindingFlags.Instance | BindingFlags.NonPublic);
+        if (start == null)
+        {
+            throw new MissingMethodException(typeof(GameManager).FullName, "Start");
+        }
+        start.Invoke(manager, null);
+        FieldInfo startupInitializationPending = typeof(GameManager).GetField("_startupInitializationPending",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        if (startupInitializationPending == null)
+        {
+            throw new MissingFieldException(typeof(GameManager).FullName, "_startupInitializationPending");
+        }
+        startupInitializationPending.SetValue(manager, false);
         manager.TemporalDenoising.Initialize(manager);
         foreach (PathTracingObject pathTracingObject in UnityEngine.Object.FindObjectsByType<PathTracingObject>(FindObjectsInactive.Exclude, FindObjectsSortMode.None))
         {
@@ -2162,18 +2181,22 @@ public static class RayTracingSceneCapture
     {
         overrides = default;
         if (!TryGetOptionalIntegerArgument("-rayTracingAdaptiveSamplingMinSamples", 1, 64, out int? minSamples)
+            || !TryGetOptionalFloatArgument("-rayTracingAdaptiveGuidanceChangeThreshold", 0.0f, 1.0f,
+                out float? guidanceChangeThreshold)
+            || !TryGetOptionalIntegerArgument("-rayTracingAdaptiveGuidanceMaxUpdates", 1, 8,
+                out int? guidanceMaxUpdates)
             || !TryGetAdaptivePriorityModeArgument(out GameManager.AdaptivePriorityMode? priorityMode)
             || !TryGetOptionalFloatArgument("-rayTracingAdaptiveNormalizePriorityByLuminance", 0.0f, 1.0f, out float? normalizePriorityByLuminance)
             || !TryGetOptionalIntegerArgument("-rayTracingAdaptiveReclassificationInterval", 1, 8, out int? reclassificationInterval)
-            || !TryGetOptionalFloatArgument("-rayTracingAdaptiveRecentChangeWeight", 0.0f, 2.0f, out float? recentChangeWeight)
             || !TryGetOptionalFloatArgument("-rayTracingAdaptiveHighestBucketSampleRate", 1.0f, 8.0f, out float? highestBucketSampleRate)
             || !TryGetOptionalIntegerArgument("-rayTracingAdaptiveMaxPathsPerPixel", 1, 16, out int? maxPathsPerPixel))
         {
             return false;
         }
 
-        overrides = new AdaptiveSamplingOverrides(minSamples, priorityMode, normalizePriorityByLuminance, reclassificationInterval,
-            recentChangeWeight, highestBucketSampleRate, maxPathsPerPixel);
+        overrides = new AdaptiveSamplingOverrides(minSamples, guidanceChangeThreshold, guidanceMaxUpdates,
+            priorityMode, normalizePriorityByLuminance, reclassificationInterval, highestBucketSampleRate,
+            maxPathsPerPixel);
         return true;
     }
 
@@ -2284,11 +2307,14 @@ public static class RayTracingSceneCapture
     private static void ApplyAdaptiveSamplingOverrides(GameManager manager, AdaptiveSamplingOverrides overrides)
     {
         if (overrides.minSamples.HasValue) manager.adaptiveSamplingMinSamples = overrides.minSamples.Value;
+        if (overrides.guidanceChangeThreshold.HasValue)
+            manager.adaptiveGuidanceChangeThreshold = overrides.guidanceChangeThreshold.Value;
+        if (overrides.guidanceMaxUpdates.HasValue)
+            manager.adaptiveGuidanceMaxUpdates = overrides.guidanceMaxUpdates.Value;
         if (overrides.priorityMode.HasValue) manager.adaptivePriorityMode = overrides.priorityMode.Value;
         if (overrides.normalizePriorityByLuminance.HasValue)
             manager.adaptiveNormalizePriorityByLuminance = overrides.normalizePriorityByLuminance.Value;
         if (overrides.reclassificationInterval.HasValue) manager.adaptiveReclassificationInterval = overrides.reclassificationInterval.Value;
-        if (overrides.recentChangeWeight.HasValue) manager.adaptiveRecentChangeWeight = overrides.recentChangeWeight.Value;
         if (overrides.highestBucketSampleRate.HasValue) manager.adaptiveHighestBucketSampleRate = overrides.highestBucketSampleRate.Value;
         if (overrides.maxPathsPerPixel.HasValue) manager.adaptiveMaxPathsPerPixel = overrides.maxPathsPerPixel.Value;
     }

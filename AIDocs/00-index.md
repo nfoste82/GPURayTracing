@@ -25,6 +25,7 @@ Use this folder as focused context for LLM-assisted work on the Unity GPU ray tr
 - `19-adaptive-scheduler-accounting-repair.md`: Reproduced bounded-service scheduler accounting failure, repair constraints, validation commands, and a focused future-session prompt.
 - `20-dammertz-adaptive-sampling-plan.md`: Fixed-8x8 Dammertz results, allocation diagnosis, next bounded-service experiment, validation criteria, and compact continuation prompt.
 - `21-adaptive-sampling-performance-plan.md`: Capture-only phase timing, root-list cost model, and the ordered adaptive runtime optimization plan.
+- `22-shader-compile-splitting-handoff.md`: Split-compute-asset compile-time work, measured Metal timings, the debug-kernel timeout, and a one-asset-at-a-time continuation workflow.
 
 ## Fast Context Selection
 
@@ -35,7 +36,7 @@ Use this folder as focused context for LLM-assisted work on the Unity GPU ray tr
 - To change Unity orchestration, object registration, buffers, camera controls, or render dispatch, read `02-runtime-data-flow.md`.
 - To add features such as meshes, BVH, accumulation, material types, or better physical lighting, read the relevant shader doc plus `05-known-limitations.md` and `09-roadmap-and-improvements.md`.
 - To benchmark or tune performance, read `10-benchmarking-and-performance.md`, plus `06-shader-intersections-and-bvh.md` for BVH-specific work.
-- To reduce shader compile time, change the `DEBUG_RENDER` variant split, `[loop]` usage, or the debug-variant compile stall/overlay, read `10-benchmarking-and-performance.md` and `08-shader-debugging-and-randomness.md`.
+- To reduce shader compile time, read `22-shader-compile-splitting-handoff.md` first, then `10-benchmarking-and-performance.md` and `08-shader-debugging-and-randomness.md`.
 - To add or update correctness, reflection/refraction, GPU probe, BVH, or image-regression tests, read `11-regression-testing.md` plus the relevant renderer document.
 - To change caustics, read `12-caustics.md`, `03-compute-shader-renderer.md`, and `07-shader-lighting-and-materials.md`.
 - To plan denoising, internal-resolution rendering, temporal upscaling, Unity 6.3 migration choices, or DLSS/FSR/MetalFX/STP integration, read `13-denoising-and-upscaling.md`, then `02-runtime-data-flow.md` and `03-compute-shader-renderer.md` before implementation.

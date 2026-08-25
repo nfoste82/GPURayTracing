@@ -10,50 +10,6 @@ RWTexture2D<float4> FeatureAlbedo;
 RWTexture2D<float> FeatureDepth;
 RWTexture2D<float> FeatureIdentity;
 RWTexture2D<float> FeatureValidity;
-RWTexture2D<float4> AdaptiveSamplingState;
-RWTexture2D<float4> AdaptiveSamplingM2;
-// Scheduling-only mean/count for samples whose deterministic sample index has odd parity.
-// This repurposes the retired guide-state texture to remain within Metal's per-kernel UAV limit.
-// It must never be presented or blended into the beauty accumulator.
-RWTexture2D<float4> AdaptiveGuidanceState;
-RWTexture2D<float4> AdaptiveGuidancePreview;
-RWStructuredBuffer<uint2> AdaptiveWorkList;
-StructuredBuffer<uint2> AdaptiveTraceWorkList;
-RWStructuredBuffer<uint2> AdaptiveRootWorkList;
-StructuredBuffer<uint2> AdaptiveTraceRootWorkList;
-RWStructuredBuffer<float4> AdaptiveRootRadiance;
-RWStructuredBuffer<uint> AdaptiveWorkRootOffsets;
-RWStructuredBuffer<uint4> AdaptiveGroupState;
-RWStructuredBuffer<uint4> AdaptiveGroupInfo;
-StructuredBuffer<uint4> AdaptiveProbeGroups;
-RWStructuredBuffer<uint> AdaptiveGroupBucket;
-RWStructuredBuffer<uint> AdaptiveGroupExtraDemand;
-RWStructuredBuffer<uint> AdaptiveRawBucketDemand;
-RWStructuredBuffer<uint> AdaptiveWorkListMetadata;
-RWStructuredBuffer<uint> AdaptiveDispatchArgs;
-RWStructuredBuffer<uint> AdaptiveResolveDispatchArgs;
-
-#define AdaptiveMetadataWorkItemCount 0u
-#define AdaptiveMetadataPrioritySum 1u
-#define AdaptiveMetadataAssignedPaths 2u
-#define AdaptiveMetadataWorkListOverflow 3u
-#define AdaptiveMetadataBootstrapPixels 4u
-#define AdaptiveMetadataRequestedPaths 5u
-#define AdaptiveMetadataRetiredPaths 6u
-#define AdaptiveMetadataBootstrapPaths 7u
-#define AdaptiveMetadataPathCountMin 8u
-#define AdaptiveMetadataPathCountMax 9u
-#define AdaptiveMetadataPathCountSum 10u
-#define AdaptiveMetadataUncertaintySum 11u
-#define AdaptiveMetadataUncertaintyMax 12u
-#define AdaptiveMetadataBucketPopulationStart 16u
-#define AdaptiveMetadataBucketAdmittedPathsStart 32u
-#define AdaptiveMetadataBucketBudgetStart 48u
-#define AdaptiveMetadataFullResolutionPaths 13u
-#define AdaptiveMetadataGuidancePaths 14u
-#define AdaptiveMetadataCoarseGroups 15u
-#define AdaptiveMetadataCount 64u
-
 RWStructuredBuffer<float4> RegressionResults;
 RWStructuredBuffer<float4> _FocusQueryResult;
 
@@ -94,24 +50,6 @@ int _LightSamplingStrategy;
 int _LightSampleCount;
 int _UseFrameAccumulation;
 int _AccumulatedFrameCount;
-int _AdaptiveSamplingMinSamples;
-int _AdaptiveGuidanceMinSamples;
-float _AdaptiveGuidanceChangeThreshold;
-float _AdaptiveGuidanceBrightnessPriority;
-float _AdaptiveGuidanceDirectLightPriority;
-float _AdaptiveGuidanceRoughnessPriority;
-uint _AdaptiveWorkListCapacity;
-uint _AdaptiveRootPathCapacity;
-uint _AdaptiveGroupWidth;
-uint _AdaptiveGroupHeight;
-uint _AdaptiveGroupCount;
-int _AdaptiveCaptureDiagnostics;
-uint _AdaptiveScheduleRotation;
-float _AdaptiveHighestBucketSampleRate;
-uint _AdaptiveBucketCount;
-uint _AdaptiveMaxPathsPerPixel;
-uint _AdaptivePriorityMode;
-float _AdaptiveNormalizePriorityByLuminance;
 float _ShadowRandomness;
 float _LightFalloffScale;
 float _ParallaxMaximumStrengthCosine;
@@ -124,6 +62,7 @@ float2 _FocusQueryUv;
 float _Exposure;
 float _FireflyClamp;
 
+#if defined(WATER_ENABLED)
 int _WaterEnabled;
 float3 _WaterCenter;
 float2 _WaterSize;
@@ -139,6 +78,7 @@ float _WaterWaveSpeed;
 float _WaterTime;
 int _WaterMarchSteps;
 int _WaterRefinementSteps;
+#endif
 // Used by the terrain-cell debug visualization, including debug variants where the terrain
 // intersection path is not compiled.
 int _TerrainCellResolution;
@@ -243,12 +183,16 @@ static const int MaterialDiffuse = 0;
 static const int MaterialMetal = 1;
 static const int MaterialGlass = 2;
 static const int MaterialEmissive = 3;
+#if defined(WATER_ENABLED)
 static const int MaterialWater = 4;
+#endif
 
 static const int MediumTypeAir = 0;
 static const int MediumTypeSphere = 1;
 static const int MediumTypeMesh = 2;
+#if defined(WATER_ENABLED)
 static const int MediumTypeWater = 3;
+#endif
 static const int MediumStackCapacity = 8;
 static const int MaxTransparentShadowBoundaries = 32;
 static const int MediumTransitionNone = 0;
@@ -277,7 +221,9 @@ static const int MaxImportanceLights = 128;
 
 static const float MinDirectLightThroughput = 0.01f;
 static const int BvhStackSize = 32;
+#if defined(WATER_ENABLED)
 static const float WaterHitEpsilon = 0.001f;
+#endif
 static const float GlassAbsorptionColorFloor = 0.001f;
 static const float GlassNeutralAbsorption = 0.08f;
 static const float ThinTransparentSurfaceDistance = 0.25f;
@@ -666,9 +612,13 @@ MediumIdentity CreateAirMedium()
 MediumIdentity CreateHitMedium(RayHit hit)
 {
     MediumIdentity medium;
+#if defined(WATER_ENABLED)
     medium.type = hit.materialType == MaterialWater
         ? MediumTypeWater
         : (hit.obj_radius > 0.0f ? MediumTypeSphere : MediumTypeMesh);
+#else
+    medium.type = hit.obj_radius > 0.0f ? MediumTypeSphere : MediumTypeMesh;
+#endif
     medium.objectIndex = medium.type == MediumTypeSphere ? hit.objectIndex : hit.meshIndex;
     medium.refractionIndex = max(1.0f, hit.refraction);
     medium.opacity = saturate(hit.opacity);
@@ -676,6 +626,7 @@ MediumIdentity CreateHitMedium(RayHit hit)
     return medium;
 }
 
+#if defined(WATER_ENABLED)
 MediumIdentity CreateWaterMedium()
 {
     MediumIdentity medium;
@@ -686,13 +637,16 @@ MediumIdentity CreateWaterMedium()
     medium.absorptionColor = saturate(_WaterColor);
     return medium;
 }
+#endif
 
 bool IsSameMedium(MediumIdentity left, MediumIdentity right)
 {
     return left.type == right.type && left.objectIndex == right.objectIndex;
 }
 
+#if defined(WATER_ENABLED)
 bool IsPointInWater(float3 position);
+#endif
 void PushMedium(inout MediumStack stack, MediumIdentity medium);
 
 bool MediumStackContains(in MediumStack stack, MediumIdentity medium)
@@ -733,11 +687,13 @@ MediumStack CreateMediumStack(float3 rayOrigin)
     stack.entry6 = air;
     stack.entry7 = air;
 
+#if defined(WATER_ENABLED)
     if (IsPointInWater(rayOrigin))
     {
         stack.entry1 = CreateWaterMedium();
         stack.count = 2;
     }
+#endif
 
     // Add containing glass spheres from largest to smallest so the innermost medium is active.
     [loop]
@@ -786,8 +742,7 @@ MediumStack CreateShadowMediumStack(float3 rayOrigin)
     stack.entry6 = air;
     stack.entry7 = air;
 
-    // Water remains handled by EstimateWaterDistanceAlongSegment(). Initialize only containing
-    // spheres here so transparent shadow traversal does not apply water absorption twice.
+    // Initialize only containing spheres. Water attenuation is applied separately to shadow rays.
     [loop]
     while (stack.count < MediumStackCapacity)
     {
@@ -1000,6 +955,7 @@ RayHit CreateRayHit()
 }
 // =======================================================
 
+#if defined(WATER_ENABLED)
 float GetWaterWaveHeight(float2 worldXZ)
 {
     float amplitude = max(0.0f, _WaterWaveAmplitude);
@@ -1332,6 +1288,7 @@ void IntersectWater(Ray ray, inout RayHit bestHit)
     IntersectWaterFlatBoundaries(ray, bestHit);
     IntersectWaterTop(ray, bestHit);
 }
+#endif // WATER_ENABLED
 
 #if defined(TERRAIN_ENABLED)
 float GetTerrainHeight(float2 worldXZ)
@@ -1700,10 +1657,12 @@ float GetMediumSegmentDistance(Ray ray, float hitDistance, MediumIdentity medium
         return 0.0f;
     }
 
+#if defined(WATER_ENABLED)
     if (medium.type == MediumTypeWater)
     {
         return GetWaterDistanceAlongRay(ray, hitDistance);
     }
+#endif
 
     return hitDistance < RayMaxDistance ? max(0.0f, hitDistance) : 0.0f;
 }
@@ -1715,9 +1674,13 @@ float3 GetMediumSegmentTransmittance(MediumIdentity medium, float distanceThroug
         return float3(1.0f, 1.0f, 1.0f);
     }
 
-    return medium.type == MediumTypeWater
-        ? GetWaterAbsorptionTransmittance(distanceThroughMedium)
-        : GetAbsorptionTransmittance(medium.absorptionColor, medium.opacity, distanceThroughMedium);
+#if defined(WATER_ENABLED)
+    if (medium.type == MediumTypeWater)
+    {
+        return GetWaterAbsorptionTransmittance(distanceThroughMedium);
+    }
+#endif
+    return GetAbsorptionTransmittance(medium.absorptionColor, medium.opacity, distanceThroughMedium);
 }
 
 float3 GetActiveMediumSegmentTransmittance(Ray ray, float hitDistance, in MediumStack stack)
@@ -1728,6 +1691,7 @@ float3 GetActiveMediumSegmentTransmittance(Ray ray, float hitDistance, in Medium
 
 void ApplyFiniteMediumExitAfterSegment(inout MediumStack stack, Ray ray, RayHit hit)
 {
+#if defined(WATER_ENABLED)
     MediumIdentity medium = GetCurrentMedium(stack);
     if (medium.type != MediumTypeWater || hit.materialType == MaterialWater)
     {
@@ -1739,6 +1703,7 @@ void ApplyFiniteMediumExitAfterSegment(inout MediumStack stack, Ray ray, RayHit 
     {
         PopMatchingMedium(stack, medium);
     }
+#endif
 }
 
 float3 GetTransparentShadowTransmittance(RayHit hit, float distanceThroughMedium)
@@ -2245,7 +2210,9 @@ RayHit GetNearestIntersectionBounded(Ray ray, float maxDistance, int ignoredMesh
 	RayHit bestHit = CreateRayHit();
 	bestHit.distance = maxDistance;
 
+	#if defined(WATER_ENABLED)
 	IntersectWater(ray, bestHit);
+	#endif
 	#if defined(TERRAIN_ENABLED)
 	IntersectTerrain(ray, bestHit);
 	#endif
@@ -2749,13 +2716,19 @@ float2 GetMetallicRoughness(RayHit hit)
 
 bool IsGlassMaterial(RayHit hit)
 {
+#if defined(WATER_ENABLED)
     return hit.materialType == MaterialGlass || hit.materialType == MaterialWater || hit.opacity < 1.0f;
+#else
+    return hit.materialType == MaterialGlass || hit.opacity < 1.0f;
+#endif
 }
 
+#if defined(WATER_ENABLED)
 bool IsWaterMaterial(RayHit hit)
 {
     return hit.materialType == MaterialWater;
 }
+#endif
 
 float3 GetSurfaceF0(RayHit hit, float3 albedo)
 {
@@ -2769,9 +2742,10 @@ float3 GetSurfaceF0(RayHit hit, float3 albedo)
         float refraction = max(1.0f, hit.refraction);
         float dielectricF0 = (1.0f - refraction) / (1.0f + refraction);
         dielectricF0 *= dielectricF0;
-        return IsWaterMaterial(hit)
-            ? dielectricF0.xxx
-            : lerp(saturate(hit.specular).xxx, float3(1.0f, 1.0f, 1.0f), dielectricF0);
+#if defined(WATER_ENABLED)
+        if (IsWaterMaterial(hit)) return dielectricF0.xxx;
+#endif
+        return lerp(saturate(hit.specular).xxx, float3(1.0f, 1.0f, 1.0f), dielectricF0);
     }
 
     return lerp(float3(0.04f, 0.04f, 0.04f), saturate(albedo), GetMetallicRoughness(hit).x);
@@ -2940,7 +2914,7 @@ float3 EvaluateMaterialBrdf(Ray ray, RayHit hit, float3 lightDirection, out floa
 
 float3 GetSkyboxColor(float3 direction);
 float3 GetSkyboxDirection(float2 uv);
-int SelectEnvironmentCdf(bool marginal, int offset, int count, float target);
+uint SelectEnvironmentCdf(bool marginal, uint offset, uint count, float target);
 
 float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
                           float lightSelectionPdf, int lightTechniqueSampleCount,
@@ -3003,8 +2977,8 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
         float environmentPdf = 0.0f;
         if (isEnvironment)
         {
-            int y = SelectEnvironmentCdf(true, 0, _EnvironmentCdfHeight, rand(rngState));
-            int x = SelectEnvironmentCdf(false, y * _EnvironmentCdfWidth, _EnvironmentCdfWidth, rand(rngState));
+            uint y = SelectEnvironmentCdf(true, 0u, (uint)_EnvironmentCdfHeight, rand(rngState));
+            uint x = SelectEnvironmentCdf(false, y * (uint)_EnvironmentCdfWidth, (uint)_EnvironmentCdfWidth, rand(rngState));
             float2 distributionUv = (float2(x, y) + float2(rand(rngState), rand(rngState)))
                 / float2(_EnvironmentCdfWidth, _EnvironmentCdfHeight);
             float rowCdf = _EnvironmentMarginalCdf[y];
@@ -3076,6 +3050,7 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
             continue;
         }
 
+#if defined(WATER_ENABLED)
         if (isEnvironment || isDirectional)
         {
             shadowTransmittance *= GetWaterAbsorptionTransmittance(GetWaterDistanceAlongRay(rayToLight, RayMaxDistance));
@@ -3084,6 +3059,7 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
         {
             shadowTransmittance *= GetWaterAbsorptionTransmittance(EstimateWaterDistanceAlongSegment(hit.position, offsetPt));
         }
+#endif
 #if defined(FOG_ENABLED)
         if (isEnvironment || isDirectional)
         {
@@ -3505,14 +3481,14 @@ float3 GetSkyboxDirection(float2 uv)
     return float3(sinTheta * sin(phi), cos(theta), -sinTheta * cos(phi));
 }
 
-int SelectEnvironmentCdf(bool marginal, int offset, int count, float target)
+uint SelectEnvironmentCdf(bool marginal, uint offset, uint count, float target)
 {
-    int low = 0;
-    int high = count - 1;
+    uint low = 0u;
+    uint high = count - 1u;
     [loop]
     while (low < high)
     {
-        int middle = (low + high) / 2;
+        uint middle = low + ((high - low) >> 1u);
         float value = marginal ? _EnvironmentMarginalCdf[offset + middle] : _EnvironmentConditionalCdf[offset + middle];
         if (target <= value)
         {
@@ -3873,6 +3849,7 @@ void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int
     mediumTransition = MediumTransitionEnter;
 }
 
+#if defined(WATER_ENABLED)
 int ApplyWaterTransmission(inout Ray ray, Ray sourceRay, RayHit hit, bool entering, float sourceRefraction, float targetRefraction)
 {
     float3 normal = dot(sourceRay.direction, hit.normal) < 0.0f ? hit.normal : -hit.normal;
@@ -3885,6 +3862,7 @@ int ApplyWaterTransmission(inout Ray ray, Ray sourceRay, RayHit hit, bool enteri
         ? (entering ? MediumTransitionEnter : MediumTransitionExit)
         : MediumTransitionNone;
 }
+#endif
 
 ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, int remainingBounces, in MediumStack mediumStack, inout uint rngState)
 {
@@ -3892,6 +3870,7 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
     float3 roughNormal = GetRandomizedNormalBasedOnAmount(hit.normal, hit.smoothness, rngState);
     Ray scatteredRay = CreateRay(hit.position + (hit.geometricNormal * 0.001f), reflect(sourceRay.direction, roughNormal));
 
+#if defined(WATER_ENABLED)
     if (IsWaterMaterial(hit))
     {
         bool entering;
@@ -3908,6 +3887,7 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
         int mediumTransition = ApplyWaterTransmission(scatteredRay, sourceRay, hit, entering, transitionIndices.x, transitionIndices.y);
         return CreateScatterResult(scatteredRay, float3(1.0f, 1.0f, 1.0f), 1, mediumTransition);
     }
+#endif
 
     if (IsGlassMaterial(hit))
     {
@@ -4243,72 +4223,8 @@ float3 ClampFirefly(float3 radiance)
 }
 
 #if DEBUG_RENDER
-float3 TraceCausticPaths(Ray ray, inout uint rngState)
-{
-    if (_CausticsEnabled != 0)
-    {
-        return TraceVisibleCausticRadiance(ray, rngState);
-    }
-
-    float3 throughput = float3(1.0f, 1.0f, 1.0f);
-    MediumStack mediumStack = CreateMediumStack(ray.origin);
-    bool hitDiffuseReceiver = false;
-    bool sampledDielectricAfterDiffuse = false;
-
-    [loop]
-    for (int bounce = 0; bounce < _NumBounces; bounce++)
-    {
-        RayHit hit = GetNearestIntersection(ray);
-        throughput *= GetActiveMediumSegmentTransmittance(ray, hit.distance, mediumStack);
-        if (!HasPathEnergy(throughput))
-        {
-            break;
-        }
-        ApplyFiniteMediumExitAfterSegment(mediumStack, ray, hit);
-
-        if (DidHitSky(hit))
-        {
-            break;
-        }
-
-        if (DidHitLight(hit))
-        {
-            return sampledDielectricAfterDiffuse ? throughput * GetEmission(hit) : float3(0.0f, 0.0f, 0.0f);
-        }
-
-        bool isDielectric = IsGlassMaterial(hit) || IsWaterMaterial(hit);
-        if (hitDiffuseReceiver && isDielectric)
-        {
-            sampledDielectricAfterDiffuse = true;
-        }
-        if (!isDielectric && hit.materialType == MaterialDiffuse)
-        {
-            hitDiffuseReceiver = true;
-        }
-
-        int remainingBounces = _NumBounces - bounce;
-        ScatterResult scatter = CreateScatteredRay(ray, hit, bounce, remainingBounces, mediumStack, rngState);
-        ApplyMediumTransition(mediumStack, hit, scatter.mediumTransition);
-        ray = scatter.ray;
-        throughput *= scatter.attenuation;
-        bounce += scatter.bouncesConsumed - 1;
-
-        if (!HasPathEnergy(throughput) || !ApplyRussianRoulette(throughput, bounce, rngState))
-        {
-            break;
-        }
-    }
-
-    return float3(0.0f, 0.0f, 0.0f);
-}
-
 float3 GetDebugRenderColor(Ray ray, inout uint rngState)
 {
-    if (_DebugRenderMode == DebugCaustics)
-    {
-        return TraceCausticPaths(ray, rngState);
-    }
-
     RayHit hit = GetNearestIntersection(ray);
 
     if (_DebugRenderMode == DebugAccelerationStructures)
@@ -4465,10 +4381,12 @@ float GetFeatureIdentity(RayHit hit)
         return 0.0f;
     }
 
+#if defined(WATER_ENABLED)
     if (hit.materialType == MaterialWater)
     {
         return 1.0f;
     }
+#endif
 
     if (hit.lightIndex >= 0)
     {
@@ -4513,7 +4431,7 @@ void WriteDenoiserFeatures(uint2 pixel, uint width, uint height)
     // Normal alpha is a reactive flag, preserving the existing eight-UAV production contract.
     // Transmission boundaries get a short temporal history. Other view-dependent paths remain
     // fully reactive because primary-surface motion cannot represent their radiance motion.
-    float reactive = (IsGlassMaterial(hit) || hit.materialType == MaterialWater) ? 0.5f
+    float reactive = IsGlassMaterial(hit) ? 0.5f
         : (hit.materialType == MaterialMetal || hit.lightIndex >= 0 || hit.smoothness > 0.8f) ? 1.0f : 0.0f;
     FeatureNormal[pixel] = float4(normalize(hit.normal), reactive);
     FeatureAlbedo[pixel] = float4(saturate(GetAlbedo(hit)), 1.0f);

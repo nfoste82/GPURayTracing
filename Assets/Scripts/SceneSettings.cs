@@ -19,12 +19,16 @@ public sealed class SceneSettings
 
     public bool EnableAdaptiveSampling = false;
     public int AdaptiveSamplingMinSamples = 8;
+    public int AdaptiveBootstrapFrames = 4;
+    public float AdaptiveBootstrapResolutionScale = 0.25f;
+    public int AdaptiveGuidanceMaxUpdates = 2;
+    public int AdaptiveGuidanceHistoryFrames = 2;
     public GameManager.AdaptivePriorityMode AdaptivePriorityMode = GameManager.AdaptivePriorityMode.WelfordStandardError;
     public float AdaptiveNormalizePriorityByLuminance = 0.0f;
     public int AdaptiveReclassificationInterval = 4;
-    public float AdaptiveRecentChangeWeight = 1.0f;
     public float AdaptiveHighestBucketSampleRate = 2.0f;
     public int AdaptiveMaxPathsPerPixel = 4;
+    public int AdaptiveBootstrapGroupDivisor = 16;
 
     public int NumBounces = 6;
     public int ShadowQuality = 0;

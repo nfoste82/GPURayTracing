@@ -1,4 +1,5 @@
 // Caustics kernels. Shared scene, material, and intersection code lives in RayTracingShared.hlsl.
+#define WATER_ENABLED 1
 #pragma kernel ClearCausticPhotons
 #pragma kernel TraceCausticPhotons CAUSTIC_PHOTON_TRACE
 #pragma kernel ClearCausticGrid

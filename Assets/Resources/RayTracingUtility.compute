@@ -1,0 +1,96 @@
+#pragma kernel ClearAccumulation
+#pragma kernel UpscaleAdaptiveBootstrap
+#pragma kernel SeedAdaptiveBootstrap
+#pragma kernel ComposeAdaptiveBootstrap
+
+RWTexture2D<float4> AccumulationResult;
+Texture2D<float4> AdaptiveBootstrapSource;
+RWTexture2D<float4> Beauty;
+RWTexture2D<float4> Result;
+RWTexture2D<float4> AdaptiveSamplingState;
+RWTexture2D<float4> AdaptiveSamplingM2;
+RWTexture2D<float4> AdaptiveBootstrapPriority;
+int _AdaptiveBootstrapHistorySamples;
+
+float3 SampleAdaptiveBootstrap(float2 uv)
+{
+    uint sourceWidth, sourceHeight;
+    AdaptiveBootstrapSource.GetDimensions(sourceWidth, sourceHeight);
+    float2 position = uv * float2(sourceWidth, sourceHeight) - 0.5f;
+    int2 basePixel = int2(floor(position));
+    float2 fraction = frac(position);
+    int2 maximum = int2(sourceWidth - 1u, sourceHeight - 1u);
+    float3 a = AdaptiveBootstrapSource.Load(int3(clamp(basePixel, int2(0, 0), maximum), 0)).rgb;
+    float3 b = AdaptiveBootstrapSource.Load(int3(clamp(basePixel + int2(1, 0), int2(0, 0), maximum), 0)).rgb;
+    float3 c = AdaptiveBootstrapSource.Load(int3(clamp(basePixel + int2(0, 1), int2(0, 0), maximum), 0)).rgb;
+    float3 d = AdaptiveBootstrapSource.Load(int3(clamp(basePixel + int2(1, 1), int2(0, 0), maximum), 0)).rgb;
+    return lerp(lerp(a, b, fraction.x), lerp(c, d, fraction.x), fraction.y);
+}
+
+float GetAdaptiveBootstrapPriority(float2 uv)
+{
+    uint sourceWidth, sourceHeight;
+    AdaptiveBootstrapSource.GetDimensions(sourceWidth, sourceHeight);
+    float2 texel = 1.0f / float2(sourceWidth, sourceHeight);
+    float3 center = SampleAdaptiveBootstrap(uv);
+    float3 right = SampleAdaptiveBootstrap(uv + float2(texel.x, 0.0f));
+    float3 down = SampleAdaptiveBootstrap(uv + float2(0.0f, texel.y));
+    // A local HDR color gradient is a short-lived allocation prior, not variance evidence.
+    return max(0.0001f, sqrt(dot(right - center, right - center) + dot(down - center, down - center)));
+}
+
+[numthreads(4,4,1)]
+void ClearAccumulation(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    AccumulationResult.GetDimensions(width, height);
+    if (id.x < width && id.y < height)
+    {
+        AccumulationResult[id.xy] = 0.0f;
+    }
+}
+
+[numthreads(4,4,1)]
+void UpscaleAdaptiveBootstrap(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    Beauty.GetDimensions(width, height);
+    if (id.x >= width || id.y >= height) return;
+    float2 uv = (float2(id.xy) + 0.5f) / float2(width, height);
+    float3 color = SampleAdaptiveBootstrap(uv);
+    Beauty[id.xy] = float4(color, 1.0f);
+    Result[id.xy] = float4(color, 1.0f);
+}
+
+[numthreads(4,4,1)]
+void SeedAdaptiveBootstrap(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    AccumulationResult.GetDimensions(width, height);
+    if (id.x >= width || id.y >= height) return;
+    float2 uv = (float2(id.xy) + 0.5f) / float2(width, height);
+    float3 color = SampleAdaptiveBootstrap(uv);
+    float priority = GetAdaptiveBootstrapPriority(uv);
+    float count = max(0.0f, (float)_AdaptiveBootstrapHistorySamples);
+    if (count > 0.0f)
+    {
+        AccumulationResult[id.xy] = float4(color, 1.0f);
+        AdaptiveSamplingState[id.xy] = float4(count, 0.0f, 0.0f, 0.0f);
+        // Encode the provisional score as an equivalent RGB M2. It is replaced by real samples.
+        float m2 = priority * priority * count * max(0.0f, count - 1.0f) / 3.0f;
+        AdaptiveSamplingM2[id.xy] = float4(m2, m2, m2, 0.0f);
+    }
+    AdaptiveBootstrapPriority[id.xy] = float4(priority, 0.0f, 0.0f, 0.0f);
+}
+
+[numthreads(4,4,1)]
+void ComposeAdaptiveBootstrap(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    Beauty.GetDimensions(width, height);
+    if (id.x >= width || id.y >= height || AdaptiveSamplingState[id.xy].x > 0.0f) return;
+    float2 uv = (float2(id.xy) + 0.5f) / float2(width, height);
+    float3 color = SampleAdaptiveBootstrap(uv);
+    Beauty[id.xy] = float4(color, 1.0f);
+    Result[id.xy] = float4(color, 1.0f);
+}

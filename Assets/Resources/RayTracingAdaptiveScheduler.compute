@@ -1,0 +1,521 @@
+#pragma kernel CSAdaptiveAllocateGroups
+#pragma kernel CSAdaptiveClassifyGroups
+#pragma kernel CSAdaptiveApplyBucketRemap
+#pragma kernel CSAdaptiveCompactGroupWorkList
+#pragma kernel CSAdaptiveBuildGroupWorkList
+#pragma kernel CSAdaptiveProbeGroups
+#pragma kernel CSAdaptiveDiagnostics
+#pragma kernel CSBuildAdaptiveDispatchArgs
+#pragma kernel ClearAdaptiveSamplingState
+#pragma kernel ClearAdaptiveFrameMetadata
+#pragma kernel ClearAdaptiveWorkList
+#pragma kernel ClearAdaptiveGroupState
+#pragma kernel ClearAdaptiveScheduler
+#include "../Scripts/RayTracingAdaptiveSchedulerShared.hlsl"
+
+[numthreads(4,4,1)]
+void ClearAdaptiveSamplingState(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    AdaptiveSamplingState.GetDimensions(width, height);
+    if (id.x < width && id.y < height)
+    {
+        AdaptiveSamplingState[id.xy] = 0.0f;
+        AdaptiveSamplingM2[id.xy] = 0.0f;
+    }
+}
+
+[numthreads(64,1,1)]
+void ClearAdaptiveGroupState(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x < _AdaptiveGroupCount)
+    {
+        AdaptiveGroupState[id.x] = 0u;
+        AdaptiveGroupInfo[id.x] = 0u;
+    }
+}
+
+[numthreads(64,1,1)]
+void ClearAdaptiveScheduler(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x < _AdaptiveBucketCount)
+    {
+        AdaptiveRawBucketDemand[id.x] = 0u;
+    }
+}
+
+groupshared float AdaptiveGroupScore[64];
+groupshared uint AdaptiveLegacyGroupBucket[64];
+groupshared uint AdaptiveGroupSamples[64];
+groupshared uint AdaptiveGroupRootOffset[64];
+groupshared uint AdaptiveGroupRootBase;
+groupshared uint AdaptiveGroupBootstrap[64];
+groupshared uint AdaptiveGroupSeedHistory;
+
+// Map each physical threadgroup to one unique logical group for this scheduler epoch. The bounded
+// coprime-stride search keeps the mapping bijective for partial test dimensions too. It changes
+// atomic arrival order without changing any image-space group ownership or compact-list order.
+uint GreatestCommonDivisor(uint left, uint right)
+{
+    [loop]
+    while (right != 0u)
+    {
+        uint remainder = left % right;
+        left = right;
+        right = remainder;
+    }
+    return left;
+}
+
+uint GetAdaptiveGroupPermutationStride(uint groupCount)
+{
+    uint stride = 1u;
+    [unroll]
+    for (uint candidate = 3u; candidate <= 31u; candidate += 2u)
+    {
+        if (stride == 1u && groupCount > 1u && GreatestCommonDivisor(candidate, groupCount) == 1u)
+            stride = candidate;
+    }
+    // A prime group count above the bounded candidates still has a coprime unit stride. This
+    // retains correctness; common render sizes select a nontrivial stride above.
+    return stride;
+}
+
+uint2 GetAdaptiveLogicalGroup(uint2 physicalGroup)
+{
+    uint groupCount = _AdaptiveGroupWidth * _AdaptiveGroupHeight;
+    uint physicalFlat = physicalGroup.x + physicalGroup.y * _AdaptiveGroupWidth;
+    uint stride = GetAdaptiveGroupPermutationStride(groupCount);
+    uint offset = Hash(_AdaptiveScheduleRotation * 2246822519u) % max(1u, groupCount);
+    uint logicalFlat = (physicalFlat * stride + offset) % max(1u, groupCount);
+    return uint2(logicalFlat % _AdaptiveGroupWidth, logicalFlat / _AdaptiveGroupWidth);
+}
+
+float GetAdaptiveBucketRateFloat(uint bucket)
+{
+    uint priorityBucketCount = max(1u, _AdaptiveBucketCount - 1u);
+    float position = priorityBucketCount <= 1u ? 0.5f : (float)bucket / (float)(priorityBucketCount - 1u);
+    float highestRate = min(_AdaptiveHighestBucketSampleRate, (float)_AdaptiveMaxPathsPerPixel);
+    return exp2(lerp(-log2(highestRate), log2(highestRate), position));
+}
+
+// Assign a source-band group to a target tier based on the overlap of their population intervals.
+// A hashed position breaks ties inside a quantized source band without changing the score ordering
+// between bands. This is a bounded 15-bucket calculation, not an image-sized sort or scan.
+uint GetAdaptiveTargetBucket(uint sourceBucket, uint flatGroup)
+{
+    uint priorityBucketCount = _AdaptiveBucketCount > 1u ? min(16u, _AdaptiveBucketCount - 1u) : 1u;
+    uint safeSourceBucket = min(sourceBucket, priorityBucketCount - 1u);
+    uint totalPixels = 0u;
+    uint sourceBegin = 0u;
+    uint sourceDemand = 0u;
+    float rateSum = 0.0f;
+    float inverseRateSum = 0.0f;
+    [unroll] for (uint sourceBucketIndex = 0u; sourceBucketIndex < 16u; sourceBucketIndex++)
+    {
+        if (sourceBucketIndex < priorityBucketCount)
+        {
+            uint demand = AdaptiveRawBucketDemand[sourceBucketIndex];
+            totalPixels += demand;
+            if (sourceBucketIndex < safeSourceBucket) sourceBegin += demand;
+            if (sourceBucketIndex == safeSourceBucket) sourceDemand = demand;
+            float rate = GetAdaptiveBucketRateFloat(sourceBucketIndex);
+            rateSum += rate;
+            inverseRateSum += rcp(rate);
+        }
+    }
+
+    uint targetBucket = safeSourceBucket;
+    if (sourceDemand != 0u && totalPixels != 0u)
+    {
+        // Pure inverse-rate populations under-spend the frame for a geometric rate curve. Add the
+        // minimum uniform component required for the tier-weighted expected rate to equal one.
+        float uniformWeight = max(0.0f, (inverseRateSum - priorityBucketCount)
+            / max(0.000001f, rateSum - priorityBucketCount));
+        float random = (float)Hash(flatGroup ^ (_AdaptiveScheduleRotation * 747796405u)) / 4294967296.0f;
+        float sourcePosition = sourceBegin + random * sourceDemand;
+        float weightSum = inverseRateSum + uniformWeight * priorityBucketCount;
+        float targetEnd = totalPixels * (rcp(GetAdaptiveBucketRateFloat(0u)) + uniformWeight)
+            / max(weightSum, 0.000001f);
+        bool targetFound = false;
+        targetBucket = priorityBucketCount - 1u;
+        [unroll] for (uint targetBucketIndex = 0u; targetBucketIndex < 16u; targetBucketIndex++)
+        {
+            if (!targetFound && targetBucketIndex < priorityBucketCount)
+            {
+                if (targetBucketIndex == priorityBucketCount - 1u || sourcePosition < targetEnd)
+                {
+                    targetBucket = targetBucketIndex;
+                    targetFound = true;
+                }
+                else
+                {
+                    targetEnd += totalPixels
+                        * (rcp(GetAdaptiveBucketRateFloat(targetBucketIndex + 1u)) + uniformWeight)
+                        / max(weightSum, 0.000001f);
+                }
+            }
+        }
+    }
+    return targetBucket;
+}
+
+// Classify spatial groups into logarithmic source bands. The next stage divides each source band
+// across overlapping inverse-rate target tiers, so a concentrated score band cannot collapse into
+// one output bucket.
+
+
+[numthreads(8,8,1)]
+void CSAdaptiveClassifyGroups(uint3 id : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex,
+    uint3 groupId : SV_GroupID)
+{
+    uint width, height;
+    AccumulationResult.GetDimensions(width, height);
+    uint2 logicalGroup = GetAdaptiveLogicalGroup(groupId.xy);
+    uint2 localPixel = uint2(groupIndex & 7u, groupIndex >> 3u);
+    uint2 pixel = logicalGroup * 8u + localPixel;
+    bool valid = pixel.x < width && pixel.y < height;
+    float score = 0.0f;
+    bool bootstrap = false;
+    if (valid)
+    {
+        float count = AdaptiveSamplingState[pixel].x;
+        float bootstrapPriority = AdaptiveBootstrapPriority[pixel].x;
+        float4 alternating = float4(AdaptiveSamplingState[pixel].yzw, AdaptiveSamplingM2[pixel].a);
+        if (_AdaptivePriorityMode == 1u)
+        {
+            // Dammertz's split estimator compares all samples with a deterministic alternating
+            // subset. Use absolute linear RGB RMS so this score targets the capture RMSE space.
+            float3 disagreement = AccumulationResult[pixel].rgb - alternating.rgb;
+            score = sqrt(max(0.0f, dot(disagreement, disagreement) / 3.0f));
+            bootstrap = count < (float)max(2, _AdaptiveSamplingMinSamples) || alternating.a < 2.0f;
+        }
+        else
+        {
+            float3 m2 = max(0.0f, AdaptiveSamplingM2[pixel].rgb);
+            score = count > 1.0f ? sqrt(max(0.0f, (m2.x + m2.y + m2.z) / (count * (count - 1.0f)))) : 1.0f;
+            bootstrap = count < (float)max(1, _AdaptiveSamplingMinSamples);
+        }
+        // Blend between absolute-RGB priority and the existing luminance-normalized correction.
+        // The floor prevents dark-noise spikes when the correction is enabled.
+        float luminance = dot(max(0.0f, AccumulationResult[pixel].rgb), float3(0.2126f, 0.7152f, 0.0722f));
+        float normalizedScore = score * (0.2f + 0.8f / max(0.25f, luminance));
+        score = lerp(score, normalizedScore, saturate(_AdaptiveNormalizePriorityByLuminance));
+        if (_UseAdaptiveBootstrapPriority != 0 && !bootstrap) score = max(score, bootstrapPriority);
+        score = isfinite(score) ? score : 0.0f;
+    }
+    AdaptiveGroupScore[groupIndex] = score;
+    AdaptiveGroupSamples[groupIndex] = valid ? 1u : 0u;
+    AdaptiveGroupBootstrap[groupIndex] = bootstrap ? 1u : 0u;
+    GroupMemoryBarrierWithGroupSync();
+
+    if (groupIndex != 0u) return;
+
+    uint validPixels = 0u;
+    float scoreSum = 0.0f;
+    bool groupBootstrap = false;
+    [unroll] for (uint reductionLane = 0u; reductionLane < 64u; reductionLane++)
+    {
+        validPixels += AdaptiveGroupSamples[reductionLane];
+        scoreSum += AdaptiveGroupScore[reductionLane];
+        groupBootstrap = groupBootstrap || AdaptiveGroupBootstrap[reductionLane] != 0u;
+    }
+
+    uint flatGroup = logicalGroup.x + logicalGroup.y * _AdaptiveGroupWidth;
+    // Use a true rotation rather than independent hash admission. Hash admission can select the
+    // same group repeatedly, leaving a substantial fraction of the image in bootstrap for many
+    // frames and repeatedly issuing an unexpectedly expensive fine trace. This maps every group
+    // to exactly one batch per divisor-sized cycle.
+    uint bootstrapBatch = (flatGroup + _AdaptiveScheduleRotation) % max(1u, _AdaptiveBootstrapGroupDivisor);
+    // The coarse image is a preview only. Trace every untouched group once before rotating the
+    // expensive bootstrap so full-resolution silhouettes, reflections, and refractions cannot
+    // remain represented by a bilinear low-resolution sample.
+    bool needsFirstFineSample = groupBootstrap && AdaptiveSamplingState[logicalGroup * 8u].x == 0.0f;
+    if (groupBootstrap && !needsFirstFineSample && _AdaptiveBootstrapGroupDivisor > 1u && bootstrapBatch != 0u)
+    {
+        // Service complete groups in rotating batches during the expensive fine bootstrap. The
+        // upscaled bootstrap remains visible for groups waiting for their first real path.
+        AdaptiveGroupBucket[flatGroup] = 0u;
+        AdaptiveGroupExtraDemand[flatGroup] = 0u;
+        return;
+    }
+
+    uint passes = (uint)max(1, _NumberOfPasses);
+    uint bucket = _AdaptiveBucketCount - 1u;
+
+    if (!groupBootstrap)
+    {
+        float meanScore = scoreSum / max(1u, validPixels);
+        uint priorityBucketCount = max(1u, _AdaptiveBucketCount - 1u);
+        bucket = min(priorityBucketCount - 1u,
+            (uint)floor(log2(1.0f + meanScore * 4096.0f) * priorityBucketCount / 15.0f));
+    }
+
+    AdaptiveGroupBucket[flatGroup] = bucket;
+    // ExtraDemand is the epoch-eligibility marker consumed by remap. Keep it nonzero for both
+    // bootstrap and established groups; GroupState carries the separate bootstrap classification.
+    AdaptiveGroupState[flatGroup] = uint4(groupBootstrap ? 1u : 2u, 0u, 0u, 0u);
+    AdaptiveGroupExtraDemand[flatGroup] = validPixels;
+    InterlockedAdd(AdaptiveRawBucketDemand[bucket], validPixels);
+}
+
+[numthreads(8,8,1)]
+void CSAdaptiveApplyBucketRemap(uint3 id : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex,
+    uint3 groupId : SV_GroupID)
+{
+    if (groupIndex != 0u) return;
+    uint width, height;
+    Result.GetDimensions(width, height);
+    uint2 logicalGroup = GetAdaptiveLogicalGroup(groupId.xy);
+    uint flatGroup = logicalGroup.x + logicalGroup.y * _AdaptiveGroupWidth;
+    // Classification leaves bootstrap groups outside this rotating batch with zero demand. Do
+    // not reinterpret that as a low-priority fractional tier: doing so would re-admit skipped
+    // groups and turn the first fine handoff back into a full-screen path-tracing dispatch.
+    if (AdaptiveGroupExtraDemand[flatGroup] == 0u)
+    {
+        AdaptiveGroupInfo[flatGroup] = 0u;
+        return;
+    }
+    uint sourceBucket = AdaptiveGroupBucket[flatGroup];
+    bool bootstrap = AdaptiveGroupState[flatGroup].x == 1u;
+    uint bucket = bootstrap ? _AdaptiveBucketCount - 1u : GetAdaptiveTargetBucket(sourceBucket, flatGroup);
+    uint validPixels = min(8u, width - logicalGroup.x * 8u) * min(8u, height - logicalGroup.y * 8u);
+    uint samples = (uint)max(1, _NumberOfPasses);
+    if (!bootstrap)
+    {
+        float rate = GetAdaptiveBucketRateFloat(bucket);
+        uint wholePaths = (uint)floor(rate);
+        float fraction = frac(rate);
+        // Use a separate sequence from tier selection so fractional-rate admission remains
+        // unbiased after lower-rate tiers consume the lower part of the selection interval.
+        float random = (float)Hash(flatGroup ^ (_AdaptiveScheduleRotation * 2891336453u)) / 4294967296.0f;
+        samples = min(_AdaptiveMaxPathsPerPixel, wholePaths + (random < fraction ? 1u : 0u));
+    }
+    uint paths = validPixels * samples;
+    AdaptiveGroupBucket[flatGroup] = bucket;
+    AdaptiveGroupExtraDemand[flatGroup] = paths;
+    InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataBucketPopulationStart + bucket], validPixels);
+    uint workBase = 0u;
+    uint rootBase = 0u;
+    if (paths != 0u)
+    {
+        InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataAssignedPaths], paths, rootBase);
+        InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataFullResolutionPaths], paths);
+        InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataWorkItemCount], validPixels, workBase);
+        InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataBucketAdmittedPathsStart + bucket], paths);
+        InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataBucketBudgetStart + bucket], paths);
+    }
+    AdaptiveGroupInfo[flatGroup] = uint4(workBase, rootBase, validPixels,
+        validPixels != 0u ? paths / validPixels : 0u);
+}
+
+[numthreads(256,1,1)]
+void CSAdaptiveCompactGroupWorkList(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    Result.GetDimensions(width, height);
+    uint flatPixel = id.x;
+    if (flatPixel >= width * height) return;
+
+    uint2 pixel = uint2(flatPixel % width, flatPixel / width);
+    uint2 groupPixel = pixel / 8u;
+    uint flatGroup = groupPixel.x + groupPixel.y * _AdaptiveGroupWidth;
+    uint4 info = AdaptiveGroupInfo[flatGroup];
+    uint samples = info.w;
+    if (samples == 0u) return;
+
+    uint validWidth = min(8u, width - groupPixel.x * 8u);
+    uint localIndex = (pixel.y % 8u) * validWidth + pixel.x % 8u;
+    uint workIndex = info.x + localIndex;
+    AdaptiveWorkList[workIndex] = uint2(flatPixel, samples);
+    uint rootOffset = info.y + localIndex * samples;
+    AdaptiveWorkRootOffsets[workIndex] = rootOffset;
+    [loop]
+    for (uint localSample = 0u; localSample < samples; localSample++)
+    {
+        uint rootIndex = rootOffset + localSample;
+        if (rootIndex < _AdaptiveRootPathCapacity)
+        {
+            AdaptiveRootWorkList[rootIndex] = uint2(flatPixel, localSample);
+        }
+    }
+}
+
+[numthreads(8,8,1)]
+void CSAdaptiveAllocateGroups(uint3 id : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex,
+    uint3 groupId : SV_GroupID)
+{
+    uint width, height;
+    Result.GetDimensions(width, height);
+    bool valid = id.x < width && id.y < height;
+    float score = 0.0f;
+    if (valid)
+    {
+        float4 state = AdaptiveSamplingState[id.xy];
+        float3 m2 = max(0.0f, AdaptiveSamplingM2[id.xy].rgb);
+        float count = state.x;
+        score = count > 1.0f ? sqrt(max(0.0f, (m2.x + m2.y + m2.z) / (count * (count - 1.0f)))) : 1.0f;
+        score = isfinite(score) ? score : 0.0f;
+    }
+    AdaptiveGroupScore[groupIndex] = score;
+    AdaptiveGroupSamples[groupIndex] = valid ? 1u : 0u;
+    AdaptiveGroupBootstrap[groupIndex] = valid && AdaptiveSamplingState[id.xy].x < (float)max(1, _AdaptiveSamplingMinSamples) ? 1u : 0u;
+    GroupMemoryBarrierWithGroupSync();
+
+    uint groupX = groupId.x;
+    uint groupY = groupId.y;
+    uint validWidth = min(8u, width - groupX * 8u);
+    uint validHeight = min(8u, height - groupY * 8u);
+    uint validPixels = validWidth * validHeight;
+    if (groupIndex == 0u)
+    {
+        float minimum = 3.402823e38f;
+        float maximum = 0.0f;
+        bool bootstrap = false;
+        [unroll] for (uint minimumLane = 0u; minimumLane < 64u; minimumLane++) if (AdaptiveGroupSamples[minimumLane] != 0u)
+        {
+            minimum = min(minimum, AdaptiveGroupScore[minimumLane]); maximum = max(maximum, AdaptiveGroupScore[minimumLane]);
+            bootstrap = bootstrap || AdaptiveGroupBootstrap[minimumLane] != 0u;
+        }
+        [unroll] for (uint bucketLane = 0u; bucketLane < 64u; bucketLane++)
+        {
+            if (AdaptiveGroupSamples[bucketLane] == 0u) { AdaptiveLegacyGroupBucket[bucketLane] = 0u; continue; }
+            // Tie spreading rotates with the deterministic sample epoch, avoiding a permanent lane bias.
+            uint tie = (bucketLane + _AdaptiveScheduleRotation) & 15u;
+            AdaptiveLegacyGroupBucket[bucketLane] = maximum > minimum * 1.0001f
+                ? min(15u, (uint)(16.0f * (AdaptiveGroupScore[bucketLane] - minimum) / (maximum - minimum))) : tie;
+        }
+        [unroll] for (uint bootstrapLane = 0u; bootstrapLane < 64u; bootstrapLane++)
+            if (bootstrap && AdaptiveGroupSamples[bootstrapLane] != 0u) AdaptiveGroupSamples[bootstrapLane] = (uint)max(1, _NumberOfPasses);
+        uint remaining = bootstrap ? 0u : validPixels * ((uint)max(1, _NumberOfPasses) - 1u);
+        uint cap = (uint)max(1, _NumberOfPasses) * 4u;
+        [loop] for (int bucket = 15; bucket >= 0 && remaining > 0u; bucket--)
+        {
+            bool added = true;
+            while (added && remaining > 0u)
+            {
+                added = false;
+                [unroll] for (uint step = 0u; step < 64u && remaining > 0u; step++)
+                {
+                    uint candidateLane = (step + _AdaptiveScheduleRotation) & 63u;
+                    if (AdaptiveGroupSamples[candidateLane] != 0u
+                        && AdaptiveLegacyGroupBucket[candidateLane] == (uint)bucket
+                        && AdaptiveGroupSamples[candidateLane] < cap)
+                    { AdaptiveGroupSamples[candidateLane]++; remaining--; added = true; }
+                }
+            }
+        }
+        uint prefix = 0u;
+        [unroll] for (uint prefixLane = 0u; prefixLane < 64u; prefixLane++)
+        { AdaptiveGroupRootOffset[prefixLane] = prefix; prefix += AdaptiveGroupSamples[prefixLane]; }
+        uint flatGroup = groupX + groupY * _AdaptiveGroupWidth;
+        AdaptiveGroupInfo[flatGroup] = uint4(0u, 0u, validPixels, (uint)max(1, _NumberOfPasses));
+        InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataRequestedPaths], prefix);
+        InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataAssignedPaths], prefix, AdaptiveGroupRootBase);
+        InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataFullResolutionPaths], prefix);
+        InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataWorkItemCount], validPixels);
+        if (bootstrap) InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataBootstrapPaths], prefix);
+        [unroll] for (uint populationLane = 0u; populationLane < 64u; populationLane++) if (AdaptiveGroupSamples[populationLane] != 0u)
+            InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataBucketPopulationStart + AdaptiveLegacyGroupBucket[populationLane]], 1u);
+    }
+    GroupMemoryBarrierWithGroupSync();
+    if (!valid) return;
+    uint flatPixel = id.x + id.y * width;
+    AdaptiveWorkList[flatPixel] = uint2(flatPixel, AdaptiveGroupSamples[groupIndex]);
+    AdaptiveWorkRootOffsets[flatPixel] = AdaptiveGroupRootBase + AdaptiveGroupRootOffset[groupIndex];
+}
+
+[numthreads(64,1,1)]
+void CSAdaptiveProbeGroups(uint3 id : SV_DispatchThreadID)
+{
+    uint groupIndex = id.x;
+    if (groupIndex >= _AdaptiveGroupCount) return;
+    uint4 input = AdaptiveProbeGroups[groupIndex];
+    AdaptiveGroupState[groupIndex] = uint4(input.x, input.y, 0u, groupIndex == 0u ? input.w : 0u);
+    AdaptiveGroupInfo[groupIndex] = uint4(0u, input.y, input.z, 0u);
+    if (input.x != 0u)
+    {
+        InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataBucketPopulationStart + input.y], 1u);
+    }
+}
+
+[numthreads(256,1,1)]
+void CSAdaptiveBuildGroupWorkList(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    Result.GetDimensions(width, height);
+    uint flatPixel = id.x;
+    if (flatPixel >= width * height) return;
+
+    uint2 pixel = uint2(flatPixel % width, flatPixel / width);
+    uint2 groupPixel = pixel / 8u;
+    uint groupFlat = groupPixel.x + groupPixel.y * _AdaptiveGroupWidth;
+    uint4 info = AdaptiveGroupInfo[groupFlat];
+    uint samples = info.w;
+    if (samples == 0u) return;
+
+    uint validWidth = min(8u, width - groupPixel.x * 8u);
+    uint localIndex = (pixel.y % 8u) * validWidth + pixel.x % 8u;
+    uint workIndex = info.x + localIndex;
+    AdaptiveWorkList[workIndex] = uint2(flatPixel, samples);
+    AdaptiveWorkRootOffsets[workIndex] = info.y + localIndex * samples;
+}
+
+[numthreads(1,1,1)]
+void ClearAdaptiveFrameMetadata(uint3 id : SV_DispatchThreadID)
+{
+    // The compact work list persists between reclassification passes. Only this counter is
+    // per-dispatch, so capture diagnostics continue to validate one frame of retired root work.
+    AdaptiveWorkListMetadata[AdaptiveMetadataRetiredPaths] = 0u;
+    uint fullResolutionPaths = AdaptiveWorkListMetadata[AdaptiveMetadataFullResolutionPaths];
+    AdaptiveWorkListMetadata[AdaptiveMetadataRequestedPaths] = fullResolutionPaths;
+    AdaptiveWorkListMetadata[AdaptiveMetadataGuidancePaths] = 0u;
+}
+
+[numthreads(1,1,1)]
+void ClearAdaptiveWorkList(uint3 id : SV_DispatchThreadID)
+{
+    uint index = id.x;
+    if (index < 64u)
+    {
+        AdaptiveWorkListMetadata[index] = index == AdaptiveMetadataPathCountMin ? 0xffffffffu : 0u;
+    }
+}
+
+[numthreads(1,1,1)]
+void CSBuildAdaptiveDispatchArgs(uint3 id : SV_DispatchThreadID)
+{
+    uint assigned = AdaptiveWorkListMetadata[AdaptiveMetadataAssignedPaths];
+    // Requested and assigned describe only compact full-resolution roots. Guidance is tracked as
+    // a separate additional cost, so publish the rebuilt schedule's actual root count here.
+    AdaptiveWorkListMetadata[AdaptiveMetadataRequestedPaths] = assigned;
+    AdaptiveWorkListMetadata[AdaptiveMetadataFullResolutionPaths] = assigned;
+    AdaptiveDispatchArgs[0] = (min(AdaptiveWorkListMetadata[AdaptiveMetadataFullResolutionPaths], _AdaptiveRootPathCapacity) + 15u) / 16u;
+    AdaptiveDispatchArgs[1] = 1u;
+    AdaptiveDispatchArgs[2] = 1u;
+    AdaptiveResolveDispatchArgs[0] = (min(AdaptiveWorkListMetadata[AdaptiveMetadataWorkItemCount], _AdaptiveWorkListCapacity) + 15u) / 16u;
+    AdaptiveResolveDispatchArgs[1] = 1u;
+    AdaptiveResolveDispatchArgs[2] = 1u;
+}
+
+[numthreads(4,4,1)]
+void CSAdaptiveDiagnostics(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    Result.GetDimensions(width, height);
+    uint2 pixel = id.xy;
+    if (pixel.x >= width || pixel.y >= height) return;
+
+    uint flatPixel = pixel.x + pixel.y * width;
+    float4 state = AdaptiveSamplingState[pixel];
+    float3 m2 = max(0.0f, AdaptiveSamplingM2[pixel].rgb);
+    uint pathCount = (uint)max(0.0f, state.x);
+    float uncertainty = state.x > 1.0f
+        ? sqrt(max(0.0f, (m2.x + m2.y + m2.z) / (state.x * (state.x - 1.0f)))) : 0.0f;
+    uint uncertaintyFixed = (uint)min(4294.0f, uncertainty * 1000000.0f);
+    InterlockedMin(AdaptiveWorkListMetadata[AdaptiveMetadataPathCountMin], pathCount);
+    InterlockedMax(AdaptiveWorkListMetadata[AdaptiveMetadataPathCountMax], pathCount);
+    InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataPathCountSum], pathCount);
+    InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataUncertaintySum], uncertaintyFixed);
+    InterlockedMax(AdaptiveWorkListMetadata[AdaptiveMetadataUncertaintyMax], uncertaintyFixed);
+}

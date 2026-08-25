@@ -1,0 +1,17 @@
+#pragma kernel CSFeatures
+#pragma multi_compile _ FOG_ENABLED
+#pragma multi_compile _ TERRAIN_ENABLED
+#include "../Scripts/RayTracingShared.hlsl"
+
+[numthreads(8,4,1)]
+void CSFeatures(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    FeatureValidity.GetDimensions(width, height);
+    if (id.x >= width || id.y >= height)
+    {
+        return;
+    }
+
+    WriteDenoiserFeatures(id.xy, width, height);
+}

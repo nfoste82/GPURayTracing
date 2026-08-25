@@ -1,0 +1,17 @@
+#pragma kernel CSFocusQuery
+#pragma multi_compile _ TERRAIN_ENABLED
+#include "../Scripts/RayTracingShared.hlsl"
+
+[numthreads(1,1,1)]
+void CSFocusQuery(uint3 id : SV_DispatchThreadID)
+{
+    Ray ray = CreateCameraRay(_FocusQueryUv);
+    RayHit hit = GetNearestIntersection(ray);
+    if (!isfinite(hit.distance))
+    {
+        _FocusQueryResult[0] = float4(0.0f, 0.0f, 0.0f, 0.0f);
+        return;
+    }
+
+    _FocusQueryResult[0] = float4(hit.position, 1.0f);
+}

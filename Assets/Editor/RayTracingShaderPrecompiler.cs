@@ -1,511 +1,472 @@
 using System.Diagnostics;
 using System.IO;
-using System.Text;
 using UnityEditor;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
 
-// Editor utility to force-compile the ray tracing compute shader from edit mode, so a slow or
-// failing kernel compile shows up here (with timing and messages) instead of stalling Unity
-// when you hit Play. Unity compiles compute kernels lazily on the first Dispatch, which is why
-// problems only surfaced on Play; this dispatches every bounded production variant up front to
-// trigger that work now.
+// Forces the renderer compute assets through their first tiny dispatch in edit mode. Unity compiles
+// compute kernels lazily, so timing the dispatch is the useful signal rather than asset loading.
 public static class RayTracingShaderPrecompiler
 {
-    private const string ShaderPath = "Assets/Scripts/RayTracingCompute.compute";
+    private const string MainShaderPath = "Assets/Scripts/RayTracingCompute.compute";
+    private const string WaterShaderPath = "Assets/Resources/RayTracingWater.compute";
+    private const string DebugShaderPath = "Assets/Resources/RayTracingDebug.compute";
+    private const string AdaptiveTraceShaderPath = "Assets/Resources/RayTracingAdaptiveTrace.compute";
+    private const string AdaptiveSchedulerShaderPath = "Assets/Resources/RayTracingAdaptiveScheduler.compute";
+    private const string UtilityShaderPath = "Assets/Resources/RayTracingUtility.compute";
+    private const string FeaturesShaderPath = "Assets/Resources/RayTracingFeatures.compute";
+    private const string FocusShaderPath = "Assets/Resources/RayTracingFocus.compute";
+    private const string RegressionProbeShaderPath = "Assets/Resources/RayTracingRegressionProbe.compute";
     private const string CausticsShaderPath = "Assets/Resources/RayTracingCaustics.compute";
-    private const string ProgressTitle = "Precompiling ray tracing shader";
+    private const string ProgressTitle = "Precompiling ray tracing shaders";
     private const string StatsPath = "Library/RayTracingShaderCompileStats.csv";
+    private const string StatsHeader = "timestamp,unityVersion,buildTarget,graphicsDevice,shaderAsset,kernel,shaderHash,variant,coldDispatchMs,warmDispatchMs";
+
+    private enum VariantSet { None, FogTerrain, Terrain }
+
+    private sealed class ShaderAsset
+    {
+        public readonly string Label;
+        public readonly string Path;
+        public readonly string[] Kernels;
+        public readonly VariantSet Variants;
+
+        public ShaderAsset(string label, string path, VariantSet variants, params string[] kernels)
+        {
+            Label = label;
+            Path = path;
+            Kernels = kernels;
+            Variants = variants;
+        }
+    }
 
     private readonly struct Variant
     {
-        public readonly bool Debug;
         public readonly bool Fog;
         public readonly bool Terrain;
 
-        public Variant(bool debug, bool fog, bool terrain)
+        public Variant(bool fog, bool terrain)
         {
-            Debug = debug;
             Fog = fog;
             Terrain = terrain;
         }
 
-        public string Label => $"debug={(Debug ? 1 : 0)};fog={(Fog ? 1 : 0)};terrain={(Terrain ? 1 : 0)}";
-        public string Type => Debug ? "Debug" : "Final-color";
+        public string Label => $"fog={(Fog ? 1 : 0)};terrain={(Terrain ? 1 : 0)}";
     }
 
-    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader")]
-    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/All Variants")]
-    private static void PrecompileAllVariants()
-    {
-        Precompile(-1, true);
-    }
+    private static readonly ShaderAsset Main = new ShaderAsset("Main Final Color", MainShaderPath, VariantSet.FogTerrain, "CSMain");
+    private static readonly ShaderAsset Water = new ShaderAsset("Water Final Color", WaterShaderPath, VariantSet.FogTerrain, "CSMain");
+    private static readonly ShaderAsset DebugShader = new ShaderAsset("Debug", DebugShaderPath, VariantSet.FogTerrain, "CSDebugMain");
+    private static readonly ShaderAsset AdaptiveTrace = new ShaderAsset("Adaptive Trace", AdaptiveTraceShaderPath, VariantSet.FogTerrain,
+        "CSAdaptiveTraceRoot", "CSAdaptiveResolveRoot", "CSAdaptiveTraceReference");
+    private static readonly ShaderAsset AdaptiveScheduler = new ShaderAsset("Adaptive Scheduler", AdaptiveSchedulerShaderPath, VariantSet.None,
+        "ClearAdaptiveSamplingState", "ClearAdaptiveGroupState", "ClearAdaptiveScheduler", "ClearAdaptiveWorkList",
+        "ClearAdaptiveFrameMetadata", "CSAdaptiveClassifyGroups", "CSAdaptiveApplyBucketRemap",
+        "CSAdaptiveCompactGroupWorkList", "CSBuildAdaptiveDispatchArgs", "CSAdaptiveDiagnostics");
+    private static readonly ShaderAsset Utility = new ShaderAsset("Utility", UtilityShaderPath, VariantSet.None,
+        "ClearAccumulation", "UpscaleAdaptiveBootstrap", "SeedAdaptiveBootstrap", "ComposeAdaptiveBootstrap");
+    private static readonly ShaderAsset Features = new ShaderAsset("Features", FeaturesShaderPath, VariantSet.FogTerrain, "CSFeatures");
+    private static readonly ShaderAsset Focus = new ShaderAsset("Focus", FocusShaderPath, VariantSet.Terrain, "CSFocusQuery");
+    private static readonly ShaderAsset RegressionProbe = new ShaderAsset("Regression Probe", RegressionProbeShaderPath, VariantSet.None, "CSRegressionProbe");
+    private static readonly ShaderAsset[] RendererAssets = { Main, Water, DebugShader, AdaptiveTrace, AdaptiveScheduler, Utility, Features, Focus, RegressionProbe };
 
-    // Run this in a separate Unity process before EditMode tests after changing a shader:
-    // -executeMethod RayTracingShaderPrecompiler.PrecompileFromCommandLine
-    // Add -rayTracingColdShaderPrecompile only to measure a deliberately cold compile.
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Main Final Color/All Fog + Terrain Variants")]
+    private static void PrecompileMainAllVariants() => Precompile(new[] { Main }, true);
+
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Main Final Color/Default (Fog Off, Terrain Off)")]
+    private static void PrecompileMainDefault() => Precompile(new[] { Main }, true, 0);
+
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Main Final Color/Fog (Terrain Off)")]
+    private static void PrecompileMainFog() => Precompile(new[] { Main }, true, 1);
+
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Main Final Color/Terrain (Fog Off)")]
+    private static void PrecompileMainTerrain() => Precompile(new[] { Main }, true, 2);
+
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Main Final Color/Fog + Terrain")]
+    private static void PrecompileMainFogTerrain() => Precompile(new[] { Main }, true, 3);
+
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Water Final Color/Default (Fog Off, Terrain Off)")]
+    private static void PrecompileWaterDefault() => Precompile(new[] { Water }, true, 0);
+
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Debug/All Fog + Terrain Variants")]
+    private static void PrecompileDebugAllVariants() => Precompile(new[] { DebugShader }, true);
+
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Adaptive Trace/All Kernels and Fog + Terrain Variants")]
+    private static void PrecompileAdaptiveTrace() => Precompile(new[] { AdaptiveTrace }, true);
+
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Adaptive Scheduler/All Runtime Kernels")]
+    private static void PrecompileAdaptiveScheduler() => Precompile(new[] { AdaptiveScheduler }, true);
+
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Utility/All Runtime Kernels")]
+    private static void PrecompileUtility() => Precompile(new[] { Utility }, true);
+
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Features/All Fog + Terrain Variants")]
+    private static void PrecompileFeatures() => Precompile(new[] { Features }, true);
+
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Focus/All Terrain Variants")]
+    private static void PrecompileFocus() => Precompile(new[] { Focus }, true);
+
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Regression Probe")]
+    private static void PrecompileRegressionProbe() => Precompile(new[] { RegressionProbe }, true);
+
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/All Renderer Assets")]
+    private static void PrecompileAllRendererAssets() => Precompile(RendererAssets, true);
+
+    // Run in a separate Unity process with -executeMethod RayTracingShaderPrecompiler.PrecompileFromCommandLine.
+    // -rayTracingPrecompileAllVariants selects every split renderer asset; otherwise only the normal main path is warmed.
     public static void PrecompileFromCommandLine()
     {
-        bool allVariants = HasCommandLineArgument("-rayTracingPrecompileAllVariants");
-        bool succeeded = Precompile(allVariants ? -1 : 0, HasCommandLineArgument("-rayTracingColdShaderPrecompile"));
+        string requestedAsset = GetCommandLineArgumentValue("-rayTracingPrecompileAsset");
+        string requestedVariant = GetCommandLineArgumentValue("-rayTracingPrecompileVariant");
+        bool allAssets = HasCommandLineArgument("-rayTracingPrecompileAllVariants");
+        ShaderAsset[] assets = string.IsNullOrEmpty(requestedAsset)
+            ? allAssets ? RendererAssets : new[] { Main }
+            : GetRequestedAssets(requestedAsset);
+        int selectedVariant = GetRequestedVariant(requestedVariant, assets);
+        if (!string.IsNullOrEmpty(requestedVariant) && selectedVariant < 0)
+        {
+            EditorApplication.Exit(1);
+            return;
+        }
+        bool succeeded = Precompile(assets, HasCommandLineArgument("-rayTracingColdShaderPrecompile"),
+            selectedVariant >= 0 ? selectedVariant : assets.Length == 1 && assets[0] == Main && !allAssets ? 0 : -1);
         EditorApplication.Exit(succeeded ? 0 : 1);
     }
 
-    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Final Color - Default")]
-    private static void PrecompileDefaultVariant()
+    private static ShaderAsset[] GetRequestedAssets(string value)
     {
-        Precompile(0, true);
-    }
-
-    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Final Color - Fog")]
-    private static void PrecompileFinalColorFogVariant()
-    {
-        Precompile(1, true);
-    }
-
-    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Final Color - Terrain")]
-    private static void PrecompileFinalColorTerrainVariant()
-    {
-        Precompile(2, true);
-    }
-
-    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Final Color - Fog + Terrain")]
-    private static void PrecompileFinalColorFogTerrainVariant()
-    {
-        Precompile(3, true);
-    }
-
-    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Debug - Default")]
-    private static void PrecompileDebugVariant()
-    {
-        Precompile(4, true);
-    }
-
-    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Debug - Fog")]
-    private static void PrecompileDebugFogVariant()
-    {
-        Precompile(5, true);
-    }
-
-    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Debug - Terrain")]
-    private static void PrecompileDebugTerrainVariant()
-    {
-        Precompile(6, true);
-    }
-
-    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Debug - Fog + Terrain")]
-    private static void PrecompileDebugFogTerrainVariant()
-    {
-        Precompile(7, true);
-    }
-
-    private static bool Precompile(int selectedVariant, bool coldCompile)
-    {
-        var shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ShaderPath);
-        if (shader == null)
+        foreach (var asset in RendererAssets)
         {
-            Debug.LogError($"Precompile failed: could not load compute shader at '{ShaderPath}'.");
+            if (string.Equals(asset.Label, value, System.StringComparison.OrdinalIgnoreCase)
+                || string.Equals(Path.GetFileNameWithoutExtension(asset.Path), value, System.StringComparison.OrdinalIgnoreCase))
+            {
+                return new[] { asset };
+            }
+        }
+
+        Debug.LogError($"Unknown -rayTracingPrecompileAsset '{value}'. Use one of: " +
+            string.Join(", ", System.Array.ConvertAll(RendererAssets, asset => Path.GetFileNameWithoutExtension(asset.Path))));
+        return System.Array.Empty<ShaderAsset>();
+    }
+
+    private static int GetRequestedVariant(string value, ShaderAsset[] assets)
+    {
+        if (string.IsNullOrEmpty(value)) return -1;
+        if (assets.Length != 1)
+        {
+            Debug.LogError("-rayTracingPrecompileVariant requires exactly one selected shader asset.");
+            return -1;
+        }
+
+        var variants = CreateVariants(assets[0].Variants);
+        for (var index = 0; index < variants.Length; index++)
+        {
+            if (string.Equals(variants[index].Label, value, System.StringComparison.OrdinalIgnoreCase)) return index;
+        }
+
+        Debug.LogError($"Unknown -rayTracingPrecompileVariant '{value}'. Use one of: " +
+            string.Join(", ", System.Array.ConvertAll(variants, variant => variant.Label)));
+        return -1;
+    }
+
+    private static bool Precompile(ShaderAsset[] assets, bool coldCompile, int selectedMainVariant = -1)
+    {
+        if (assets.Length == 0)
+        {
             return false;
         }
 
-        var allVariants = CreateVariants();
-        var variants = selectedVariant >= 0
-            ? new[] { allVariants[selectedVariant] }
-            : allVariants;
-        var stats = new StringBuilder();
-        stats.AppendLine("timestamp,unityVersion,buildTarget,graphicsDevice,shaderHash,variant,coldDispatchMs,warmDispatchMs");
         if (coldCompile)
         {
-            // ComputeShader is not a UnityEngine.Shader, so ShaderUtil.ClearCachedData cannot be
-            // clear its cache. Only explicit cold-compile measurements clear and reimport here.
+            // Clear once for a selected set, then force each selected asset to rebuild before timing.
             ClearShaderCache();
-            AssetDatabase.ImportAsset(ShaderPath, ImportAssetOptions.ForceUpdate);
-            shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ShaderPath);
-            if (shader == null)
+            foreach (var asset in assets)
             {
-                Debug.LogError($"Precompile failed after reimport: could not load compute shader at '{ShaderPath}'.");
-                return false;
+                AssetDatabase.ImportAsset(asset.Path, ImportAssetOptions.ForceUpdate);
             }
         }
 
-        // 1) Force the HLSL -> backend compile and surface any compile messages. This is the
-        //    step that was hanging; if it errors, the messages explain why.
-        var messages = ShaderUtil.GetComputeShaderMessages(shader);
-        bool hasError = false;
-        foreach (var message in messages)
-        {
-            string formatted =
-                $"[{message.platform}] {message.message}\n{message.messageDetails}";
-            if (message.severity == UnityEditor.Rendering.ShaderCompilerMessageSeverity.Error)
-            {
-                hasError = true;
-                Debug.LogError($"Compute shader error: {formatted}");
-            }
-            else
-            {
-                Debug.LogWarning($"Compute shader warning: {formatted}");
-            }
-        }
-
-        if (hasError)
-        {
-            Debug.LogError("Precompile aborted: the compute shader has compile errors (see above).");
-            return false;
-        }
-
-        // 2) Force the real GPU dispatch (the lazy step Play triggers) on a tiny render target.
-        // Fog and terrain deliberately isolate their large paths behind keywords, so warm the
-        // bounded DEBUG_RENDER x FOG_ENABLED x TERRAIN_ENABLED matrix here rather than making a
-        // scene switch discover a cold variant.
-        int kernel = shader.FindKernel("CSMain");
-
-        var rt = new RenderTexture(8, 8, 0, RenderTextureFormat.ARGBFloat)
-        {
-            enableRandomWrite = true
-        };
-        rt.Create();
-        var featureColor = new RenderTexture(8, 8, 0, RenderTextureFormat.ARGBFloat)
-        {
-            enableRandomWrite = true
-        };
-        featureColor.Create();
-        var featureScalar = new RenderTexture(8, 8, 0, RenderTextureFormat.RFloat)
-        {
-            enableRandomWrite = true
-        };
-        featureScalar.Create();
-        var terrainCells = new ComputeBuffer(1, sizeof(float) * 2);
-        terrainCells.SetData(new[] { Vector2.zero });
-        var terrainHeights = new ComputeBuffer(1, sizeof(float));
-        terrainHeights.SetData(new[] { 0.0f });
-        var dummyTextureArrays = CreateDummyTextureArrays();
-        var dummyStructuredBuffers = CreateDummyStructuredBuffers();
-
+        var resources = new DummyResources();
+        int completed = 0;
+        int total = CountDispatches(assets, selectedMainVariant);
+        long coldTotal = 0;
+        long warmTotal = 0;
         var totalStopwatch = Stopwatch.StartNew();
-        var completedVariants = 0;
-        long totalColdDispatchMs = 0;
-        long totalWarmDispatchMs = 0;
-        bool cancelled = false;
         try
         {
-            shader.SetInt("_CausticsEnabled", 0);
-            shader.SetInt("_EnvironmentLightEnabled", 0);
-            shader.SetInt("_NumLights", 0);
-            shader.SetInt("_NumberOfPasses", 1);
-            shader.SetInt("_NumBounces", 1);
-            shader.SetVector("_FogBoundsMin", Vector3.zero);
-            shader.SetVector("_FogBoundsMax", Vector3.one);
-            shader.SetVector("_FogScatteringAlbedo", Vector3.zero);
-            shader.SetFloat("_FogDensity", 0.0f);
-            shader.SetFloat("_FogInScatteringIntensity", 0.0f);
-            shader.SetInt("_FogMultipleScattering", 0);
-            shader.SetTexture(kernel, "_SkyboxTexture", Texture2D.blackTexture);
-            shader.SetTexture(kernel, "_MeshAlbedoTextures", dummyTextureArrays[0]);
-            shader.SetTexture(kernel, "_MeshMetallicRoughnessTextures", dummyTextureArrays[1]);
-            shader.SetTexture(kernel, "_MeshNormalTextures", dummyTextureArrays[2]);
-            shader.SetTexture(kernel, "_MeshParallaxTextures", dummyTextureArrays[3]);
-            shader.SetBuffer(kernel, "_EnvironmentConditionalCdf", dummyStructuredBuffers[0]);
-            shader.SetBuffer(kernel, "_EnvironmentMarginalCdf", dummyStructuredBuffers[1]);
-            shader.SetBuffer(kernel, "_Spheres", dummyStructuredBuffers[2]);
-            shader.SetBuffer(kernel, "_Lights", dummyStructuredBuffers[3]);
-            shader.SetBuffer(kernel, "_MeshLightTriangleCdf", dummyStructuredBuffers[4]);
-            shader.SetBuffer(kernel, "_Triangles", dummyStructuredBuffers[5]);
-            shader.SetBuffer(kernel, "_Meshes", dummyStructuredBuffers[6]);
-            shader.SetBuffer(kernel, "_BvhNodes", dummyStructuredBuffers[7]);
-            shader.SetBuffer(kernel, "_TopLevelBvhNodes", dummyStructuredBuffers[8]);
-            shader.SetBuffer(kernel, "_ShadowBvhNodes", dummyStructuredBuffers[9]);
-            shader.SetBuffer(kernel, "_CausticPhotons", dummyStructuredBuffers[10]);
-            shader.SetBuffer(kernel, "_CausticPhotonMetadata", dummyStructuredBuffers[11]);
-            shader.SetBuffer(kernel, "_CausticGridCellHeads", dummyStructuredBuffers[12]);
-            shader.SetBuffer(kernel, "_CausticPhotonNext", dummyStructuredBuffers[13]);
-            shader.SetTexture(kernel, "Result", rt);
-            shader.SetTexture(kernel, "AccumulationResult", featureColor);
-            shader.SetTexture(kernel, "Beauty", featureColor);
-            shader.SetTexture(kernel, "FeatureNormal", featureColor);
-            shader.SetTexture(kernel, "FeatureAlbedo", featureColor);
-            shader.SetTexture(kernel, "FeatureDepth", featureScalar);
-            shader.SetTexture(kernel, "FeatureIdentity", featureScalar);
-            shader.SetTexture(kernel, "FeatureValidity", featureScalar);
-            shader.SetInt("_AccumulatedFrameCount", 1);
-            shader.SetInt("_SampleOffset", 0);
-            shader.SetTexture(kernel, "_TerrainAlphamap", Texture2D.blackTexture);
-            shader.SetTexture(kernel, "_TerrainLayer0", Texture2D.whiteTexture);
-            shader.SetTexture(kernel, "_TerrainLayer1", Texture2D.whiteTexture);
-            shader.SetTexture(kernel, "_TerrainLayer2", Texture2D.whiteTexture);
-            shader.SetTexture(kernel, "_TerrainLayer3", Texture2D.whiteTexture);
-            shader.SetTexture(kernel, "_TerrainNormal0", Texture2D.normalTexture);
-            shader.SetTexture(kernel, "_TerrainNormal1", Texture2D.normalTexture);
-            shader.SetTexture(kernel, "_TerrainNormal2", Texture2D.normalTexture);
-            shader.SetTexture(kernel, "_TerrainNormal3", Texture2D.normalTexture);
-            shader.SetTexture(kernel, "_TerrainMask0", Texture2D.whiteTexture);
-            shader.SetTexture(kernel, "_TerrainMask1", Texture2D.whiteTexture);
-            shader.SetTexture(kernel, "_TerrainMask2", Texture2D.whiteTexture);
-            shader.SetTexture(kernel, "_TerrainMask3", Texture2D.whiteTexture);
-            shader.SetBuffer(kernel, "_TerrainCells", terrainCells);
-            shader.SetBuffer(kernel, "_TerrainHeights", terrainHeights);
-            shader.SetVector("_TerrainSize", Vector3.one);
-            shader.SetInt("_TerrainCellResolution", 1);
-            shader.SetInt("_TerrainHeightmapResolution", 1);
-
-            for (var variantIndex = 0; variantIndex < variants.Length; variantIndex++)
+            foreach (var asset in assets)
             {
-                var variant = variants[variantIndex];
-                var remaining = variants.Length - variantIndex - 1;
-                var progressText = variants.Length == 1
-                    ? $"{variant.Label} variant compiling. 1 of 1 variant"
-                    : $"{variant.Label} variant compiling. {remaining} of {variants.Length} variants remaining";
-                if (EditorUtility.DisplayCancelableProgressBar(
-                        ProgressTitle, progressText, variantIndex / (float)variants.Length))
+                var shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(asset.Path);
+                if (shader == null)
                 {
-                    cancelled = true;
-                    break;
+                    Debug.LogError($"Precompile failed: could not load '{asset.Path}'.");
+                    return false;
                 }
 
-                SetKeyword(shader, "DEBUG_RENDER", variant.Debug);
-                SetKeyword(shader, "FOG_ENABLED", variant.Fog);
-                SetKeyword(shader, "TERRAIN_ENABLED", variant.Terrain);
+                if (!LogCompileMessages(asset.Label, shader)) return false;
+                var variants = CreateVariants(asset.Variants);
+                for (var kernelIndex = 0; kernelIndex < asset.Kernels.Length; kernelIndex++)
+                {
+                    int kernel = shader.FindKernel(asset.Kernels[kernelIndex]);
+                    BindResources(shader, kernel, resources);
+                    for (var variantIndex = 0; variantIndex < variants.Length; variantIndex++)
+                    {
+                        if (selectedMainVariant >= 0 && variantIndex != selectedMainVariant) continue;
+                        var variant = variants[variantIndex];
+                        if (EditorUtility.DisplayCancelableProgressBar(ProgressTitle,
+                                $"{asset.Label} / {asset.Kernels[kernelIndex]} / {variant.Label} ({completed + 1} of {total})",
+                                completed / (float)total))
+                        {
+                            Debug.LogWarning($"Ray tracing precompile cancelled after {completed} of {total} dispatches.");
+                            return false;
+                        }
 
-                var coldStopwatch = Stopwatch.StartNew();
-                PathTracing.ComputeDispatch.Dispatch(shader, kernel, 1, 1, 1);
-                coldStopwatch.Stop();
-                var warmStopwatch = Stopwatch.StartNew();
-                PathTracing.ComputeDispatch.Dispatch(shader, kernel, 1, 1, 1);
-                warmStopwatch.Stop();
-                totalColdDispatchMs += coldStopwatch.ElapsedMilliseconds;
-                totalWarmDispatchMs += warmStopwatch.ElapsedMilliseconds;
-
-                var timestamp = System.DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture);
-                var shaderHash = AssetDatabase.GetAssetDependencyHash(ShaderPath).ToString();
-                var row = string.Join(",", Quote(timestamp), Quote(Application.unityVersion),
-                    Quote(EditorUserBuildSettings.activeBuildTarget.ToString()), Quote(SystemInfo.graphicsDeviceName),
-                    Quote(shaderHash), Quote(variant.Label), coldStopwatch.ElapsedMilliseconds,
-                    warmStopwatch.ElapsedMilliseconds);
-                stats.AppendLine(row);
-                AppendStatsRow(stats, row);
-                Debug.Log($"Ray tracing shader variant ({variant.Label}) first={coldStopwatch.ElapsedMilliseconds} ms, " +
-                    $"warm={warmStopwatch.ElapsedMilliseconds} ms.");
-                completedVariants++;
+                        SetKeyword(shader, "FOG_ENABLED", variant.Fog);
+                        SetKeyword(shader, "TERRAIN_ENABLED", variant.Terrain);
+                        var cold = Stopwatch.StartNew();
+                        PathTracing.ComputeDispatch.Dispatch(shader, kernel, 1, 1, 1);
+                        cold.Stop();
+                        var warm = Stopwatch.StartNew();
+                        PathTracing.ComputeDispatch.Dispatch(shader, kernel, 1, 1, 1);
+                        warm.Stop();
+                        coldTotal += cold.ElapsedMilliseconds;
+                        warmTotal += warm.ElapsedMilliseconds;
+                        AppendStatsRow(asset.Path, asset.Kernels[kernelIndex], variant.Label, cold.ElapsedMilliseconds, warm.ElapsedMilliseconds);
+                        Debug.Log($"{asset.Label} {asset.Kernels[kernelIndex]} ({variant.Label}) first={cold.ElapsedMilliseconds} ms, warm={warm.ElapsedMilliseconds} ms.");
+                        completed++;
+                    }
+                }
             }
 
-            if (!cancelled)
-            {
-                // Read back to force the GPU to execute the queued dispatches before completion.
-                var prev = RenderTexture.active;
-                RenderTexture.active = rt;
-                var readback = new Texture2D(8, 8, TextureFormat.RGBAFloat, false);
-                readback.ReadPixels(new Rect(0, 0, 8, 8), 0, 0);
-                readback.Apply();
-                RenderTexture.active = prev;
-                Object.DestroyImmediate(readback);
-            }
+            resources.WaitForGpu();
         }
-        catch (System.Exception e)
+        catch (System.Exception exception)
         {
-            Debug.LogError($"Precompile dispatch threw: {e.Message}\n{e}");
+            Debug.LogError($"Precompile dispatch threw: {exception.Message}\n{exception}");
             return false;
         }
         finally
         {
             totalStopwatch.Stop();
             EditorUtility.ClearProgressBar();
-            SetKeyword(shader, "DEBUG_RENDER", false);
-            SetKeyword(shader, "FOG_ENABLED", false);
-            SetKeyword(shader, "TERRAIN_ENABLED", false);
-            terrainCells.Release();
-            terrainHeights.Release();
-            foreach (var buffer in dummyStructuredBuffers)
-            {
-                buffer.Release();
-            }
-            foreach (var textureArray in dummyTextureArrays)
-            {
-                Object.DestroyImmediate(textureArray);
-            }
-            rt.Release();
-            featureColor.Release();
-            featureScalar.Release();
-            Object.DestroyImmediate(rt);
-            Object.DestroyImmediate(featureColor);
-            Object.DestroyImmediate(featureScalar);
-        }
-
-        if (cancelled)
-        {
-            Debug.LogWarning($"Ray tracing shader precompile cancelled after {completedVariants} of {variants.Length} variants.");
-            return false;
+            resources.Dispose();
         }
 
         var statsPath = Path.Combine(Directory.GetParent(Application.dataPath).FullName, StatsPath);
-        Debug.Log(
-            $"Ray tracing compute shader {(coldCompile ? "cold-recompiled" : "cache-preservingly dispatched")} across {variants.Length} selected variant(s) in " +
-            $"{totalStopwatch.ElapsedMilliseconds} ms. First dispatch total={totalColdDispatchMs} ms, " +
-            $"warm dispatch total={totalWarmDispatchMs} ms. Stats appended to '{statsPath}'. Safe to enter Play mode.");
+        Debug.Log($"Ray tracing precompile completed {completed} dispatches in {totalStopwatch.ElapsedMilliseconds} ms. First dispatch total={coldTotal} ms, warm dispatch total={warmTotal} ms. Stats appended to '{statsPath}'.");
         return true;
     }
 
-    private static bool HasCommandLineArgument(string argument)
+    private static int CountDispatches(ShaderAsset[] assets, int selectedMainVariant)
     {
-        string[] arguments = System.Environment.GetCommandLineArgs();
-        for (int i = 0; i < arguments.Length; i++)
+        int count = 0;
+        foreach (var asset in assets)
         {
-            if (arguments[i] == argument)
+            int variants = selectedMainVariant >= 0 ? 1 : CreateVariants(asset.Variants).Length;
+            count += asset.Kernels.Length * variants;
+        }
+        return count;
+    }
+
+    private static Variant[] CreateVariants(VariantSet set)
+    {
+        if (set == VariantSet.None) return new[] { new Variant(false, false) };
+        if (set == VariantSet.Terrain) return new[] { new Variant(false, false), new Variant(false, true) };
+        return new[] { new Variant(false, false), new Variant(true, false), new Variant(false, true), new Variant(true, true) };
+    }
+
+    private static bool LogCompileMessages(string label, ComputeShader shader)
+    {
+        bool hasError = false;
+        foreach (var message in ShaderUtil.GetComputeShaderMessages(shader))
+        {
+            string formatted = $"[{message.platform}] {message.message}\n{message.messageDetails}";
+            if (message.severity == UnityEditor.Rendering.ShaderCompilerMessageSeverity.Error)
             {
-                return true;
+                hasError = true;
+                Debug.LogError($"{label} compute shader error: {formatted}");
+            }
+            else Debug.LogWarning($"{label} compute shader warning: {formatted}");
+        }
+        return !hasError;
+    }
+
+    private static void BindResources(ComputeShader shader, int kernel, DummyResources r)
+    {
+        shader.SetInt("_CausticsEnabled", 0); shader.SetInt("_EnvironmentLightEnabled", 0); shader.SetInt("_NumLights", 0);
+        shader.SetInt("_NumberOfPasses", 1); shader.SetInt("_NumBounces", 1); shader.SetInt("_AccumulatedFrameCount", 1);
+        shader.SetInt("_SampleOffset", 0); shader.SetInt("_AdaptiveBucketCount", 16); shader.SetInt("_AdaptiveGroupWidth", 1);
+        shader.SetInt("_AdaptiveGroupHeight", 1); shader.SetInt("_AdaptiveGroupCount", 1); shader.SetInt("_AdaptiveWorkListCapacity", 1);
+        shader.SetInt("_AdaptiveRootPathCapacity", 1); shader.SetInt("_AdaptiveSamplingMinSamples", 1); shader.SetInt("_AdaptiveMaxPathsPerPixel", 1);
+        shader.SetVector("_FogBoundsMin", Vector3.zero); shader.SetVector("_FogBoundsMax", Vector3.one); shader.SetVector("_TerrainSize", Vector3.one);
+        shader.SetTexture(kernel, "Result", r.Color); shader.SetTexture(kernel, "AccumulationResult", r.Color); shader.SetTexture(kernel, "Beauty", r.Color);
+        shader.SetTexture(kernel, "FeatureNormal", r.Color); shader.SetTexture(kernel, "FeatureAlbedo", r.Color); shader.SetTexture(kernel, "FeatureDepth", r.Scalar);
+        shader.SetTexture(kernel, "FeatureIdentity", r.Scalar); shader.SetTexture(kernel, "FeatureValidity", r.Scalar); shader.SetTexture(kernel, "_SkyboxTexture", Texture2D.blackTexture);
+        shader.SetTexture(kernel, "_MeshAlbedoTextures", r.TextureArray); shader.SetTexture(kernel, "_MeshMetallicRoughnessTextures", r.TextureArray);
+        shader.SetTexture(kernel, "_MeshNormalTextures", r.TextureArray); shader.SetTexture(kernel, "_MeshParallaxTextures", r.TextureArray);
+        shader.SetTexture(kernel, "_TerrainAlphamap", Texture2D.blackTexture); shader.SetTexture(kernel, "_TerrainLayer0", Texture2D.whiteTexture);
+        shader.SetTexture(kernel, "_TerrainLayer1", Texture2D.whiteTexture); shader.SetTexture(kernel, "_TerrainLayer2", Texture2D.whiteTexture); shader.SetTexture(kernel, "_TerrainLayer3", Texture2D.whiteTexture);
+        shader.SetTexture(kernel, "_TerrainNormal0", Texture2D.normalTexture); shader.SetTexture(kernel, "_TerrainNormal1", Texture2D.normalTexture); shader.SetTexture(kernel, "_TerrainNormal2", Texture2D.normalTexture); shader.SetTexture(kernel, "_TerrainNormal3", Texture2D.normalTexture);
+        shader.SetTexture(kernel, "_TerrainMask0", Texture2D.whiteTexture); shader.SetTexture(kernel, "_TerrainMask1", Texture2D.whiteTexture); shader.SetTexture(kernel, "_TerrainMask2", Texture2D.whiteTexture); shader.SetTexture(kernel, "_TerrainMask3", Texture2D.whiteTexture);
+        shader.SetTexture(kernel, "AdaptiveSamplingState", r.Color); shader.SetTexture(kernel, "AdaptiveSamplingM2", r.Color); shader.SetTexture(kernel, "AdaptiveBootstrapPriority", r.Color);
+        foreach (var name in r.FloatBufferNames) shader.SetBuffer(kernel, name, r.FloatBuffer);
+        foreach (var name in r.StructuredBufferNames) shader.SetBuffer(kernel, name, r.GetStructuredBuffer(name));
+        foreach (var name in r.AdaptiveBufferNames) shader.SetBuffer(kernel, name, r.GetAdaptiveBuffer(name));
+    }
+
+    private sealed class DummyResources : System.IDisposable
+    {
+        public readonly RenderTexture Color = CreateTexture(RenderTextureFormat.ARGBFloat);
+        public readonly RenderTexture Scalar = CreateTexture(RenderTextureFormat.RFloat);
+        public readonly Texture2DArray TextureArray;
+        public readonly ComputeBuffer FloatBuffer = new ComputeBuffer(1, 4);
+        private readonly ComputeBuffer sphereBuffer = new ComputeBuffer(1, 92);
+        private readonly ComputeBuffer lightBuffer = new ComputeBuffer(1, 88);
+        private readonly ComputeBuffer triangleBuffer = new ComputeBuffer(1, 260);
+        private readonly ComputeBuffer meshAndBvhBuffer = new ComputeBuffer(1, 48);
+        private readonly ComputeBuffer causticPhotonBuffer = new ComputeBuffer(1, 36);
+        private readonly ComputeBuffer terrainCellBuffer = new ComputeBuffer(1, 8);
+        private readonly ComputeBuffer float4Buffer = new ComputeBuffer(64, 16);
+        private readonly ComputeBuffer uint2Buffer = new ComputeBuffer(64, 8);
+        private readonly ComputeBuffer uintBuffer = new ComputeBuffer(64, 4);
+        public readonly string[] FloatBufferNames = { "_EnvironmentConditionalCdf", "_EnvironmentMarginalCdf", "_MeshLightTriangleCdf", "_CausticPhotonMetadata", "_CausticGridCellHeads", "_CausticPhotonNext", "_TerrainHeights" };
+        public readonly string[] StructuredBufferNames = { "_Spheres", "_Lights", "_Triangles", "_Meshes", "_BvhNodes", "_TopLevelBvhNodes", "_ShadowBvhNodes", "_CausticPhotons", "_TerrainCells", "RegressionResults", "_FocusQueryResult" };
+        public readonly string[] AdaptiveBufferNames = { "AdaptiveWorkList", "AdaptiveTraceWorkList", "AdaptiveRootWorkList", "AdaptiveTraceRootWorkList", "AdaptiveRootRadiance", "AdaptiveWorkRootOffsets", "AdaptiveGroupState", "AdaptiveGroupInfo", "AdaptiveProbeGroups", "AdaptiveGroupBucket", "AdaptiveGroupExtraDemand", "AdaptiveRawBucketDemand", "AdaptiveWorkListMetadata", "AdaptiveDispatchArgs", "AdaptiveResolveDispatchArgs" };
+
+        public DummyResources()
+        {
+            TextureArray = new Texture2DArray(1, 1, 1, TextureFormat.RGBA32, false);
+            TextureArray.SetPixels(new[] { UnityEngine.Color.white }, 0, 0);
+            TextureArray.Apply(false, true);
+        }
+
+        public ComputeBuffer GetStructuredBuffer(string name)
+        {
+            switch (name)
+            {
+                case "_Spheres": return sphereBuffer;
+                case "_Lights": return lightBuffer;
+                case "_Triangles": return triangleBuffer;
+                case "_Meshes":
+                case "_BvhNodes":
+                case "_TopLevelBvhNodes":
+                case "_ShadowBvhNodes": return meshAndBvhBuffer;
+                case "_CausticPhotons": return causticPhotonBuffer;
+                case "_TerrainCells": return terrainCellBuffer;
+                default: return float4Buffer;
             }
         }
 
-        return false;
+        public ComputeBuffer GetAdaptiveBuffer(string name)
+        {
+            switch (name)
+            {
+                case "AdaptiveWorkList":
+                case "AdaptiveTraceWorkList":
+                case "AdaptiveRootWorkList":
+                case "AdaptiveTraceRootWorkList": return uint2Buffer;
+                case "AdaptiveRootRadiance":
+                case "AdaptiveGroupState":
+                case "AdaptiveGroupInfo":
+                case "AdaptiveProbeGroups": return float4Buffer;
+                default: return uintBuffer;
+            }
+        }
+
+        public void WaitForGpu()
+        {
+            var previous = RenderTexture.active;
+            RenderTexture.active = Color;
+            var readback = new Texture2D(1, 1, TextureFormat.RGBAFloat, false);
+            readback.ReadPixels(new Rect(0, 0, 1, 1), 0, 0); readback.Apply();
+            RenderTexture.active = previous;
+            Object.DestroyImmediate(readback);
+        }
+
+        public void Dispose()
+        {
+            FloatBuffer.Release(); sphereBuffer.Release(); lightBuffer.Release(); triangleBuffer.Release();
+            meshAndBvhBuffer.Release(); causticPhotonBuffer.Release(); terrainCellBuffer.Release();
+            float4Buffer.Release(); uint2Buffer.Release(); uintBuffer.Release(); Color.Release(); Scalar.Release();
+            Object.DestroyImmediate(TextureArray); Object.DestroyImmediate(Color); Object.DestroyImmediate(Scalar);
+        }
+
+        private static RenderTexture CreateTexture(RenderTextureFormat format)
+        {
+            var texture = new RenderTexture(8, 8, 0, format) { enableRandomWrite = true };
+            texture.Create();
+            return texture;
+        }
     }
 
     [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Caustics")]
     private static void PrecompileCaustics()
     {
         var shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(CausticsShaderPath);
-        if (shader == null)
-        {
-            Debug.LogError($"Precompile failed: could not load compute shader at '{CausticsShaderPath}'.");
-            return;
-        }
-
-        ClearShaderCache();
-        AssetDatabase.ImportAsset(CausticsShaderPath, ImportAssetOptions.ForceUpdate);
+        if (shader == null) { Debug.LogError($"Precompile failed: could not load '{CausticsShaderPath}'."); return; }
+        ClearShaderCache(); AssetDatabase.ImportAsset(CausticsShaderPath, ImportAssetOptions.ForceUpdate);
         shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(CausticsShaderPath);
-        var messages = ShaderUtil.GetComputeShaderMessages(shader);
-        foreach (var message in messages)
+        if (shader == null || !LogCompileMessages("Caustics", shader)) return;
+        using (var resources = new DummyResources())
         {
-            var formatted = $"[{message.platform}] {message.message}\n{message.messageDetails}";
-            if (message.severity == UnityEditor.Rendering.ShaderCompilerMessageSeverity.Error)
-            {
-                Debug.LogError($"Caustics compute shader error: {formatted}");
-            }
-            else
-            {
-                Debug.LogWarning($"Caustics compute shader warning: {formatted}");
-            }
-        }
-
-        int kernel = shader.FindKernel("CSCausticsDebug");
-        var result = new RenderTexture(8, 8, 0, RenderTextureFormat.ARGBFloat) { enableRandomWrite = true };
-        result.Create();
-        try
-        {
-            shader.SetInt("_NumberOfPasses", 1);
-            shader.SetInt("_NumBounces", 1);
+            int kernel = shader.FindKernel("CSCausticsDebug");
+            BindResources(shader, kernel, resources);
             shader.SetInt("_NumCausticTargetPairs", 0);
-            shader.SetTexture(kernel, "Result", result);
             PathTracing.ComputeDispatch.Dispatch(shader, kernel, 1, 1, 1);
-            Debug.Log("Caustics compute shader precompile dispatched successfully.");
+            resources.WaitForGpu();
         }
-        finally
-        {
-            result.Release();
-            Object.DestroyImmediate(result);
-        }
+        Debug.Log("Caustics compute shader precompile dispatched successfully.");
     }
 
-    private static Variant[] CreateVariants()
+    private static void AppendStatsRow(string assetPath, string kernel, string variant, long coldMilliseconds, long warmMilliseconds)
     {
-        var variants = new Variant[8];
-        var index = 0;
-        for (var debug = 0; debug <= 1; debug++)
+        var statsPath = Path.Combine(Directory.GetParent(Application.dataPath).FullName, StatsPath);
+        bool hasV2Header = false;
+        if (File.Exists(statsPath))
         {
-            for (var fog = 0; fog <= 1; fog++)
-            {
-                for (var terrain = 0; terrain <= 1; terrain++)
-                {
-                    variants[index++] = new Variant(debug != 0, fog != 0, terrain != 0);
-                }
-            }
+            foreach (var line in File.ReadLines(statsPath)) if (line == StatsHeader) { hasV2Header = true; break; }
         }
-
-        return variants;
+        string timestamp = System.DateTime.UtcNow.ToString("o", System.Globalization.CultureInfo.InvariantCulture);
+        string hash = AssetDatabase.GetAssetDependencyHash(assetPath).ToString();
+        string row = string.Join(",", Quote(timestamp), Quote(Application.unityVersion), Quote(EditorUserBuildSettings.activeBuildTarget.ToString()), Quote(SystemInfo.graphicsDeviceName), Quote(assetPath), Quote(kernel), Quote(hash), Quote(variant), coldMilliseconds, warmMilliseconds);
+        File.AppendAllText(statsPath, (hasV2Header ? string.Empty : StatsHeader + System.Environment.NewLine) + row + System.Environment.NewLine);
     }
 
     private static string Quote(string value) => $"\"{value.Replace("\"", "\"\"")}\"";
 
-    private static ComputeBuffer[] CreateDummyStructuredBuffers()
+    private static bool HasCommandLineArgument(string argument)
     {
-        var buffers = new[]
-        {
-            new ComputeBuffer(1, 4),
-            new ComputeBuffer(1, 4),
-            new ComputeBuffer(1, 92),
-            new ComputeBuffer(1, 88),
-            new ComputeBuffer(1, 4),
-            new ComputeBuffer(1, 260),
-            new ComputeBuffer(1, 48),
-            new ComputeBuffer(1, 48),
-            new ComputeBuffer(1, 48),
-            new ComputeBuffer(1, 48),
-            new ComputeBuffer(1, 36),
-            new ComputeBuffer(1, 4),
-            new ComputeBuffer(1, 4),
-            new ComputeBuffer(1, 4)
-        };
-
-        return buffers;
+        foreach (var value in System.Environment.GetCommandLineArgs()) if (value == argument) return true;
+        return false;
     }
 
-    private static Texture2DArray[] CreateDummyTextureArrays()
+    private static string GetCommandLineArgumentValue(string argument)
     {
-        var arrays = new Texture2DArray[4];
-        for (var i = 0; i < arrays.Length; i++)
+        var arguments = System.Environment.GetCommandLineArgs();
+        for (var index = 0; index + 1 < arguments.Length; index++)
         {
-            arrays[i] = new Texture2DArray(1, 1, 1, TextureFormat.RGBA32, false)
-            {
-                name = "RayTracingPrecompileDummyTextureArray"
-            };
-            arrays[i].SetPixels(new[] { Color.white }, 0, 0);
-            arrays[i].Apply(false, true);
+            if (arguments[index] == argument) return arguments[index + 1];
         }
 
-        return arrays;
+        return null;
     }
 
     private static void ClearShaderCache()
     {
         var projectPath = Directory.GetParent(Application.dataPath).FullName;
-        var shaderCachePath = Path.Combine(projectPath, "Library", "ShaderCache");
-        var shaderCacheDatabasePath = Path.Combine(projectPath, "Library", "ShaderCache.db");
-
         try
         {
-            if (Directory.Exists(shaderCachePath))
-            {
-                Directory.Delete(shaderCachePath, true);
-            }
-
-            if (File.Exists(shaderCacheDatabasePath))
-            {
-                File.Delete(shaderCacheDatabasePath);
-            }
-
+            var cache = Path.Combine(projectPath, "Library", "ShaderCache");
+            var database = Path.Combine(projectPath, "Library", "ShaderCache.db");
+            if (Directory.Exists(cache)) Directory.Delete(cache, true);
+            if (File.Exists(database)) File.Delete(database);
             Debug.Log("Cleared Unity's generated shader cache before precompilation.");
         }
-        catch (System.Exception exception)
-        {
-            Debug.LogWarning($"Could not fully clear Unity's generated shader cache: {exception.Message}");
-        }
-    }
-
-    private static void AppendStatsRow(StringBuilder stats, string row)
-    {
-        var statsPath = Path.Combine(Directory.GetParent(Application.dataPath).FullName, StatsPath);
-        var includeHeader = !File.Exists(statsPath) || new FileInfo(statsPath).Length == 0;
-        File.AppendAllText(statsPath, includeHeader
-            ? stats.ToString()
-            : row + System.Environment.NewLine);
+        catch (System.Exception exception) { Debug.LogWarning($"Could not fully clear Unity's generated shader cache: {exception.Message}"); }
     }
 
     private static void SetKeyword(ComputeShader shader, string keyword, bool enabled)
     {
-        if (enabled)
-        {
-            shader.EnableKeyword(keyword);
-        }
-        else
-        {
-            shader.DisableKeyword(keyword);
-        }
+        if (enabled) shader.EnableKeyword(keyword); else shader.DisableKeyword(keyword);
     }
 }

@@ -235,10 +235,17 @@ Timed command-line captures are capped at ten seconds to avoid a pathological ad
 `GameManager` and `SceneSettings` expose:
 
 ```text
-enableAdaptiveSampling       default false
-adaptiveSamplingMinSamples  default 8
- adaptiveNormalizePriorityByLuminance default 0.0
+enableAdaptiveSampling                 default false
+adaptiveSamplingMinSamples             default 8; also the coarse-guide minimum path history
+adaptiveGuidanceChangeThreshold        default 0.02; relative coarse-mean stability required for handoff
+adaptiveGuidanceHistoryFrames           default 0; retained 64-ray coarse-guide updates seeded into each fine pixel
+adaptiveNormalizePriorityByLuminance   default 0.0
 ```
+
+When a group promotes, the scheduler grants it at least one normal full-resolution update before
+fractional-rate tiers may skip a later epoch. This prevents the coarse `8x8` preview from being
+presented as a fine result for a logically promoted but untraced group. The requirement applies
+only at handoff, not as a permanent per-pixel allocation floor.
 
 The inspector exposes the bootstrap count and exploration floor when adaptive sampling is enabled. Any of these settings changes the accumulation-state hash, so progressive and adaptive state reset together.
 
@@ -565,8 +572,7 @@ Two additional details compound this:
 
 The user proposed rendering at ~1/8 resolution for ~5 seconds, then using that as a starting "back-buffer" for the full-resolution render so the classifier has an early estimate of which pixels need more work. The core instinct — get a cleaner-than-8-bootstrap-sample variance estimate before allocating — is correct and matches Diagnosis 1/2 above. However, the idea as stated has one fatal flaw and one redundancy:
 
-- **Fatal flaw:** seeding `AccumulationResult` (the actual output buffer) with upscaled low-resolution data injects a spatially *structured* bias (blur, edge bleed at silhouettes/highlights/caustic boundaries), not unstructured noise. This bias decays only as `1/n` as further samples accumulate and is exactly the kind of error RMSE and human vision punish most. It would also break the unbiased accumulation invariant (`AIDocs/17-adaptive-sampling-continuation.md:65-69`) that the rest of the pipeline relies on.
-  - **Fix if this is pursued later:** keep the low-res estimate in a separate guidance buffer consumed only by `GetAdaptivePriority`, and never write it into `AccumulationResult`. That preserves the classification benefit with zero bias risk.
+- **Bias tradeoff:** seeding `AccumulationResult` (the actual output buffer) with upscaled low-resolution data injects a spatially *structured* bias (blur, edge bleed at silhouettes/highlights/caustic boundaries), not unstructured noise. This is particularly invalid for glass/refraction because nearby primary rays can follow materially different paths. The default `adaptiveGuidanceHistoryFrames = 0` therefore leaves full-resolution history empty. It is deliberately exposed as a bounded experiment in complete 64-ray guide updates so this hypothesis can be tested without changing guide duration or scheduling.
 - **Redundancy given the current bug:** the 8x8 block classification (Diagnosis 1) already is a 1/8-resolution classification pass over the *actual* accumulated samples, at zero extra ray cost, once the reduction operator is fixed from `max` to `mean`. The 8 bootstrap frames already spend `8 * 1024 * 1024 ≈ 8.4M` rays before any adaptive allocation runs, versus roughly `4.9M` rays for a 5-second 1/8-resolution (`128x128`) prepass at similar spp — the prepass is not obviously cheaper, and Diagnosis 1's fix gets a similar variance-reduction benefit from data already being generated.
 
 **Recommendation:** do not implement the low-resolution prepass until Diagnoses 1-3 are fixed and re-measured. If the equal-retired-path gap remains after those fixes, revisit the prepass as a *guidance-only* prior (never seeding the output buffer), and prefer Dammertz-style block variance (see below) over a naive low-res render if pursued.
