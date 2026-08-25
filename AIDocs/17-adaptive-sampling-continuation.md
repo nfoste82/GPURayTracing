@@ -40,7 +40,8 @@ and priority-mode changes clear/hash this state with the other adaptive state.
 
 `RayTracingSceneCapture -rayTracingCompareAdaptiveSampling` now renders `adaptive_off`,
 `adaptive_welford`, and `adaptive_dammertz`. It writes per-candidate images/timing/reports,
-candidate-to-reference differences, all three pairwise candidate differences, a combined
+candidate-to-reference differences, pairwise candidate differences when both candidates exist,
+and adaptive-off pairwise differences when adaptive-off is enabled, a combined
 `adaptive_three_way_comparison.json`, one row per candidate in
 `adaptive_variant_comparison.csv`, and capture-only fixed-8x8 diagnostics. The CSV combines
 timing, retired paths, and all reference metrics in columns so candidates can be compared without

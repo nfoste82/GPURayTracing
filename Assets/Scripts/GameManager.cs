@@ -270,17 +270,12 @@ public class GameManager : MonoBehaviour
     private ComputeBuffer _adaptiveGroupInfoBuffer;
     private ComputeBuffer _adaptiveGroupBucketBuffer;
     private ComputeBuffer _adaptiveGroupExtraDemandBuffer;
-    private ComputeBuffer _adaptiveGroupExtraGrantBuffer;
-    private ComputeBuffer _adaptiveBucketDemandBuffer;
-    private ComputeBuffer _adaptiveBucketBudgetBuffer;
-    private ComputeBuffer _adaptiveBucketUsageBuffer;
-    private ComputeBuffer _adaptiveBucketPrimaryDemandBuffer;
-    private ComputeBuffer _adaptiveBucketExtraDemandBuffer;
-    private ComputeBuffer _adaptiveBucketExtraBudgetBuffer;
-    private ComputeBuffer _adaptiveBucketExtraUsageBuffer;
     private ComputeBuffer _adaptiveRawBucketDemandBuffer;
     private ComputeBuffer _adaptiveWorkListMetadataBuffer;
     private AsyncGPUReadbackRequest _adaptiveDiagnosticsReadback;
+    private double _adaptiveSchedulerMilliseconds;
+    private double _adaptiveTraceMilliseconds;
+    private double _adaptiveResolveMilliseconds;
     private bool _adaptiveDiagnosticsReadbackInFlight;
     private uint[] _latestAdaptiveDiagnostics;
 
@@ -317,9 +312,13 @@ public class GameManager : MonoBehaviour
         public readonly uint assignedPaths;
         public readonly uint retiredPaths;
         public readonly uint guidancePaths;
+        public readonly double schedulerMilliseconds;
+        public readonly double traceMilliseconds;
+        public readonly double resolveMilliseconds;
 
         public AdaptiveFrameTelemetry(int accumulatedFrameCount, bool reclassified, uint activeWorkItems,
-            uint assignedPaths, uint retiredPaths, uint guidancePaths)
+            uint assignedPaths, uint retiredPaths, uint guidancePaths, double schedulerMilliseconds,
+            double traceMilliseconds, double resolveMilliseconds)
         {
             this.accumulatedFrameCount = accumulatedFrameCount;
             this.reclassified = reclassified;
@@ -327,6 +326,9 @@ public class GameManager : MonoBehaviour
             this.assignedPaths = assignedPaths;
             this.retiredPaths = retiredPaths;
             this.guidancePaths = guidancePaths;
+            this.schedulerMilliseconds = schedulerMilliseconds;
+            this.traceMilliseconds = traceMilliseconds;
+            this.resolveMilliseconds = resolveMilliseconds;
         }
     }
     private ComputeBuffer _adaptiveDispatchArgumentsBuffer;
@@ -562,14 +564,6 @@ public class GameManager : MonoBehaviour
     private static readonly int AdaptiveGroupInfo = Shader.PropertyToID("AdaptiveGroupInfo");
     private static readonly int AdaptiveGroupBucket = Shader.PropertyToID("AdaptiveGroupBucket");
     private static readonly int AdaptiveGroupExtraDemand = Shader.PropertyToID("AdaptiveGroupExtraDemand");
-    private static readonly int AdaptiveGroupExtraGrant = Shader.PropertyToID("AdaptiveGroupExtraGrant");
-    private static readonly int AdaptiveBucketDemand = Shader.PropertyToID("AdaptiveBucketDemand");
-    private static readonly int AdaptiveBucketBudget = Shader.PropertyToID("AdaptiveBucketBudget");
-    private static readonly int AdaptiveBucketUsage = Shader.PropertyToID("AdaptiveBucketUsage");
-    private static readonly int AdaptiveBucketPrimaryDemand = Shader.PropertyToID("AdaptiveBucketPrimaryDemand");
-    private static readonly int AdaptiveBucketExtraDemand = Shader.PropertyToID("AdaptiveBucketExtraDemand");
-    private static readonly int AdaptiveBucketExtraBudget = Shader.PropertyToID("AdaptiveBucketExtraBudget");
-    private static readonly int AdaptiveBucketExtraUsage = Shader.PropertyToID("AdaptiveBucketExtraUsage");
     private static readonly int AdaptiveRawBucketDemand = Shader.PropertyToID("AdaptiveRawBucketDemand");
     private static readonly int AdaptiveGroupWidth = Shader.PropertyToID("_AdaptiveGroupWidth");
     private static readonly int AdaptiveGroupHeight = Shader.PropertyToID("_AdaptiveGroupHeight");
@@ -824,14 +818,6 @@ public class GameManager : MonoBehaviour
         _adaptiveGroupInfoBuffer?.Release();
         _adaptiveGroupBucketBuffer?.Release();
         _adaptiveGroupExtraDemandBuffer?.Release();
-        _adaptiveGroupExtraGrantBuffer?.Release();
-        _adaptiveBucketDemandBuffer?.Release();
-        _adaptiveBucketBudgetBuffer?.Release();
-        _adaptiveBucketUsageBuffer?.Release();
-        _adaptiveBucketPrimaryDemandBuffer?.Release();
-        _adaptiveBucketExtraDemandBuffer?.Release();
-        _adaptiveBucketExtraBudgetBuffer?.Release();
-        _adaptiveBucketExtraUsageBuffer?.Release();
         _adaptiveRawBucketDemandBuffer?.Release();
         _adaptiveWorkListMetadataBuffer?.Release();
         _adaptiveDispatchArgumentsBuffer?.Release();
@@ -886,14 +872,6 @@ public class GameManager : MonoBehaviour
         _adaptiveGroupInfoBuffer = new ComputeBuffer(adaptiveGroupCount, sizeof(uint) * 4);
         _adaptiveGroupBucketBuffer = new ComputeBuffer(adaptiveGroupCount, sizeof(uint));
         _adaptiveGroupExtraDemandBuffer = new ComputeBuffer(adaptiveGroupCount, sizeof(uint));
-        _adaptiveGroupExtraGrantBuffer = new ComputeBuffer(adaptiveGroupCount, sizeof(uint));
-        _adaptiveBucketDemandBuffer = new ComputeBuffer(AdaptiveBucketCountMaximum, sizeof(uint));
-        _adaptiveBucketBudgetBuffer = new ComputeBuffer(AdaptiveBucketCountMaximum, sizeof(uint));
-        _adaptiveBucketUsageBuffer = new ComputeBuffer(AdaptiveBucketCountMaximum, sizeof(uint));
-        _adaptiveBucketPrimaryDemandBuffer = new ComputeBuffer(AdaptiveBucketCountMaximum, sizeof(uint));
-        _adaptiveBucketExtraDemandBuffer = new ComputeBuffer(AdaptiveBucketCountMaximum, sizeof(uint));
-        _adaptiveBucketExtraBudgetBuffer = new ComputeBuffer(AdaptiveBucketCountMaximum, sizeof(uint));
-        _adaptiveBucketExtraUsageBuffer = new ComputeBuffer(AdaptiveBucketCountMaximum, sizeof(uint));
         _adaptiveRawBucketDemandBuffer = new ComputeBuffer(AdaptiveBucketCountMaximum, sizeof(uint));
         _adaptiveWorkListMetadataBuffer = new ComputeBuffer(AdaptiveMetadataCount, sizeof(uint));
         _adaptiveDispatchArgumentsBuffer = new ComputeBuffer(3, sizeof(uint), ComputeBufferType.IndirectArguments);
@@ -1097,14 +1075,6 @@ public class GameManager : MonoBehaviour
         _adaptiveGroupInfoBuffer?.Release();
         _adaptiveGroupBucketBuffer?.Release();
         _adaptiveGroupExtraDemandBuffer?.Release();
-        _adaptiveGroupExtraGrantBuffer?.Release();
-        _adaptiveBucketDemandBuffer?.Release();
-        _adaptiveBucketBudgetBuffer?.Release();
-        _adaptiveBucketUsageBuffer?.Release();
-        _adaptiveBucketPrimaryDemandBuffer?.Release();
-        _adaptiveBucketExtraDemandBuffer?.Release();
-        _adaptiveBucketExtraBudgetBuffer?.Release();
-        _adaptiveBucketExtraUsageBuffer?.Release();
         _adaptiveRawBucketDemandBuffer?.Release();
         _adaptiveWorkListMetadataBuffer?.Release();
         _adaptiveDispatchArgumentsBuffer?.Release();
@@ -1275,14 +1245,8 @@ public class GameManager : MonoBehaviour
     {
         var classifyKernel = shader.FindKernel("CSAdaptiveClassifyGroups");
         var applyBucketRemapKernel = shader.FindKernel("CSAdaptiveApplyBucketRemap");
-        var allocateBucketsKernel = shader.FindKernel("CSAdaptiveAllocateGroupBuckets");
-        var assignKernel = shader.FindKernel("CSAdaptiveAssignGroups");
-        var assignExtrasKernel = shader.FindKernel("CSAdaptiveAssignGroupExtras");
-        var finalizeGroupsKernel = shader.FindKernel("CSAdaptiveFinalizeGroupGrants");
-        var finalizeScheduleKernel = shader.FindKernel("CSAdaptiveFinalizeSchedule");
         var compactWorkListKernel = shader.FindKernel("CSAdaptiveCompactGroupWorkList");
         var clearSchedulerKernel = shader.FindKernel("ClearAdaptiveScheduler");
-        var buildRootWorkListKernel = shader.FindKernel("CSAdaptiveBuildRootWorkList");
         var traceKernel = shader.FindKernel("CSAdaptiveTraceRoot");
         var resolveKernel = shader.FindKernel("CSAdaptiveResolveRoot");
         var buildDispatchArgsKernel = shader.FindKernel("CSBuildAdaptiveDispatchArgs");
@@ -1299,18 +1263,21 @@ public class GameManager : MonoBehaviour
             || !_adaptiveScheduleInitialized
             || _adaptiveScheduleFrame >= Mathf.Clamp(adaptiveReclassificationInterval, 1, 8);
         LastAdaptiveSamplingReclassified = reclassify;
-        shader.SetBuffer(clearFrameMetadataKernel, AdaptiveWorkListMetadata, _adaptiveWorkListMetadataBuffer);
-        ComputeDispatch.Dispatch(shader, clearFrameMetadataKernel, 1, 1, 1);
+        if (_adaptiveCaptureDiagnostics)
+        {
+            shader.SetBuffer(clearFrameMetadataKernel, AdaptiveWorkListMetadata, _adaptiveWorkListMetadataBuffer);
+            ComputeDispatch.Dispatch(shader, clearFrameMetadataKernel, 1, 1, 1);
+        }
 
         if (reclassify)
         {
+            var schedulerStopwatch = _adaptiveCaptureDiagnostics ? Stopwatch.StartNew() : null;
             shader.SetBuffer(clearWorkListKernel, AdaptiveWorkListMetadata, _adaptiveWorkListMetadataBuffer);
             ComputeDispatch.Dispatch(shader, clearWorkListKernel, AdaptiveMetadataCount, 1, 1);
 
             SetShaderParameters(clearSchedulerKernel);
             BindAdaptiveSamplingResources(clearSchedulerKernel);
-            SetAdaptiveGroupDimensions(groupWidth, groupHeight);
-            ComputeDispatch.Dispatch(shader, clearSchedulerKernel, Mathf.CeilToInt(groupWidth * groupHeight / 64.0f), 1, 1);
+            ComputeDispatch.Dispatch(shader, clearSchedulerKernel, 1, 1, 1);
 
             SetShaderParameters(classifyKernel);
             BindAdaptiveSamplingResources(classifyKernel);
@@ -1324,40 +1291,11 @@ public class GameManager : MonoBehaviour
             shader.SetInt("_AdaptiveScheduleRotation", _accumulatedFrameCount & 63);
             ComputeDispatch.Dispatch(shader, applyBucketRemapKernel, groupWidth, groupHeight, 1);
 
-            SetShaderParameters(allocateBucketsKernel);
-            BindAdaptiveSamplingResources(allocateBucketsKernel);
-            ComputeDispatch.Dispatch(shader, allocateBucketsKernel, 1, 1, 1);
-
-            SetShaderParameters(assignKernel);
-            BindAdaptiveSamplingResources(assignKernel);
-            SetAdaptiveGroupDimensions(groupWidth, groupHeight);
-            shader.SetInt("_AdaptiveScheduleRotation", _accumulatedFrameCount & 63);
-            ComputeDispatch.Dispatch(shader, assignKernel, groupWidth, groupHeight, 1);
-
-            SetShaderParameters(assignExtrasKernel);
-            BindAdaptiveSamplingResources(assignExtrasKernel);
-            SetAdaptiveGroupDimensions(groupWidth, groupHeight);
-            ComputeDispatch.Dispatch(shader, assignExtrasKernel, groupWidth, groupHeight, 1);
-
-            SetShaderParameters(finalizeGroupsKernel);
-            BindAdaptiveSamplingResources(finalizeGroupsKernel);
-            SetAdaptiveGroupDimensions(groupWidth, groupHeight);
-            ComputeDispatch.Dispatch(shader, finalizeGroupsKernel, groupWidth, groupHeight, 1);
-
-            SetShaderParameters(finalizeScheduleKernel);
-            BindAdaptiveSamplingResources(finalizeScheduleKernel);
-            ComputeDispatch.Dispatch(shader, finalizeScheduleKernel, 1, 1, 1);
-
             SetShaderParameters(compactWorkListKernel);
             BindAdaptiveSamplingResources(compactWorkListKernel);
             SetAdaptiveGroupDimensions(groupWidth, groupHeight);
-            ComputeDispatch.Dispatch(shader, compactWorkListKernel, Mathf.CeilToInt(workCapacity / 256.0f), 1, 1);
-
-            SetShaderParameters(buildRootWorkListKernel);
-            BindAdaptiveSamplingResources(buildRootWorkListKernel);
-            shader.SetInt(AdaptiveWorkListCapacity, workCapacity);
             shader.SetInt(AdaptiveRootPathCapacity, rootPathCapacity);
-            ComputeDispatch.Dispatch(shader, buildRootWorkListKernel, Mathf.CeilToInt(workCapacity / 256.0f), 1, 1);
+            ComputeDispatch.Dispatch(shader, compactWorkListKernel, Mathf.CeilToInt(workCapacity / 256.0f), 1, 1);
 
             SetShaderParameters(buildDispatchArgsKernel);
             BindAdaptiveSamplingResources(buildDispatchArgsKernel);
@@ -1367,17 +1305,48 @@ public class GameManager : MonoBehaviour
             shader.SetBuffer(buildDispatchArgsKernel, AdaptiveDispatchArgs, _adaptiveDispatchArgumentsBuffer);
             shader.SetBuffer(buildDispatchArgsKernel, AdaptiveResolveDispatchArgs, _adaptiveResolveDispatchArgumentsBuffer);
             ComputeDispatch.Dispatch(shader, buildDispatchArgsKernel, 1, 1, 1);
+            CompleteAdaptivePhaseTiming(schedulerStopwatch, out _adaptiveSchedulerMilliseconds);
+        }
+        else
+        {
+            _adaptiveSchedulerMilliseconds = 0.0;
         }
 
         SetShaderParameters(traceKernel);
         BindAdaptiveSamplingResources(traceKernel);
         SetShaderParameters(resolveKernel);
         BindAdaptiveSamplingResources(resolveKernel);
+        var traceStopwatch = _adaptiveCaptureDiagnostics ? Stopwatch.StartNew() : null;
         ComputeDispatch.DispatchIndirect(shader, traceKernel, _adaptiveDispatchArgumentsBuffer);
+        CompleteAdaptivePhaseTiming(traceStopwatch, out _adaptiveTraceMilliseconds);
+
+        var resolveStopwatch = _adaptiveCaptureDiagnostics ? Stopwatch.StartNew() : null;
         ComputeDispatch.DispatchIndirect(shader, resolveKernel, _adaptiveResolveDispatchArgumentsBuffer);
+        CompleteAdaptivePhaseTiming(resolveStopwatch, out _adaptiveResolveMilliseconds);
 
         _adaptiveScheduleInitialized = true;
         _adaptiveScheduleFrame = reclassify ? 0 : _adaptiveScheduleFrame + 1;
+    }
+
+    // Capture diagnostics fence each submitted phase through an existing tiny buffer. This makes
+    // timing GPU-complete, but is intentionally too expensive for normal interactive rendering.
+    private void CompleteAdaptivePhaseTiming(Stopwatch stopwatch, out double milliseconds)
+    {
+        if (stopwatch == null)
+        {
+            milliseconds = 0.0;
+            return;
+        }
+
+        var request = AsyncGPUReadback.Request(_adaptiveWorkListMetadataBuffer);
+        request.WaitForCompletion();
+        stopwatch.Stop();
+        if (request.hasError)
+        {
+            throw new InvalidOperationException("Adaptive phase timing GPU readback failed.");
+        }
+
+        milliseconds = stopwatch.Elapsed.TotalMilliseconds;
     }
 
     private void DispatchAdaptiveDiagnostics()
@@ -1520,7 +1489,8 @@ public class GameManager : MonoBehaviour
         var metadata = request.GetData<uint>();
         return new AdaptiveFrameTelemetry(_accumulatedFrameCount, LastAdaptiveSamplingReclassified,
             metadata[AdaptiveMetadataWorkItemCount], metadata[AdaptiveMetadataAssignedPaths],
-            metadata[AdaptiveMetadataRetiredPaths], metadata[AdaptiveMetadataGuidancePaths]);
+            metadata[AdaptiveMetadataRetiredPaths], metadata[AdaptiveMetadataGuidancePaths],
+            _adaptiveSchedulerMilliseconds, _adaptiveTraceMilliseconds, _adaptiveResolveMilliseconds);
     }
 
     // Capture-only readback of the current compact allocation. This deliberately avoids the
@@ -1544,14 +1514,6 @@ public class GameManager : MonoBehaviour
         shader.SetBuffer(kernelHandle, AdaptiveGroupInfo, _adaptiveGroupInfoBuffer);
         shader.SetBuffer(kernelHandle, AdaptiveGroupBucket, _adaptiveGroupBucketBuffer);
         shader.SetBuffer(kernelHandle, AdaptiveGroupExtraDemand, _adaptiveGroupExtraDemandBuffer);
-        shader.SetBuffer(kernelHandle, AdaptiveGroupExtraGrant, _adaptiveGroupExtraGrantBuffer);
-        shader.SetBuffer(kernelHandle, AdaptiveBucketDemand, _adaptiveBucketDemandBuffer);
-        shader.SetBuffer(kernelHandle, AdaptiveBucketBudget, _adaptiveBucketBudgetBuffer);
-        shader.SetBuffer(kernelHandle, AdaptiveBucketUsage, _adaptiveBucketUsageBuffer);
-        shader.SetBuffer(kernelHandle, AdaptiveBucketPrimaryDemand, _adaptiveBucketPrimaryDemandBuffer);
-        shader.SetBuffer(kernelHandle, AdaptiveBucketExtraDemand, _adaptiveBucketExtraDemandBuffer);
-        shader.SetBuffer(kernelHandle, AdaptiveBucketExtraBudget, _adaptiveBucketExtraBudgetBuffer);
-        shader.SetBuffer(kernelHandle, AdaptiveBucketExtraUsage, _adaptiveBucketExtraUsageBuffer);
         shader.SetBuffer(kernelHandle, AdaptiveRawBucketDemand, _adaptiveRawBucketDemandBuffer);
         shader.SetBuffer(kernelHandle, AdaptiveWorkListMetadata, _adaptiveWorkListMetadataBuffer);
     }

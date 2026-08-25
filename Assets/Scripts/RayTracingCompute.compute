@@ -4,16 +4,10 @@
 #pragma kernel CSAdaptiveAllocateGroups
 #pragma kernel CSAdaptiveClassifyGroups
 #pragma kernel CSAdaptiveApplyBucketRemap
-#pragma kernel CSAdaptiveAllocateGroupBuckets
-#pragma kernel CSAdaptiveAssignGroups
-#pragma kernel CSAdaptiveAssignGroupExtras
-#pragma kernel CSAdaptiveFinalizeGroupGrants
-#pragma kernel CSAdaptiveFinalizeSchedule
 #pragma kernel CSAdaptiveCompactGroupWorkList
 #pragma kernel CSAdaptiveBuildGroupWorkList
 #pragma kernel CSAdaptiveProbeGroups
 #pragma kernel CSAdaptiveComposePreview
-#pragma kernel CSAdaptiveBuildRootWorkList
 #pragma kernel CSAdaptiveDiagnostics
 #pragma kernel CSAdaptiveTraceRoot
 #pragma kernel CSAdaptiveResolveRoot
@@ -370,21 +364,8 @@ void ClearAdaptiveGroupState(uint3 id : SV_DispatchThreadID)
 [numthreads(64,1,1)]
 void ClearAdaptiveScheduler(uint3 id : SV_DispatchThreadID)
 {
-    if (id.x < _AdaptiveGroupCount)
-    {
-        AdaptiveGroupBucket[id.x] = 0u;
-        AdaptiveGroupExtraDemand[id.x] = 0u;
-        AdaptiveGroupExtraGrant[id.x] = 0u;
-    }
     if (id.x < _AdaptiveBucketCount)
     {
-        AdaptiveBucketDemand[id.x] = 0u;
-        AdaptiveBucketBudget[id.x] = 0u;
-        AdaptiveBucketUsage[id.x] = 0u;
-        AdaptiveBucketPrimaryDemand[id.x] = 0u;
-        AdaptiveBucketExtraDemand[id.x] = 0u;
-        AdaptiveBucketExtraBudget[id.x] = 0u;
-        AdaptiveBucketExtraUsage[id.x] = 0u;
         AdaptiveRawBucketDemand[id.x] = 0u;
     }
 }
@@ -697,109 +678,19 @@ void CSAdaptiveApplyBucketRemap(uint3 id : SV_DispatchThreadID, uint groupIndex 
     uint paths = validPixels * samples;
     AdaptiveGroupBucket[flatGroup] = bucket;
     AdaptiveGroupExtraDemand[flatGroup] = paths;
-    InterlockedAdd(AdaptiveBucketDemand[bucket], paths);
-    InterlockedAdd(AdaptiveBucketPrimaryDemand[bucket], paths);
     InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataBucketPopulationStart + bucket], validPixels);
-}
-
-// This is deliberately bounded to 16 buckets, rather than scanning image-sized group data on one
-// lane. It first funds rotating complete-group service, then directs the remaining budget to
-// bounded extra group quanta by score.
-[numthreads(1,1,1)]
-void CSAdaptiveAllocateGroupBuckets(uint3 id : SV_DispatchThreadID)
-{
-    uint width, height;
-    Result.GetDimensions(width, height);
-    [unroll] for (uint bucket = 0u; bucket < 16u; bucket++)
-    {
-        if (bucket >= _AdaptiveBucketCount) break;
-        AdaptiveBucketBudget[bucket] = AdaptiveBucketPrimaryDemand[bucket];
-    }
-    [unroll] for (uint bucket = 0u; bucket < 16u; bucket++)
-        InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataBucketBudgetStart + bucket], AdaptiveBucketBudget[bucket]);
-}
-
-// Each group requests a whole number of paths derived from its literal tier rate. Atomic admission
-// remains only to compact the independently requested groups into per-bucket contiguous ranges.
-[numthreads(8,8,1)]
-void CSAdaptiveAssignGroups(uint3 id : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex,
-    uint3 groupId : SV_GroupID)
-{
-    uint width, height;
-    Result.GetDimensions(width, height);
-    uint2 logicalGroup = GetAdaptiveLogicalGroup(groupId.xy);
-    uint flatGroup = logicalGroup.x + logicalGroup.y * _AdaptiveGroupWidth;
-    if (groupIndex == 0u)
-    {
-        uint bucket = AdaptiveGroupBucket[flatGroup];
-        uint budget = AdaptiveBucketBudget[bucket];
-        uint validWidth = min(8u, width - logicalGroup.x * 8u);
-        uint validHeight = min(8u, height - logicalGroup.y * 8u);
-        uint validPixels = validWidth * validHeight;
-        uint quantum = AdaptiveGroupExtraDemand[flatGroup];
-        uint grant = 0u;
-        uint observed = AdaptiveBucketUsage[bucket];
-        [loop]
-        while (quantum != 0u && observed + quantum <= budget)
-        {
-            uint original;
-            InterlockedCompareExchange(AdaptiveBucketUsage[bucket], observed, observed + quantum, original);
-            if (original == observed)
-            {
-                grant = quantum;
-                break;
-            }
-            observed = original;
-        }
-        AdaptiveGroupExtraGrant[flatGroup] = grant;
-    }
-}
-
-[numthreads(8,8,1)]
-void CSAdaptiveAssignGroupExtras(uint3 id : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex,
-    uint3 groupId : SV_GroupID)
-{
-    // Kept as a no-op kernel so the existing dispatch sequence and editor probes remain valid.
-}
-
-// Publish offsets after both service layers so compact work and root counts derive from final grants.
-[numthreads(8,8,1)]
-void CSAdaptiveFinalizeGroupGrants(uint3 id : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex,
-    uint3 groupId : SV_GroupID)
-{
-    if (groupIndex != 0u) return;
-    uint width, height;
-    Result.GetDimensions(width, height);
-    uint2 logicalGroup = GetAdaptiveLogicalGroup(groupId.xy);
-    uint flatGroup = logicalGroup.x + logicalGroup.y * _AdaptiveGroupWidth;
-    uint validPixels = min(8u, width - logicalGroup.x * 8u) * min(8u, height - logicalGroup.y * 8u);
-    uint groupPaths = AdaptiveGroupExtraGrant[flatGroup];
-    uint bucket = AdaptiveGroupBucket[flatGroup];
     uint workBase = 0u;
     uint rootBase = 0u;
-    if (groupPaths != 0u)
+    if (paths != 0u)
     {
-        InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataAssignedPaths], groupPaths, rootBase);
-        InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataFullResolutionPaths], groupPaths);
+        InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataAssignedPaths], paths, rootBase);
+        InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataFullResolutionPaths], paths);
         InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataWorkItemCount], validPixels, workBase);
-        InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataBucketAdmittedPathsStart + bucket], groupPaths);
+        InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataBucketAdmittedPathsStart + bucket], paths);
+        InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataBucketBudgetStart + bucket], paths);
     }
     AdaptiveGroupInfo[flatGroup] = uint4(workBase, rootBase, validPixels,
-        validPixels != 0u ? groupPaths / validPixels : 0u);
-}
-
-[numthreads(1,1,1)]
-void CSAdaptiveFinalizeSchedule(uint3 id : SV_DispatchThreadID)
-{
-    uint assigned = AdaptiveWorkListMetadata[AdaptiveMetadataAssignedPaths];
-    AdaptiveWorkListMetadata[AdaptiveMetadataRequestedPaths] = assigned;
-    AdaptiveWorkListMetadata[AdaptiveMetadataFullResolutionPaths] = assigned;
-    AdaptiveWorkListMetadata[AdaptiveMetadataGuidancePaths] = 0u;
-    [unroll] for (uint bucket = 0u; bucket < 16u; bucket++)
-    {
-        AdaptiveWorkListMetadata[AdaptiveMetadataBucketBudgetStart + bucket] =
-            AdaptiveWorkListMetadata[AdaptiveMetadataBucketAdmittedPathsStart + bucket];
-    }
+        validPixels != 0u ? paths / validPixels : 0u);
 }
 
 [numthreads(256,1,1)]
@@ -821,7 +712,17 @@ void CSAdaptiveCompactGroupWorkList(uint3 id : SV_DispatchThreadID)
     uint localIndex = (pixel.y % 8u) * validWidth + pixel.x % 8u;
     uint workIndex = info.x + localIndex;
     AdaptiveWorkList[workIndex] = uint2(flatPixel, samples);
-    AdaptiveWorkRootOffsets[workIndex] = info.y + localIndex * samples;
+    uint rootOffset = info.y + localIndex * samples;
+    AdaptiveWorkRootOffsets[workIndex] = rootOffset;
+    [loop]
+    for (uint localSample = 0u; localSample < samples; localSample++)
+    {
+        uint rootIndex = rootOffset + localSample;
+        if (rootIndex < _AdaptiveRootPathCapacity)
+        {
+            AdaptiveRootWorkList[rootIndex] = uint2(flatPixel, localSample);
+        }
+    }
 }
 
 // A bounded group-local allocator replaces the old image-wide serial promotion pass. Every valid
@@ -991,34 +892,16 @@ void ClearAdaptiveWorkList(uint3 id : SV_DispatchThreadID)
 [numthreads(1,1,1)]
 void CSBuildAdaptiveDispatchArgs(uint3 id : SV_DispatchThreadID)
 {
+    uint assigned = AdaptiveWorkListMetadata[AdaptiveMetadataAssignedPaths];
+    AdaptiveWorkListMetadata[AdaptiveMetadataRequestedPaths] = assigned;
+    AdaptiveWorkListMetadata[AdaptiveMetadataFullResolutionPaths] = assigned;
+    AdaptiveWorkListMetadata[AdaptiveMetadataGuidancePaths] = 0u;
     AdaptiveDispatchArgs[0] = (min(AdaptiveWorkListMetadata[AdaptiveMetadataFullResolutionPaths], _AdaptiveRootPathCapacity) + 15u) / 16u;
     AdaptiveDispatchArgs[1] = 1u;
     AdaptiveDispatchArgs[2] = 1u;
     AdaptiveResolveDispatchArgs[0] = (min(AdaptiveWorkListMetadata[AdaptiveMetadataWorkItemCount], _AdaptiveWorkListCapacity) + 15u) / 16u;
     AdaptiveResolveDispatchArgs[1] = 1u;
     AdaptiveResolveDispatchArgs[2] = 1u;
-}
-
-// Expands the compact per-pixel allocation once per reclassification. The hot trace dispatch
-// subsequently contains only admitted root paths, with no inactive batch lanes.
-[numthreads(256,1,1)]
-void CSAdaptiveBuildRootWorkList(uint3 id : SV_DispatchThreadID)
-{
-    uint workIndex = id.x;
-    uint workCount = min(AdaptiveWorkListMetadata[AdaptiveMetadataWorkItemCount], _AdaptiveWorkListCapacity);
-    if (workIndex >= workCount) return;
-
-    uint2 workItem = AdaptiveWorkList[workIndex];
-    uint rootOffset = AdaptiveWorkRootOffsets[workIndex];
-    [loop]
-    for (uint localSample = 0u; localSample < workItem.y; localSample++)
-    {
-        uint rootIndex = rootOffset + localSample;
-        if (rootIndex < _AdaptiveRootPathCapacity)
-        {
-            AdaptiveRootWorkList[rootIndex] = uint2(workItem.x, localSample);
-        }
-    }
 }
 
 [numthreads(4,4,1)]

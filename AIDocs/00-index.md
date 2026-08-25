@@ -24,6 +24,7 @@ Use this folder as focused context for LLM-assisted work on the Unity GPU ray tr
 - `18-adaptive-sampling-next-session-prompt.md`: Compact future-session prompt for implementing the remaining low-overhead statistical group scheduler.
 - `19-adaptive-scheduler-accounting-repair.md`: Reproduced bounded-service scheduler accounting failure, repair constraints, validation commands, and a focused future-session prompt.
 - `20-dammertz-adaptive-sampling-plan.md`: Fixed-8x8 Dammertz results, allocation diagnosis, next bounded-service experiment, validation criteria, and compact continuation prompt.
+- `21-adaptive-sampling-performance-plan.md`: Capture-only phase timing, root-list cost model, and the ordered adaptive runtime optimization plan.
 
 ## Fast Context Selection
 
@@ -44,3 +45,4 @@ Use this folder as focused context for LLM-assisted work on the Unity GPU ray tr
 - To regenerate generated scenes after changing generator code, use `Tools > Ray Tracing > Regenerate Scenes (Delete Existing Scenes)`; plain `Generate Scenes` skips scenes that already exist.
 - To continue reducing the public project's barrier to entry, read `16-accessibility-and-onboarding.md`.
 - To continue adaptive-sampling work, read `17-adaptive-sampling-continuation.md`, then `03-compute-shader-renderer.md`, `08-shader-debugging-and-randomness.md`, and `10-benchmarking-and-performance.md`.
+- To measure or reduce adaptive runtime overhead, read `21-adaptive-sampling-performance-plan.md` after `17-adaptive-sampling-continuation.md`.
