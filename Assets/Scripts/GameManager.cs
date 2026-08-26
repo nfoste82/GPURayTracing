@@ -112,6 +112,9 @@ public class GameManager : MonoBehaviour
     [Tooltip("Redistributes a fixed image-wide full-resolution path budget using group uncertainty. It never automatically stops rendering.")]
     public bool enableAdaptiveSampling = false;
 
+    [Tooltip("Records per-frame reference PSNR/RMSE and the final render to TestCaptures/EditorRuns when Play mode ends. The Adaptive Allocation Monitor must be open.")]
+    public bool recordEditorRun = false;
+
     [Range(1, 64), Tooltip("Full-resolution paths per pixel before variance-driven adaptive allocation begins.")]
     public int adaptiveSamplingMinSamples = 8;
 

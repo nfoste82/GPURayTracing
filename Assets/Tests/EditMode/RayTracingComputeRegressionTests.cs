@@ -736,7 +736,8 @@ namespace GPURayTracing.Tests
             Assert.That(window, Does.Contain("Current RGB PSNR"));
             Assert.That(window, Does.Contain("TryCompareCurrentRenderToReference"));
             Assert.That(window, Does.Contain("TestCaptures/EditorRuns"));
-            Assert.That(window, Does.Contain("Record editor run (PSNR/RMSE per frame)"));
+            Assert.That(window, Does.Contain("TryGetRecordingManager"));
+            Assert.That(window, Does.Not.Contain("EditorRunPreference"));
             Assert.That(window, Does.Contain("settings.txt"));
             Assert.That(window, Does.Contain("metrics.csv"));
             Assert.That(window, Does.Contain("rgb_psnr_db,rgb_rmse,psnr_db_improvement,rmse_improvement"));
@@ -745,15 +746,37 @@ namespace GPURayTracing.Tests
             Assert.That(window, Does.Contain("run_complete.txt"));
             Assert.That(window, Does.Contain("StopEditorRunRecording"));
             Assert.That(window, Does.Contain("recordedFrames"));
-            Assert.That(window, Does.Contain("Show allocation heatmap while playing"));
+            Assert.That(window, Does.Contain("Enable adaptive live diagnostics"));
             Assert.That(window, Does.Contain("UpdateHeatmapTexture"));
             Assert.That(window, Does.Contain("SaveFinalHeatmap"));
+            Assert.That(window, Does.Contain("_lastHeatmapAllocation == null || _lastHeatmapAllocation.pixels == null"));
+            Assert.That(window, Does.Contain("allocation == null || allocation.pixels == null"));
             Assert.That(window, Does.Contain("final_heatmap.png"));
             Assert.That(window, Does.Contain("final_color.png"));
             Assert.That(window, Does.Contain("SaveFinalColor"));
             Assert.That(window, Does.Not.Contain("frame_{frame:000000}.png"));
             Assert.That(window, Does.Contain("if (_liveGeneration)"));
             Assert.That(window, Does.Contain("UpdateHeatmapTexture(allocation)"));
+            Assert.That(window, Does.Contain("bool showReferenceMetrics = _showDifference || _editorRunWriter != null"));
+            Assert.That(window, Does.Contain("_metadata = $\"Frame: {frame}\\n\""));
+            Assert.That(window, Does.Not.Contain("Adaptive allocation heatmap\\nFrame:"));
+            Assert.That(window, Does.Not.Contain("Colors rank pixels by retired paths"));
+            string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+            string managerEditorSource = System.IO.File.ReadAllText("Assets/Editor/GameManagerEditor.cs");
+            Assert.That(managerSource, Does.Contain("recordEditorRun"));
+            Assert.That(managerEditorSource, Does.Contain("Record Editor Run"));
+            Assert.That(window, Does.Contain("manager.enableFrameAccumulation = true"));
+            Assert.That(window, Does.Contain("recordEditorRun"));
+            Assert.That(window, Does.Contain("new GUIContent(\"Record Editor Run\")"));
+            Assert.That(window, Does.Contain("bool adaptive = _liveManager.enableAdaptiveSampling"));
+            Assert.That(window, Does.Contain("if (adaptive)"));
+            Assert.That(window, Does.Contain("bool needReferenceComparison = _showDifference || _editorRunWriter != null"));
+            Assert.That(window, Does.Contain("if ((!_liveGeneration && _editorRunWriter == null)"));
+            Assert.That(window, Does.Contain("if (adaptive)"));
+            Assert.That(window, Does.Contain("ReadAdaptiveAllocationStatsForCapture"));
+            Assert.That(window, Does.Not.Contain("manager.enableAdaptiveSampling = true"));
+            Assert.That(window, Does.Contain("SaveFinalHeatmap"));
+            Assert.That(window, Does.Contain("string runPrefix = manager.enableAdaptiveSampling ? \"adaptive_run\" : \"run\""));
         }
 
         [Test]
@@ -795,6 +818,13 @@ namespace GPURayTracing.Tests
         {
             string source = System.IO.File.ReadAllText("Assets/Editor/RayTracingSceneCapture.cs");
             Assert.That(source, Does.Contain("-rayTracingAdaptiveSampling"));
+            Assert.That(source, Does.Contain("-rayTracingRecordEditorRun"));
+            Assert.That(source, Does.Contain("recordEditorRun"));
+            Assert.That(source, Does.Contain("CreateCommandLineEditorRunFolder"));
+            Assert.That(source, Does.Contain("adaptive_run_"));
+            Assert.That(source, Does.Contain("metrics.csv"));
+            Assert.That(source, Does.Contain("metrics.rgbRootMeanSquaredError"));
+            Assert.That(source, Does.Not.Contain("metrics.rgbRmse"));
             Assert.That(source, Does.Contain("-rayTracingAdaptiveSamplingMinSamples"));
             Assert.That(source, Does.Contain("-rayTracingAdaptivePriorityMode"));
             Assert.That(source, Does.Contain("-rayTracingAdaptiveType"));
@@ -809,6 +839,8 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("-rayTracingAdaptiveBootstrapGroupDivisor"));
             Assert.That(source, Does.Contain("Enum.IsDefined"));
             Assert.That(source, Does.Contain("ApplyAdaptiveSamplingOverrides"));
+            Assert.That(source, Does.Contain("private const double MaximumTimedCaptureSeconds = 600.0"));
+            Assert.That(source, Does.Contain("GetCommandLineArgument(\"-rayTracingDurationSeconds\") != null"));
         }
 
         [Test]

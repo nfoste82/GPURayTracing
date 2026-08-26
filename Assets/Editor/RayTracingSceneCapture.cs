@@ -24,8 +24,9 @@ public static class RayTracingSceneCapture
     private const int ReferenceWidth = 1024;
     private const int ReferenceHeight = 1024;
     private const double ReferenceDurationSeconds = 240.0;
-    private const double MaximumTimedCaptureSeconds = 120.0;
+    private const double MaximumTimedCaptureSeconds = 600.0;
     private const string GenerateReferenceArgument = "-rayTracingGenerateReference";
+    private const string RecordEditorRunArgument = "-rayTracingRecordEditorRun";
     private const double DefaultCooldownSeconds = 10.0;
     private const float DifferenceHeatmapRedPercentile = 0.99f;
     private const int AdaptiveAllocationBlockSize = 8;
@@ -178,6 +179,7 @@ public static class RayTracingSceneCapture
         var generateReference = HasCommandLineArgument(GenerateReferenceArgument);
         var adaptiveSampling = HasCommandLineArgument("-rayTracingAdaptiveSampling");
         var compareAdaptiveSampling = HasCommandLineArgument("-rayTracingCompareAdaptiveSampling");
+        var recordEditorRun = HasCommandLineArgument(RecordEditorRunArgument);
         var disableAdaptiveInstrumentation = HasCommandLineArgument("-rayTracingDisableAdaptiveInstrumentation");
         var skipAdaptiveOff = HasCommandLineArgument("-rayTracingSkipAdaptiveOff");
         if (!TryGetAdaptiveComparisonType(out GameManager.AdaptivePriorityMode? adaptiveComparisonType))
@@ -227,7 +229,8 @@ public static class RayTracingSceneCapture
         }
 
         // The candidate comparison is capped independently from the longer reference capture.
-        if (compareAdaptiveSampling && durationSeconds > MaximumTimedCaptureSeconds)
+        if (compareAdaptiveSampling && GetCommandLineArgument("-rayTracingDurationSeconds") != null
+            && durationSeconds > MaximumTimedCaptureSeconds)
         {
             ReportCommandLineError($"Timed captures are capped at {MaximumTimedCaptureSeconds:0} seconds to prevent adaptive regressions from stalling the editor.");
             ExitBatchMode(1);
@@ -285,7 +288,8 @@ public static class RayTracingSceneCapture
             CaptureInBatchMode(label, scenes, outputRoot, samplesPerScene, captureWidth, captureHeight,
                 durationSeconds, debugRenderMode, generateReference, compareAdaptiveSampling, skipAdaptiveOff, referenceMetrics,
                 refreshReferences, requireExistingReferences, referenceRoot, brightnessPriority, directLightPriority, roughnessPriority,
-                adaptiveSamplingOverrides, adaptiveSampling, adaptiveComparisonType, cooldownSeconds, disableAdaptiveInstrumentation);
+                adaptiveSamplingOverrides, adaptiveSampling, adaptiveComparisonType, cooldownSeconds, disableAdaptiveInstrumentation,
+                recordEditorRun);
             return;
         }
         StartCapture(label, scenes, outputRoot, samplesPerScene, captureWidth, captureHeight);
@@ -343,7 +347,8 @@ public static class RayTracingSceneCapture
         bool adaptiveSampling,
         GameManager.AdaptivePriorityMode? adaptiveComparisonType,
         double cooldownSeconds,
-        bool disableAdaptiveInstrumentation)
+        bool disableAdaptiveInstrumentation,
+        bool recordEditorRun)
     {
         try
         {
@@ -386,13 +391,13 @@ public static class RayTracingSceneCapture
                     CaptureAdaptiveComparison(manager, sceneName, outputRoot, label, samplesPerScene,
                         captureWidth, captureHeight, durationSeconds, debugRenderMode, trimmedPath, skipAdaptiveOff, referenceMetrics,
                         refreshReferences, requireExistingReferences, referenceRoot, adaptiveSamplingOverrides, adaptiveComparisonType,
-                        cooldownSeconds, !disableAdaptiveInstrumentation);
+                        cooldownSeconds, !disableAdaptiveInstrumentation, recordEditorRun);
                 }
                 else
                 {
                     CaptureVariant(manager, sceneName, Path.Combine(outputRoot, SanitizePathSegment(label)), sceneName, samplesPerScene,
                         captureWidth, captureHeight, durationSeconds, debugRenderMode, adaptiveSampling,
-                        adaptiveSamplingOverrides.priorityMode ?? manager.adaptivePriorityMode, false, false);
+                        adaptiveSamplingOverrides.priorityMode ?? manager.adaptivePriorityMode, false, false, recordEditorRun, null);
                 }
             }
 
@@ -461,7 +466,8 @@ public static class RayTracingSceneCapture
         AdaptiveSamplingOverrides adaptiveSamplingOverrides,
         GameManager.AdaptivePriorityMode? adaptiveComparisonType,
         double cooldownSeconds,
-        bool adaptiveInstrumentation)
+        bool adaptiveInstrumentation,
+        bool recordEditorRun)
     {
         var comparisonRoot = Path.Combine(outputRoot, SanitizePathSegment(label), sceneName);
         ReferenceMetadata reference = null;
@@ -485,21 +491,21 @@ public static class RayTracingSceneCapture
         {
             adaptiveWelford = CaptureVariant(manager, sceneName, comparisonRoot, "adaptive_welford", samplesPerScene, captureWidth,
                 captureHeight, durationSeconds, debugRenderMode, true, GameManager.AdaptivePriorityMode.WelfordStandardError, true,
-                adaptiveInstrumentation);
+                adaptiveInstrumentation, recordEditorRun, referenceImagePath);
         }
         if (runDammertz)
         {
             if (runWelford) CoolDownBetweenTimedCaptures(durationSeconds, cooldownSeconds);
             adaptiveDammertz = CaptureVariant(manager, sceneName, comparisonRoot, "adaptive_dammertz", samplesPerScene, captureWidth,
                 captureHeight, durationSeconds, debugRenderMode, true, GameManager.AdaptivePriorityMode.DammertzSplitEstimator, true,
-                adaptiveInstrumentation);
+                adaptiveInstrumentation, recordEditorRun, referenceImagePath);
         }
         if (!skipAdaptiveOff)
         {
             CoolDownBetweenTimedCaptures(durationSeconds, cooldownSeconds);
             adaptiveOff = CaptureVariant(manager, sceneName, comparisonRoot, "adaptive_off", samplesPerScene, captureWidth,
                 captureHeight, durationSeconds, debugRenderMode, false, GameManager.AdaptivePriorityMode.WelfordStandardError, true,
-                false);
+                false, recordEditorRun, referenceImagePath);
         }
         if (referenceMetrics)
         {
@@ -601,7 +607,9 @@ public static class RayTracingSceneCapture
         bool adaptiveSampling,
         GameManager.AdaptivePriorityMode adaptivePriorityMode,
         bool writeTimingReport,
-        bool adaptiveInstrumentation)
+        bool adaptiveInstrumentation,
+        bool recordEditorRun = false,
+        string referencePath = null)
     {
         manager.randomNoise = false;
         manager.enableFrameAccumulation = true;
@@ -643,6 +651,17 @@ public static class RayTracingSceneCapture
         ResetAccumulation(manager);
 
         var measuredFrames = 0;
+        string editorRunFolder = recordEditorRun
+            ? CreateCommandLineEditorRunFolder(outputRoot, adaptiveSampling)
+            : null;
+        StreamWriter editorRunWriter = recordEditorRun
+            ? CreateCommandLineEditorRunWriter(editorRunFolder, manager, sceneName, referencePath)
+            : null;
+        Color[] referencePixels = string.IsNullOrEmpty(referencePath) ? null : LoadCachedReferencePixels(referencePath);
+        double editorRunStart = EditorApplication.timeSinceStartup;
+        double previousPsnr = 0.0;
+        double previousRmse = 0.0;
+        bool hasPreviousMetrics = false;
         var adaptiveFrames = adaptiveInstrumentation ? new List<AdaptiveCaptureFrame>() : null;
         string heatmapFolder = adaptiveInstrumentation && writeTimingReport
             ? Path.GetFullPath(Path.Combine(DefaultOutputFolder, "Heatmaps", sceneName, label))
@@ -663,6 +682,11 @@ public static class RayTracingSceneCapture
                 SynchronizeDurationCaptureGpu();
             }
             frameStopwatch.Stop();
+            if (editorRunWriter != null)
+            {
+                WriteCommandLineEditorRunFrame(editorRunWriter, manager, measuredFrames, editorRunStart,
+                    referencePixels, ref previousPsnr, ref previousRmse, ref hasPreviousMetrics);
+            }
             if (adaptiveInstrumentation)
             {
                 GameManager.AdaptiveFrameTelemetry telemetry = manager.ReadAdaptiveFrameTelemetryForCapture();
@@ -685,6 +709,14 @@ public static class RayTracingSceneCapture
         Directory.CreateDirectory(outputRoot);
         string outputPath = Path.Combine(outputRoot, label + ".png");
         manager.ExportCurrentRenderPng(outputPath);
+        if (editorRunWriter != null)
+        {
+            editorRunWriter.Flush();
+            editorRunWriter.Dispose();
+            manager.ExportCurrentRenderPng(Path.Combine(editorRunFolder, "final_color.png"));
+            File.WriteAllText(Path.Combine(editorRunFolder, "run_complete.txt"),
+                $"recordedFrames={measuredFrames}\n");
+        }
         if (writeTimingReport)
         {
             WriteTimingReport(diagnosticsRoot, label, sceneName, adaptiveSampling, measuredFrames, durationSeconds,
@@ -779,6 +811,73 @@ public static class RayTracingSceneCapture
             "  \"priorityBucketBudgets\": [" + JoinMetadata(metadata, GameManager.AdaptiveMetadataBucketBudgetStart, 16) + "]\n" +
             "}\n";
         File.WriteAllText(Path.Combine(outputRoot, "adaptive_diagnostics.json"), report);
+    }
+
+    private static string CreateCommandLineEditorRunFolder(string outputRoot, bool adaptiveSampling)
+    {
+        string prefix = adaptiveSampling ? "adaptive_run" : "run";
+        string folder = Path.Combine(outputRoot, $"{prefix}_{DateTime.Now:yyyyMMdd_HHmmss_fff}");
+        Directory.CreateDirectory(folder);
+        return folder;
+    }
+
+    private static StreamWriter CreateCommandLineEditorRunWriter(string folder, GameManager manager,
+        string sceneName, string referencePath)
+    {
+        string settings =
+            $"scene={sceneName}\n" +
+            $"enableAdaptiveSampling={manager.enableAdaptiveSampling}\n" +
+            $"enableFrameAccumulation={manager.enableFrameAccumulation}\n" +
+            $"displayWidth={manager.DisplayTextureSize.x}\n" +
+            $"displayHeight={manager.DisplayTextureSize.y}\n" +
+            $"referenceImage={referencePath ?? string.Empty}\n";
+        File.WriteAllText(Path.Combine(folder, "settings.txt"), settings);
+        var writer = new StreamWriter(Path.Combine(folder, "metrics.csv"), false);
+        writer.WriteLine("frame,elapsed_seconds,rgb_psnr_db,rgb_rmse,psnr_db_improvement,rmse_improvement");
+        writer.Flush();
+        return writer;
+    }
+
+    private static void WriteCommandLineEditorRunFrame(StreamWriter writer, GameManager manager, int frame,
+        double startTime, Color[] referencePixels, ref double previousPsnr, ref double previousRmse,
+        ref bool hasPreviousMetrics)
+    {
+        bool available = referencePixels != null;
+        double psnr = double.NaN;
+        double rmse = double.NaN;
+        if (available)
+        {
+            VariantComparisonMetrics metrics = CalculateReferenceMetrics(manager.ReadCurrentFinalColorPixels(), referencePixels, true);
+            psnr = metrics.rgbPsnrDb;
+            rmse = metrics.rgbRootMeanSquaredError;
+        }
+        string psnrValue = double.IsNaN(psnr) ? "NaN" : (double.IsPositiveInfinity(psnr) ? "Infinity" : psnr.ToString("R", CultureInfo.InvariantCulture));
+        string rmseValue = double.IsNaN(rmse) ? "NaN" : rmse.ToString("R", CultureInfo.InvariantCulture);
+        string psnrImprovement = "NaN";
+        string rmseImprovement = "NaN";
+        if (!double.IsNaN(psnr) && hasPreviousMetrics)
+        {
+            psnrImprovement = CalculatePsnrImprovement(psnr, previousPsnr);
+            rmseImprovement = (previousRmse - rmse).ToString("R", CultureInfo.InvariantCulture);
+        }
+        writer.WriteLine(string.Join(",", frame,
+            (EditorApplication.timeSinceStartup - startTime).ToString("R", CultureInfo.InvariantCulture),
+            psnrValue, rmseValue, psnrImprovement, rmseImprovement));
+        if (!double.IsNaN(psnr))
+        {
+            previousPsnr = psnr;
+            previousRmse = rmse;
+            hasPreviousMetrics = true;
+        }
+        writer.Flush();
+    }
+
+    private static string CalculatePsnrImprovement(double current, double previous)
+    {
+        if (double.IsPositiveInfinity(current) && double.IsPositiveInfinity(previous)) return "0";
+        if (double.IsPositiveInfinity(current)) return "Infinity";
+        if (double.IsPositiveInfinity(previous)) return "-Infinity";
+        return (current - previous).ToString("R", CultureInfo.InvariantCulture);
     }
 
     private static double Mean(float[] values)

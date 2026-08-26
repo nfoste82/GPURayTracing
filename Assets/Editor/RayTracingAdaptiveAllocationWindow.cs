@@ -15,7 +15,6 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
     private const string DifferencePreference = "RayTracing.AdaptiveAllocationShowDifference";
     private const string RollingHeatmapPreference = "RayTracing.AdaptiveAllocationShowRollingHeatmap";
     private const string RollingHeatmapFramesPreference = "RayTracing.AdaptiveAllocationRollingHeatmapFrames";
-    private const string EditorRunPreference = "RayTracing.AdaptiveAllocationEditorRun";
     private const string HeatmapFolderName = "TestCaptures/Heatmaps";
     private const string EditorRunFolderName = "TestCaptures/EditorRuns";
     private const int AdaptiveAllocationBlockSize = 8;
@@ -41,7 +40,6 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
     private bool _showHeatmap;
     private bool _showDifference;
     private bool _showRollingHeatmap;
-    private bool _recordEditorRun;
     private int _rollingHeatmapFrames;
     private readonly Queue<uint[]> _rollingGroupHistory = new Queue<uint[]>();
     private int _rollingHistoryWidth = -1;
@@ -57,6 +55,8 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
     private double _editorRunStartTime;
     private string _editorRunFolder;
     private int _editorRunFrameCount;
+    private bool _editorRunPreviousFrameAccumulation;
+    private bool _editorRunFrameAccumulationApplied;
     private bool _hasPreviousEditorRunMetrics;
     private double _previousEditorRunPsnr;
     private double _previousEditorRunRmse;
@@ -75,7 +75,6 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         _showHeatmap = SessionState.GetBool(HeatmapPreference, true);
         _showDifference = SessionState.GetBool(DifferencePreference, false);
         _showRollingHeatmap = SessionState.GetBool(RollingHeatmapPreference, false);
-        _recordEditorRun = SessionState.GetBool(EditorRunPreference, false);
         _rollingHeatmapFrames = Mathf.Clamp(SessionState.GetInt(RollingHeatmapFramesPreference, 30), 1, 10000);
         _folder = _liveGeneration ? GetLiveFolder() : ResolveDefaultFolder();
         if (string.IsNullOrEmpty(_folder))
@@ -119,10 +118,9 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         {
             ApplyLiveGenerationSettings();
         }
-        if (state == PlayModeStateChange.EnteredPlayMode && _recordEditorRun)
+        if (state == PlayModeStateChange.EnteredPlayMode && TryGetRecordingManager(out _))
         {
-            if (!_liveGeneration) StartLiveGeneration();
-            else StartEditorRunRecording();
+            StartEditorRunRecording();
         }
         if (state == PlayModeStateChange.ExitingPlayMode)
         {
@@ -149,29 +147,27 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
             "Live monitoring reports adaptive allocation statistics while playing. Heatmap and reference images are optional diagnostics and can be disabled to avoid their readback and file-generation cost. Monitoring pauses its diagnostics while Play mode is paused.",
             MessageType.Info);
 
-        bool liveGeneration = EditorGUILayout.ToggleLeft("Monitor allocation while playing", _liveGeneration);
+        bool liveGeneration = EditorGUILayout.ToggleLeft("Enable adaptive live diagnostics", _liveGeneration);
         if (liveGeneration != _liveGeneration)
         {
             if (liveGeneration) StartLiveGeneration();
             else StopLiveGeneration();
         }
 
-        bool recordEditorRun = EditorGUILayout.ToggleLeft("Record editor run (PSNR/RMSE per frame)", _recordEditorRun);
-        if (recordEditorRun != _recordEditorRun)
+        GameManager recordingManager = null;
+        if (EditorApplication.isPlaying)
         {
-            _recordEditorRun = recordEditorRun;
-            SessionState.SetBool(EditorRunPreference, _recordEditorRun);
-            if (_recordEditorRun)
-            {
-                if (!_liveGeneration) StartLiveGeneration();
-                else if (EditorApplication.isPlaying) StartEditorRunRecording();
-            }
-            else
-            {
-                StopEditorRunRecording();
-            }
+            TryGetRecordingManager(out recordingManager);
         }
-        if (_recordEditorRun)
+        if (_editorRunWriter != null && (_liveManager == null || !_liveManager.recordEditorRun))
+        {
+            StopEditorRunRecording();
+        }
+        if (recordingManager != null && _editorRunWriter == null)
+        {
+            StartEditorRunRecording();
+        }
+        if (recordingManager != null && recordingManager.recordEditorRun)
         {
             EditorGUILayout.HelpBox(string.IsNullOrEmpty(_editorRunFolder)
                 ? "Recording starts when Play mode begins. Output: TestCaptures/EditorRuns/<scene>/run_<timestamp>/"
@@ -263,14 +259,15 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
                 : _differenceStatus, MessageType.Info);
         }
 
-        if (_showDifference && _hasReferenceMetrics)
+        bool showReferenceMetrics = _showDifference || _editorRunWriter != null;
+        if (showReferenceMetrics && _hasReferenceMetrics)
         {
             EditorGUILayout.LabelField("Current RGB PSNR", double.IsPositiveInfinity(_referencePsnrDb)
                 ? "Infinity dB (identical)"
                 : $"{_referencePsnrDb:0.00} dB");
             EditorGUILayout.LabelField("Current RGB RMSE", $"{_referenceRmse:0.00000000}");
         }
-        else if (_showDifference && !string.IsNullOrEmpty(_referenceMetricStatus))
+        else if (showReferenceMetrics && !string.IsNullOrEmpty(_referenceMetricStatus))
         {
             EditorGUILayout.HelpBox(_referenceMetricStatus, MessageType.Info);
         }
@@ -330,6 +327,8 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
 
         SerializedProperty enabled = serializedManager.FindProperty("enableAdaptiveSampling");
         EditorGUILayout.PropertyField(enabled, new GUIContent("Adaptive Sampling (Experimental)"));
+        EditorGUILayout.PropertyField(serializedManager.FindProperty("recordEditorRun"),
+            new GUIContent("Record Editor Run"));
         if (enabled.boolValue)
         {
             EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveBootstrapFrames"),
@@ -413,14 +412,12 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         DestroyLatestTexture();
         DestroyDifferenceTexture();
         _liveManager = manager;
-        _previousAdaptiveSampling = manager.enableAdaptiveSampling;
         _previousFrameAccumulation = manager.enableFrameAccumulation;
-        manager.enableAdaptiveSampling = true;
         manager.enableFrameAccumulation = true;
-        manager.SetAdaptiveCaptureDiagnostics(true);
+        manager.SetAdaptiveCaptureDiagnostics(manager.enableAdaptiveSampling);
         _liveSettingsApplied = true;
         _lastLiveFrame = -1;
-        if (_recordEditorRun) StartEditorRunRecording();
+        if (TryGetRecordingManager(out _)) StartEditorRunRecording();
         PollForLatestFrame(true);
     }
 
@@ -436,7 +433,6 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         if (_liveManager != null && _liveSettingsApplied)
         {
             _liveManager.SetAdaptiveCaptureDiagnostics(false);
-            _liveManager.enableAdaptiveSampling = _previousAdaptiveSampling;
             _liveManager.enableFrameAccumulation = _previousFrameAccumulation;
         }
         _liveManager = null;
@@ -446,17 +442,22 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
 
     private void CaptureLiveFrame()
     {
-        if (!_liveGeneration || !EditorApplication.isPlaying || EditorApplication.isPaused || _liveManager == null
-            || !_liveManager.enableAdaptiveSampling || _liveManager.AccumulatedFrameCount <= 0
+        if ((!_liveGeneration && _editorRunWriter == null) || !EditorApplication.isPlaying || EditorApplication.isPaused || _liveManager == null
+            || _liveManager.AccumulatedFrameCount <= 0
             || _liveManager.AccumulatedFrameCount == _lastLiveFrame)
         {
             return;
         }
 
-        GameManager.AdaptiveAllocationFrameData allocation =
-            _liveManager.ReadAdaptiveAllocationStatsForCapture();
+        bool adaptive = _liveManager.enableAdaptiveSampling;
+        GameManager.AdaptiveAllocationFrameData allocation = default;
+        if (adaptive)
+        {
+            allocation = _liveManager.ReadAdaptiveAllocationStatsForCapture();
+        }
         int frame = _liveManager.AccumulatedFrameCount;
-        bool needReferenceComparison = _showDifference || _recordEditorRun;
+        _metadata = $"Frame: {frame}\n";
+        bool needReferenceComparison = _showDifference || _editorRunWriter != null;
         Texture2D difference = null;
         bool hasReferenceMetrics = false;
         double referencePsnr = 0.0;
@@ -469,7 +470,7 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
                 out referenceStatus);
         }
         RecordEditorRunFrame(frame, hasReferenceMetrics, referencePsnr, referenceRmse, referenceStatus);
-        if (_showHeatmap)
+        if (_showHeatmap && adaptive)
         {
             // The compact work list describes this scheduler epoch only. The monitor's heatmap is
             // a convergence view, so visualize the persistent per-pixel retired-path totals.
@@ -481,20 +482,14 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
             _lastHeatmapAllocation = allocation;
             _hasLastHeatmapAllocation = true;
             UpdateHeatmapTexture(allocation);
-            _metadata =
-                $"Adaptive allocation heatmap\nFrame: {frame}\n" +
+            _metadata +=
                 $"Active work items: {allocation.activeWorkItems}\n" +
                 (_showRollingHeatmap
                     ? $"Rolling retired paths: {allocation.assignedPaths}\n"
                     : $"Cumulative retired paths: {allocation.assignedPaths}\n") +
-                FormatBucketGroupCounts(allocation.bucketGroupCounts) +
-                (_showRollingHeatmap
-                    ? $"Colors rank pixels by retired paths from the last {_rollingHeatmapFrames} frames.\n"
-                    : "Colors rank pixels by their cumulative retired-path count.\n");
-            _latestMetadataPath = $"live_frame_{frame:000000}";
-            Repaint();
+                FormatBucketGroupCounts(allocation.bucketGroupCounts);
         }
-        else
+        else if (_showHeatmap)
         {
             _hasLastHeatmapAllocation = false;
             DestroyLatestTexture();
@@ -526,20 +521,26 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
             _hasReferenceMetrics = false;
             _referenceMetricStatus = null;
         }
+        _latestMetadataPath = $"live_frame_{frame:000000}";
+        Repaint();
         _lastLiveFrame = frame;
         PollForLatestFrame(true);
     }
 
     private void StartEditorRunRecording()
     {
-        if (!_recordEditorRun || _editorRunWriter != null || !EditorApplication.isPlaying) return;
-        GameManager manager = _liveManager ?? UnityEngine.Object.FindFirstObjectByType<GameManager>();
-        if (manager == null) return;
+        if (_editorRunWriter != null || !EditorApplication.isPlaying) return;
+        if (!TryGetRecordingManager(out GameManager manager)) return;
+        _liveManager = manager;
+        _editorRunPreviousFrameAccumulation = manager.enableFrameAccumulation;
+        _editorRunFrameAccumulationApplied = true;
+        manager.enableFrameAccumulation = true;
 
         string sceneName = Path.GetFileNameWithoutExtension(SceneManager.GetActiveScene().path);
         if (string.IsNullOrEmpty(sceneName)) sceneName = "UnsavedScene";
         string sceneFolder = Path.GetFullPath(Path.Combine(Application.dataPath, "..", EditorRunFolderName, sceneName));
-        _editorRunFolder = Path.Combine(sceneFolder, $"run_{DateTime.Now:yyyyMMdd_HHmmss}");
+        string runPrefix = manager.enableAdaptiveSampling ? "adaptive_run" : "run";
+        _editorRunFolder = Path.Combine(sceneFolder, $"{runPrefix}_{DateTime.Now:yyyyMMdd_HHmmss}");
         Directory.CreateDirectory(_editorRunFolder);
         _editorRunStartTime = EditorApplication.timeSinceStartup;
 
@@ -571,7 +572,7 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
 
     private void RecordEditorRunFrame(int frame, bool available, double psnr, double rmse, string _)
     {
-        if (!_recordEditorRun || _editorRunWriter == null || _liveManager == null) return;
+        if (_editorRunWriter == null || _liveManager == null) return;
 
         string psnrValue = available
             ? (double.IsPositiveInfinity(psnr) ? "Infinity" : psnr.ToString("R", System.Globalization.CultureInfo.InvariantCulture))
@@ -630,7 +631,23 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
             _editorRunFolder = null;
             _editorRunFrameCount = 0;
             _hasPreviousEditorRunMetrics = false;
+            if (_editorRunFrameAccumulationApplied && _liveManager != null)
+            {
+                _liveManager.enableFrameAccumulation = _editorRunPreviousFrameAccumulation;
+            }
+            _editorRunFrameAccumulationApplied = false;
         }
+    }
+
+    private static bool TryGetRecordingManager(out GameManager manager)
+    {
+        manager = UnityEngine.Object.FindFirstObjectByType<GameManager>();
+        if (manager == null || !manager.recordEditorRun)
+        {
+            manager = null;
+            return false;
+        }
+        return true;
     }
 
     private void UpdateHeatmapTexture(GameManager.AdaptiveAllocationFrameData allocation)
@@ -645,7 +662,9 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
 
     private void SaveFinalHeatmap()
     {
-        if (!_hasLastHeatmapAllocation || string.IsNullOrEmpty(_editorRunFolder)) return;
+        if (!_hasLastHeatmapAllocation || _lastHeatmapAllocation == null || _lastHeatmapAllocation.pixels == null
+            || _lastHeatmapAllocation.width <= 0 || _lastHeatmapAllocation.height <= 0
+            || string.IsNullOrEmpty(_editorRunFolder)) return;
         string path = Path.Combine(_editorRunFolder, "final_heatmap.png");
         WriteHeatmap(path, _lastHeatmapAllocation);
     }
@@ -673,6 +692,7 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
 
     private static void WriteHeatmap(string path, GameManager.AdaptiveAllocationFrameData allocation)
     {
+        if (allocation == null || allocation.pixels == null || allocation.width <= 0 || allocation.height <= 0) return;
         Texture2D texture = CreateHeatmapTexture(allocation);
         File.WriteAllBytes(path, texture.EncodeToPNG());
         DestroyImmediate(texture);

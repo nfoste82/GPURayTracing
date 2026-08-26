@@ -59,6 +59,7 @@ public sealed class GameManagerEditor : Editor
         {
             DrawProperty("shadowRandomness", "Local Light Shadow Randomness");
             DrawProperty("enableAdaptiveSampling", "Adaptive Sampling (Experimental)");
+            DrawProperty("recordEditorRun", "Record Editor Run");
             if (manager.enableAdaptiveSampling)
             {
                 DrawProperty("adaptiveBootstrapFrames", "Low-Resolution Bootstrap Frames");
