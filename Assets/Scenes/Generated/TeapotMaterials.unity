@@ -1702,6 +1702,10 @@ MonoBehaviour:
   adaptiveReclassificationInterval: 4
   adaptiveHighestBucketSampleRate: 3
   adaptiveMaxPathsPerPixel: 4
+  adaptiveBootstrapGroupDivisor: 16
+  adaptiveBootstrapFrames: 8
+  adaptiveBootstrapResolutionScale: 0.25
+  adaptiveGuidanceHistoryFrames: 2
   adaptiveGuidanceChangeThreshold: 0.02
   adaptiveGuidanceMaxUpdates: 8
   adaptiveGuidanceBrightnessPriority: 0.5

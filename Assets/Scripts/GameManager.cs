@@ -130,8 +130,8 @@ public class GameManager : MonoBehaviour
     [Range(1, 16), Tooltip("Number of rotating whole-group batches used while full-resolution adaptive bootstrap samples are still required. Higher values avoid a single expensive all-pixel handoff.")]
     public int adaptiveBootstrapGroupDivisor = 16;
 
-    [Range(1, 8), Tooltip("Frames rendered uniformly at the bootstrap resolution before full-resolution adaptive sampling begins.")]
-    public int adaptiveBootstrapFrames = 4;
+    [Range(1, 256), Tooltip("Frames rendered uniformly at the bootstrap resolution before full-resolution adaptive sampling begins.")]
+    public int adaptiveBootstrapFrames = 8;
     [Range(0.125f, 0.5f), Tooltip("Resolution used by the normal CSMain bootstrap renderer before full-resolution adaptive sampling begins.")]
     public float adaptiveBootstrapResolutionScale = 0.25f;
     [Range(0, 8), Tooltip("Coarse History Passed to Fine: approximate accumulation samples initialized from the upscaled bootstrap image. Set to 0 to keep the bootstrap display-only and preserve unbiased fine accumulation.")]
@@ -2329,6 +2329,38 @@ public class GameManager : MonoBehaviour
         catch (Exception exception)
         {
             throw new InvalidOperationException($"Could not export the current render to '{path}'.", exception);
+        }
+    }
+
+    public Color[] ReadCurrentFinalColorPixels()
+    {
+        if (_outputTexture == null)
+        {
+            throw new InvalidOperationException("The ray tracer has not rendered an image yet.");
+        }
+
+        int width = Mathf.Max(1, _displayTextureSize.x);
+        int height = Mathf.Max(1, _displayTextureSize.y);
+        var presentation = RenderTexture.GetTemporary(width, height, 0, RenderTextureFormat.ARGB32);
+        var previous = RenderTexture.active;
+        var texture = new Texture2D(width, height, TextureFormat.RGB24, false);
+
+        try
+        {
+            var currentOutput = debugRenderMode == DebugRenderMode.FinalColor
+                ? _presentationTexture ?? _outputTexture
+                : _outputTexture;
+            Graphics.Blit(currentOutput, presentation);
+            RenderTexture.active = presentation;
+            texture.ReadPixels(new Rect(0, 0, width, height), 0, 0, false);
+            texture.Apply(false, false);
+            return texture.GetPixels();
+        }
+        finally
+        {
+            RenderTexture.active = previous;
+            RenderTexture.ReleaseTemporary(presentation);
+            DestroyRuntimeObject(texture);
         }
     }
 

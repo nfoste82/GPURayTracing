@@ -43,12 +43,17 @@ public static class RayTracingSceneCapture
         public readonly int? reclassificationInterval;
         public readonly float? highestBucketSampleRate;
         public readonly int? maxPathsPerPixel;
+        public readonly int? bootstrapFrames;
+        public readonly float? bootstrapResolutionScale;
+        public readonly int? guidanceHistoryFrames;
+        public readonly int? bootstrapGroupDivisor;
 
         public AdaptiveSamplingOverrides(int? minSamples, float? guidanceChangeThreshold, int? guidanceMaxUpdates,
             GameManager.AdaptivePriorityMode? priorityMode,
             float? normalizePriorityByLuminance,
             int? reclassificationInterval, float? highestBucketSampleRate,
-            int? maxPathsPerPixel)
+            int? maxPathsPerPixel, int? bootstrapFrames, float? bootstrapResolutionScale,
+            int? guidanceHistoryFrames, int? bootstrapGroupDivisor)
         {
             this.minSamples = minSamples;
             this.guidanceChangeThreshold = guidanceChangeThreshold;
@@ -58,6 +63,10 @@ public static class RayTracingSceneCapture
             this.reclassificationInterval = reclassificationInterval;
             this.highestBucketSampleRate = highestBucketSampleRate;
             this.maxPathsPerPixel = maxPathsPerPixel;
+            this.bootstrapFrames = bootstrapFrames;
+            this.bootstrapResolutionScale = bootstrapResolutionScale;
+            this.guidanceHistoryFrames = guidanceHistoryFrames;
+            this.bootstrapGroupDivisor = bootstrapGroupDivisor;
         }
     }
 
@@ -1510,37 +1519,173 @@ public static class RayTracingSceneCapture
             {
                 throw new InvalidOperationException($"Could not compare '{candidatePath}' to reference '{referencePath}'.");
             }
-            Color[] actual = candidate.GetPixels();
-            Color[] expected = referenceImage.GetPixels();
-            double rgbAbsolute = 0.0, rgbSquared = 0.0, luminanceAbsolute = 0.0, luminanceSquared = 0.0, relative = 0.0;
-            int aboveThreshold = 0;
-            for (int i = 0; i < actual.Length; i++)
-            {
-                Color a = actual[i].linear;
-                Color b = expected[i].linear;
-                float dr = a.r - b.r, dg = a.g - b.g, db = a.b - b.b;
-                rgbAbsolute += Math.Abs(dr) + Math.Abs(dg) + Math.Abs(db);
-                rgbSquared += dr * dr + dg * dg + db * db;
-                float ay = 0.2126f * a.r + 0.7152f * a.g + 0.0722f * a.b;
-                float by = 0.2126f * b.r + 0.7152f * b.g + 0.0722f * b.b;
-                float difference = Math.Abs(ay - by);
-                luminanceAbsolute += difference;
-                luminanceSquared += difference * difference;
-                relative += difference / Math.Max(by, 0.01f);
-                if (difference > 0.01f) aboveThreshold++;
-            }
-            int pixels = actual.Length;
-            double rgbRmse = Math.Sqrt(rgbSquared / (pixels * 3.0));
-            double psnr = rgbRmse == 0.0 ? double.PositiveInfinity : 20.0 * Math.Log10(1.0 / rgbRmse);
-            return new VariantComparisonMetrics(true, rgbAbsolute / (pixels * 3.0), rgbRmse, psnr,
-                luminanceAbsolute / pixels, Math.Sqrt(luminanceSquared / pixels), relative / pixels,
-                (double)aboveThreshold / pixels);
+            return CalculateReferenceMetrics(candidate.GetPixels(), referenceImage.GetPixels());
         }
         finally
         {
             UnityEngine.Object.DestroyImmediate(candidate);
             UnityEngine.Object.DestroyImmediate(referenceImage);
         }
+    }
+
+    private static VariantComparisonMetrics CalculateReferenceMetrics(Color[] actual, Color[] expected)
+    {
+        return CalculateReferenceMetrics(actual, expected, false);
+    }
+
+    private static VariantComparisonMetrics CalculateReferenceMetrics(Color[] actual, Color[] expected,
+        bool expectedIsLinear)
+    {
+        return CalculateReferenceMetrics(actual, expected, expectedIsLinear, null);
+    }
+
+    private static VariantComparisonMetrics CalculateReferenceMetrics(Color[] actual, Color[] expected,
+        bool expectedIsLinear, float[] differences)
+    {
+        if (actual == null || expected == null || actual.Length != expected.Length || actual.Length == 0)
+        {
+            throw new InvalidOperationException("Reference comparison requires matching non-empty pixel arrays.");
+        }
+        if (differences != null && differences.Length != actual.Length)
+        {
+            throw new InvalidOperationException("Reference difference storage must match the pixel array length.");
+        }
+
+        double rgbAbsolute = 0.0, rgbSquared = 0.0, luminanceAbsolute = 0.0, luminanceSquared = 0.0, relative = 0.0;
+        int aboveThreshold = 0;
+        for (int i = 0; i < actual.Length; i++)
+        {
+            Color a = actual[i].linear;
+            Color b = expectedIsLinear ? expected[i] : expected[i].linear;
+            float dr = a.r - b.r, dg = a.g - b.g, db = a.b - b.b;
+            rgbAbsolute += Math.Abs(dr) + Math.Abs(dg) + Math.Abs(db);
+            rgbSquared += dr * dr + dg * dg + db * db;
+            if (differences != null)
+            {
+                differences[i] = Mathf.Sqrt((dr * dr + dg * dg + db * db) / 3.0f);
+            }
+            float ay = 0.2126f * a.r + 0.7152f * a.g + 0.0722f * a.b;
+            float by = 0.2126f * b.r + 0.7152f * b.g + 0.0722f * b.b;
+            float difference = Math.Abs(ay - by);
+            luminanceAbsolute += difference;
+            luminanceSquared += difference * difference;
+            relative += difference / Math.Max(by, 0.01f);
+            if (difference > 0.01f) aboveThreshold++;
+        }
+        int pixels = actual.Length;
+        double rgbRmse = Math.Sqrt(rgbSquared / (pixels * 3.0));
+        double psnr = rgbRmse == 0.0 ? double.PositiveInfinity : 20.0 * Math.Log10(1.0 / rgbRmse);
+        return new VariantComparisonMetrics(true, rgbAbsolute / (pixels * 3.0), rgbRmse, psnr,
+            luminanceAbsolute / pixels, Math.Sqrt(luminanceSquared / pixels), relative / pixels,
+            (double)aboveThreshold / pixels);
+    }
+
+    private static string _cachedReferencePath;
+    private static long _cachedReferenceWriteTicks;
+    private static int _cachedReferenceWidth;
+    private static int _cachedReferenceHeight;
+    private static Color[] _cachedReferencePixels;
+
+    private static Color[] LoadCachedReferencePixels(string referencePath)
+    {
+        DateTime writeTime = File.GetLastWriteTimeUtc(referencePath);
+        if (_cachedReferencePixels != null
+            && string.Equals(_cachedReferencePath, referencePath, StringComparison.Ordinal)
+            && _cachedReferenceWriteTicks == writeTime.Ticks)
+        {
+            return _cachedReferencePixels;
+        }
+
+        var referenceImage = new Texture2D(2, 2, TextureFormat.RGB24, false);
+        try
+        {
+            if (!referenceImage.LoadImage(File.ReadAllBytes(referencePath), false))
+            {
+                throw new InvalidOperationException($"Could not load reference image '{referencePath}'.");
+            }
+
+            Color[] pixels = referenceImage.GetPixels();
+            _cachedReferencePixels = new Color[pixels.Length];
+            for (int i = 0; i < pixels.Length; i++) _cachedReferencePixels[i] = pixels[i].linear;
+            _cachedReferencePath = referencePath;
+            _cachedReferenceWriteTicks = writeTime.Ticks;
+            _cachedReferenceWidth = referenceImage.width;
+            _cachedReferenceHeight = referenceImage.height;
+            return _cachedReferencePixels;
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(referenceImage);
+        }
+    }
+
+    public static bool TryCompareCurrentRenderToReference(GameManager manager, string scenePath,
+        out Texture2D difference, out double rgbPsnrDb, out double rgbRootMeanSquaredError, out string status)
+    {
+        difference = null;
+        rgbPsnrDb = 0.0;
+        rgbRootMeanSquaredError = 0.0;
+        status = string.Empty;
+        if (manager == null || string.IsNullOrEmpty(scenePath))
+        {
+            status = "No saved scene is available for reference comparison.";
+            return false;
+        }
+
+        Vector2Int size = manager.DisplayTextureSize;
+        string referencePath = FindLongestReference(scenePath, DefaultReferenceRoot, size.x, size.y, out _);
+        if (string.IsNullOrEmpty(referencePath))
+        {
+            status = $"No {size.x}x{size.y} reference image is available for this scene.";
+            return false;
+        }
+
+        try
+        {
+            Color[] actual = manager.ReadCurrentFinalColorPixels();
+            Color[] reference = LoadCachedReferencePixels(referencePath);
+            if (_cachedReferenceWidth != size.x || _cachedReferenceHeight != size.y)
+            {
+                status = $"Reference image dimensions do not match the current {size.x}x{size.y} render.";
+                return false;
+            }
+
+            float[] differences = new float[actual.Length];
+            VariantComparisonMetrics metrics = CalculateReferenceMetrics(actual, reference, true, differences);
+
+            float[] sortedDifferences = (float[])differences.Clone();
+            Array.Sort(sortedDifferences);
+            int redIndex = Mathf.Min(sortedDifferences.Length - 1,
+                Mathf.FloorToInt((sortedDifferences.Length - 1) * DifferenceHeatmapRedPercentile));
+            float redDifference = sortedDifferences[redIndex];
+            difference = new Texture2D(size.x, size.y, TextureFormat.RGB24, false, true);
+            var outputPixels = new Color[differences.Length];
+            for (int i = 0; i < differences.Length; i++)
+            {
+                float amount = redDifference > 0.0f ? Mathf.Clamp01(differences[i] / redDifference) : 0.0f;
+                outputPixels[i] = Color.Lerp(Color.blue, Color.red, amount);
+            }
+            difference.SetPixels(outputPixels);
+            difference.Apply(false, false);
+            rgbPsnrDb = metrics.rgbPsnrDb;
+            rgbRootMeanSquaredError = metrics.rgbRootMeanSquaredError;
+            return true;
+        }
+        catch (Exception exception)
+        {
+            status = $"Could not calculate reference metrics: {exception.Message}";
+            return false;
+        }
+    }
+
+    public static bool TryCalculateCurrentReferenceMetrics(GameManager manager, string scenePath,
+        out double rgbPsnrDb, out double rgbRootMeanSquaredError, out string status)
+    {
+        Texture2D difference;
+        bool success = TryCompareCurrentRenderToReference(manager, scenePath, out difference,
+            out rgbPsnrDb, out rgbRootMeanSquaredError, out status);
+        if (difference != null) UnityEngine.Object.DestroyImmediate(difference);
+        return success;
     }
 
     private static void GenerateDifferenceImage(string firstPath, string secondPath, string outputPath)
@@ -2189,14 +2334,19 @@ public static class RayTracingSceneCapture
             || !TryGetOptionalFloatArgument("-rayTracingAdaptiveNormalizePriorityByLuminance", 0.0f, 1.0f, out float? normalizePriorityByLuminance)
             || !TryGetOptionalIntegerArgument("-rayTracingAdaptiveReclassificationInterval", 1, 8, out int? reclassificationInterval)
             || !TryGetOptionalFloatArgument("-rayTracingAdaptiveHighestBucketSampleRate", 1.0f, 8.0f, out float? highestBucketSampleRate)
-            || !TryGetOptionalIntegerArgument("-rayTracingAdaptiveMaxPathsPerPixel", 1, 16, out int? maxPathsPerPixel))
+            || !TryGetOptionalIntegerArgument("-rayTracingAdaptiveMaxPathsPerPixel", 1, 16, out int? maxPathsPerPixel)
+            || !TryGetOptionalIntegerArgument("-rayTracingAdaptiveBootstrapFrames", 1, 64, out int? bootstrapFrames)
+            || !TryGetOptionalFloatArgument("-rayTracingAdaptiveBootstrapResolutionScale", 0.125f, 0.5f, out float? bootstrapResolutionScale)
+            || !TryGetOptionalIntegerArgument("-rayTracingAdaptiveGuidanceHistoryFrames", 0, 8, out int? guidanceHistoryFrames)
+            || !TryGetOptionalIntegerArgument("-rayTracingAdaptiveBootstrapGroupDivisor", 1, 16, out int? bootstrapGroupDivisor))
         {
             return false;
         }
 
         overrides = new AdaptiveSamplingOverrides(minSamples, guidanceChangeThreshold, guidanceMaxUpdates,
             priorityMode, normalizePriorityByLuminance, reclassificationInterval, highestBucketSampleRate,
-            maxPathsPerPixel);
+            maxPathsPerPixel, bootstrapFrames, bootstrapResolutionScale, guidanceHistoryFrames,
+            bootstrapGroupDivisor);
         return true;
     }
 
@@ -2317,6 +2467,13 @@ public static class RayTracingSceneCapture
         if (overrides.reclassificationInterval.HasValue) manager.adaptiveReclassificationInterval = overrides.reclassificationInterval.Value;
         if (overrides.highestBucketSampleRate.HasValue) manager.adaptiveHighestBucketSampleRate = overrides.highestBucketSampleRate.Value;
         if (overrides.maxPathsPerPixel.HasValue) manager.adaptiveMaxPathsPerPixel = overrides.maxPathsPerPixel.Value;
+        if (overrides.bootstrapFrames.HasValue) manager.adaptiveBootstrapFrames = overrides.bootstrapFrames.Value;
+        if (overrides.bootstrapResolutionScale.HasValue)
+            manager.adaptiveBootstrapResolutionScale = overrides.bootstrapResolutionScale.Value;
+        if (overrides.guidanceHistoryFrames.HasValue)
+            manager.adaptiveGuidanceHistoryFrames = overrides.guidanceHistoryFrames.Value;
+        if (overrides.bootstrapGroupDivisor.HasValue)
+            manager.adaptiveBootstrapGroupDivisor = overrides.bootstrapGroupDivisor.Value;
     }
 
     private static void ExitBatchMode(int exitCode)

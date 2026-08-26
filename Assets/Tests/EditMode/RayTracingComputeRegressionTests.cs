@@ -692,7 +692,7 @@ namespace GPURayTracing.Tests
             string source = System.IO.File.ReadAllText("Assets/Editor/RayTracingAdaptiveAllocationWindow.cs");
             Assert.That(source, Does.Contain("Generate heatmaps while playing"));
             Assert.That(source, Does.Contain("SetAdaptiveCaptureDiagnostics(true)"));
-            Assert.That(source, Does.Contain("ReadAdaptiveAllocationForCapture"));
+            Assert.That(source, Does.Contain("ReadAdaptiveCumulativeAllocationForCapture"));
             Assert.That(source, Does.Contain("TestCaptures/Heatmaps"));
             Assert.That(source, Does.Contain("OnPlayModeStateChanged"));
             Assert.That(source, Does.Contain("EnteredPlayMode"));
@@ -701,13 +701,14 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("SessionState.GetBool"));
             Assert.That(source, Does.Contain("_folder = GetLiveFolder()"));
             Assert.That(source, Does.Contain("PollForLatestFrame(true)"));
-            Assert.That(source, Does.Contain("ReadAdaptiveAllocationForCapture"));
+            Assert.That(source, Does.Contain("ReadAdaptiveCumulativeAllocationForCapture"));
             Assert.That(source, Does.Contain("ReadAdaptiveAllocationStatsForCapture"));
             Assert.That(source, Does.Contain("EditorApplication.isPaused"));
             Assert.That(source, Does.Contain("TryWriteCurrentReferenceDifference"));
             Assert.That(source, Does.Contain("Current Render vs Reference"));
             Assert.That(source, Does.Contain("HeatmapPreviewScale = 4"));
             Assert.That(source, Does.Contain("Pixel groups per bucket (8x8)"));
+            Assert.That(source, Does.Contain("Cumulative retired paths"));
             Assert.That(source, Does.Contain("Show allocation heatmap (generate while playing)"));
             Assert.That(source, Does.Contain("Show Current Render vs Reference"));
             Assert.That(source, Does.Contain("if (_showHeatmap)"));
@@ -720,6 +721,20 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("adaptiveReclassificationInterval"));
             Assert.That(source, Does.Contain("adaptiveHighestBucketSampleRate"));
             Assert.That(source, Does.Contain("adaptiveMaxPathsPerPixel"));
+        }
+
+        [Test]
+        public void AdaptiveAllocationMonitor_UsesCachedReferencePixelsForLivePsnr()
+        {
+            string source = System.IO.File.ReadAllText("Assets/Editor/RayTracingSceneCapture.cs");
+            string window = System.IO.File.ReadAllText("Assets/Editor/RayTracingAdaptiveAllocationWindow.cs");
+            Assert.That(source, Does.Contain("LoadCachedReferencePixels"));
+            Assert.That(source, Does.Contain("TryCalculateCurrentReferenceMetrics"));
+            Assert.That(source, Does.Contain("TryCompareCurrentRenderToReference"));
+            Assert.That(source, Does.Contain("difference.SetPixels(outputPixels)"));
+            Assert.That(source, Does.Contain("ReadCurrentFinalColorPixels"));
+            Assert.That(window, Does.Contain("Current RGB PSNR"));
+            Assert.That(window, Does.Contain("TryCalculateCurrentReferenceMetrics"));
         }
 
         [Test]
@@ -769,6 +784,10 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("-rayTracingAdaptiveReclassificationInterval"));
             Assert.That(source, Does.Contain("-rayTracingAdaptiveHighestBucketSampleRate"));
             Assert.That(source, Does.Contain("-rayTracingAdaptiveMaxPathsPerPixel"));
+            Assert.That(source, Does.Contain("-rayTracingAdaptiveBootstrapFrames"));
+            Assert.That(source, Does.Contain("-rayTracingAdaptiveBootstrapResolutionScale"));
+            Assert.That(source, Does.Contain("-rayTracingAdaptiveGuidanceHistoryFrames"));
+            Assert.That(source, Does.Contain("-rayTracingAdaptiveBootstrapGroupDivisor"));
             Assert.That(source, Does.Contain("Enum.IsDefined"));
             Assert.That(source, Does.Contain("ApplyAdaptiveSamplingOverrides"));
         }

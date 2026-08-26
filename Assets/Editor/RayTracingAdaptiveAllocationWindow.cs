@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -12,20 +13,36 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
     private const string LiveGenerationPreference = "RayTracing.AdaptiveAllocationLiveGeneration";
     private const string HeatmapPreference = "RayTracing.AdaptiveAllocationShowHeatmap";
     private const string DifferencePreference = "RayTracing.AdaptiveAllocationShowDifference";
+    private const string RollingHeatmapPreference = "RayTracing.AdaptiveAllocationShowRollingHeatmap";
+    private const string RollingHeatmapFramesPreference = "RayTracing.AdaptiveAllocationRollingHeatmapFrames";
     private const string HeatmapFolderName = "TestCaptures/Heatmaps";
     private const int AdaptiveAllocationBlockSize = 8;
     private const int HeatmapPreviewScale = 4;
+    private const float MaxImageDisplaySize = 512.0f;
+    private const float ImagePanelMinimumHeight = 180.0f;
+    private const float ImagePanelBottomMargin = 24.0f;
     private string _folder;
     private string _latestPath;
     private string _latestMetadataPath;
     private Texture2D _latestTexture;
     private Texture2D _differenceTexture;
     private string _differenceStatus;
+    private string _referenceMetricStatus;
+    private double _referencePsnrDb;
+    private double _referenceRmse;
+    private bool _hasReferenceMetrics;
     private string _metadata;
     private double _nextPoll;
     private bool _liveGeneration;
     private bool _showHeatmap;
     private bool _showDifference;
+    private bool _showRollingHeatmap;
+    private int _rollingHeatmapFrames;
+    private readonly Queue<uint[]> _rollingGroupHistory = new Queue<uint[]>();
+    private int _rollingHistoryWidth = -1;
+    private int _rollingHistoryHeight = -1;
+    private Vector2 _windowScrollPosition;
+    private Vector2 _imageScrollPosition;
     private GameManager _liveManager;
     private bool _previousAdaptiveSampling;
     private bool _previousFrameAccumulation;
@@ -45,6 +62,8 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         _liveGeneration = SessionState.GetBool(LiveGenerationPreference, false);
         _showHeatmap = SessionState.GetBool(HeatmapPreference, true);
         _showDifference = SessionState.GetBool(DifferencePreference, false);
+        _showRollingHeatmap = SessionState.GetBool(RollingHeatmapPreference, false);
+        _rollingHeatmapFrames = Mathf.Clamp(SessionState.GetInt(RollingHeatmapFramesPreference, 30), 1, 10000);
         _folder = _liveGeneration ? GetLiveFolder() : ResolveDefaultFolder();
         if (string.IsNullOrEmpty(_folder))
         {
@@ -102,6 +121,7 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
 
     private void OnGUI()
     {
+        _windowScrollPosition = EditorGUILayout.BeginScrollView(_windowScrollPosition);
         EditorGUILayout.LabelField("Adaptive Allocation Monitor", EditorStyles.boldLabel);
         EditorGUILayout.HelpBox(
             "Live monitoring reports adaptive allocation statistics while playing. Heatmap and reference images are optional diagnostics and can be disabled to avoid their readback and file-generation cost. Monitoring pauses its diagnostics while Play mode is paused.",
@@ -156,6 +176,29 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
             PollForLatestFrame(true);
         }
 
+        using (new EditorGUILayout.HorizontalScope())
+        {
+            bool showRollingHeatmap = EditorGUILayout.ToggleLeft("Show last", _showRollingHeatmap,
+                GUILayout.Width(110.0f));
+            int rollingHeatmapFrames = EditorGUILayout.IntField(_rollingHeatmapFrames, GUILayout.Width(50.0f));
+            EditorGUILayout.LabelField("frames of allocation", GUILayout.Width(120.0f));
+            rollingHeatmapFrames = Mathf.Clamp(rollingHeatmapFrames, 1, 10000);
+            if (showRollingHeatmap != _showRollingHeatmap)
+            {
+                _showRollingHeatmap = showRollingHeatmap;
+                SessionState.SetBool(RollingHeatmapPreference, _showRollingHeatmap);
+                ResetRollingHeatmapHistory();
+                Repaint();
+            }
+            if (rollingHeatmapFrames != _rollingHeatmapFrames)
+            {
+                _rollingHeatmapFrames = rollingHeatmapFrames;
+                SessionState.SetInt(RollingHeatmapFramesPreference, _rollingHeatmapFrames);
+                ResetRollingHeatmapHistory();
+                Repaint();
+            }
+        }
+
         if (!_showHeatmap)
         {
             EditorGUILayout.HelpBox("Heatmap display and generation are disabled. Allocation statistics above continue to update while live monitoring is enabled.", MessageType.Info);
@@ -165,28 +208,65 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
             EditorGUILayout.HelpBox("Start an adaptive capture or select a completed heatmap folder to show the heatmap.", MessageType.Info);
         }
 
-        if (_showHeatmap && _latestTexture != null)
+        bool hasHeatmap = _showHeatmap && _latestTexture != null;
+        bool hasDifference = _showDifference && _differenceTexture != null;
+        if (!hasDifference && _showDifference)
         {
-            Rect imageRect = GUILayoutUtility.GetRect(_latestTexture.width * HeatmapPreviewScale,
-                _latestTexture.height * HeatmapPreviewScale, GUILayout.ExpandWidth(false), GUILayout.ExpandHeight(false));
-            GUI.DrawTexture(imageRect, _latestTexture, ScaleMode.ScaleToFit, false);
-        }
-
-        if (!_showDifference) return;
-
-        EditorGUILayout.Space();
-        EditorGUILayout.LabelField("Current Render vs Reference", EditorStyles.boldLabel);
-        if (_differenceTexture == null)
-        {
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Current Render vs Reference", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(string.IsNullOrEmpty(_differenceStatus)
                 ? "No reference difference is available for this frame."
                 : _differenceStatus, MessageType.Info);
+        }
+
+        if (_showDifference && _hasReferenceMetrics)
+        {
+            EditorGUILayout.LabelField("Current RGB PSNR", double.IsPositiveInfinity(_referencePsnrDb)
+                ? "Infinity dB (identical)"
+                : $"{_referencePsnrDb:0.00} dB");
+            EditorGUILayout.LabelField("Current RGB RMSE", $"{_referenceRmse:0.00000000}");
+        }
+        else if (_showDifference && !string.IsNullOrEmpty(_referenceMetricStatus))
+        {
+            EditorGUILayout.HelpBox(_referenceMetricStatus, MessageType.Info);
+        }
+
+        if (!hasHeatmap && !hasDifference)
+        {
+            EditorGUILayout.EndScrollView();
             return;
         }
 
-        Rect differenceRect = GUILayoutUtility.GetAspectRect(_differenceTexture.width / (float)_differenceTexture.height,
-            GUILayout.ExpandWidth(true), GUILayout.ExpandHeight(true));
-        GUI.DrawTexture(differenceRect, _differenceTexture, ScaleMode.ScaleToFit, false);
+        float imageWidth = Mathf.Min(MaxImageDisplaySize, Mathf.Max(1.0f, position.width - 24.0f));
+        float imagePanelHeight = Mathf.Max(ImagePanelMinimumHeight, position.height - GUILayoutUtility.GetLastRect().yMax
+            - ImagePanelBottomMargin);
+        imagePanelHeight = Mathf.Min(imagePanelHeight, position.height - ImagePanelBottomMargin);
+        _imageScrollPosition = EditorGUILayout.BeginScrollView(_imageScrollPosition, false, true,
+            GUILayout.Height(imagePanelHeight));
+        using (new EditorGUILayout.VerticalScope(GUILayout.Width(imageWidth), GUILayout.ExpandHeight(false)))
+        {
+            if (hasHeatmap)
+            {
+                DrawImage(_latestTexture, Mathf.Min(imageWidth, _latestTexture.width * HeatmapPreviewScale));
+            }
+
+            if (hasDifference)
+            {
+                if (hasHeatmap) EditorGUILayout.Space();
+                EditorGUILayout.LabelField("Current Render vs Reference", EditorStyles.boldLabel);
+                DrawImage(_differenceTexture, imageWidth);
+            }
+        }
+        EditorGUILayout.EndScrollView();
+        EditorGUILayout.EndScrollView();
+    }
+
+    private static void DrawImage(Texture2D texture, float width)
+    {
+        float height = width * texture.height / texture.width;
+        Rect imageRect = GUILayoutUtility.GetRect(width, height, GUILayout.Width(width), GUILayout.Height(height),
+            GUILayout.ExpandWidth(false), GUILayout.ExpandHeight(false));
+        GUI.DrawTexture(imageRect, texture, ScaleMode.ScaleToFit, false);
     }
 
     private static void DrawAdaptiveSamplingControls()
@@ -242,6 +322,9 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         _latestMetadataPath = null;
         DestroyLatestTexture();
         DestroyDifferenceTexture();
+        _hasReferenceMetrics = false;
+        _referenceMetricStatus = null;
+        ResetRollingHeatmapHistory();
         PollForLatestFrame(true);
     }
 
@@ -255,6 +338,9 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         _latestMetadataPath = null;
         DestroyLatestTexture();
         DestroyDifferenceTexture();
+        _hasReferenceMetrics = false;
+        _referenceMetricStatus = null;
+        ResetRollingHeatmapHistory();
 
         if (!EditorApplication.isPlaying)
         {
@@ -310,6 +396,7 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         }
         _liveManager = null;
         _liveSettingsApplied = false;
+        ResetRollingHeatmapHistory();
     }
 
     private void CaptureLiveFrame()
@@ -327,29 +414,52 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         string metadataPath = Path.Combine(_folder, $"frame_{frame:000000}.txt");
         if (_showHeatmap)
         {
-            allocation = _liveManager.ReadAdaptiveAllocationForCapture();
+            // The compact work list describes this scheduler epoch only. The monitor's heatmap is
+            // a convergence view, so visualize the persistent per-pixel retired-path totals.
+            allocation = _liveManager.ReadAdaptiveCumulativeAllocationForCapture();
+            if (_showRollingHeatmap)
+            {
+                allocation = BuildRollingHeatmapAllocation(allocation);
+            }
             string path = Path.Combine(_folder, $"frame_{frame:000000}.png");
             WriteHeatmap(path, allocation);
         }
         if (_showDifference)
         {
-            string differencePath = Path.Combine(_folder, $"difference_{frame:000000}.png");
-            if (!RayTracingSceneCapture.TryWriteCurrentReferenceDifference(_liveManager, SceneManager.GetActiveScene().path,
-                    differencePath, out _differenceStatus) && File.Exists(differencePath))
+            Texture2D difference;
+            _hasReferenceMetrics = RayTracingSceneCapture.TryCompareCurrentRenderToReference(_liveManager,
+                SceneManager.GetActiveScene().path, out difference, out _referencePsnrDb, out _referenceRmse,
+                out _referenceMetricStatus);
+            if (_hasReferenceMetrics)
             {
-                File.Delete(differencePath);
+                DestroyDifferenceTexture();
+                _differenceTexture = difference;
+                _differenceTexture.filterMode = FilterMode.Point;
+                _differenceStatus = string.Empty;
+            }
+            else
+            {
+                if (difference != null) UnityEngine.Object.DestroyImmediate(difference);
+                DestroyDifferenceTexture();
+                _differenceStatus = _referenceMetricStatus;
             }
         }
         else
         {
             DestroyDifferenceTexture();
+            _hasReferenceMetrics = false;
+            _referenceMetricStatus = null;
         }
         File.WriteAllText(metadataPath,
             $"Adaptive allocation heatmap\nFrame: {frame}\n" +
             $"Active work items: {allocation.activeWorkItems}\n" +
-            $"Current scheduled paths: {allocation.assignedPaths}\n" +
+            (_showRollingHeatmap
+                ? $"Rolling retired paths: {allocation.assignedPaths}\n"
+                : $"Cumulative retired paths: {allocation.assignedPaths}\n") +
             FormatBucketGroupCounts(allocation.bucketGroupCounts) +
-            "Colors rank pixels by their current scheduled-path count.\n");
+            (_showRollingHeatmap
+                ? $"Colors rank pixels by retired paths from the last {_rollingHeatmapFrames} frames.\n"
+                : "Colors rank pixels by their cumulative retired-path count.\n"));
         _lastLiveFrame = frame;
         PollForLatestFrame(true);
     }
@@ -392,6 +502,99 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         texture.Apply(false, false);
         File.WriteAllBytes(path, texture.EncodeToPNG());
         DestroyImmediate(texture);
+    }
+
+    private GameManager.AdaptiveAllocationFrameData BuildRollingHeatmapAllocation(
+        GameManager.AdaptiveAllocationFrameData cumulative)
+    {
+        EnsureRollingHistoryCapacity(cumulative.width, cumulative.height);
+        uint[] current = DownsampleGroupCounts(cumulative);
+        _rollingGroupHistory.Enqueue(current);
+        while (_rollingGroupHistory.Count > _rollingHeatmapFrames + 1)
+        {
+            _rollingGroupHistory.Dequeue();
+        }
+
+        uint[] oldest = _rollingGroupHistory.Count > _rollingHeatmapFrames
+            ? _rollingGroupHistory.Peek()
+            : null;
+        uint[] rolling = new uint[current.Length];
+        ulong assignedPaths = 0;
+        uint activeWorkItems = 0;
+        for (int i = 0; i < rolling.Length; i++)
+        {
+            uint previous = oldest == null ? 0u : oldest[i];
+            rolling[i] = current[i] >= previous ? current[i] - previous : 0u;
+            assignedPaths += rolling[i];
+            if (rolling[i] > 0u) activeWorkItems++;
+        }
+
+        return new GameManager.AdaptiveAllocationFrameData
+        {
+            pixels = ExpandGroupCounts(rolling, cumulative.width, cumulative.height),
+            bucketGroupCounts = cumulative.bucketGroupCounts,
+            assignedPaths = assignedPaths > uint.MaxValue ? uint.MaxValue : (uint)assignedPaths,
+            activeWorkItems = activeWorkItems,
+            width = cumulative.width,
+            height = cumulative.height
+        };
+    }
+
+    private void EnsureRollingHistoryCapacity(int width, int height)
+    {
+        if (_rollingHistoryWidth == width && _rollingHistoryHeight == height) return;
+        ResetRollingHeatmapHistory();
+        _rollingHistoryWidth = width;
+        _rollingHistoryHeight = height;
+    }
+
+    private void ResetRollingHeatmapHistory()
+    {
+        _rollingGroupHistory.Clear();
+        _rollingHistoryWidth = -1;
+        _rollingHistoryHeight = -1;
+    }
+
+    private static uint[] DownsampleGroupCounts(GameManager.AdaptiveAllocationFrameData allocation)
+    {
+        int groupWidth = Mathf.CeilToInt(allocation.width / (float)AdaptiveAllocationBlockSize);
+        int groupHeight = Mathf.CeilToInt(allocation.height / (float)AdaptiveAllocationBlockSize);
+        var groups = new uint[groupWidth * groupHeight];
+        for (int y = 0; y < groupHeight; y++)
+        {
+            for (int x = 0; x < groupWidth; x++)
+            {
+                int startX = x * AdaptiveAllocationBlockSize;
+                int startY = y * AdaptiveAllocationBlockSize;
+                int endX = Mathf.Min(startX + AdaptiveAllocationBlockSize, allocation.width);
+                int endY = Mathf.Min(startY + AdaptiveAllocationBlockSize, allocation.height);
+                ulong total = 0;
+                for (int pixelY = startY; pixelY < endY; pixelY++)
+                {
+                    for (int pixelX = startX; pixelX < endX; pixelX++)
+                    {
+                        total += allocation.pixels[pixelX + pixelY * allocation.width];
+                    }
+                }
+                groups[x + y * groupWidth] = total > uint.MaxValue ? uint.MaxValue : (uint)total;
+            }
+        }
+        return groups;
+    }
+
+    private static uint[] ExpandGroupCounts(uint[] groups, int width, int height)
+    {
+        int groupWidth = Mathf.CeilToInt(width / (float)AdaptiveAllocationBlockSize);
+        var pixels = new uint[width * height];
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                pixels[x + y * width] = groups[(x / AdaptiveAllocationBlockSize)
+                    + (y / AdaptiveAllocationBlockSize) * groupWidth];
+            }
+        }
+        return pixels;
     }
 
     private static Color HeatmapColor(uint paths, float quantile)
@@ -528,9 +731,14 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         }
         if (_showDifference)
         {
-            string differencePath = Path.Combine(_folder,
-                Path.GetFileName(latest).Replace("frame_", "difference_"));
-            LoadDifferenceTexture(differencePath);
+            // Live comparison creates the display texture directly and does not write a PNG.
+            // Completed capture folders still load their persisted difference image here.
+            if (!_liveGeneration || _differenceTexture == null)
+            {
+                string differencePath = Path.Combine(_folder,
+                    Path.GetFileName(latest).Replace("frame_", "difference_"));
+                LoadDifferenceTexture(differencePath);
+            }
         }
         Repaint();
     }
