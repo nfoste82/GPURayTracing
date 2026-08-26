@@ -1,5 +1,4 @@
-#pragma kernel CSAdaptiveTraceRoot
-#pragma kernel CSAdaptiveResolveRoot
+#pragma kernel CSAdaptiveTrace
 #pragma kernel CSAdaptiveTraceReference
 #pragma multi_compile _ FOG_ENABLED
 #pragma multi_compile _ TERRAIN_ENABLED
@@ -8,47 +7,10 @@
 #include "../Scripts/RayTracingShared.hlsl"
 
 [numthreads(16,1,1)]
-void CSAdaptiveTraceRoot(uint3 id : SV_DispatchThreadID)
+void CSAdaptiveTrace(uint3 id : SV_DispatchThreadID)
 {
     uint width, height;
-    Result.GetDimensions(width, height);
-    uint rootIndex = id.x;
-    uint rootCount = min(AdaptiveWorkListMetadata[AdaptiveMetadataAssignedPaths], _AdaptiveRootPathCapacity);
-    if (rootIndex >= rootCount) return;
-
-    uint2 rootItem = AdaptiveTraceRootWorkList[rootIndex];
-    uint2 pixel = uint2(rootItem.x % width, rootItem.x / width);
-    float oldCount = AdaptiveSamplingState[pixel].x;
-    uint rngState = CreateRngState(pixel, (uint)oldCount + rootItem.y);
-    float2 pixelJitter = float2(rand(rngState), rand(rngState));
-    if (_SubpixelJitterScale != 1.0f) pixelJitter = (pixelJitter - 0.5f) * _SubpixelJitterScale + 0.5f;
-    float2 uv = ((pixel + pixelJitter) / float2(width, height)) * 2.0f - 1.0f;
-    if (_UseTemporalJitter != 0) uv += _FrameJitterNdc;
-    Ray ray = CreateCameraRay(uv);
-    if (_ApertureRadius > 0.0f)
-    {
-        float3 cameraForward = normalize(mul(_CameraToWorld, float4(0.0f, 0.0f, -1.0f, 0.0f)).xyz);
-        float focusRayDistance = _FocalDistance / max(0.0001f, dot(ray.direction, cameraForward));
-        float3 focalPoint = ray.origin + ray.direction * focusRayDistance;
-        float2 apertureSample = SampleAperture(rngState) * _ApertureRadius;
-        float3 cameraRight = normalize(mul(_CameraToWorld, float4(1.0f, 0.0f, 0.0f, 0.0f)).xyz);
-        float3 cameraUp = normalize(mul(_CameraToWorld, float4(0.0f, 1.0f, 0.0f, 0.0f)).xyz);
-        ray.origin += cameraRight * apertureSample.x + cameraUp * apertureSample.y;
-        ray.direction = normalize(focalPoint - ray.origin);
-    }
-    else
-    {
-        rand(rngState); rand(rngState); rand(rngState); rand(rngState); rand(rngState); rand(rngState);
-    }
-    float3 radiance = ClampFirefly(TracePath(ray, rngState));
-    AdaptiveRootRadiance[rootIndex] = float4(all(isfinite(radiance)) ? radiance : 0.0f, 1.0f);
-}
-
-[numthreads(16,1,1)]
-void CSAdaptiveResolveRoot(uint3 id : SV_DispatchThreadID)
-{
-    uint width, height;
-    Result.GetDimensions(width, height);
+    Beauty.GetDimensions(width, height);
     uint workIndex = id.x;
     uint workCount = min(AdaptiveWorkListMetadata[AdaptiveMetadataWorkItemCount], _AdaptiveWorkListCapacity);
     if (workIndex >= workCount) return;
@@ -58,22 +20,42 @@ void CSAdaptiveResolveRoot(uint3 id : SV_DispatchThreadID)
     if (workItem.y == 0u) return;
     uint2 pixel = uint2(workItem.x % width, workItem.x / width);
     float4 previousState = AdaptiveSamplingState[pixel];
-    float3 colorM2 = AdaptiveSamplingM2[pixel].rgb;
+    float4 previousM2 = AdaptiveSamplingM2[pixel];
+    float3 colorM2 = previousM2.rgb;
     float3 color = AccumulationResult[pixel].rgb;
-    float4 alternating = float4(previousState.yzw, AdaptiveSamplingM2[pixel].a);
-    float3 radianceSum = 0.0f;
-    uint rootOffset = AdaptiveWorkRootOffsets[workIndex];
+    bool trackAlternating = _AdaptivePriorityMode == 1u;
+    float4 alternating = float4(previousState.yzw, previousM2.a);
     [loop]
     for (uint localSample = 0u; localSample < workItem.y; localSample++)
     {
-        float3 sampleRadiance = AdaptiveRootRadiance[rootOffset + localSample].rgb;
-        radianceSum += sampleRadiance;
+        uint rngState = CreateRngState(pixel, (uint)previousState.x + localSample);
+        float2 pixelJitter = float2(rand(rngState), rand(rngState));
+        if (_SubpixelJitterScale != 1.0f) pixelJitter = (pixelJitter - 0.5f) * _SubpixelJitterScale + 0.5f;
+        float2 uv = ((pixel + pixelJitter) / float2(width, height)) * 2.0f - 1.0f;
+        if (_UseTemporalJitter != 0) uv += _FrameJitterNdc;
+        Ray ray = CreateCameraRay(uv);
+        if (_ApertureRadius > 0.0f)
+        {
+            float3 cameraForward = normalize(mul(_CameraToWorld, float4(0.0f, 0.0f, -1.0f, 0.0f)).xyz);
+            float focusRayDistance = _FocalDistance / max(0.0001f, dot(ray.direction, cameraForward));
+            float3 focalPoint = ray.origin + ray.direction * focusRayDistance;
+            float2 apertureSample = SampleAperture(rngState) * _ApertureRadius;
+            float3 cameraRight = normalize(mul(_CameraToWorld, float4(1.0f, 0.0f, 0.0f, 0.0f)).xyz);
+            float3 cameraUp = normalize(mul(_CameraToWorld, float4(0.0f, 1.0f, 0.0f, 0.0f)).xyz);
+            ray.origin += cameraRight * apertureSample.x + cameraUp * apertureSample.y;
+            ray.direction = normalize(focalPoint - ray.origin);
+        }
+        else
+        {
+            rand(rngState); rand(rngState); rand(rngState); rand(rngState); rand(rngState); rand(rngState);
+        }
+        float3 sampleRadiance = ClampFirefly(TracePath(ray, rngState));
+        sampleRadiance = all(isfinite(sampleRadiance)) ? sampleRadiance : 0.0f;
         float nextCount = previousState.x + localSample + 1.0f;
         float3 colorDelta = sampleRadiance - color;
         color += colorDelta / nextCount;
         colorM2 += colorDelta * (sampleRadiance - color);
-        uint sampleIndex = (uint)previousState.x + localSample;
-        if ((sampleIndex & 1u) != 0u)
+        if (trackAlternating && ((((uint)previousState.x + localSample) & 1u) != 0u))
         {
             float alternatingCount = alternating.a + 1.0f;
             alternating.rgb += (sampleRadiance - alternating.rgb) / alternatingCount;
@@ -81,11 +63,9 @@ void CSAdaptiveResolveRoot(uint3 id : SV_DispatchThreadID)
         }
     }
     float newCount = previousState.x + (float)workItem.y;
-    float uncertainty = newCount > 1.0f ? sqrt(max(0.0f, (colorM2.x + colorM2.y + colorM2.z) / (newCount * (newCount - 1.0f)))) : 0.0f;
-    InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataRetiredPaths], workItem.y);
     AccumulationResult[pixel] = float4(color, 1.0f);
-    AdaptiveSamplingState[pixel] = float4(newCount, alternating.rgb);
-    AdaptiveSamplingM2[pixel] = float4(colorM2, alternating.a);
+    AdaptiveSamplingState[pixel] = float4(newCount, trackAlternating ? alternating.rgb : previousState.yzw);
+    AdaptiveSamplingM2[pixel] = float4(colorM2, trackAlternating ? alternating.a : previousM2.a);
     Beauty[pixel] = float4(color, 1.0f);
 }
 
@@ -100,10 +80,10 @@ void CSAdaptiveTraceReference(uint3 id : SV_DispatchThreadID)
     uint2 workItem = AdaptiveTraceWorkList[pixel.x + pixel.y * width];
     int samplesThisPixel = (int)workItem.y;
     float4 previousState = AdaptiveSamplingState[pixel];
-    float3 radianceSum = 0.0f;
     float3 colorM2 = AdaptiveSamplingM2[pixel].rgb;
     float3 color = AccumulationResult[pixel].rgb;
     float4 alternating = float4(previousState.yzw, AdaptiveSamplingM2[pixel].a);
+    bool trackAlternating = _AdaptivePriorityMode == 1u;
     float oldCount = previousState.x;
     [loop]
     for (int i = 0; i < samplesThisPixel; i++)
@@ -117,13 +97,12 @@ void CSAdaptiveTraceReference(uint3 id : SV_DispatchThreadID)
         // The controlled reference uses the pinhole path, matching the parity fixture setup.
         rand(rngState); rand(rngState); rand(rngState); rand(rngState); rand(rngState); rand(rngState);
         float3 sampleRadiance = ClampFirefly(TracePath(ray, rngState));
-        radianceSum += sampleRadiance;
         float nextCount = oldCount + (float)i + 1.0f;
         float3 colorDelta = sampleRadiance - color;
         color += colorDelta / nextCount;
         colorM2 += colorDelta * (sampleRadiance - color);
         uint sampleIndex = (uint)oldCount + (uint)i;
-        if ((sampleIndex & 1u) != 0u)
+        if (trackAlternating && (sampleIndex & 1u) != 0u)
         {
             float alternatingCount = alternating.a + 1.0f;
             alternating.rgb += (sampleRadiance - alternating.rgb) / alternatingCount;
@@ -134,7 +113,6 @@ void CSAdaptiveTraceReference(uint3 id : SV_DispatchThreadID)
     float newCount = oldCount + samplesThisPixel;
     float uncertainty = newCount > 1.0f ? sqrt(max(0.0f, (colorM2.x + colorM2.y + colorM2.z) / (newCount * (newCount - 1.0f)))) : 0.0f;
     AccumulationResult[pixel] = float4(color, 1.0f);
-    AdaptiveSamplingState[pixel] = float4(newCount, alternating.rgb);
-    AdaptiveSamplingM2[pixel] = float4(colorM2, alternating.a);
-    Result[pixel] = float4(color, 1.0f);
+    AdaptiveSamplingState[pixel] = float4(newCount, trackAlternating ? alternating.rgb : previousState.yzw);
+    AdaptiveSamplingM2[pixel] = float4(colorM2, trackAlternating ? alternating.a : AdaptiveSamplingM2[pixel].a);
 }

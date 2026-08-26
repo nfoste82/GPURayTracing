@@ -286,9 +286,6 @@ public class GameManager : MonoBehaviour
     private RenderTexture _adaptiveBootstrapBeautyTexture;
     private RenderTexture _adaptiveBootstrapPriorityTexture;
     private ComputeBuffer _adaptiveWorkListBuffer;
-    private ComputeBuffer _adaptiveRootWorkListBuffer;
-    private ComputeBuffer _adaptiveRootRadianceBuffer;
-    private ComputeBuffer _adaptiveWorkRootOffsetsBuffer;
     private ComputeBuffer _adaptiveGroupStateBuffer;
     private ComputeBuffer _adaptiveGroupInfoBuffer;
     private ComputeBuffer _adaptiveGroupBucketBuffer;
@@ -355,7 +352,6 @@ public class GameManager : MonoBehaviour
         }
     }
     private ComputeBuffer _adaptiveDispatchArgumentsBuffer;
-    private ComputeBuffer _adaptiveResolveDispatchArgumentsBuffer;
     private int _adaptiveScheduleFrame = -1;
     private bool _adaptiveScheduleInitialized;
     private int _adaptiveBootstrapFrameCount;
@@ -592,10 +588,6 @@ public class GameManager : MonoBehaviour
     private static readonly int AdaptiveNormalizePriorityByLuminance = Shader.PropertyToID("_AdaptiveNormalizePriorityByLuminance");
     private static readonly int AdaptiveWorkList = Shader.PropertyToID("AdaptiveWorkList");
     private static readonly int AdaptiveTraceWorkList = Shader.PropertyToID("AdaptiveTraceWorkList");
-    private static readonly int AdaptiveRootWorkList = Shader.PropertyToID("AdaptiveRootWorkList");
-    private static readonly int AdaptiveTraceRootWorkList = Shader.PropertyToID("AdaptiveTraceRootWorkList");
-    private static readonly int AdaptiveRootRadiance = Shader.PropertyToID("AdaptiveRootRadiance");
-    private static readonly int AdaptiveWorkRootOffsets = Shader.PropertyToID("AdaptiveWorkRootOffsets");
     private static readonly int AdaptiveGroupState = Shader.PropertyToID("AdaptiveGroupState");
     private static readonly int AdaptiveGroupInfo = Shader.PropertyToID("AdaptiveGroupInfo");
     private static readonly int AdaptiveGroupBucket = Shader.PropertyToID("AdaptiveGroupBucket");
@@ -612,9 +604,7 @@ public class GameManager : MonoBehaviour
     private static readonly int AdaptiveBootstrapGroupDivisor = Shader.PropertyToID("_AdaptiveBootstrapGroupDivisor");
     private static readonly int AdaptiveWorkListMetadata = Shader.PropertyToID("AdaptiveWorkListMetadata");
     private static readonly int AdaptiveWorkListCapacity = Shader.PropertyToID("_AdaptiveWorkListCapacity");
-    private static readonly int AdaptiveRootPathCapacity = Shader.PropertyToID("_AdaptiveRootPathCapacity");
     private static readonly int AdaptiveDispatchArgs = Shader.PropertyToID("AdaptiveDispatchArgs");
-    private static readonly int AdaptiveResolveDispatchArgs = Shader.PropertyToID("AdaptiveResolveDispatchArgs");
     private static readonly int MainTex = Shader.PropertyToID("_MainTex");
     private static readonly int Tint = Shader.PropertyToID("_Tint");
     private static readonly int Rotation = Shader.PropertyToID("_Rotation");
@@ -914,9 +904,6 @@ public class GameManager : MonoBehaviour
         _adaptiveBootstrapBeautyTexture?.Release();
         _adaptiveBootstrapPriorityTexture?.Release();
         _adaptiveWorkListBuffer?.Release();
-        _adaptiveRootWorkListBuffer?.Release();
-        _adaptiveRootRadianceBuffer?.Release();
-        _adaptiveWorkRootOffsetsBuffer?.Release();
         _adaptiveGroupStateBuffer?.Release();
         _adaptiveGroupInfoBuffer?.Release();
         _adaptiveGroupBucketBuffer?.Release();
@@ -924,7 +911,6 @@ public class GameManager : MonoBehaviour
         _adaptiveRawBucketDemandBuffer?.Release();
         _adaptiveWorkListMetadataBuffer?.Release();
         _adaptiveDispatchArgumentsBuffer?.Release();
-        _adaptiveResolveDispatchArgumentsBuffer?.Release();
         _spatialDenoisingManager.ReleaseResources();
         _glareManager.ReleaseResources();
         ReleaseTemporalDenoiserResources();
@@ -966,13 +952,7 @@ public class GameManager : MonoBehaviour
         var adaptiveGroupWidth = Mathf.CeilToInt(_textureSize.x / 8.0f);
         var adaptiveGroupHeight = Mathf.CeilToInt(_textureSize.y / 8.0f);
         var adaptiveWorkCapacity = Mathf.Max(1, _textureSize.x * _textureSize.y);
-        // The allocation can change at runtime without recreating resources. Keep the existing
-        // maximum-pass capacity until resource lifetime is made adaptive as a separate change.
-        var adaptiveRootPathCapacity = adaptiveWorkCapacity * 32;
         _adaptiveWorkListBuffer = new ComputeBuffer(adaptiveWorkCapacity, AdaptiveWorkItemStride);
-        _adaptiveRootWorkListBuffer = new ComputeBuffer(adaptiveRootPathCapacity, AdaptiveWorkItemStride);
-        _adaptiveRootRadianceBuffer = new ComputeBuffer(adaptiveRootPathCapacity, sizeof(float) * 4);
-        _adaptiveWorkRootOffsetsBuffer = new ComputeBuffer(adaptiveWorkCapacity, sizeof(uint));
         var adaptiveGroupCount = adaptiveGroupWidth * adaptiveGroupHeight;
         _adaptiveGroupStateBuffer = new ComputeBuffer(adaptiveGroupCount, sizeof(uint) * 4);
         _adaptiveGroupInfoBuffer = new ComputeBuffer(adaptiveGroupCount, sizeof(uint) * 4);
@@ -981,7 +961,6 @@ public class GameManager : MonoBehaviour
         _adaptiveRawBucketDemandBuffer = new ComputeBuffer(AdaptiveBucketCountMaximum, sizeof(uint));
         _adaptiveWorkListMetadataBuffer = new ComputeBuffer(AdaptiveMetadataCount, sizeof(uint));
         _adaptiveDispatchArgumentsBuffer = new ComputeBuffer(3, sizeof(uint), ComputeBufferType.IndirectArguments);
-        _adaptiveResolveDispatchArgumentsBuffer = new ComputeBuffer(3, sizeof(uint), ComputeBufferType.IndirectArguments);
         ResetFrameAccumulation();
         _temporalDenoisingManager.ResetHistory();
     }
@@ -1201,9 +1180,6 @@ public class GameManager : MonoBehaviour
         _adaptiveBootstrapBeautyTexture?.Release();
         _adaptiveBootstrapPriorityTexture?.Release();
         _adaptiveWorkListBuffer?.Release();
-        _adaptiveRootWorkListBuffer?.Release();
-        _adaptiveRootRadianceBuffer?.Release();
-        _adaptiveWorkRootOffsetsBuffer?.Release();
         _adaptiveGroupStateBuffer?.Release();
         _adaptiveGroupInfoBuffer?.Release();
         _adaptiveGroupBucketBuffer?.Release();
@@ -1211,7 +1187,6 @@ public class GameManager : MonoBehaviour
         _adaptiveRawBucketDemandBuffer?.Release();
         _adaptiveWorkListMetadataBuffer?.Release();
         _adaptiveDispatchArgumentsBuffer?.Release();
-        _adaptiveResolveDispatchArgumentsBuffer?.Release();
         
         _spatialDenoisingManager.ReleaseResources();
         _glareManager.ReleaseResources();
@@ -1369,7 +1344,7 @@ public class GameManager : MonoBehaviour
         }
 
         var activeAdaptiveTraceShader = ActiveAdaptiveTraceShader;
-        if (targetShader == activeAdaptiveTraceShader && kernelHandle == activeAdaptiveTraceShader.FindKernel("CSAdaptiveTraceRoot"))
+        if (targetShader == activeAdaptiveTraceShader && kernelHandle == activeAdaptiveTraceShader.FindKernel("CSAdaptiveTrace"))
         {
             DispatchAdaptiveSampling();
             return;
@@ -1404,20 +1379,16 @@ public class GameManager : MonoBehaviour
         var applyBucketRemapKernel = adaptiveSchedulerShader.FindKernel("CSAdaptiveApplyBucketRemap");
         var compactWorkListKernel = adaptiveSchedulerShader.FindKernel("CSAdaptiveCompactGroupWorkList");
         var clearSchedulerKernel = adaptiveSchedulerShader.FindKernel("ClearAdaptiveScheduler");
-        var traceKernel = activeAdaptiveTraceShader.FindKernel("CSAdaptiveTraceRoot");
-        var resolveKernel = activeAdaptiveTraceShader.FindKernel("CSAdaptiveResolveRoot");
+        var traceKernel = activeAdaptiveTraceShader.FindKernel("CSAdaptiveTrace");
         var buildDispatchArgsKernel = adaptiveSchedulerShader.FindKernel("CSBuildAdaptiveDispatchArgs");
         var clearWorkListKernel = adaptiveSchedulerShader.FindKernel("ClearAdaptiveWorkList");
         var clearFrameMetadataKernel = adaptiveSchedulerShader.FindKernel("ClearAdaptiveFrameMetadata");
+        var recordRetiredPathsKernel = adaptiveSchedulerShader.FindKernel("RecordAdaptiveRetiredPaths");
         var workCapacity = _textureSize.x * _textureSize.y;
-        var rootPathCapacity = _adaptiveRootWorkListBuffer.count;
         var groupWidth = Mathf.CeilToInt(_textureSize.x / 8.0f);
         var groupHeight = Mathf.CeilToInt(_textureSize.y / 8.0f);
 
-        // Fractional rates are represented by whole group updates across scheduler epochs. Keep
-        // those epochs frame-sized so a 1/8x tier is not stretched by schedule reuse.
-        bool reclassify = adaptiveHighestBucketSampleRate > 1.0f
-            || !_adaptiveScheduleInitialized
+        bool reclassify = !_adaptiveScheduleInitialized
             || _adaptiveScheduleFrame >= Mathf.Clamp(adaptiveReclassificationInterval, 1, 8);
         LastAdaptiveSamplingReclassified = reclassify;
         if (_adaptiveCaptureDiagnostics)
@@ -1426,12 +1397,11 @@ public class GameManager : MonoBehaviour
             ComputeDispatch.Dispatch(adaptiveSchedulerShader, clearFrameMetadataKernel, 1, 1, 1);
         }
 
+        var schedulerStopwatch = _adaptiveCaptureDiagnostics ? Stopwatch.StartNew() : null;
+        adaptiveSchedulerShader.SetBuffer(clearWorkListKernel, AdaptiveWorkListMetadata, _adaptiveWorkListMetadataBuffer);
+        ComputeDispatch.Dispatch(adaptiveSchedulerShader, clearWorkListKernel, AdaptiveMetadataCount, 1, 1);
         if (reclassify)
         {
-            var schedulerStopwatch = _adaptiveCaptureDiagnostics ? Stopwatch.StartNew() : null;
-            adaptiveSchedulerShader.SetBuffer(clearWorkListKernel, AdaptiveWorkListMetadata, _adaptiveWorkListMetadataBuffer);
-            ComputeDispatch.Dispatch(adaptiveSchedulerShader, clearWorkListKernel, AdaptiveMetadataCount, 1, 1);
-
             BindAdaptiveSchedulerResources(clearSchedulerKernel);
             ComputeDispatch.Dispatch(adaptiveSchedulerShader, clearSchedulerKernel, 1, 1, 1);
 
@@ -1441,48 +1411,45 @@ public class GameManager : MonoBehaviour
                 _accumulatedFrameCount % Mathf.Clamp(adaptiveBootstrapGroupDivisor, 1, 16));
             ComputeDispatch.Dispatch(adaptiveSchedulerShader, classifyKernel, groupWidth, groupHeight, 1);
 
-            BindAdaptiveSchedulerResources(applyBucketRemapKernel);
-            SetAdaptiveGroupDimensions(groupWidth, groupHeight);
-            adaptiveSchedulerShader.SetInt("_AdaptiveScheduleRotation",
-                _accumulatedFrameCount % Mathf.Clamp(adaptiveBootstrapGroupDivisor, 1, 16));
-            ComputeDispatch.Dispatch(adaptiveSchedulerShader, applyBucketRemapKernel, groupWidth, groupHeight, 1);
-
-            BindAdaptiveSchedulerResources(compactWorkListKernel);
-            SetAdaptiveGroupDimensions(groupWidth, groupHeight);
-            adaptiveSchedulerShader.SetInt(AdaptiveRootPathCapacity, rootPathCapacity);
-            ComputeDispatch.Dispatch(adaptiveSchedulerShader, compactWorkListKernel, Mathf.CeilToInt(workCapacity / 256.0f), 1, 1);
-
-            BindAdaptiveSchedulerResources(buildDispatchArgsKernel);
-            adaptiveSchedulerShader.SetInt(AdaptiveWorkListCapacity, workCapacity);
-            adaptiveSchedulerShader.SetInt(AdaptiveRootPathCapacity, rootPathCapacity);
-            adaptiveSchedulerShader.SetBuffer(buildDispatchArgsKernel, AdaptiveDispatchArgs, _adaptiveDispatchArgumentsBuffer);
-            adaptiveSchedulerShader.SetBuffer(buildDispatchArgsKernel, AdaptiveResolveDispatchArgs, _adaptiveResolveDispatchArgumentsBuffer);
-            ComputeDispatch.Dispatch(adaptiveSchedulerShader, buildDispatchArgsKernel, 1, 1, 1);
-            CompleteAdaptivePhaseTiming(schedulerStopwatch, out _adaptiveSchedulerMilliseconds);
         }
-        else _adaptiveSchedulerMilliseconds = 0.0;
+        // Scores persist between reclassifications, but tier rotation remains per-frame so fractional
+        // sample rates retain their intended temporal distribution.
+        BindAdaptiveSchedulerResources(applyBucketRemapKernel);
+        SetAdaptiveGroupDimensions(groupWidth, groupHeight);
+        adaptiveSchedulerShader.SetInt("_AdaptiveScheduleRotation", _accumulatedFrameCount);
+        ComputeDispatch.Dispatch(adaptiveSchedulerShader, applyBucketRemapKernel, groupWidth, groupHeight, 1);
+
+        BindAdaptiveSchedulerResources(compactWorkListKernel);
+        SetAdaptiveGroupDimensions(groupWidth, groupHeight);
+        ComputeDispatch.Dispatch(adaptiveSchedulerShader, compactWorkListKernel, Mathf.CeilToInt(workCapacity / 256.0f), 1, 1);
+
+        BindAdaptiveSchedulerResources(buildDispatchArgsKernel);
+        adaptiveSchedulerShader.SetInt(AdaptiveWorkListCapacity, workCapacity);
+        adaptiveSchedulerShader.SetBuffer(buildDispatchArgsKernel, AdaptiveDispatchArgs, _adaptiveDispatchArgumentsBuffer);
+        ComputeDispatch.Dispatch(adaptiveSchedulerShader, buildDispatchArgsKernel, 1, 1, 1);
+        CompleteAdaptivePhaseTiming(schedulerStopwatch, out _adaptiveSchedulerMilliseconds);
 
         SetShaderParameters(activeAdaptiveTraceShader, traceKernel);
         BindAdaptiveTraceResources(traceKernel);
-        SetShaderParameters(activeAdaptiveTraceShader, resolveKernel);
-        BindAdaptiveTraceResources(resolveKernel);
-        // Dispatch limits belong to the trace asset, not the scheduler asset that built the list.
-        // Without these bindings both indirect kernels clamp their work counts to zero.
         activeAdaptiveTraceShader.SetInt(AdaptiveWorkListCapacity, workCapacity);
-        activeAdaptiveTraceShader.SetInt(AdaptiveRootPathCapacity, rootPathCapacity);
         var traceStopwatch = _adaptiveCaptureDiagnostics ? Stopwatch.StartNew() : null;
         ComputeDispatch.DispatchIndirect(activeAdaptiveTraceShader, traceKernel, _adaptiveDispatchArgumentsBuffer);
         CompleteAdaptivePhaseTiming(traceStopwatch, out _adaptiveTraceMilliseconds);
+        if (_adaptiveCaptureDiagnostics)
+        {
+            adaptiveSchedulerShader.SetBuffer(recordRetiredPathsKernel, AdaptiveWorkListMetadata, _adaptiveWorkListMetadataBuffer);
+            ComputeDispatch.Dispatch(adaptiveSchedulerShader, recordRetiredPathsKernel, 1, 1, 1);
+        }
+        _adaptiveResolveMilliseconds = 0.0;
 
-        var resolveStopwatch = _adaptiveCaptureDiagnostics ? Stopwatch.StartNew() : null;
-        ComputeDispatch.DispatchIndirect(activeAdaptiveTraceShader, resolveKernel, _adaptiveResolveDispatchArgumentsBuffer);
-        CompleteAdaptivePhaseTiming(resolveStopwatch, out _adaptiveResolveMilliseconds);
-
-        var composeBootstrapKernel = utilityShader.FindKernel("ComposeAdaptiveBootstrap");
-        BindAdaptiveBootstrapUtilityResources(composeBootstrapKernel);
-        ComputeDispatch.Dispatch(utilityShader, composeBootstrapKernel,
-            Mathf.CeilToInt(_textureSize.x / (float)RenderThreadCountX),
-            Mathf.CeilToInt(_textureSize.y / (float)RenderThreadCountY), 1);
+        if (_adaptiveBootstrapPriorityActive)
+        {
+            var composeBootstrapKernel = utilityShader.FindKernel("ComposeAdaptiveBootstrap");
+            BindAdaptiveBootstrapUtilityResources(composeBootstrapKernel);
+            ComputeDispatch.Dispatch(utilityShader, composeBootstrapKernel,
+                Mathf.CeilToInt(_textureSize.x / (float)RenderThreadCountX),
+                Mathf.CeilToInt(_textureSize.y / (float)RenderThreadCountY), 1);
+        }
 
         _adaptiveScheduleInitialized = true;
         _adaptiveScheduleFrame = reclassify ? 0 : _adaptiveScheduleFrame + 1;
@@ -1720,10 +1687,6 @@ public class GameManager : MonoBehaviour
         targetShader.SetTexture(kernelHandle, "AdaptiveBootstrapPriority", _adaptiveBootstrapPriorityTexture);
         targetShader.SetBuffer(kernelHandle, AdaptiveWorkList, _adaptiveWorkListBuffer);
         targetShader.SetBuffer(kernelHandle, AdaptiveTraceWorkList, _adaptiveWorkListBuffer);
-        targetShader.SetBuffer(kernelHandle, AdaptiveRootWorkList, _adaptiveRootWorkListBuffer);
-        targetShader.SetBuffer(kernelHandle, AdaptiveTraceRootWorkList, _adaptiveRootWorkListBuffer);
-        targetShader.SetBuffer(kernelHandle, AdaptiveRootRadiance, _adaptiveRootRadianceBuffer);
-        targetShader.SetBuffer(kernelHandle, AdaptiveWorkRootOffsets, _adaptiveWorkRootOffsetsBuffer);
         targetShader.SetBuffer(kernelHandle, AdaptiveGroupState, _adaptiveGroupStateBuffer);
         targetShader.SetBuffer(kernelHandle, AdaptiveGroupInfo, _adaptiveGroupInfoBuffer);
         targetShader.SetBuffer(kernelHandle, AdaptiveGroupBucket, _adaptiveGroupBucketBuffer);
@@ -2237,7 +2200,7 @@ public class GameManager : MonoBehaviour
             : ShouldUseAdaptiveSampling() ? ActiveAdaptiveTraceShader : HasWaterVolume ? waterShader : shader;
         frame.kernelHandle = frame.computeShader.FindKernel(frame.useDedicatedCausticsDebugKernel ? "CSCausticsDebug"
             : frame.useGeometryDebugShader ? "CSDebugMain"
-            : ShouldUseAdaptiveSampling() ? "CSAdaptiveTraceRoot" : "CSMain");
+            : ShouldUseAdaptiveSampling() ? "CSAdaptiveTrace" : "CSMain");
     }
 
     private void DispatchRenderFrame(ref RenderFrame frame)

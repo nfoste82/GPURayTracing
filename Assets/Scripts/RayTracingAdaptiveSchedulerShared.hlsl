@@ -9,19 +9,18 @@ RWTexture2D<float4> AdaptiveSamplingM2;
 Texture2D<float4> AdaptiveBootstrapPriority;
 RWStructuredBuffer<uint2> AdaptiveWorkList;
 StructuredBuffer<uint2> AdaptiveTraceWorkList;
-RWStructuredBuffer<uint2> AdaptiveRootWorkList;
-StructuredBuffer<uint2> AdaptiveTraceRootWorkList;
-RWStructuredBuffer<float4> AdaptiveRootRadiance;
-RWStructuredBuffer<uint> AdaptiveWorkRootOffsets;
 RWStructuredBuffer<uint4> AdaptiveGroupState;
 RWStructuredBuffer<uint4> AdaptiveGroupInfo;
 StructuredBuffer<uint4> AdaptiveProbeGroups;
 RWStructuredBuffer<uint> AdaptiveGroupBucket;
 RWStructuredBuffer<uint> AdaptiveGroupExtraDemand;
 RWStructuredBuffer<uint> AdaptiveRawBucketDemand;
+#ifdef RAY_TRACING_ADAPTIVE_TRACE
+StructuredBuffer<uint> AdaptiveWorkListMetadata;
+#else
 RWStructuredBuffer<uint> AdaptiveWorkListMetadata;
+#endif
 RWStructuredBuffer<uint> AdaptiveDispatchArgs;
-RWStructuredBuffer<uint> AdaptiveResolveDispatchArgs;
 
 #define AdaptiveMetadataWorkItemCount 0u
 #define AdaptiveMetadataPrioritySum 1u
@@ -48,7 +47,6 @@ int _NumberOfPasses;
 #endif
 int _AdaptiveSamplingMinSamples;
 uint _AdaptiveWorkListCapacity;
-uint _AdaptiveRootPathCapacity;
 uint _AdaptiveGroupWidth;
 uint _AdaptiveGroupHeight;
 uint _AdaptiveGroupCount;

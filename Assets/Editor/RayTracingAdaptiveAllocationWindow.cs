@@ -159,7 +159,10 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         {
             TryGetRecordingManager(out recordingManager);
         }
-        if (_editorRunWriter != null && (_liveManager == null || !_liveManager.recordEditorRun))
+        // A manager can be temporarily unavailable while Play mode initializes or reloads a
+        // scene. Do not close the active run on that transient miss; ExitingPlayMode and an
+        // explicitly disabled recording flag are the authoritative stop conditions.
+        if (_editorRunWriter != null && recordingManager != null && !recordingManager.recordEditorRun)
         {
             StopEditorRunRecording();
         }
