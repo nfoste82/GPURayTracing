@@ -1696,16 +1696,16 @@ MonoBehaviour:
   shadowBvhMinObjectCount: 0
   shadowRandomness: 0.65
   enableAdaptiveSampling: 1
-  adaptiveSamplingMinSamples: 4
+  adaptiveSamplingMinSamples: 1
   adaptivePriorityMode: 0
-  adaptiveNormalizePriorityByLuminance: 0.35
-  adaptiveReclassificationInterval: 4
-  adaptiveHighestBucketSampleRate: 3
+  adaptiveNormalizePriorityByLuminance: 0.3
+  adaptiveReclassificationInterval: 8
+  adaptiveHighestBucketSampleRate: 2.5
   adaptiveMaxPathsPerPixel: 4
-  adaptiveBootstrapGroupDivisor: 16
-  adaptiveBootstrapFrames: 8
-  adaptiveBootstrapResolutionScale: 0.25
-  adaptiveGuidanceHistoryFrames: 2
+  adaptiveBootstrapGroupDivisor: 2
+  adaptiveBootstrapFrames: 96
+  adaptiveBootstrapResolutionScale: 0.5
+  adaptiveGuidanceHistoryFrames: 8
   adaptiveGuidanceChangeThreshold: 0.02
   adaptiveGuidanceMaxUpdates: 8
   adaptiveGuidanceBrightnessPriority: 0.5

@@ -134,7 +134,7 @@ public class GameManager : MonoBehaviour
     public int adaptiveBootstrapFrames = 8;
     [Range(0.125f, 0.5f), Tooltip("Resolution used by the normal CSMain bootstrap renderer before full-resolution adaptive sampling begins.")]
     public float adaptiveBootstrapResolutionScale = 0.25f;
-    [Range(0, 8), Tooltip("Coarse History Passed to Fine: approximate accumulation samples initialized from the upscaled bootstrap image. Set to 0 to keep the bootstrap display-only and preserve unbiased fine accumulation.")]
+    [Range(0, 32), Tooltip("Coarse History Passed to Fine: approximate accumulation samples initialized from the upscaled bootstrap image. Set to 0 to keep the bootstrap display-only and preserve unbiased fine accumulation.")]
     public int adaptiveGuidanceHistoryFrames = 2;
     // Retained only to deserialize existing scenes and command-line settings. Bootstrap is now a
     // uniform CSMain render, so stability-driven guide handoff no longer exists.

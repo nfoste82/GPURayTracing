@@ -709,7 +709,7 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("HeatmapPreviewScale = 4"));
             Assert.That(source, Does.Contain("Pixel groups per bucket (8x8)"));
             Assert.That(source, Does.Contain("Cumulative retired paths"));
-            Assert.That(source, Does.Contain("Show allocation heatmap (generate while playing)"));
+            Assert.That(source, Does.Contain("Show allocation heatmap while playing"));
             Assert.That(source, Does.Contain("Show Current Render vs Reference"));
             Assert.That(source, Does.Contain("if (_showHeatmap)"));
             Assert.That(source, Does.Contain("if (_showDifference)"));
@@ -734,7 +734,26 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("difference.SetPixels(outputPixels)"));
             Assert.That(source, Does.Contain("ReadCurrentFinalColorPixels"));
             Assert.That(window, Does.Contain("Current RGB PSNR"));
-            Assert.That(window, Does.Contain("TryCalculateCurrentReferenceMetrics"));
+            Assert.That(window, Does.Contain("TryCompareCurrentRenderToReference"));
+            Assert.That(window, Does.Contain("TestCaptures/EditorRuns"));
+            Assert.That(window, Does.Contain("Record editor run (PSNR/RMSE per frame)"));
+            Assert.That(window, Does.Contain("settings.txt"));
+            Assert.That(window, Does.Contain("metrics.csv"));
+            Assert.That(window, Does.Contain("rgb_psnr_db,rgb_rmse,psnr_db_improvement,rmse_improvement"));
+            Assert.That(window, Does.Contain("CalculatePsnrImprovement"));
+            Assert.That(window, Does.Not.Contain("reference_status"));
+            Assert.That(window, Does.Contain("run_complete.txt"));
+            Assert.That(window, Does.Contain("StopEditorRunRecording"));
+            Assert.That(window, Does.Contain("recordedFrames"));
+            Assert.That(window, Does.Contain("Show allocation heatmap while playing"));
+            Assert.That(window, Does.Contain("UpdateHeatmapTexture"));
+            Assert.That(window, Does.Contain("SaveFinalHeatmap"));
+            Assert.That(window, Does.Contain("final_heatmap.png"));
+            Assert.That(window, Does.Contain("final_color.png"));
+            Assert.That(window, Does.Contain("SaveFinalColor"));
+            Assert.That(window, Does.Not.Contain("frame_{frame:000000}.png"));
+            Assert.That(window, Does.Contain("if (_liveGeneration)"));
+            Assert.That(window, Does.Contain("UpdateHeatmapTexture(allocation)"));
         }
 
         [Test]
