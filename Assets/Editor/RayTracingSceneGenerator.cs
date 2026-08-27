@@ -1338,8 +1338,9 @@ public static class RayTracingSceneGenerator
             CameraFocalDistance = 12.0f, 
             FireflyClamp = 0.0f,
             EnableCaustics = true, 
+            CausticPhotonCount = 262144,
             CausticGatherRadius = 0.01f, 
-            CausticIntensity = 1.3f,
+            CausticIntensity = 1f,
             EnableSpatialDenoising = true,
             DenoiserIterations = 1,
             DenoiserLuminanceSigma = 0.02f,
@@ -1351,6 +1352,7 @@ public static class RayTracingSceneGenerator
             DirectionalLightIntensity = 2.5f,
             CameraApertureMode = CameraApertureMode.Pinhole,
             GlareIntensity = 0.45f,
+            SubpixelJitterScale = 1.2f,
         });
 
         var texturedPlane = RayMeshAssetGenerator.GetOrCreateTexturedPlaneMesh();

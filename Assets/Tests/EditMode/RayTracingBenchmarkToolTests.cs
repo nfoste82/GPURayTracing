@@ -46,6 +46,27 @@ public class RayTracingBenchmarkToolTests
     }
 
     [Test]
+    public void CausticsManager_ProgressiveGatherRadius_ShrinksAndResetsToStartingRadius()
+    {
+        Type causticsType = Type.GetType("PathTracing.Caustics.CausticsManager, Assembly-CSharp");
+        Assert.That(causticsType, Is.Not.Null);
+        object caustics = Activator.CreateInstance(causticsType);
+        causticsType.GetProperty("GatherRadius").SetValue(caustics, 0.4f);
+        causticsType.GetProperty("GatherRadiusDecayRate").SetValue(caustics, 1.0f);
+
+        SetCausticFrameIndex(causticsType, caustics, 1);
+        Assert.That((float)causticsType.GetProperty("EffectiveGatherRadius").GetValue(caustics), Is.EqualTo(0.4f).Within(0.000001f));
+        SetCausticFrameIndex(causticsType, caustics, 4);
+        Assert.That((float)causticsType.GetProperty("EffectiveGatherRadius").GetValue(caustics), Is.EqualTo(0.2f).Within(0.000001f));
+
+        SetCausticFrameIndex(causticsType, caustics, 13);
+        MethodInfo reset = causticsType.GetMethod("ResetProgressiveRadius", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.That(reset, Is.Not.Null);
+        reset.Invoke(caustics, null);
+        Assert.That((float)causticsType.GetProperty("EffectiveGatherRadius").GetValue(caustics), Is.EqualTo(0.4f).Within(0.000001f));
+    }
+
+    [Test]
     public void GettingStartedControls_MoveBelowVisibleBenchmarkOverlay()
     {
         var gameObject = new GameObject("Getting Started overlay test");
@@ -501,6 +522,13 @@ public class RayTracingBenchmarkToolTests
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         Assert.That(field, Is.Not.Null, $"Could not find {component.GetType().Name}.{fieldName}");
         return (T)field.GetValue(component);
+    }
+
+    private static void SetCausticFrameIndex(Type causticsType, object caustics, int frameIndex)
+    {
+        FieldInfo field = causticsType.GetField("FrameIndex", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.That(field, Is.Not.Null);
+        field.SetValue(caustics, frameIndex);
     }
 
     private static void SetField(Component component, string fieldName, object value)

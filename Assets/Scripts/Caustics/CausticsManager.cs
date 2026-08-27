@@ -41,6 +41,10 @@ namespace PathTracing.Caustics
         [SerializeField, Range(0.01f, 2.0f)]
         private float _gatherRadius = 0.025f;
 
+        [SerializeField, Range(0.0f, 1.0f)]
+        [Tooltip("Progressively shrinks the gather radius during frame accumulation. Zero keeps the starting radius.")]
+        private float _gatherRadiusDecayRate = 0.0f;
+
         [SerializeField, HideInInspector]
         private int _seed = 1;
 
@@ -49,6 +53,8 @@ namespace PathTracing.Caustics
 
         public int PhotonCount { get => _photonCount; set => _photonCount = value; }
         public float GatherRadius { get => _gatherRadius; set => _gatherRadius = value; }
+        public float GatherRadiusDecayRate { get => _gatherRadiusDecayRate; set => _gatherRadiusDecayRate = value; }
+        public float EffectiveGatherRadius => CalculateEffectiveGatherRadius(Mathf.Max(0, FrameIndex - 1));
         public int Seed { get => _seed; set => _seed = value; }
         public float Intensity { get => _intensity; set => _intensity = value; }
 
@@ -221,9 +227,10 @@ namespace PathTracing.Caustics
         {
             unchecked
             {
-                hash = GameManager.AddHash(hash, 5); // Progressive, low-discrepancy photon-map algorithm version.
+                hash = GameManager.AddHash(hash, 6); // Progressive photon-map radius schedule version.
                 hash = GameManager.AddHash(hash, PhotonCount);
                 hash = GameManager.AddHash(hash, GatherRadius);
+                hash = GameManager.AddHash(hash, GatherRadiusDecayRate);
                 hash = GameManager.AddHash(hash, Seed);
                 return hash;
             }
@@ -238,6 +245,7 @@ namespace PathTracing.Caustics
 
             hash = GameManager.AddHash(hash, PhotonCount);
             hash = GameManager.AddHash(hash, GatherRadius);
+            hash = GameManager.AddHash(hash, GatherRadiusDecayRate);
             hash = GameManager.AddHash(hash, Seed);
             hash = GameManager.AddHash(hash, Intensity);
             return GameManager.AddHash(hash, PhotonStateHash);
@@ -255,7 +263,7 @@ namespace PathTracing.Caustics
             shader.SetInt(CausticMaxBounces, Mathf.Clamp(maxBounces, 1, 16));
             shader.SetInt(CausticSeed, Seed);
             shader.SetInt(CausticFrameIndex, FrameIndex);
-            shader.SetFloat(CausticGatherRadius, Mathf.Max(0.001f, GatherRadius));
+            shader.SetFloat(CausticGatherRadius, Mathf.Max(0.001f, EffectiveGatherRadius));
             shader.SetFloat(CausticIntensity, Mathf.Max(0.0f, Intensity));
             shader.SetVector(CausticGridMin, GridMin);
             shader.SetFloat(CausticGridCellSize, GridCellSize);
@@ -268,6 +276,18 @@ namespace PathTracing.Caustics
             SetBuffer(shader, kernelHandle, CausticPhotonNext, PhotonNextBuffer ?? _dummyPhotonNextBuffer);
             SetBuffer(shader, kernelHandle, CausticTargetPairs, TargetPairBuffer ?? _dummyTargetPairBuffer);
             SetBuffer(shader, kernelHandle, CausticTargetTriangles, TargetTriangleBuffer ?? _dummyTargetTriangleBuffer);
+        }
+
+        internal void ResetProgressiveRadius()
+        {
+            FrameIndex = 0;
+        }
+
+        private float CalculateEffectiveGatherRadius(int frameIndex)
+        {
+            float iteration = Mathf.Max(1.0f, frameIndex + 1.0f);
+            float exponent = 0.5f * Mathf.Clamp01(GatherRadiusDecayRate);
+            return GatherRadius / Mathf.Pow(iteration, exponent);
         }
 
         internal void BindBuffers(ComputeShader shader, int kernelHandle)

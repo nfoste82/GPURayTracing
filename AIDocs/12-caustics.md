@@ -28,6 +28,8 @@ CSMain or CSCausticsDebug:
 
 Static final-color rendering with frame accumulation advances an independent photon sequence for each rendered batch and averages the complete estimates. Without accumulation, the current photon batch remains fixed. Caustic state changes reset both final-color accumulation and the photon sequence; camera-only changes do not rebuild the photon map.
 
+`Gather Radius Decay Rate` optionally reduces the effective gather radius over accumulated photon batches: `r_n = r_initial / n^(0.5 * decayRate)`. Its default of zero retains a fixed radius. The spatial grid remains sized from the starting radius, so it covers every later, smaller search radius. Any frame-accumulation reset restarts the sequence at the configured starting radius.
+
 The final-color shader uses runtime `_CausticsEnabled` state for camera-side photon gathering. Disabled rendering still binds one-element dummy photon buffers, but does not allocate the scene photon map or dispatch caustic kernels. Caustic photon target-distribution helpers compile only for `TraceCausticPhotons`, keeping the register-heavy camera kernel within Metal's practical compiler limits.
 
 ## Sampling And Estimation

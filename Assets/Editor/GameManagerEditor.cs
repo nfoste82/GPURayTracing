@@ -366,6 +366,7 @@ public sealed class GameManagerEditor : Editor
         {
             EditorGUILayout.PropertyField(caustics.FindPropertyRelative("_photonCount"), new GUIContent("Caustic Photon Count"));
             EditorGUILayout.PropertyField(caustics.FindPropertyRelative("_gatherRadius"));
+            EditorGUILayout.PropertyField(caustics.FindPropertyRelative("_gatherRadiusDecayRate"));
             EditorGUILayout.PropertyField(caustics.FindPropertyRelative("_intensity"));
         }
     }

@@ -1777,6 +1777,7 @@ public class GameManager : MonoBehaviour
 
     internal void ResetFrameAccumulation()
     {
+        _causticsManager.ResetProgressiveRadius();
         _accumulatedFrameCount = 0;
         _hasAccumulationStateHash = false;
         _accumulationClearPending = true;
@@ -2184,8 +2185,7 @@ public class GameManager : MonoBehaviour
             var stateHash = CalculateAccumulationStateHash();
             if (!_hasAccumulationStateHash || stateHash != _accumulationStateHash)
             {
-                _accumulatedFrameCount = 0; 
-                _accumulationClearPending = true;
+                ResetFrameAccumulation();
                 _accumulationStateHash = stateHash; 
                 _hasAccumulationStateHash = true;
             }
