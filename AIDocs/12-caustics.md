@@ -79,4 +79,4 @@ EditMode coverage verifies:
 - Focused caustic image signatures and energy stability across photon counts and gather radii.
 - Production-scene photon-map construction and indexed receiver photons in `Assets/Scenes/Generated/Caustics.unity`.
 
-Use the benchmark runner's caustic photon-count sweep to compare disabled and enabled configurations on target hardware. `Benchmark_Caustics` and `Benchmark_CausticsTriangleLight` provide focused fixtures for photon-map tuning.
+Use the benchmark runner's caustic photon-count sweep to measure the enabled photon-count curve from `2^10` upward, retest the highest two counts for 30 frames, and then compare them with a 30-frame caustics-disabled run. The runner pauses renderer submission for its configurable cooldown between configurations. `Benchmark_Caustics` and `Benchmark_CausticsTriangleLight` provide focused fixtures for photon-map tuning.

@@ -16,11 +16,16 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
     public int warmupFrames = 30;
     public int measurementFrames = 120;
     public int trialsPerConfiguration = 3;
-    [Tooltip("Benchmarks caustics disabled and each photon count instead of only the scene's current settings.")]
+    [Tooltip("Benchmarks exponentially increasing caustic photon counts, then measures caustics disabled.")]
     public bool sweepCausticPhotonCounts = false;
     public float impracticalOverheadPercent = 25.0f;
     public int targetFrameRate = 60;
-    public int[] photonCounts = { 64, 256, 1024, 2048, 4096, 16384 };
+    [Min(64)] public int sweepStartPhotonCount = 1 << 10;
+    [Min(2)] public int sweepPhotonCountMultiplier = 2;
+    [Min(1)] public int sweepFramesPerPhotonCount = 10;
+    [Min(1)] public int sweepExtendedFrameCount = 30;
+    [Min(0.0f)] public float cooldownSeconds = 5.0f;
+    [Min(64)] public int sweepMaximumPhotonCount = 1 << 21;
 
     private readonly List<Result> _results = new List<Result>();
     private readonly List<Summary> _summaries = new List<Summary>();
@@ -29,6 +34,7 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
     private string _lastCsvPath;
     private string _benchmarkMetadata;
     private GUIStyle _style;
+    private bool _hasMeasuredConfiguration;
 
     private void Awake()
     {
@@ -68,6 +74,7 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
         _results.Clear();
         _summaries.Clear();
         _lastCsvPath = null;
+        _hasMeasuredConfiguration = false;
         Application.targetFrameRate = -1;
         QualitySettings.vSyncCount = 0;
         _benchmarkMetadata = BuildMetadata();
@@ -76,18 +83,45 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
         {
             if (sweepCausticPhotonCounts)
             {
-                yield return MeasureConfiguration(false, 0);
-                if (photonCounts != null)
+                int startPhotonCount = Mathf.Clamp(sweepStartPhotonCount, 64, sweepMaximumPhotonCount);
+                int photonCount = startPhotonCount;
+                float firstCausticsMs = 0.0f;
+                var testedPhotonCounts = new List<int>();
+                while (true)
                 {
-                    for (int i = 0; i < photonCounts.Length; i++)
+                    yield return MeasureConfiguration(true, photonCount, Mathf.Max(1, sweepFramesPerPhotonCount));
+                    testedPhotonCounts.Add(photonCount);
+                    Summary summary = _summaries[_summaries.Count - 1];
+                    if (photonCount == startPhotonCount)
                     {
-                        yield return MeasureConfiguration(true, Mathf.Max(64, photonCounts[i]));
+                        firstCausticsMs = summary.MedianFrameMs;
                     }
+                    else if (firstCausticsMs > 0.0f
+                        && summary.MedianFrameMs >= firstCausticsMs * (1.0f + impracticalOverheadPercent / 100.0f))
+                    {
+                        break;
+                    }
+
+                    if (photonCount >= sweepMaximumPhotonCount)
+                    {
+                        break;
+                    }
+
+                    photonCount = Mathf.Min(sweepMaximumPhotonCount,
+                        Mathf.Max(photonCount + 1, photonCount * Mathf.Max(2, sweepPhotonCountMultiplier)));
                 }
+
+                int extendedStart = Mathf.Max(0, testedPhotonCounts.Count - 2);
+                for (int i = extendedStart; i < testedPhotonCounts.Count; i++)
+                {
+                    yield return MeasureConfiguration(true, testedPhotonCounts[i], Mathf.Max(1, sweepExtendedFrameCount));
+                }
+
+                yield return MeasureConfiguration(false, 0, Mathf.Max(1, sweepExtendedFrameCount));
             }
             else
             {
-                yield return MeasureConfiguration(originalCausticsEnabled, originalPhotonCount);
+                yield return MeasureConfiguration(originalCausticsEnabled, originalPhotonCount, measurementFrames);
             }
 
             _lastCsvPath = WriteCsv();
@@ -96,25 +130,30 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
         }
         finally
         {
+            gameManager.SetRenderingPaused(false);
             gameManager.enableCaustics = originalCausticsEnabled;
             gameManager.Caustics.PhotonCount = originalPhotonCount;
             Application.targetFrameRate = originalTargetFrameRate;
             QualitySettings.vSyncCount = originalVSyncCount;
             _benchmarkCoroutine = null;
+            _hasMeasuredConfiguration = false;
         }
     }
 
-    private IEnumerator MeasureConfiguration(bool causticsEnabled, int photonCount)
+    private IEnumerator MeasureConfiguration(bool causticsEnabled, int photonCount, int frameCount)
     {
+        yield return CooldownIfNeeded();
         gameManager.enableCaustics = causticsEnabled;
         if (causticsEnabled)
         {
             gameManager.Caustics.PhotonCount = photonCount;
         }
+        gameManager.ResetFrameAccumulation();
 
         string label = sweepCausticPhotonCounts
             ? (causticsEnabled ? $"{photonCount} photons" : "caustics disabled")
             : SceneManager.GetActiveScene().name;
+        gameManager.SetRenderingPaused(false);
         int warmupCount = Mathf.Max(1, warmupFrames);
         for (int i = 0; i < warmupCount; i++)
         {
@@ -123,7 +162,7 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
         }
 
         int trialCount = Mathf.Max(1, trialsPerConfiguration);
-        int sampleCount = Mathf.Max(1, measurementFrames);
+        int sampleCount = Mathf.Max(1, frameCount);
         var trialAverages = new float[trialCount];
         for (int trial = 0; trial < trialCount; trial++)
         {
@@ -146,7 +185,26 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
         }
 
         Array.Sort(trialAverages);
-        _summaries.Add(new Summary(causticsEnabled, photonCount, Median(trialAverages)));
+        _summaries.Add(new Summary(causticsEnabled, photonCount, Median(trialAverages), sampleCount));
+    }
+
+    private IEnumerator CooldownIfNeeded()
+    {
+        if (!_hasMeasuredConfiguration)
+        {
+            _hasMeasuredConfiguration = true;
+            yield break;
+        }
+
+        float duration = Mathf.Max(0.0f, cooldownSeconds);
+        if (duration <= 0.0f)
+        {
+            yield break;
+        }
+
+        gameManager.SetRenderingPaused(true);
+        _status = $"Cooling down for {duration:0.0} seconds";
+        yield return new WaitForSecondsRealtime(duration);
     }
 
     private static float Median(float[] sortedValues)
@@ -159,7 +217,7 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
 
     private string WriteCsv()
     {
-        string directory = Path.Combine(Application.persistentDataPath, "Benchmarks");
+        string directory = Path.GetFullPath(Path.Combine(Application.dataPath, "..", "TestCaptures", "CausticsBenchmarks"));
         Directory.CreateDirectory(directory);
         string sceneName = SanitizeFileName(SceneManager.GetActiveScene().name);
         string path = Path.Combine(directory, $"{sceneName}-{DateTime.Now:yyyyMMdd-HHmmss}.csv");
@@ -181,20 +239,26 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
 
 
         builder.AppendLine();
-        builder.AppendLine("caustics_enabled,photon_count,median_average_frame_ms,overhead_percent,over_target_budget,impractical");
-        float baselineMs = _summaries.Count > 0 ? _summaries[0].MedianFrameMs : 0.0f;
+        builder.AppendLine("caustics_enabled,photon_count,frames,median_average_frame_ms,overhead_vs_first_caustics_percent,overhead_vs_disabled_percent,over_target_budget,impractical");
+        int firstCausticsIndex = _summaries.FindIndex(summary => summary.CausticsEnabled);
+        int disabledIndex = _summaries.FindIndex(summary => !summary.CausticsEnabled);
+        float baselineMs = firstCausticsIndex >= 0 ? _summaries[firstCausticsIndex].MedianFrameMs : 0.0f;
+        float disabledMs = disabledIndex >= 0 ? _summaries[disabledIndex].MedianFrameMs : 0.0f;
         float targetFrameMs = 1000.0f / Mathf.Max(1, targetFrameRate);
         for (int i = 0; i < _summaries.Count; i++)
         {
             Summary summary = _summaries[i];
             float overheadPercent = baselineMs > 0.0f ? (summary.MedianFrameMs / baselineMs - 1.0f) * 100.0f : 0.0f;
+            float disabledOverheadPercent = disabledMs > 0.0f ? (summary.MedianFrameMs / disabledMs - 1.0f) * 100.0f : 0.0f;
             bool overTarget = summary.MedianFrameMs > targetFrameMs;
             bool impractical = sweepCausticPhotonCounts && summary.CausticsEnabled
                 && (overheadPercent > impracticalOverheadPercent || overTarget);
             builder.Append(summary.CausticsEnabled ? "true" : "false").Append(',')
                 .Append(summary.PhotonCount).Append(',')
+                .Append(summary.Frames).Append(',')
                 .Append(summary.MedianFrameMs.ToString("0.000", CultureInfo.InvariantCulture)).Append(',')
                 .Append(overheadPercent.ToString("0.0", CultureInfo.InvariantCulture)).Append(',')
+                .Append(disabledOverheadPercent.ToString("0.0", CultureInfo.InvariantCulture)).Append(',')
                 .Append(overTarget ? "true" : "false").Append(',')
                 .Append(impractical ? "true" : "false").AppendLine();
         }
@@ -240,6 +304,12 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
         AppendSetting(builder, "caustic_photon_count", gameManager.enableCaustics ? gameManager.Caustics.PhotonCount : 0);
         AppendSetting(builder, "caustic_gather_radius", gameManager.Caustics.GatherRadius);
         AppendSetting(builder, "caustic_intensity", gameManager.Caustics.Intensity);
+        AppendSetting(builder, "caustic_sweep_start_photons", sweepStartPhotonCount);
+        AppendSetting(builder, "caustic_sweep_multiplier", sweepPhotonCountMultiplier);
+        AppendSetting(builder, "caustic_sweep_frames_per_count", sweepFramesPerPhotonCount);
+        AppendSetting(builder, "caustic_sweep_extended_frames", sweepExtendedFrameCount);
+        AppendSetting(builder, "caustic_sweep_cooldown_seconds", cooldownSeconds);
+        AppendSetting(builder, "caustic_sweep_max_photons", sweepMaximumPhotonCount);
         AppendSetting(builder, "fog_enabled", gameManager.IsVolumetricFogActive);
         AppendSetting(builder, "fog_density", gameManager.EffectiveFogDensity);
         AppendSetting(builder, "fog_density_scale", gameManager.fogDensityScale);
@@ -300,7 +370,8 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
 
         var builder = new StringBuilder(512);
         builder.Append("Scene benchmark (B)\n").AppendLine(_status);
-        float baselineMs = _summaries.Count > 0 ? _summaries[0].MedianFrameMs : 0.0f;
+        int firstCausticsIndex = _summaries.FindIndex(summary => summary.CausticsEnabled);
+        float baselineMs = firstCausticsIndex >= 0 ? _summaries[firstCausticsIndex].MedianFrameMs : 0.0f;
         float targetFrameMs = 1000.0f / Mathf.Max(1, targetFrameRate);
         int practicalLimit = -1;
         for (int i = 0; i < _summaries.Count; i++)
@@ -312,7 +383,8 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
             builder.Append(sweepCausticPhotonCounts
                     ? (summary.CausticsEnabled ? summary.PhotonCount.ToString() : "Disabled")
                     : SceneManager.GetActiveScene().name)
-                .Append(": ").Append(summary.MedianFrameMs.ToString("0.00")).Append(" ms median")
+                .Append(": ").Append(summary.MedianFrameMs.ToString("0.00")).Append(" ms median, ")
+                .Append(summary.Frames).Append(" frames")
                 .Append(sweepCausticPhotonCounts && summary.CausticsEnabled ? $" ({overheadPercent:+0.0;-0.0;0.0}%)" : string.Empty)
                 .AppendLine(impractical ? "  LIMIT" : string.Empty);
             if (impractical && practicalLimit < 0)
@@ -362,12 +434,14 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
         public readonly bool CausticsEnabled;
         public readonly int PhotonCount;
         public readonly float MedianFrameMs;
+        public readonly int Frames;
 
-        public Summary(bool causticsEnabled, int photonCount, float medianFrameMs)
+        public Summary(bool causticsEnabled, int photonCount, float medianFrameMs, int frames)
         {
             CausticsEnabled = causticsEnabled;
             PhotonCount = photonCount;
             MedianFrameMs = medianFrameMs;
+            Frames = frames;
         }
     }
 }

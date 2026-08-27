@@ -7,6 +7,7 @@ using PathTracing.Camera;
 using PathTracing.AccelerationStructures;
 using PathTracing.Lighting;
 using UnityEditor;
+using UnityEditorInternal;
 using UnityEngine;
 
 [CustomEditor(typeof(GameManager))]
@@ -25,12 +26,32 @@ public sealed class GameManagerEditor : Editor
     {
         EditorApplication.projectChanged += Repaint;
         EditorApplication.hierarchyChanged += Repaint;
+        EditorApplication.delayCall += EnsureComponentOrder;
     }
 
     private void OnDisable()
     {
         EditorApplication.projectChanged -= Repaint;
         EditorApplication.hierarchyChanged -= Repaint;
+        EditorApplication.delayCall -= EnsureComponentOrder;
+    }
+
+    private void EnsureComponentOrder()
+    {
+        if (target is not GameManager manager || manager == null)
+        {
+            return;
+        }
+
+        Component[] components = manager.GetComponents<Component>();
+        int managerIndex = Array.IndexOf(components, manager);
+        for (int index = managerIndex; index > 1; index--)
+        {
+            if (!ComponentUtility.MoveComponentUp(manager))
+            {
+                break;
+            }
+        }
     }
 
     public override void OnInspectorGUI()

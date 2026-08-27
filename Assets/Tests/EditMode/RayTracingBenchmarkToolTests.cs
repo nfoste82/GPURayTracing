@@ -24,11 +24,25 @@ public class RayTracingBenchmarkToolTests
             Assert.That(GetField<KeyCode>(runner, "toggleKey"), Is.EqualTo(KeyCode.X));
             Assert.That(GetField<KeyCode>(runner, "runKey"), Is.EqualTo(KeyCode.B));
             Assert.That(GetField<bool>(runner, "sweepCausticPhotonCounts"), Is.False);
+            Assert.That(GetField<int>(runner, "sweepStartPhotonCount"), Is.EqualTo(1024));
+            Assert.That(GetField<int>(runner, "sweepPhotonCountMultiplier"), Is.EqualTo(2));
+            Assert.That(GetField<int>(runner, "sweepFramesPerPhotonCount"), Is.EqualTo(10));
+            Assert.That(GetField<int>(runner, "sweepExtendedFrameCount"), Is.EqualTo(30));
+            Assert.That(GetField<float>(runner, "cooldownSeconds"), Is.EqualTo(5.0f));
         }
         finally
         {
             UnityEngine.Object.DestroyImmediate(gameObject);
         }
+    }
+
+    [Test]
+    public void BenchmarkRunner_WritesResultsUnderCausticsBenchmarkCaptures()
+    {
+        string source = File.ReadAllText(Path.Combine(Application.dataPath, "Scripts", "RayTracingBenchmarkRunner.cs"));
+
+        Assert.That(source, Does.Contain("Application.dataPath, \"..\", \"TestCaptures\", \"CausticsBenchmarks\""));
+        Assert.That(source, Does.Not.Contain("Application.persistentDataPath, \"Benchmarks\""));
     }
 
     [Test]
