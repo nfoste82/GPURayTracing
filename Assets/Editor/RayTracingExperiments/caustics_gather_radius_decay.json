@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "label": "caustics_gather_radius_decay_120s",
+  "scenes": [
+    "Assets/Scenes/Generated/Caustics.unity"
+  ],
+  "width": 1024,
+  "height": 1024,
+  "durationSeconds": 120.0,
+  "cooldownSeconds": 20.0,
+  "referenceRoot": "Assets/Editor/RayTracingSceneReferences",
+  "variants": [
+    {
+      "name": "fixed_radius",
+      "overrides": [
+        {
+          "path": "Caustics.GatherRadiusDecayRate",
+          "value": "0.0"
+        },
+        {
+          "path": "Caustics.GatherRadius",
+          "value": "0.01"
+        }
+      ]
+    },
+    {
+      "name": "new_default",
+      "overrides": [
+        {
+          "path": "Caustics.GatherRadiusDecayRate",
+          "value": "0.35"
+        },
+        {
+          "path": "Caustics.GatherRadius",
+          "value": "0.025"
+        }
+      ]
+    },
+    {
+      "name": "larger_start_faster_decay",
+      "overrides": [
+        {
+          "path": "Caustics.GatherRadiusDecayRate",
+          "value": "0.5"
+        },
+        {
+          "path": "Caustics.GatherRadius",
+          "value": "0.035"
+        }
+      ]
+    }
+  ]
+}

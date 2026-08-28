@@ -685,6 +685,7 @@ public class GameManager : MonoBehaviour
         enableCaustics = settings.EnableCaustics;
         Caustics.PhotonCount = settings.CausticPhotonCount;
         Caustics.GatherRadius = settings.CausticGatherRadius;
+        Caustics.GatherRadiusDecayRate = settings.CausticGatherRadiusDecayRate;
         Caustics.Seed = settings.CausticSeed;
         Caustics.Intensity = settings.CausticIntensity;
         enableVolumetricFog = settings.EnableVolumetricFog;

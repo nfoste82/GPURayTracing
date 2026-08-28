@@ -14,6 +14,8 @@ namespace PathTracing.Caustics
     [System.Serializable]
     public sealed class CausticsManager
     {
+        public const float MinimumGatherRadius = 0.001f;
+
         private static readonly int CausticPhotonCapacity = Shader.PropertyToID("_CausticPhotonCapacity");
         private static readonly int CausticPhotonAttemptCount = Shader.PropertyToID("_CausticPhotonAttemptCount");
         private static readonly int CausticMaxBounces = Shader.PropertyToID("_CausticMaxBounces");
@@ -38,7 +40,7 @@ namespace PathTracing.Caustics
         [Tooltip("Photon attempts traced for each rendered frame. Independent batches are averaged by final-color frame accumulation.")]
         private int _photonCount = 65536;
 
-        [SerializeField, Range(0.01f, 2.0f)]
+        [SerializeField, Range(0.001f, 0.3f)]
         private float _gatherRadius = 0.025f;
 
         [SerializeField, Range(0.0f, 1.0f)]
@@ -263,7 +265,7 @@ namespace PathTracing.Caustics
             shader.SetInt(CausticMaxBounces, Mathf.Clamp(maxBounces, 1, 16));
             shader.SetInt(CausticSeed, Seed);
             shader.SetInt(CausticFrameIndex, FrameIndex);
-            shader.SetFloat(CausticGatherRadius, Mathf.Max(0.001f, EffectiveGatherRadius));
+            shader.SetFloat(CausticGatherRadius, EffectiveGatherRadius);
             shader.SetFloat(CausticIntensity, Mathf.Max(0.0f, Intensity));
             shader.SetVector(CausticGridMin, GridMin);
             shader.SetFloat(CausticGridCellSize, GridCellSize);
@@ -287,7 +289,7 @@ namespace PathTracing.Caustics
         {
             float iteration = Mathf.Max(1.0f, frameIndex + 1.0f);
             float exponent = 0.5f * Mathf.Clamp01(GatherRadiusDecayRate);
-            return GatherRadius / Mathf.Pow(iteration, exponent);
+            return Mathf.Max(MinimumGatherRadius, GatherRadius / Mathf.Pow(iteration, exponent));
         }
 
         internal void BindBuffers(ComputeShader shader, int kernelHandle)

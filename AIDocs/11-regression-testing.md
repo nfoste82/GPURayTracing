@@ -48,6 +48,12 @@ Unity Test Framework `1.6.0` exits after a command-line run without requiring `-
 
 ## Scene Capture Comparisons
 
+### Generic Experiments
+
+`RayTracingSceneCapture` also accepts `-rayTracingExperiment <json>`. An experiment manifest defines one or more scenes, capture settings, an existing validated reference root, and at least two named variants. Each variant can override writable `GameManager` fields or properties using dotted paths and scalar values (`bool`, `int`, `float`, or enum), for example `Caustics.GatherRadiusDecayRate`. Set either a positive `durationSeconds` for a wall-clock capture or a positive `samples` count for a fixed-frame capture. If both are present, `durationSeconds` takes precedence. Experiment captures never generate or replace references; create a reference separately with `-rayTracingGenerateReference` and review it before use.
+
+Each variant is reset and warmed independently, then produces a final PNG, per-frame convergence `metrics.csv`, reference metrics, and a generic `variant_comparison.csv`. Pairwise and variant-to-reference difference images are written beside the results. The output also records the manifest, so the exact variants and overrides are preserved with the capture.
+
 With `-rayTracingSkipAdaptiveOff`, adaptive-off is not rendered. Adaptive candidate reference metrics, candidate-to-reference differences, and candidate-to-candidate comparisons still run; outputs that specifically require adaptive-off are omitted.
 
 `RayTracingSceneCapture` is an editor tool, not a test. It loads the production scenes supplied on its command line, enters Play mode, renders a `512x512` final-color image with 200 deterministic accumulated samples by default, and writes PNGs for visual before/after comparison. Command-line capture uses this same Play-mode lifecycle rather than a separate direct-dispatch path, so scene initialization and renderer registration match a user entering Play mode. It fixes the random seed, freezes simulation, and disables temporal denoising. Scenes do not need to be in Build Settings. Capture output defaults to the project-root `TestCaptures/` directory; the output subfolder defaults to a local timestamp in `YYYY-MM-DD_HH-mm-ss` format, and `-rayTracingCaptureLabel` can override it for named before/after comparisons. If the requested label folder already exists, the tool selects `_2`, `_3`, and higher numeric suffixes automatically.

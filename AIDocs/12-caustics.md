@@ -28,7 +28,7 @@ CSMain or CSCausticsDebug:
 
 Static final-color rendering with frame accumulation advances an independent photon sequence for each rendered batch and averages the complete estimates. Without accumulation, the current photon batch remains fixed. Caustic state changes reset both final-color accumulation and the photon sequence; camera-only changes do not rebuild the photon map.
 
-`Gather Radius Decay Rate` optionally reduces the effective gather radius over accumulated photon batches: `r_n = r_initial / n^(0.5 * decayRate)`. Its default of zero retains a fixed radius. The spatial grid remains sized from the starting radius, so it covers every later, smaller search radius. Any frame-accumulation reset restarts the sequence at the configured starting radius.
+`Gather Radius Decay Rate` optionally reduces the effective gather radius over accumulated photon batches: `r_n = max(0.001, r_initial / n^(0.5 * decayRate))`. Its default of zero retains a fixed radius. The `CausticsManager.MinimumGatherRadius` constant defines the `0.001` floor, and decay stops there. The spatial grid remains sized from the starting radius, so it covers every later, smaller search radius. Any frame-accumulation reset restarts the sequence at the configured starting radius.
 
 The final-color shader uses runtime `_CausticsEnabled` state for camera-side photon gathering. Disabled rendering still binds one-element dummy photon buffers, but does not allocate the scene photon map or dispatch caustic kernels. Caustic photon target-distribution helpers compile only for `TraceCausticPhotons`, keeping the register-heavy camera kernel within Metal's practical compiler limits.
 
@@ -82,3 +82,15 @@ EditMode coverage verifies:
 - Production-scene photon-map construction and indexed receiver photons in `Assets/Scenes/Generated/Caustics.unity`.
 
 Use the benchmark runner's caustic photon-count sweep to measure the enabled photon-count curve from `2^10` upward, retest the highest two counts for 30 frames, and then compare them with a 30-frame caustics-disabled run. The runner pauses renderer submission for its configurable cooldown between configurations. `Benchmark_Caustics` and `Benchmark_CausticsTriangleLight` provide focused fixtures for photon-map tuning.
+
+For image-quality and convergence comparisons, use the generic manifest at `Assets/Editor/RayTracingExperiments/caustics_gather_radius_decay.json`. It compares the fixed-radius schedule (`GatherRadiusDecayRate = 0`) with the progressive schedule (`GatherRadiusDecayRate = 1`) against the checked-in 1024x1024 high-quality caustics reference. This manifest uses a 60-second wall-clock capture; experiment manifests should generally set either `durationSeconds` or `samples`, not both. The command-line experiment requires that existing reference and does not regenerate it:
+
+```sh
+/Applications/Unity/Hub/Editor/6000.3.18f1/Unity.app/Contents/MacOS/Unity \
+  -batchmode \
+  -projectPath /Users/nic.foster/Projects/GPURayTracing \
+  -executeMethod RayTracingSceneCapture.CaptureFromCommandLine \
+  -rayTracingExperiment Assets/Editor/RayTracingExperiments/caustics_gather_radius_decay.json \
+  -rayTracingOutput /Users/nic.foster/Projects/GPURayTracing/TestCaptures \
+  -logFile -
+```

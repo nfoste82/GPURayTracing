@@ -824,6 +824,24 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void SceneCapture_GenericExperimentsUseExistingReferencesAndTypedOverrides()
+        {
+            string source = System.IO.File.ReadAllText("Assets/Editor/RayTracingSceneCapture.cs");
+            string manifest = System.IO.File.ReadAllText("Assets/Editor/RayTracingExperiments/caustics_gather_radius_decay.json");
+            Assert.That(source, Does.Contain("-rayTracingExperiment"));
+            Assert.That(source, Does.Contain("ValidateExperiment"));
+            Assert.That(source, Does.Contain("ApplyExperimentOverrides"));
+            Assert.That(source, Does.Contain("FindLongestReference"));
+            Assert.That(source, Does.Contain("variant_comparison.csv"));
+            Assert.That(source, Does.Contain("WriteReferenceMetrics"));
+            Assert.That(manifest, Does.Contain("fixed_radius"));
+            Assert.That(manifest, Does.Contain("progressive_radius"));
+            Assert.That(manifest, Does.Contain("Caustics.GatherRadiusDecayRate"));
+            Assert.That(manifest, Does.Contain("\"value\": \"0.0\""));
+            Assert.That(manifest, Does.Contain("\"value\": \"1.0\""));
+        }
+
+        [Test]
         public void ProductionShader_ReflectionRefractionAndAbsorptionBaselines_AreStable()
         {
             if (!SystemInfo.supportsComputeShaders)

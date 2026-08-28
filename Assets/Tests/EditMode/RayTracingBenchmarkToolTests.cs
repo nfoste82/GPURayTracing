@@ -67,6 +67,47 @@ public class RayTracingBenchmarkToolTests
     }
 
     [Test]
+    public void CausticsManager_ProgressiveGatherRadius_StopsAtMinimum()
+    {
+        Type causticsType = Type.GetType("PathTracing.Caustics.CausticsManager, Assembly-CSharp");
+        Assert.That(causticsType, Is.Not.Null);
+        object caustics = Activator.CreateInstance(causticsType);
+        causticsType.GetProperty("GatherRadius").SetValue(caustics, 0.01f);
+        causticsType.GetProperty("GatherRadiusDecayRate").SetValue(caustics, 1.0f);
+
+        SetCausticFrameIndex(causticsType, caustics, int.MaxValue);
+
+        float effectiveRadius = (float)causticsType.GetProperty("EffectiveGatherRadius").GetValue(caustics);
+        float minimumRadius = (float)causticsType.GetField("MinimumGatherRadius").GetValue(null);
+        Assert.That(effectiveRadius, Is.EqualTo(minimumRadius));
+    }
+
+    [Test]
+    public void SceneSettings_CausticGatherRadiusDecayRate_PropagatesToGameManager()
+    {
+        Type gameManagerType = Type.GetType("GameManager, Assembly-CSharp");
+        Assert.That(gameManagerType, Is.Not.Null);
+        var gameObject = new GameObject("Scene settings caustics test");
+        try
+        {
+            Component gameManager = gameObject.AddComponent(gameManagerType);
+            Type sceneSettingsType = Type.GetType("SceneSettings, Assembly-CSharp");
+            object settings = Activator.CreateInstance(sceneSettingsType);
+            sceneSettingsType.GetField("CausticGatherRadiusDecayRate").SetValue(settings, 0.75f);
+
+            gameManagerType.GetMethod("InitSceneSettings").Invoke(gameManager, new[] { settings });
+
+            object caustics = gameManagerType.GetProperty("Caustics").GetValue(gameManager);
+            float decayRate = (float)caustics.GetType().GetProperty("GatherRadiusDecayRate").GetValue(caustics);
+            Assert.That(decayRate, Is.EqualTo(0.75f));
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(gameObject);
+        }
+    }
+
+    [Test]
     public void GettingStartedControls_MoveBelowVisibleBenchmarkOverlay()
     {
         var gameObject = new GameObject("Getting Started overlay test");

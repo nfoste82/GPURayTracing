@@ -26,6 +26,7 @@ public static class RayTracingSceneCapture
     private const double ReferenceDurationSeconds = 240.0;
     private const double MaximumTimedCaptureSeconds = 600.0;
     private const string GenerateReferenceArgument = "-rayTracingGenerateReference";
+    private const string ExperimentArgument = "-rayTracingExperiment";
     private const string RecordEditorRunArgument = "-rayTracingRecordEditorRun";
     private const double DefaultCooldownSeconds = 10.0;
     private const float DifferenceHeatmapRedPercentile = 0.99f;
@@ -69,6 +70,35 @@ public static class RayTracingSceneCapture
             this.guidanceHistoryFrames = guidanceHistoryFrames;
             this.bootstrapGroupDivisor = bootstrapGroupDivisor;
         }
+    }
+
+    [Serializable]
+    private sealed class CaptureExperiment
+    {
+        public int schemaVersion = 1;
+        public string label;
+        public string[] scenes;
+        public int width = DefaultCaptureWidth;
+        public int height = DefaultCaptureHeight;
+        public int samples = DefaultSamplesPerScene;
+        public double durationSeconds;
+        public double cooldownSeconds = DefaultCooldownSeconds;
+        public string referenceRoot = DefaultReferenceRoot;
+        public ExperimentVariant[] variants;
+    }
+
+    [Serializable]
+    private sealed class ExperimentVariant
+    {
+        public string name;
+        public ExperimentOverride[] overrides;
+    }
+
+    [Serializable]
+    private sealed class ExperimentOverride
+    {
+        public string path;
+        public string value;
     }
 
     [Serializable]
@@ -175,6 +205,12 @@ public static class RayTracingSceneCapture
 
         var sceneArgument = GetCommandLineArgument("-rayTracingScenes");
         var outputArgument = GetCommandLineArgument("-rayTracingOutput");
+        var experimentArgument = GetCommandLineArgument(ExperimentArgument);
+        if (!string.IsNullOrWhiteSpace(experimentArgument))
+        {
+            RunExperimentFromCommandLine(experimentArgument, outputArgument);
+            return;
+        }
         var generateScenes = HasCommandLineArgument("-rayTracingGenerateScenes");
         var generateReference = HasCommandLineArgument(GenerateReferenceArgument);
         var adaptiveSampling = HasCommandLineArgument("-rayTracingAdaptiveSampling");
@@ -416,6 +452,168 @@ public static class RayTracingSceneCapture
         }
     }
 
+    private static void RunExperimentFromCommandLine(string experimentPath, string outputArgument)
+    {
+        string outputRoot = string.IsNullOrWhiteSpace(outputArgument) ? GetDefaultOutputRoot() : outputArgument;
+        string label = null;
+        try
+        {
+            CaptureExperiment experiment = JsonUtility.FromJson<CaptureExperiment>(File.ReadAllText(experimentPath));
+            ValidateExperiment(experiment, experimentPath);
+            label = GetAvailableCaptureLabel(outputRoot, experiment.label);
+            string experimentRoot = Path.Combine(outputRoot, SanitizePathSegment(label));
+            Directory.CreateDirectory(experimentRoot);
+
+            foreach (string scenePath in experiment.scenes)
+            {
+                string trimmedPath = scenePath.Trim();
+                EditorSceneManager.OpenScene(trimmedPath);
+                var manager = UnityEngine.Object.FindFirstObjectByType<GameManager>();
+                if (manager == null || manager.renderTextureCamera == null || manager.shader == null)
+                {
+                    throw new InvalidOperationException($"Experiment requires a configured GameManager, render camera, and compute shader: {trimmedPath}");
+                }
+                foreach (var setup in UnityEngine.Object.FindObjectsByType<MaterialBallRoomRuntimeSetup>(FindObjectsInactive.Exclude, FindObjectsSortMode.None))
+                {
+                    setup.PrepareForRendering();
+                }
+
+                string sceneName = Path.GetFileNameWithoutExtension(trimmedPath);
+                string referencePath = FindLongestReference(trimmedPath, experiment.referenceRoot,
+                    experiment.width, experiment.height, out ReferenceMetadata reference);
+                if (referencePath == null)
+                {
+                    throw new InvalidOperationException(
+                        $"Experiment reference is missing for '{trimmedPath}' at {experiment.width}x{experiment.height}. " +
+                        "Generate it separately with -rayTracingGenerateReference; experiments never generate references automatically.");
+                }
+
+                string sceneRoot = Path.Combine(experimentRoot, SanitizePathSegment(sceneName));
+                Directory.CreateDirectory(sceneRoot);
+                var results = new List<ExperimentVariantResult>();
+                for (int index = 0; index < experiment.variants.Length; index++)
+                {
+                    ExperimentVariant variant = experiment.variants[index];
+                    if (index > 0) CoolDownBetweenTimedCaptures(experiment.durationSeconds, experiment.cooldownSeconds);
+                    ApplyExperimentOverrides(manager, variant.overrides);
+                    string variantName = SanitizePathSegment(variant.name);
+                    CaptureResult result = CaptureVariant(manager, sceneName, sceneRoot, variantName,
+                        experiment.samples, experiment.width, experiment.height, experiment.durationSeconds,
+                        DebugRenderMode.FinalColor, false, GameManager.AdaptivePriorityMode.WelfordStandardError,
+                        true, false, false, referencePath, true);
+                    WriteReferenceMetrics(sceneRoot, variantName, result, referencePath, reference);
+                    results.Add(new ExperimentVariantResult(variantName, result));
+                }
+
+                WriteExperimentComparison(sceneRoot, results, referencePath, reference);
+                File.WriteAllText(Path.Combine(sceneRoot, "experiment.json"), JsonUtility.ToJson(experiment, true));
+                for (int first = 0; first < results.Count; first++)
+                {
+                    for (int second = first + 1; second < results.Count; second++)
+                    {
+                        GenerateDifferenceImage(results[first].result.imagePath, results[second].result.imagePath,
+                            Path.Combine(sceneRoot, $"{results[first].name}_vs_{results[second].name}_difference.png"));
+                    }
+                    GenerateDifferenceImage(results[first].result.imagePath, referencePath,
+                        Path.Combine(sceneRoot, $"{results[first].name}_vs_reference_difference.png"));
+                }
+                WriteCaptureLog(sceneRoot, label);
+            }
+            Debug.Log($"Ray tracing experiment complete: '{Path.Combine(outputRoot, SanitizePathSegment(label))}'.");
+            ExitBatchMode(0);
+        }
+        catch (Exception exception)
+        {
+            string failureRoot = label == null ? outputRoot : Path.Combine(outputRoot, SanitizePathSegment(label));
+            string failureLogPath = TryWriteCaptureLog(failureRoot, label ?? Path.GetFileNameWithoutExtension(experimentPath));
+            ReportCommandLineError("Ray tracing experiment failed. " +
+                (failureLogPath == null ? $"Unity console log: '{Application.consoleLogPath}'." :
+                    $"Unity console log: '{Application.consoleLogPath}'. Experiment log: '{failureLogPath}'."), exception);
+            ReleaseCaptureTarget(null);
+            ExitBatchMode(1);
+        }
+    }
+
+    private readonly struct ExperimentVariantResult
+    {
+        public readonly string name;
+        public readonly CaptureResult result;
+        public ExperimentVariantResult(string name, CaptureResult result)
+        {
+            this.name = name;
+            this.result = result;
+        }
+    }
+
+    private static void ValidateExperiment(CaptureExperiment experiment, string path)
+    {
+        if (experiment == null || experiment.schemaVersion != 1)
+            throw new InvalidOperationException($"Experiment '{path}' must use schemaVersion 1.");
+        if (string.IsNullOrWhiteSpace(experiment.label) || experiment.scenes == null || experiment.scenes.Length == 0
+            || experiment.variants == null || experiment.variants.Length < 2)
+            throw new InvalidOperationException("An experiment requires a label, at least one scene, and at least two variants.");
+        if (experiment.width <= 0 || experiment.height <= 0 || experiment.samples <= 0
+            || experiment.durationSeconds < 0.0 || experiment.cooldownSeconds < 0.0)
+            throw new InvalidOperationException("Experiment dimensions, samples, duration, and cooldown must be valid non-negative values.");
+        if (string.IsNullOrWhiteSpace(experiment.referenceRoot)) experiment.referenceRoot = DefaultReferenceRoot;
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (ExperimentVariant variant in experiment.variants)
+        {
+            if (variant == null || string.IsNullOrWhiteSpace(variant.name) || !names.Add(variant.name))
+                throw new InvalidOperationException("Experiment variant names must be non-empty and unique.");
+        }
+    }
+
+    private static void ApplyExperimentOverrides(GameManager manager, ExperimentOverride[] overrides)
+    {
+        if (overrides == null) return;
+        foreach (ExperimentOverride item in overrides)
+        {
+            if (item == null || string.IsNullOrWhiteSpace(item.path))
+                throw new InvalidOperationException("Experiment overrides require a property path.");
+            object target = manager;
+            string[] segments = item.path.Split('.');
+            for (int index = 0; index < segments.Length - 1; index++)
+            {
+                FieldInfo field = target.GetType().GetField(segments[index], BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                PropertyInfo property = target.GetType().GetProperty(segments[index], BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                target = field != null ? field.GetValue(target) : property?.GetValue(target);
+                if (target == null) throw new InvalidOperationException($"Experiment override path '{item.path}' could not be resolved.");
+            }
+            string memberName = segments[segments.Length - 1];
+            FieldInfo targetField = target.GetType().GetField(memberName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            PropertyInfo targetProperty = target.GetType().GetProperty(memberName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            Type valueType = targetField != null ? targetField.FieldType : targetProperty?.PropertyType;
+            if (valueType == null || (targetProperty != null && !targetProperty.CanWrite))
+                throw new InvalidOperationException($"Experiment override path '{item.path}' is not writable.");
+            object value;
+            if (valueType == typeof(bool) && bool.TryParse(item.value, out bool boolValue)) value = boolValue;
+            else if (valueType == typeof(int) && int.TryParse(item.value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int intValue)) value = intValue;
+            else if (valueType == typeof(float) && float.TryParse(item.value, NumberStyles.Float, CultureInfo.InvariantCulture, out float floatValue)) value = floatValue;
+            else if (valueType.IsEnum && Enum.TryParse(valueType, item.value, true, out object enumValue)) value = enumValue;
+            else throw new InvalidOperationException($"Experiment override '{item.path}' has invalid value '{item.value}' for {valueType.Name}.");
+            if (targetField != null) targetField.SetValue(target, value); else targetProperty.SetValue(target, value);
+        }
+    }
+
+    private static void WriteExperimentComparison(string outputRoot, List<ExperimentVariantResult> results,
+        string referencePath, ReferenceMetadata reference)
+    {
+        var lines = new List<string> { "variant,measured_frames,total_render_ms,average_render_ms,average_fps,retired_paths,rgb_mae,rgb_rmse,rgb_psnr_db,luminance_mae,luminance_rmse,luminance_relative_absolute_error,luminance_fraction_above_0_01" };
+        foreach (ExperimentVariantResult item in results)
+        {
+            double average = item.result.totalMilliseconds / Math.Max(1, item.result.measuredFrames);
+            VariantComparisonMetrics metrics = CalculateReferenceMetrics(item.result.imagePath, referencePath);
+            lines.Add(string.Join(",", item.name, item.result.measuredFrames.ToString(CultureInfo.InvariantCulture),
+                item.result.totalMilliseconds.ToString("R", CultureInfo.InvariantCulture), average.ToString("R", CultureInfo.InvariantCulture),
+                (average > 0.0 ? 1000.0 / average : 0.0).ToString("R", CultureInfo.InvariantCulture), item.result.retiredPaths,
+                CsvNumber(metrics.rgbMeanAbsoluteError), CsvNumber(metrics.rgbRootMeanSquaredError), CsvNumber(metrics.rgbPsnrDb),
+                CsvNumber(metrics.luminanceMeanAbsoluteError), CsvNumber(metrics.luminanceRootMeanSquaredError),
+                CsvNumber(metrics.luminanceMeanRelativeAbsoluteError), CsvNumber(metrics.luminanceFractionAbove0_01)));
+        }
+        File.WriteAllLines(Path.Combine(outputRoot, "variant_comparison.csv"), lines);
+    }
+
     private static void GenerateReference(GameManager manager, string scenePath, string referenceRoot,
         int width, int height, double durationSeconds, bool refresh, bool requireExisting)
     {
@@ -609,7 +807,8 @@ public static class RayTracingSceneCapture
         bool writeTimingReport,
         bool adaptiveInstrumentation,
         bool recordEditorRun = false,
-        string referencePath = null)
+        string referencePath = null,
+        bool writeConvergenceMetrics = false)
     {
         manager.randomNoise = false;
         manager.enableFrameAccumulation = true;
@@ -657,6 +856,9 @@ public static class RayTracingSceneCapture
         StreamWriter editorRunWriter = recordEditorRun
             ? CreateCommandLineEditorRunWriter(editorRunFolder, manager, sceneName, referencePath)
             : null;
+        StreamWriter convergenceWriter = writeConvergenceMetrics
+            ? CreateConvergenceWriter(diagnosticsRoot)
+            : null;
         Color[] referencePixels = string.IsNullOrEmpty(referencePath) ? null : LoadCachedReferencePixels(referencePath);
         double editorRunStart = EditorApplication.timeSinceStartup;
         double previousPsnr = 0.0;
@@ -685,6 +887,11 @@ public static class RayTracingSceneCapture
             if (editorRunWriter != null)
             {
                 WriteCommandLineEditorRunFrame(editorRunWriter, manager, measuredFrames, editorRunStart,
+                    referencePixels, ref previousPsnr, ref previousRmse, ref hasPreviousMetrics);
+            }
+            if (convergenceWriter != null)
+            {
+                WriteCommandLineEditorRunFrame(convergenceWriter, manager, measuredFrames, editorRunStart,
                     referencePixels, ref previousPsnr, ref previousRmse, ref hasPreviousMetrics);
             }
             if (adaptiveInstrumentation)
@@ -716,6 +923,11 @@ public static class RayTracingSceneCapture
             manager.ExportCurrentRenderPng(Path.Combine(editorRunFolder, "final_color.png"));
             File.WriteAllText(Path.Combine(editorRunFolder, "run_complete.txt"),
                 $"recordedFrames={measuredFrames}\n");
+        }
+        if (convergenceWriter != null)
+        {
+            convergenceWriter.Flush();
+            convergenceWriter.Dispose();
         }
         if (writeTimingReport)
         {
@@ -832,6 +1044,15 @@ public static class RayTracingSceneCapture
             $"displayHeight={manager.DisplayTextureSize.y}\n" +
             $"referenceImage={referencePath ?? string.Empty}\n";
         File.WriteAllText(Path.Combine(folder, "settings.txt"), settings);
+        var writer = new StreamWriter(Path.Combine(folder, "metrics.csv"), false);
+        writer.WriteLine("frame,elapsed_seconds,rgb_psnr_db,rgb_rmse,psnr_db_improvement,rmse_improvement");
+        writer.Flush();
+        return writer;
+    }
+
+    private static StreamWriter CreateConvergenceWriter(string folder)
+    {
+        Directory.CreateDirectory(folder);
         var writer = new StreamWriter(Path.Combine(folder, "metrics.csv"), false);
         writer.WriteLine("frame,elapsed_seconds,rgb_psnr_db,rgb_rmse,psnr_db_improvement,rmse_improvement");
         writer.Flush();

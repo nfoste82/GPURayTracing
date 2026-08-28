@@ -45,6 +45,7 @@ public sealed class SceneSettings
     public bool EnableCaustics = true;
     public int CausticPhotonCount = 65536;
     public float CausticGatherRadius = 0.015f;
+    public float CausticGatherRadiusDecayRate = 0.0f;
     public int CausticSeed = 1;
     public float CausticIntensity = 1.0f;
 
