@@ -26,6 +26,7 @@ Use this folder as focused context for LLM-assisted work on the Unity GPU ray tr
 - `20-dammertz-adaptive-sampling-plan.md`: Fixed-8x8 Dammertz results, allocation diagnosis, next bounded-service experiment, validation criteria, and compact continuation prompt.
 - `21-adaptive-sampling-performance-plan.md`: Capture-only phase timing, root-list cost model, and the ordered adaptive runtime optimization plan.
 - `22-shader-compile-splitting-handoff.md`: Split-compute-asset compile-time work, measured Metal timings, the debug-kernel timeout, and a one-asset-at-a-time continuation workflow.
+- `23-initial-ris-direct-lighting-plan.md`: Platform-neutral local direct-light RIS plan, correctness constraints, benchmark matrix, and future-session prompt.
 
 ## Fast Context Selection
 
@@ -47,3 +48,4 @@ Use this folder as focused context for LLM-assisted work on the Unity GPU ray tr
 - To continue reducing the public project's barrier to entry, read `16-accessibility-and-onboarding.md`.
 - To continue adaptive-sampling work, read `17-adaptive-sampling-continuation.md`, then `03-compute-shader-renderer.md`, `08-shader-debugging-and-randomness.md`, and `10-benchmarking-and-performance.md`.
 - To measure or reduce adaptive runtime overhead, read `21-adaptive-sampling-performance-plan.md` after `17-adaptive-sampling-continuation.md`.
+- To implement local initial direct-light RIS without temporal/spatial reuse, read `23-initial-ris-direct-lighting-plan.md`, then `07-shader-lighting-and-materials.md`, `03-compute-shader-renderer.md`, `10-benchmarking-and-performance.md`, and `11-regression-testing.md`.

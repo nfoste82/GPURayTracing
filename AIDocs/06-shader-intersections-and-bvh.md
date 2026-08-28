@@ -20,6 +20,12 @@ Registered triangle meshes upload world-space triangles into `_Triangles`, objec
 
 Each mesh has an object-level AABB in `_Meshes`. Once a ray enters a mesh, traversal walks that mesh's binary BVH and tests only leaf triangle ranges that survive AABB checks.
 
+## Planned Object-Space BLAS Instancing
+
+The current template cache avoids repeated BVH split construction but still expands each instance into world-space triangle/node data. The planned instancing path will retain shared object-space triangles and a BLAS per unique mesh/template, while the TLAS stores world-space AABBs for compact per-instance records. On selecting an instance, the shader will transform the ray to object space for BLAS traversal and transform the resulting hit data back to world space.
+
+This must preserve nearest-hit distances under non-uniform scale, use inverse-transpose normal transforms, retain per-instance material/submesh assignments and stable IDs, and keep mesh refraction, shadow segment distances, and temporal feature data correct. It is deliberately separate from hardware ray tracing and applies to the existing software compute traversal. See `09-roadmap-and-improvements.md` for the staged design, test matrix, and benchmark requirements.
+
 The `GameManager` inspector exposes `Bake BVH` above its diagnostics. A bake stores object-space per-mesh triangles and BVH nodes in generated assets and reports `Baked`, `Not baked`, or `Bake is out-of-date`. Its signature covers stable mesh asset GUID/local-file identities, smooth-normal topology mode, and source mesh dependency hashes. Runtime resolves those stable identities to the Play-mode mesh instances and populates its instance-ID cache; multiple runtime instances of the same imported mesh can therefore share one baked template. Runtime uses baked templates only when that signature is current; otherwise it falls back to the normal CPU builder. Transforms and material values are intentionally excluded because baked data is object-space and those values are applied while assembling runtime world-space triangle records.
 
 Completing a manual or bake-on-exit operation writes only locally generated assets. The bake is found from the scene and `GameManager` identities, so it survives editor sessions without adding a scene reference. Startup profiling includes a `baked mesh BVH load` phase whose parenthesized status confirms how many templates loaded or states why runtime rejected the bake.

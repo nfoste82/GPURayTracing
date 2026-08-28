@@ -40,6 +40,12 @@ For the random/importance strategies, if `_LightSampleCount` would cover (nearly
 
 ImportanceSampled only weights up to `MaxImportanceLights` (`128`) global emitters; lights beyond that are ignored for importance weighting. `GameManager` logs a one-time warning when the scene exceeds this count while ImportanceSampled is active. Because omitted lights have zero selection probability, this mode is biased relative to the full scene when the cap is exceeded. An emissive mesh consumes one global entry regardless of triangle count.
 
+### Planned Light BVH
+
+A future portable light BVH will replace the capped O(light-count) importance-selection scan when emitter count warrants it. It will store conservative emitter-group bounds, aggregate flux, and directional bounds, then sample branches according to a receiver-dependent contribution estimate. The final emitter PDF must include every hierarchy branch probability, followed by the existing mesh-triangle CDF and light-shape PDF, before conversion to the solid-angle measure used by MIS. The hierarchy must preserve nonzero probability for every eligible light; it cannot silently recreate the current cap-induced bias.
+
+The current all-lights and uniform strategies remain useful correctness/performance references. The selection implementation must also preserve the single inlined `SampleSingleLight()` call site described below. See `09-roadmap-and-improvements.md` for implementation stages, tradeoffs, and validation criteria.
+
 ### Light Sampling Structure And Compile-Time Constraint
 
 `GetLightHittingPoint()` is deliberately written with a **single** inlined `SampleSingleLight()` call site inside one `[loop]`. A helper, `SelectLightForDraw()`, isolates the cheap per-strategy light selection and weighting, while the expensive, BVH-traversing `SampleSingleLight()` body is called once. Finite emitters and environment samples both flow through that call site, so `GetShadowTransmittance()` has only one production direct-light call site. Inlining the sampling or visibility body at multiple call sites previously made the Metal/HLSL compiler duplicate the shadow BVH traversal loop many times, causing multi-minute shader compiles that hung Unity on "Importing Assets". Keep direct-light changes within this single-call-site shape. See `Tools > Ray Tracing > Precompile Compute Shader` for surfacing compile time/errors from edit mode.
@@ -69,6 +75,10 @@ Mesh hits retain both a shading/optical normal and the triangle's geometric norm
 Opaque continuation throughput uses `brdf * abs(N dot L) / pdf`. The common roughness conversion is `roughness = 1 - smoothness`, `alpha = roughness^2`, with a small roughness floor to keep mirror-like GGX evaluation finite. Glass/water transmission and Fresnel branch selection retain their medium-stack-specific path; their direct reflection uses the shared GGX evaluator.
 
 Mesh opaque materials can blend continuously between dielectric and metal with `RayMaterial.Metallic`. The glTF-style metallic/roughness texture multiplies scalar metallic and roughness using blue and green channels respectively. Tangent-space normal maps modify the optical/shading normal used by direct light, GGX sampling, reflection, and mesh refraction; geometric triangle normals continue to control boundary classification and ray offsets.
+
+### Planned Ray Material Presets
+
+Optional data-only `RayMaterialPreset` assets are planned as an editor authoring convenience. Applying one will copy documented scalar and texture values into an ordinary `RayMaterial`; shader code and GPU material layout remain unchanged. Manual edits can intentionally diverge from the source preset, and preset changes must follow the existing material/texture dirty path and accumulation invalidation without rebuilding geometry or BVHs. See `09-roadmap-and-improvements.md` for the override policy and test requirements.
 
 Each uploaded emissive triangle stores the matching `_Lights` index, and emissive sphere hits already use their light-buffer index. This identity lets a BRDF-sampled emissive hit reconstruct the same light-selection and shape PDF used by next-event estimation.
 

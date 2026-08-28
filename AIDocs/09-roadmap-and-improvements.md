@@ -164,6 +164,61 @@ Completion criteria: light and material sampling can both discover the same path
 - Add focused water march/refinement and mesh-light tessellation benchmarks before optimizing those paths.
 - Consider dynamic-quality presets or user-selectable priorities if users need to favor bounces/shadows over sample count or light quality.
 
+### Object-Space BLAS Instancing
+
+The existing mesh-template cache already shares object-space topology construction, but runtime still transforms and uploads triangles and BVH bounds for every mesh instance. Replace that expanded world-space representation with true instances: retain one object-space BLAS and triangle buffer per unique mesh/template, and upload a compact record for each scene instance. This is a portable compute-shader technique; it does not depend on hardware ray tracing, a vendor API, or bindless textures.
+
+- Each instance record should contain its shared BLAS/geometry offsets and counts, object-to-world and world-to-object transforms, inverse-transpose normal transform, world-space TLAS AABB, stable object identity, and material/submesh override references.
+- The TLAS and shadow TLAS should continue to contain world-space instance AABBs. Once a leaf selects an instance, transform the ray into its object space, traverse the shared BLAS, then transform the hit position and geometric/shading normals back to world space.
+- Establish and test a single ray-distance convention before implementation. With normalized world-space rays transformed into object space, non-uniform scale must not corrupt nearest-hit comparisons, shadow maximum distance, ray offsets, refraction segment lengths, or light PDFs. Normals require inverse-transpose transformation and re-normalization.
+- Preserve per-instance material assignment and stable IDs. Sharing a BLAS must not accidentally share material data across instances, and temporal feature/history identity must remain stable when buffers rebuild.
+- Keep unique/dynamic topology on the current expanded path initially. Do not make skinned/deforming meshes depend on the static shared BLAS path until deformation/refit data and temporal motion semantics exist.
+
+Expected tradeoffs: equal image quality and Monte Carlo convergence for equivalent scenes; substantially lower geometry/BVH memory and CPU upload work for repeated meshes; small per-hit transform overhead; and better scene scalability. More instances can still increase TLAS/shadow traversal cost, so this is not a replacement for culling or LOD.
+
+Validation and benchmarks:
+
+- Add deterministic brute-force versus instanced-BLAS hit equivalence tests for identity, translation, rotation, uniform scale, and non-uniform scale, including closest-hit `t`, normals, UVs, material selection, shadow distance, and mesh refraction boundaries.
+- Add image fixtures comparing a repeated-object scene rendered through the old expanded representation and the instanced path, including reflective, glass, textured, and emissive instances.
+- Add repeated-instance benchmark scenes and report unique mesh count, instance count, triangle/BVH bytes, upload bytes, TLAS nodes, CPU preparation time, and GPU frame time. Compare one source mesh with many instances against equivalent duplicated meshes.
+- Retain the existing path as a temporary A/B fallback until these tests show equivalence and measurements demonstrate a repeated-geometry benefit.
+
+### Light BVH For Global Emitter Selection
+
+The current global importance sampler has a fixed `128`-emitter consideration cap. Although each emissive mesh already uses one global entry and selects a triangle internally, scenes beyond that cap are biased because omitted emitters have zero probability. Replace the capped linear selection pass with a compact CPU-built light hierarchy, but begin with a conventional light BVH rather than a spherical-Gaussian tree.
+
+- Build or refit the hierarchy only when emitter membership, transformed bounds, emission, or mesh-triangle distributions change. A node should conservatively store bounds, aggregate emitted flux, a normal cone or equivalent directional bound, and child/leaf ranges.
+- At a shading point, traverse/sample branches using a conservative receiver-dependent contribution bound based on node flux, distance, and orientation. Every branch and leaf probability must contribute to the selected emitter's PDF.
+- Keep the existing per-mesh area-weighted triangle CDF as the second stage after selecting a mesh emitter. Sphere and directional lights can remain leaves in the same global hierarchy; environment sampling remains its separate distribution and MIS path.
+- Convert the complete hierarchy-selection times triangle-selection times shape PDF into the existing solid-angle measure before applying the power heuristic. A zero-weight emitter must either be excluded consistently or retain an explicit nonzero fallback probability; never silently omit a valid emitter.
+- Preserve `GetLightHittingPoint()`'s one `[loop]` and one inlined `SampleSingleLight()` call site. Selection can move to helper functions, but do not duplicate the BVH-traversing shadow/light-evaluation body, which is known to cause severe Metal compile-time expansion.
+
+Expected tradeoffs: better direct-light quality and lower variance when many emissive objects exist; removal of the current cap-induced selection bias; logarithmic selection work instead of an O(light-count) per-hit weighting scan; and a small additional light-node buffer. Small-light scenes may see a minor fixed traversal cost with no visible benefit, so retain simple all-lights/uniform paths for diagnostics and benchmark before selecting defaults.
+
+Validation and benchmarks:
+
+- Test hierarchy bounds, flux aggregation, PDF normalization, and nonzero selection probability for every eligible emitter. Empirically sample selections and compare observed emitter/triangle frequencies against their reported PDFs.
+- Compare direct-light energy and image signatures against `AllLights` in deterministic low-light, dense-emissive-mesh, many-mesh-light, glossy, and moving-emitter fixtures. Confirm that subdividing an emitter does not materially alter its brightness.
+- Extend `Benchmark_EmissiveDragon` and `Benchmark_ManyLights`, or add a focused light-hierarchy fixture, to report emitter count, mesh-light count, triangle count, hierarchy depth/node count, selection time, direct-light variance, and GPU frame time.
+- Measure hierarchy rebuild/refit cost and define a conservative fallback for rapidly moving lights before enabling it by default.
+
+### Ray Material Preset Assets
+
+Add optional data-only `RayMaterialPreset` assets as an authoring layer over the existing `RayMaterial`; do not introduce a second shader material model or general Unity-shader introspection. A preset should populate the established scalar and texture references for a recognizable material category while leaving the renderer's uploaded material representation unchanged.
+
+- Presets may define material type, base color, metallic, smoothness, opacity, refraction index, specular/transmission, emission, normal/metallic-roughness/albedo texture references, and documented map-channel/color-space expectations.
+- Define a clear override policy: applying a preset copies values into `RayMaterial`; later manual edits intentionally diverge. Inspector UI should display the applied preset and whether the component matches it, but runtime shading must read only the normal `RayMaterial` data.
+- Applying or changing a preset must use the existing texture/material dirty path, rebuild only affected texture-array slices/material records, and invalidate accumulation exactly as direct material edits do. It must not rebuild unrelated mesh geometry or BVHs.
+- Start with a small set of calibrated diffuse, metal, glass, and emissive examples. Avoid presets that claim physical accuracy beyond the renderer's supported BRDF, medium, texture-filtering, and emissive-light behavior.
+
+Expected tradeoffs: better authoring consistency and quicker scene setup, with no per-sample shader cost or convergence change. GPU memory is unchanged unless a selected preset introduces previously unused textures; the preset assets themselves are negligible. Reasonable parameter defaults can indirectly reduce fireflies or noise caused by extreme authoring values, but presets do not improve the estimator.
+
+Validation:
+
+- Add editor tests for apply, match/divergence detection, undo/redo, missing textures, and accumulation invalidation.
+- Add material fixtures that compare a preset-applied object with the equivalent manually configured `RayMaterial`, covering diffuse, metal, glass, emissive, textured, and normal-mapped cases.
+- Confirm preset-only changes update only the expected material/texture resources through startup/dirty-path diagnostics and leave geometry/BVH buffers untouched.
+
 ### Low-Visual-Cost Interactive Quality Trades
 
 These are opt-in quality modes or future dynamic-quality ladder steps. They are intended to reduce interactive rendering cost with a limited, explicit visual tradeoff; preserve the current native-resolution/high-quality path and benchmark each mode before changing defaults.
