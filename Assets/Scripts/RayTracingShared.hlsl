@@ -4282,9 +4282,6 @@ float3 TracePathWithDirectLight(Ray ray, inout uint rngState, out float directLi
     float previousMaterialPdf = 0.0f;
     bool previousDirectLightSampled = false;
     bool previousSoftShadows = false;
-    // The primary RIS estimator already performs NEE for finite mesh/environment emitters.
-    // Its immediately following opaque continuation must not add those same terminal events.
-    bool suppressInitialRisTerminalEvent = false;
     bool canGatherCaustics = true;
 
     [loop]
@@ -4341,10 +4338,6 @@ float3 TracePathWithDirectLight(Ray ray, inout uint rngState, out float directLi
 
         if (DidHitSky(hit))
         {
-            if (suppressInitialRisTerminalEvent)
-            {
-                break;
-            }
             float misWeight = 1.0f;
             if (previousDirectLightSampled && previousMaterialPdf > 0.0f && _EnvironmentLightEnabled != 0)
             {
@@ -4361,11 +4354,6 @@ float3 TracePathWithDirectLight(Ray ray, inout uint rngState, out float directLi
         float3 emission = GetEmission(hit);
         if (DidHitLight(hit))
         {
-            bool isFiniteMeshLight = hit.lightIndex >= 0 && _Lights[hit.lightIndex].type != LightTypeSphere;
-            if (suppressInitialRisTerminalEvent && isFiniteMeshLight)
-            {
-                break;
-            }
             float misWeight = 1.0f;
             if (previousDirectLightSampled && previousMaterialPdf > 0.0f)
             {
@@ -4413,7 +4401,6 @@ float3 TracePathWithDirectLight(Ray ray, inout uint rngState, out float directLi
         previousSurfacePosition = hit.position;
         previousMaterialPdf = scatter.materialPdf;
         previousDirectLightSampled = sampledDirectLight;
-        suppressInitialRisTerminalEvent = sampledInitialRis;
         canGatherCaustics = canGatherCaustics && IsGlassMaterial(hit);
         ray = scatter.ray;
         throughput *= scatter.attenuation;

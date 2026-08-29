@@ -865,8 +865,9 @@ namespace GPURayTracing.Tests
                 "RIS candidates must reuse SampleSingleLight's only production shadow query.");
             Assert.That(CountOccurrences(source, "accumulated += SampleSingleLight("), Is.EqualTo(1),
                 "RIS candidates must reuse GetLightHittingPoint's only production light-sampling call site.");
-            Assert.That(source, Does.Contain("suppressInitialRisTerminalEvent"));
             Assert.That(source, Does.Contain("out bool initialRisSelected"));
+            Assert.That(source, Does.Not.Contain("suppressInitialRisTerminalEvent"),
+                "RIS NEE must retain the complementary BRDF terminal-light path for mesh emitters.");
         }
 
         [Test]
