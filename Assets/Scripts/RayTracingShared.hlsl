@@ -48,6 +48,9 @@ int _DebugRenderMode;
 int _MaxLightSamples;
 int _LightSamplingStrategy;
 int _LightSampleCount;
+// Experimental primary-surface local RIS budget. This path is intentionally always enabled
+// when its bounce/material/strategy eligibility criteria are met.
+int _InitialRisCandidateCount;
 int _UseFrameAccumulation;
 int _AccumulatedFrameCount;
 float _ShadowRandomness;
@@ -2916,40 +2919,81 @@ float3 GetSkyboxColor(float3 direction);
 float3 GetSkyboxDirection(float2 uv);
 uint SelectEnvironmentCdf(bool marginal, uint offset, uint count, float target);
 
+struct InitialRisCandidate
+{
+    Light light;
+    float3 samplePosition;
+    float3 direction;
+    float distance;
+    float environmentPdf;
+    float triangleSelectionProbability;
+    float proposalPdf;
+    float risScale;
+    int lightIndex;
+    int isEnvironment;
+    int isMeshLight;
+    int valid;
+};
+
+bool IsFiniteRisValue(float value)
+{
+    return value == value && abs(value) < RayMaxDistance;
+}
+
+bool IsFiniteRisColor(float3 value)
+{
+    return all(value == value) && all(abs(value) < RayMaxDistance);
+}
+
+bool IsInitialRisEligible(RayHit hit)
+{
+    return _LightSamplingStrategy == LightSamplingImportance
+        && hit.opacity >= 1.0f
+        && !IsGlassMaterial(hit);
+}
+
 float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
-                          float lightSelectionPdf, int lightTechniqueSampleCount,
-                          bool volumeEvent,
-                          inout uint rngState)
+                           float lightSelectionPdf, int lightTechniqueSampleCount,
+                           bool volumeEvent, InitialRisCandidate risCandidate,
+                           inout uint rngState)
 {
     float3 lightTotal = float3(0.0f, 0.0f, 0.0f);
-    bool isEnvironment = lightIndex < 0;
+    bool useRisCandidate = risCandidate.valid != 0;
+    bool isEnvironment = useRisCandidate ? risCandidate.isEnvironment != 0 : lightIndex < 0;
     if (isEnvironment && (_EnvironmentLightEnabled == 0 || _EnvironmentCdfWidth <= 0 || _EnvironmentCdfHeight <= 0))
     {
         return lightTotal;
     }
 
     Light light;
-    float triangleSelectionProbability = 1.0f;
-    bool isMeshLight = false;
+    float triangleSelectionProbability = useRisCandidate ? risCandidate.triangleSelectionProbability : 1.0f;
+    bool isMeshLight = useRisCandidate ? risCandidate.isMeshLight != 0 : false;
     if (!isEnvironment)
     {
-        light = _Lights[lightIndex];
-        isMeshLight = light.type == LightTypeMesh;
-        if (light.type == LightTypeMesh)
+        if (!useRisCandidate)
         {
-            int triangleIndex = SelectMeshLightTriangle(light, rngState, triangleSelectionProbability);
-            if (triangleIndex < 0)
+            light = _Lights[lightIndex];
+            isMeshLight = light.type == LightTypeMesh;
+            if (light.type == LightTypeMesh)
             {
-                return lightTotal;
-            }
+                int triangleIndex = SelectMeshLightTriangle(light, rngState, triangleSelectionProbability);
+                if (triangleIndex < 0)
+                {
+                    return lightTotal;
+                }
 
-            MeshTriangle meshTriangle = _Triangles[triangleIndex];
-            light.position = meshTriangle.vertex0;
-            light.u = meshTriangle.vertex1 - meshTriangle.vertex0;
-            light.v = meshTriangle.vertex2 - meshTriangle.vertex0;
-            light.normal = meshTriangle.normal;
-            light.area = GetTriangleArea(meshTriangle);
-            light.type = LightTypeTriangle;
+                MeshTriangle meshTriangle = _Triangles[triangleIndex];
+                light.position = meshTriangle.vertex0;
+                light.u = meshTriangle.vertex1 - meshTriangle.vertex0;
+                light.v = meshTriangle.vertex2 - meshTriangle.vertex0;
+                light.normal = meshTriangle.normal;
+                light.area = GetTriangleArea(meshTriangle);
+                light.type = LightTypeTriangle;
+            }
+        }
+        else
+        {
+            light = risCandidate.light;
         }
     }
     bool isDirectional = false;
@@ -2977,26 +3021,41 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
         float environmentPdf = 0.0f;
         if (isEnvironment)
         {
-            uint y = SelectEnvironmentCdf(true, 0u, (uint)_EnvironmentCdfHeight, rand(rngState));
-            uint x = SelectEnvironmentCdf(false, y * (uint)_EnvironmentCdfWidth, (uint)_EnvironmentCdfWidth, rand(rngState));
-            float2 distributionUv = (float2(x, y) + float2(rand(rngState), rand(rngState)))
-                / float2(_EnvironmentCdfWidth, _EnvironmentCdfHeight);
-            float rowCdf = _EnvironmentMarginalCdf[y];
-            float previousRowCdf = y > 0 ? _EnvironmentMarginalCdf[y - 1] : 0.0f;
-            float columnCdf = _EnvironmentConditionalCdf[y * _EnvironmentCdfWidth + x];
-            float previousColumnCdf = x > 0 ? _EnvironmentConditionalCdf[y * _EnvironmentCdfWidth + x - 1] : 0.0f;
-            float texelProbability = max(0.0f, rowCdf - previousRowCdf)
-                * max(0.0f, columnCdf - previousColumnCdf);
-            float theta = distributionUv.y * PI;
-            float texelSolidAngle = (2.0f * PI / _EnvironmentCdfWidth) * (PI / _EnvironmentCdfHeight)
-                * max(abs(sin(theta)), 1e-5f);
-            environmentPdf = texelProbability / texelSolidAngle;
-            ptToOffset = GetSkyboxDirection(float2(distributionUv.x, 1.0f - distributionUv.y));
-            distanceToLight = RayMaxDistance;
+            if (useRisCandidate)
+            {
+                environmentPdf = risCandidate.environmentPdf;
+                ptToOffset = risCandidate.direction;
+                distanceToLight = risCandidate.distance;
+            }
+            else
+            {
+                uint y = SelectEnvironmentCdf(true, 0u, (uint)_EnvironmentCdfHeight, rand(rngState));
+                uint x = SelectEnvironmentCdf(false, y * (uint)_EnvironmentCdfWidth, (uint)_EnvironmentCdfWidth, rand(rngState));
+                float2 distributionUv = (float2(x, y) + float2(rand(rngState), rand(rngState)))
+                    / float2(_EnvironmentCdfWidth, _EnvironmentCdfHeight);
+                float rowCdf = _EnvironmentMarginalCdf[y];
+                float previousRowCdf = y > 0 ? _EnvironmentMarginalCdf[y - 1] : 0.0f;
+                float columnCdf = _EnvironmentConditionalCdf[y * _EnvironmentCdfWidth + x];
+                float previousColumnCdf = x > 0 ? _EnvironmentConditionalCdf[y * _EnvironmentCdfWidth + x - 1] : 0.0f;
+                float texelProbability = max(0.0f, rowCdf - previousRowCdf)
+                    * max(0.0f, columnCdf - previousColumnCdf);
+                float theta = distributionUv.y * PI;
+                float texelSolidAngle = (2.0f * PI / _EnvironmentCdfWidth) * (PI / _EnvironmentCdfHeight)
+                    * max(abs(sin(theta)), 1e-5f);
+                environmentPdf = texelProbability / texelSolidAngle;
+                ptToOffset = GetSkyboxDirection(float2(distributionUv.x, 1.0f - distributionUv.y));
+                distanceToLight = RayMaxDistance;
+            }
         }
         else
         {
-            if (isDirectional)
+            if (useRisCandidate)
+            {
+                offsetPt = risCandidate.samplePosition;
+                ptToOffset = risCandidate.direction;
+                distanceToLight = risCandidate.distance;
+            }
+            else if (isDirectional)
             {
                 offsetPt = hit.position + SampleCone(ptToLight, light.radius, rngState);
             }
@@ -3089,7 +3148,8 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
 
             float materialPdf;
             float3 brdf = EvaluateMaterialBrdf(ray, hit, ptToOffset, materialPdf);
-            float misWeight = PowerHeuristic(environmentPdf, materialPdf);
+            float misWeight = useRisCandidate ? risCandidate.risScale * environmentPdf
+                : PowerHeuristic(environmentPdf, materialPdf);
             lightTotal += GetSkyboxColor(ptToOffset) * _SkyboxLight.xyz * shadowTransmittance
                 * brdf * rayNormalDot * misWeight / environmentPdf;
             continue;
@@ -3111,7 +3171,7 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
         if ((light.type == LightTypeTriangle || light.type == LightTypeSunTriangle) && lightShapePdf > 0.0f)
         {
             float lightPdf = lightSelectionPdf * triangleSelectionProbability * lightShapePdf;
-            float misWeight = PowerHeuristic(lightTechniqueSampleCount * lightPdf, materialPdf);
+            float misWeight = useRisCandidate ? risCandidate.risScale : PowerHeuristic(lightTechniqueSampleCount * lightPdf, materialPdf);
             float distanceScale = max(1.0f, distanceToLight * distanceToLight * max(0.001f, _LightFalloffScale));
             float lightStrength = saturate(dot(light.normal, -ptToOffset)) * light.area / distanceScale;
             if (light.type == LightTypeSunTriangle)
@@ -3127,13 +3187,15 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
         {
             // Directional lights are delta lights at zero radius and are deliberately outside
             // area-light/BRDF MIS. Finite-radius cones remain direct-light-only for now.
-            lightTotal += light.emission * shadowTransmittance * materialResponse * rayNormalDot;
+            lightTotal += light.emission * shadowTransmittance * materialResponse * rayNormalDot
+                * (useRisCandidate ? risCandidate.risScale : 1.0f);
         }
         else
         {
             // Zero-radius disk sampling is a delta-light fallback and has no competing BRDF PDF.
             float lightStrength = GetDirectLightFalloff(distanceToLight, light.radius);
-            lightTotal += light.emission * lightStrength * shadowTransmittance * materialResponse * rayNormalDot;
+            lightTotal += light.emission * lightStrength * shadowTransmittance * materialResponse * rayNormalDot
+                * (useRisCandidate ? risCandidate.risScale : 1.0f);
         }
     }
 
@@ -3287,8 +3349,10 @@ int SelectLightForDraw(int iteration, int drawCount, int lightCount, float3 shad
 }
 
 float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
-                            bool volumeEvent, inout uint rngState)
+                            bool volumeEvent, bool initialRis, out bool initialRisSelected,
+                            inout uint rngState)
 {
+    initialRisSelected = false;
     int sampleCount = max(1, samplesPerLight);
     // Preserve fog's established finite-emitter estimator; environment NEE is a surface path.
     bool sampleEnvironment = !volumeEvent && _EnvironmentLightEnabled != 0
@@ -3342,17 +3406,164 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
 
     // SINGLE inlined SampleSingleLight call site. Finite-light and environment samples both use
     // this visibility path so the Metal compiler sees only one shadow-BVH traversal body.
+    bool useInitialRis = initialRis && !volumeEvent && IsInitialRisEligible(hit);
+    InitialRisCandidate selectedRisCandidate;
+    selectedRisCandidate.valid = 0;
+    int risLightIndex = 0;
+    if (useInitialRis)
+    {
+        int proposalCount = (lightCount > 0 ? 1 : 0) + (sampleEnvironment ? 1 : 0);
+        float totalWeight = 0.0f;
+        float selectedWeight = 0.0f;
+        int candidateCount = max(1, _InitialRisCandidateCount);
+        int candidateIndex;
+        [loop]
+        for (candidateIndex = 0; candidateIndex < candidateCount; candidateIndex++)
+        {
+            InitialRisCandidate candidate;
+            candidate.valid = 0;
+            candidate.isEnvironment = 0;
+            candidate.isMeshLight = 0;
+            candidate.proposalPdf = 0.0f;
+            candidate.risScale = 0.0f;
+            if (proposalCount <= 0) continue;
+
+            float branchPdf = 1.0f / proposalCount;
+            bool chooseEnvironment = sampleEnvironment && (lightCount <= 0 || rand(rngState) < branchPdf);
+            float3 unshadowed = 0.0f;
+            float proposalPdf = 0.0f;
+            if (chooseEnvironment)
+            {
+                uint y = SelectEnvironmentCdf(true, 0u, (uint)_EnvironmentCdfHeight, rand(rngState));
+                uint x = SelectEnvironmentCdf(false, y * (uint)_EnvironmentCdfWidth, (uint)_EnvironmentCdfWidth, rand(rngState));
+                float2 distributionUv = (float2(x, y) + float2(rand(rngState), rand(rngState)))
+                    / float2(_EnvironmentCdfWidth, _EnvironmentCdfHeight);
+                float rowCdf = _EnvironmentMarginalCdf[y];
+                float previousRowCdf = y > 0 ? _EnvironmentMarginalCdf[y - 1] : 0.0f;
+                float columnCdf = _EnvironmentConditionalCdf[y * _EnvironmentCdfWidth + x];
+                float previousColumnCdf = x > 0 ? _EnvironmentConditionalCdf[y * _EnvironmentCdfWidth + x - 1] : 0.0f;
+                float texelProbability = max(0.0f, rowCdf - previousRowCdf) * max(0.0f, columnCdf - previousColumnCdf);
+                float theta = distributionUv.y * PI;
+                float texelSolidAngle = (2.0f * PI / _EnvironmentCdfWidth) * (PI / _EnvironmentCdfHeight) * max(abs(sin(theta)), 1e-5f);
+                candidate.environmentPdf = texelProbability / texelSolidAngle;
+                candidate.direction = GetSkyboxDirection(float2(distributionUv.x, 1.0f - distributionUv.y));
+                candidate.distance = RayMaxDistance;
+                candidate.samplePosition = hit.position;
+                candidate.isEnvironment = 1;
+                float materialPdf;
+                float3 brdf = EvaluateMaterialBrdf(ray, hit, candidate.direction, materialPdf);
+                proposalPdf = branchPdf * candidate.environmentPdf;
+                unshadowed = GetSkyboxColor(candidate.direction) * _SkyboxLight.xyz * brdf
+                    * saturate(dot(hit.normal, candidate.direction));
+            }
+            else
+            {
+                float ignoredWeight;
+                float selectionPdf;
+                int candidateLightIndex = SelectLightForDraw(0, 1, lightCount, hit.position, rngState, ignoredWeight, selectionPdf);
+                if (selectionPdf <= 0.0f || candidateLightIndex < 0 || candidateLightIndex >= lightCount) continue;
+                candidate.lightIndex = candidateLightIndex;
+                candidate.light = _Lights[candidateLightIndex];
+                candidate.isMeshLight = candidate.light.type == LightTypeMesh;
+                candidate.triangleSelectionProbability = 1.0f;
+                if (candidate.isMeshLight != 0)
+                {
+                    int triangleIndex = SelectMeshLightTriangle(candidate.light, rngState, candidate.triangleSelectionProbability);
+                    if (triangleIndex < 0) continue;
+                    MeshTriangle sampledTriangle = _Triangles[triangleIndex];
+                    candidate.light.position = sampledTriangle.vertex0;
+                    candidate.light.u = sampledTriangle.vertex1 - sampledTriangle.vertex0;
+                    candidate.light.v = sampledTriangle.vertex2 - sampledTriangle.vertex0;
+                    candidate.light.normal = sampledTriangle.normal;
+                    candidate.light.area = GetTriangleArea(sampledTriangle);
+                    candidate.light.type = LightTypeTriangle;
+                }
+                bool directional = candidate.light.type == LightTypeDirectional;
+                if (directional)
+                {
+                    candidate.direction = SampleCone(-normalize(candidate.light.position), candidate.light.radius, rngState);
+                    candidate.distance = RayMaxDistance;
+                    candidate.samplePosition = hit.position;
+                }
+                else
+                {
+                    if (candidate.light.type == LightTypeTriangle || candidate.light.type == LightTypeSunTriangle)
+                    {
+                        float r1 = rand(rngState); float r2 = rand(rngState);
+                        if (r1 + r2 > 1.0f) { r1 = 1.0f - r1; r2 = 1.0f - r2; }
+                        candidate.samplePosition = candidate.light.position + candidate.light.u * r1 + candidate.light.v * r2;
+                    }
+                    else
+                    {
+                        float3 centerDirection = normalize(candidate.light.position - hit.position);
+                        float3 tangent; float3 bitangent;
+                        CreateBasisFromNormal(centerDirection, tangent, bitangent);
+                        float2 diskSample = SampleDisk(rngState) * candidate.light.radius * max(0.0f, _ShadowRandomness);
+                        candidate.samplePosition = candidate.light.position + tangent * diskSample.x + bitangent * diskSample.y;
+                    }
+                    float3 toLight = candidate.samplePosition - hit.position;
+                    float distanceSquared = dot(toLight, toLight);
+                    if (distanceSquared <= 1e-8f) continue;
+                    candidate.distance = sqrt(distanceSquared);
+                    candidate.direction = toLight / candidate.distance;
+                }
+                float materialPdf;
+                float3 materialResponse = EvaluateMaterialBrdf(ray, hit, candidate.direction, materialPdf);
+                float normalDotLight = saturate(dot(hit.normal, candidate.direction));
+                proposalPdf = branchPdf * selectionPdf;
+                if (candidate.light.type == LightTypeTriangle || candidate.light.type == LightTypeSunTriangle)
+                {
+                    float distanceScale = max(1.0f, candidate.distance * candidate.distance * max(0.001f, _LightFalloffScale));
+                    float lightStrength = saturate(dot(candidate.light.normal, -candidate.direction)) * candidate.light.area / distanceScale;
+                    if (candidate.light.type == LightTypeSunTriangle) lightStrength = 0.5f;
+                    unshadowed = candidate.light.emission * lightStrength * materialResponse * normalDotLight
+                        * (candidate.isMeshLight != 0 ? 1.0f / max(candidate.triangleSelectionProbability, 1e-8f) : 1.0f);
+                }
+                else if (directional) unshadowed = candidate.light.emission * materialResponse * normalDotLight;
+                else unshadowed = candidate.light.emission * GetDirectLightFalloff(candidate.distance, candidate.light.radius) * materialResponse * normalDotLight;
+            }
+
+            float3 weightedContribution = proposalPdf > 1e-8f ? max(0.0f, unshadowed / proposalPdf) : 0.0f;
+            float weight = dot(weightedContribution, float3(0.2126f, 0.7152f, 0.0722f));
+            if (!IsFiniteRisColor(weightedContribution) || !IsFiniteRisValue(weight) || weight <= 0.0f) continue;
+            candidate.valid = 1;
+            candidate.proposalPdf = proposalPdf;
+            totalWeight += weight;
+            if (rand(rngState) * totalWeight < weight)
+            {
+                selectedRisCandidate = candidate;
+                selectedWeight = weight;
+                risLightIndex = candidate.isEnvironment != 0 ? -1 : candidate.lightIndex;
+            }
+        }
+        if (selectedRisCandidate.valid != 0 && selectedWeight > 0.0f && IsFiniteRisValue(totalWeight))
+        {
+            float reservoirScale = totalWeight / (candidateCount * selectedWeight);
+            selectedRisCandidate.risScale = reservoirScale / selectedRisCandidate.proposalPdf;
+            initialRisSelected = IsFiniteRisValue(selectedRisCandidate.risScale)
+                && selectedRisCandidate.risScale > 0.0f;
+        }
+    }
+
     float3 accumulated = float3(0.0f, 0.0f, 0.0f);
     int d;
     [loop]
-    for (d = 0; d < drawCount + (sampleEnvironment ? 1 : 0); d++)
+    for (d = 0; d < (useInitialRis ? 1 : drawCount + (sampleEnvironment ? 1 : 0)); d++)
     {
         float weight;
         float selectionPdf;
         int lightIndex;
         int selectedSampleCount;
         int lightTechniqueSampleCount;
-        if (d == drawCount)
+        if (useInitialRis)
+        {
+            lightIndex = risLightIndex;
+            weight = selectedRisCandidate.valid != 0 ? 1.0f : 0.0f;
+            selectionPdf = 1.0f;
+            selectedSampleCount = 1;
+            lightTechniqueSampleCount = 1;
+        }
+        else if (d == drawCount)
         {
             // A negative index identifies the separately sampled environment distribution.
             lightIndex = -1;
@@ -3385,6 +3596,7 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
         accumulated += SampleSingleLight(lightIndex, ray, hit, selectedSampleCount,
             selectionPdf, lightTechniqueSampleCount,
             volumeEvent,
+            selectedRisCandidate,
             rngState) * weight;
     }
 
@@ -3930,10 +4142,11 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
     return result;
 }
 
-float3 GetDirectLight(Ray ray, RayHit hit, bool softShadows, inout uint rngState)
+float3 GetDirectLight(Ray ray, RayHit hit, bool softShadows, bool initialRis,
+                      out bool initialRisSelected, inout uint rngState)
 {
     int samplesPerLight = softShadows ? max(1, _ShadowQuality + 1) : 1;
-    return GetLightHittingPoint(ray, hit, samplesPerLight, false, rngState);
+    return GetLightHittingPoint(ray, hit, samplesPerLight, false, initialRis, initialRisSelected, rngState);
 }
 
 #if defined(FOG_ENABLED)
@@ -3942,7 +4155,8 @@ float3 GetFogDirectLight(Ray ray, float3 position, bool softShadows, inout uint 
     RayHit eventHit = CreateRayHit();
     eventHit.position = position;
     int samplesPerLight = softShadows ? max(1, _ShadowQuality + 1) : 1;
-    return GetLightHittingPoint(ray, eventHit, samplesPerLight, true, rngState);
+    bool ignoredInitialRisSelection;
+    return GetLightHittingPoint(ray, eventHit, samplesPerLight, true, false, ignoredInitialRisSelection, rngState);
 }
 #endif
 
@@ -4165,10 +4379,15 @@ float3 TracePathWithDirectLight(Ray ray, inout uint rngState, out float directLi
         }
 
         bool sampledDirectLight = false;
+        bool sampledInitialRis = false;
         if (ShouldSampleDirectLight(throughput))
         {
             bool softShadows = bounce == 0;
-            float3 directLight = GetDirectLight(ray, hit, softShadows, rngState);
+            bool hasInitialRisProposal = _NumLights > 0 || (_EnvironmentLightEnabled != 0
+                && _EnvironmentCdfWidth > 0 && _EnvironmentCdfHeight > 0);
+            bool useInitialRis = bounce == 0 && hasInitialRisProposal && IsInitialRisEligible(hit);
+            float3 directLight = GetDirectLight(ray, hit, softShadows, useInitialRis,
+                sampledInitialRis, rngState);
             float3 directLightContribution = throughput * directLight;
             radiance += directLightContribution;
             directLightLuminance += dot(directLightContribution, float3(0.2126f, 0.7152f, 0.0722f));
@@ -4292,7 +4511,8 @@ float3 GetDebugRenderColor(Ray ray, inout uint rngState)
 
     if (_DebugRenderMode == DebugDirectLight)
     {
-        return saturate(GetDirectLight(ray, hit, true, rngState));
+        bool ignoredInitialRisSelection;
+        return saturate(GetDirectLight(ray, hit, true, false, ignoredInitialRisSelection, rngState));
     }
 
     if (_DebugRenderMode == DebugHitDistance)

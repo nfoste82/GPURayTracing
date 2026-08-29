@@ -448,6 +448,7 @@ namespace PathTracing.TemporalDenoising
                 hash = AddHash(hash, _gameManager.shadowQuality);
                 hash = AddHash(hash, _gameManager.Lighting.LightSamplingStrategy.GetHashCode());
                 hash = AddHash(hash, _gameManager.Lighting.LightSampleCount);
+                hash = AddHash(hash, _gameManager.Lighting.InitialRisCandidateCount);
                 hash = AddHash(hash, _gameManager.maxLightSamples);
                 hash = AddHash(hash, _gameManager.GetCameraApertureRadiusInternal());
                 hash = AddHash(hash, _gameManager.enableCaustics ? 1 : 0);

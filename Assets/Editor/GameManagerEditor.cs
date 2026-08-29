@@ -102,6 +102,10 @@ public sealed class GameManagerEditor : Editor
             {
                 DrawLightingProperty("lightSampleCount", "Light Sample Count");
             }
+            if (serializedObject.FindProperty("_lightingManager._lightSamplingStrategy").enumValueIndex == (int)LightSamplingStrategy.ImportanceSampled)
+            {
+                DrawLightingProperty("initialRisCandidateCount", "Initial RIS Candidate Count (Experimental)");
+            }
             DrawLightingProperty("lightFalloffScale", "Local Light Falloff Scale");
             DrawDirectionalLighting(manager);
         });

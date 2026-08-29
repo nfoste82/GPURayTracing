@@ -376,6 +376,41 @@ namespace GPURayTracing.Tests
             AssertSignature("mesh light", signature, MeshLightBaseline);
         }
 
+        [Test]
+        public void InitialRis_MeshLightCandidateCountsProduceFiniteRadiance()
+        {
+            CreateEmissiveQuad(out MeshTriangleData[] triangles, out MeshInfoData[] meshes, out BvhNodeData[] bvhNodes,
+                out LightData[] lights, true);
+            Vector4[] oneCandidateSignature = null;
+            for (int candidateCount = 1; candidateCount <= 8; candidateCount *= 2)
+            {
+                Vector4[] signature = RenderSignature(
+                    new[] { Sphere(new Vector3(0.0f, 0.75f, 1.5f), new Vector3(0.75f, 0.35f, 0.12f), 0.75f, 0.2f, 1.0f, 1.0f, 0) },
+                    false, new Vector3(0.0f, 1.6f, -4.5f), Quaternion.Euler(4.0f, 0.0f, 0.0f),
+                    triangles, meshes, bvhNodes, lights, numberOfPasses: 128,
+                    lightSamplingStrategy: 2, initialRisCandidateCount: candidateCount);
+                foreach (Vector4 value in signature)
+                {
+                    Assert.That(float.IsNaN(value.x) || float.IsInfinity(value.x), Is.False,
+                        $"RIS {candidateCount}-candidate fixture produced an invalid red value.");
+                    Assert.That(float.IsNaN(value.y) || float.IsInfinity(value.y), Is.False,
+                        $"RIS {candidateCount}-candidate fixture produced an invalid green value.");
+                    Assert.That(float.IsNaN(value.z) || float.IsInfinity(value.z), Is.False,
+                        $"RIS {candidateCount}-candidate fixture produced an invalid blue value.");
+                }
+
+                if (oneCandidateSignature == null)
+                {
+                    oneCandidateSignature = signature;
+                }
+                else
+                {
+                    Assert.That(GetAverageLuminance(signature), Is.GreaterThan(GetAverageLuminance(oneCandidateSignature) * 0.75f),
+                        $"RIS {candidateCount}-candidate mesh-light result lost excessive radiance.");
+                }
+            }
+        }
+
         [TestCase(0)]
         [TestCase(1)]
         [TestCase(2)]
@@ -730,6 +765,42 @@ namespace GPURayTracing.Tests
             };
         }
 
+        private static float[] CreateMeshLightTriangleCdf(MeshTriangleData[] triangles, LightData[] lights)
+        {
+            var cdf = new float[Mathf.Max(1, triangles.Length)];
+            for (int lightIndex = 0; lightIndex < lights.Length; lightIndex++)
+            {
+                LightData light = lights[lightIndex];
+                if (light.type != 4 || light.triangleCount <= 0 || light.totalArea <= 0.0f)
+                {
+                    continue;
+                }
+
+                float cumulativeArea = 0.0f;
+                int end = light.triangleStart + light.triangleCount;
+                for (int triangleIndex = light.triangleStart; triangleIndex < end; triangleIndex++)
+                {
+                    MeshTriangleData triangle = triangles[triangleIndex];
+                    cumulativeArea += Vector3.Cross(triangle.vertex1 - triangle.vertex0,
+                        triangle.vertex2 - triangle.vertex0).magnitude * 0.5f;
+                    cdf[triangleIndex] = cumulativeArea / light.totalArea;
+                }
+                cdf[end - 1] = 1.0f;
+            }
+            return cdf;
+        }
+
+        private static float GetAverageLuminance(Vector4[] signature)
+        {
+            float luminance = 0.0f;
+            for (int i = 0; i < signature.Length; i++)
+            {
+                Vector4 value = signature[i];
+                luminance += value.x * 0.2126f + value.y * 0.7152f + value.z * 0.0722f;
+            }
+            return luminance / signature.Length;
+        }
+
         private static Vector4[] RenderSignature(
             SphereData[] spheres,
             bool waterEnabled,
@@ -750,7 +821,9 @@ namespace GPURayTracing.Tests
             float[,] probes = null,
             CausticOptions caustics = null,
             bool includePeak = false,
-            bool includeReceiver = true)
+            bool includeReceiver = true,
+            int lightSamplingStrategy = 0,
+            int initialRisCandidateCount = 1)
         {
             if (!SystemInfo.supportsComputeShaders)
             {
@@ -796,7 +869,7 @@ namespace GPURayTracing.Tests
             ComputeBuffer bvhBuffer = CreateBuffer(bvhNodes, 48);
             ComputeBuffer topLevelBuffer = CreateDummyBuffer(48);
             ComputeBuffer shadowBuffer = CreateDummyBuffer(48);
-            ComputeBuffer meshLightCdfBuffer = CreateDummyBuffer(4);
+            ComputeBuffer meshLightCdfBuffer = CreateBuffer(CreateMeshLightTriangleCdf(triangles, lights), sizeof(float));
             ComputeBuffer environmentCdfBuffer = CreateDummyBuffer(4);
             ComputeBuffer causticPhotonBuffer = CreateDummyBuffer(40);
             ComputeBuffer causticMetadataBuffer = CreateDummyBuffer(24);
@@ -873,8 +946,9 @@ namespace GPURayTracing.Tests
                 shader.SetInt("_UseFrameAccumulation", 0);
                 shader.SetInt("_AccumulatedFrameCount", 0);
                 shader.SetInt("_MaxLightSamples", lights.Length);
-                shader.SetInt("_LightSamplingStrategy", 0);
+                shader.SetInt("_LightSamplingStrategy", lightSamplingStrategy);
                 shader.SetInt("_LightSampleCount", 1);
+                shader.SetInt("_InitialRisCandidateCount", initialRisCandidateCount);
                 shader.SetInt("_ShadowQuality", 0);
                 shader.SetFloat("_ShadowRandomness", shadowRandomness);
                 shader.SetFloat("_LightFalloffScale", lightFalloffScale);
@@ -1407,7 +1481,8 @@ namespace GPURayTracing.Tests
             out MeshTriangleData[] triangles,
             out MeshInfoData[] meshes,
             out BvhNodeData[] bvhNodes,
-            out LightData[] lights)
+            out LightData[] lights,
+            bool useMeshLight = false)
         {
             Vector3 p0 = new Vector3(-1.0f, 3.6f, 0.0f);
             Vector3 p1 = new Vector3(1.0f, 3.6f, 0.0f);
@@ -1420,13 +1495,26 @@ namespace GPURayTracing.Tests
                 SurfaceTriangle(p0, p3, p2, Vector3.down, Vector3.one, -1, emission, 3)
             };
             triangles[0].lightIndex = 0;
-            triangles[1].lightIndex = 1;
+            triangles[1].lightIndex = useMeshLight ? 0 : 1;
             CreateSingleLeafMesh(triangles, p0 - Vector3.one * 0.0001f, p2 + Vector3.one * 0.0001f, true, out meshes, out bvhNodes);
-            lights = new[]
-            {
-                TriangleLight(p0, p2 - p0, p1 - p0, Vector3.down, emission),
-                TriangleLight(p0, p3 - p0, p2 - p0, Vector3.down, emission)
-            };
+            lights = useMeshLight
+                ? new[]
+                {
+                    new LightData
+                    {
+                        position = (p0 + p1 + p2 + p3) * 0.25f,
+                        emission = emission,
+                        type = 4,
+                        triangleStart = 0,
+                        triangleCount = 2,
+                        totalArea = 4.0f
+                    }
+                }
+                : new[]
+                {
+                    TriangleLight(p0, p2 - p0, p1 - p0, Vector3.down, emission),
+                    TriangleLight(p0, p3 - p0, p2 - p0, Vector3.down, emission)
+                };
         }
 
         private static LightData TriangleLight(Vector3 position, Vector3 u, Vector3 v, Vector3 normal, Vector3 emission)

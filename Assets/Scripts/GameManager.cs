@@ -679,6 +679,7 @@ public class GameManager : MonoBehaviour
         shadowRandomness = settings.ShadowRandomness;
         Lighting.LightSamplingStrategy = settings.LightSamplingStrategy;
         Lighting.LightSampleCount = settings.LightSampleCount;
+        Lighting.InitialRisCandidateCount = settings.InitialRisCandidateCount;
         SpatialDenoising.enabled = settings.EnableSpatialDenoising;
         SpatialDenoising.iterations = settings.DenoiserIterations;
         SpatialDenoising.luminanceSigma = settings.DenoiserLuminanceSigma;
@@ -3712,6 +3713,7 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, maxLightSamples);
             hash = AddHash(hash, (int)Lighting.LightSamplingStrategy);
             hash = AddHash(hash, Lighting.LightSampleCount);
+            hash = AddHash(hash, Lighting.InitialRisCandidateCount);
             hash = AddHash(hash, shadowRandomness);
             hash = AddHash(hash, parallaxMaximumStrengthAngle);
             hash = AddHash(hash, Lighting.LightFalloffScale);

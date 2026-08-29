@@ -80,7 +80,8 @@ public class RayTracingBenchmarkOverlay : MonoBehaviour
             .Append(" internal / ").Append(gameManager.DisplayTextureSize.x).Append('x').AppendLine(gameManager.DisplayTextureSize.y.ToString());
         _builder.Append("Passes: ").Append(gameManager.numberOfPasses).Append("  Bounces: ").Append(gameManager.numBounces).Append("  Shadow quality: ").AppendLine(gameManager.shadowQuality.ToString());
         _builder.Append("Light sampling: ").Append(gameManager.Lighting.LightSamplingStrategy)
-            .Append("  Samples: ").AppendLine(gameManager.Lighting.LightSampleCount.ToString());
+            .Append("  Samples: ").Append(gameManager.Lighting.LightSampleCount)
+            .Append("  RIS candidates: ").AppendLine(gameManager.Lighting.InitialRisCandidateCount.ToString());
         _builder.Append("Accumulation: ").Append(gameManager.enableFrameAccumulation ? "on" : "off")
             .Append("  Frames: ").AppendLine(gameManager.AccumulatedFrameCount.ToString());
         _builder.Append("Caustics: ").Append(gameManager.enableCaustics ? "on" : "off");

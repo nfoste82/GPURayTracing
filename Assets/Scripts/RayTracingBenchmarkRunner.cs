@@ -285,6 +285,7 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
         AppendSetting(builder, "shadow_randomness", gameManager.shadowRandomness);
         AppendSetting(builder, "light_sampling_strategy", gameManager.Lighting.LightSamplingStrategy);
         AppendSetting(builder, "light_sample_count", gameManager.Lighting.LightSampleCount);
+        AppendSetting(builder, "initial_ris_candidate_count", gameManager.Lighting.InitialRisCandidateCount);
         AppendSetting(builder, "max_light_samples", gameManager.maxLightSamples);
         AppendSetting(builder, "frame_accumulation", gameManager.enableFrameAccumulation);
         AppendSetting(builder, "debug_render_mode", gameManager.debugRenderMode);
