@@ -34,6 +34,18 @@ namespace GPURayTracing.Tests
         // of platform-dependent error near the pitch limits.
         private const float CameraRotationEpsilon = 0.001f;
 
+        private static int CountOccurrences(string value, string fragment)
+        {
+            int count = 0;
+            int offset = 0;
+            while ((offset = value.IndexOf(fragment, offset, StringComparison.Ordinal)) >= 0)
+            {
+                count++;
+                offset += fragment.Length;
+            }
+            return count;
+        }
+
         [Test]
         public void AdaptiveGroupScheduler_CompactsOneWorkItemPerActivePixel()
         {
@@ -839,6 +851,37 @@ namespace GPURayTracing.Tests
             Assert.That(manifest, Does.Contain("Caustics.GatherRadiusDecayRate"));
             Assert.That(manifest, Does.Contain("\"value\": \"0.0\""));
             Assert.That(manifest, Does.Contain("\"value\": \"1.0\""));
+        }
+
+        [Test]
+        public void InitialRis_UsesOneSelectedProductionShadowPath()
+        {
+            string source = System.IO.File.ReadAllText("Assets/Scripts/RayTracingShared.hlsl");
+            Assert.That(source, Does.Contain("int _InitialRisCandidateCount"));
+            Assert.That(source, Does.Contain("struct InitialRisCandidate"));
+            Assert.That(source, Does.Contain("totalWeight / (candidateCount * selectedWeight)"));
+            Assert.That(source, Does.Contain("GetShadowTransmittance(rayToLight, distanceToLight)"));
+            Assert.That(CountOccurrences(source, "GetShadowTransmittance(rayToLight, distanceToLight)"), Is.EqualTo(1),
+                "RIS candidates must reuse SampleSingleLight's only production shadow query.");
+            Assert.That(CountOccurrences(source, "accumulated += SampleSingleLight("), Is.EqualTo(1),
+                "RIS candidates must reuse GetLightHittingPoint's only production light-sampling call site.");
+            Assert.That(source, Does.Contain("suppressInitialRisTerminalEvent"));
+            Assert.That(source, Does.Contain("out bool initialRisSelected"));
+        }
+
+        [Test]
+        public void InitialRis_ExperimentalCandidateCountIsUploadedAndInvalidatesHistories()
+        {
+            string lighting = System.IO.File.ReadAllText("Assets/Scripts/Lighting/LightingManager.cs");
+            string manager = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+            string temporal = System.IO.File.ReadAllText("Assets/Scripts/Denoising/TemporalDenoisingManager.cs");
+            string settings = System.IO.File.ReadAllText("Assets/Scripts/SceneSettings.cs");
+            Assert.That(lighting, Does.Contain("InitialRisCandidateCountId"));
+            Assert.That(lighting, Does.Contain("shader.SetInt(InitialRisCandidateCountId, _initialRisCandidateCount)"));
+            Assert.That(settings, Does.Contain("InitialRisCandidateCount = 4"));
+            Assert.That(manager, Does.Contain("Lighting.InitialRisCandidateCount = settings.InitialRisCandidateCount"));
+            Assert.That(manager, Does.Contain("AddHash(hash, Lighting.InitialRisCandidateCount)"));
+            Assert.That(temporal, Does.Contain("AddHash(hash, _gameManager.Lighting.InitialRisCandidateCount)"));
         }
 
         [Test]

@@ -37,6 +37,8 @@ public sealed class SceneSettings
     public float ShadowRandomness = 0.65f;
     public LightSamplingStrategy LightSamplingStrategy = LightSamplingStrategy.ImportanceSampled;
     public int LightSampleCount = 1;
+    // Four candidates is the project default; scene-specific settings can override it.
+    public int InitialRisCandidateCount = 4;
 
     public bool EnableSpatialDenoising = true;
     public float DenoiserLuminanceSigma = 0.05f;

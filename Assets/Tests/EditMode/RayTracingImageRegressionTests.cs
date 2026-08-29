@@ -376,6 +376,30 @@ namespace GPURayTracing.Tests
             AssertSignature("mesh light", signature, MeshLightBaseline);
         }
 
+        [Test]
+        public void InitialRis_MeshLightCandidateCountsProduceFiniteRadiance()
+        {
+            CreateEmissiveQuad(out MeshTriangleData[] triangles, out MeshInfoData[] meshes, out BvhNodeData[] bvhNodes,
+                out LightData[] lights);
+            for (int candidateCount = 1; candidateCount <= 8; candidateCount *= 2)
+            {
+                Vector4[] signature = RenderSignature(
+                    new[] { Sphere(new Vector3(0.0f, 0.75f, 1.5f), new Vector3(0.75f, 0.35f, 0.12f), 0.75f, 0.2f, 1.0f, 1.0f, 0) },
+                    false, new Vector3(0.0f, 1.6f, -4.5f), Quaternion.Euler(4.0f, 0.0f, 0.0f),
+                    triangles, meshes, bvhNodes, lights, numberOfPasses: 32,
+                    lightSamplingStrategy: 2, initialRisCandidateCount: candidateCount);
+                foreach (Vector4 value in signature)
+                {
+                    Assert.That(float.IsNaN(value.x) || float.IsInfinity(value.x), Is.False,
+                        $"RIS {candidateCount}-candidate fixture produced an invalid red value.");
+                    Assert.That(float.IsNaN(value.y) || float.IsInfinity(value.y), Is.False,
+                        $"RIS {candidateCount}-candidate fixture produced an invalid green value.");
+                    Assert.That(float.IsNaN(value.z) || float.IsInfinity(value.z), Is.False,
+                        $"RIS {candidateCount}-candidate fixture produced an invalid blue value.");
+                }
+            }
+        }
+
         [TestCase(0)]
         [TestCase(1)]
         [TestCase(2)]
@@ -750,7 +774,9 @@ namespace GPURayTracing.Tests
             float[,] probes = null,
             CausticOptions caustics = null,
             bool includePeak = false,
-            bool includeReceiver = true)
+            bool includeReceiver = true,
+            int lightSamplingStrategy = 0,
+            int initialRisCandidateCount = 1)
         {
             if (!SystemInfo.supportsComputeShaders)
             {
@@ -873,8 +899,9 @@ namespace GPURayTracing.Tests
                 shader.SetInt("_UseFrameAccumulation", 0);
                 shader.SetInt("_AccumulatedFrameCount", 0);
                 shader.SetInt("_MaxLightSamples", lights.Length);
-                shader.SetInt("_LightSamplingStrategy", 0);
+                shader.SetInt("_LightSamplingStrategy", lightSamplingStrategy);
                 shader.SetInt("_LightSampleCount", 1);
+                shader.SetInt("_InitialRisCandidateCount", initialRisCandidateCount);
                 shader.SetInt("_ShadowQuality", 0);
                 shader.SetFloat("_ShadowRandomness", shadowRandomness);
                 shader.SetFloat("_LightFalloffScale", lightFalloffScale);

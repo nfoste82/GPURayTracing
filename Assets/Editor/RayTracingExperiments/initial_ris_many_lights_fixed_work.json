@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "label": "initial_ris_many_lights_fixed_work",
+  "scenes": ["Assets/Scenes/Generated/ManyLights.unity"],
+  "width": 1024,
+  "height": 1024,
+  "durationSeconds": 30.0,
+  "cooldownSeconds": 12.0,
+  "referenceRoot": "Assets/Editor/RayTracingSceneReferences",
+  "variants": [
+    { "name": "ris_1_candidate", "overrides": [
+      { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+      { "path": "Lighting.InitialRisCandidateCount", "value": "1" },
+      { "path": "enableAdaptiveSampling", "value": "false" }
+    ] },
+    { "name": "ris_2_candidates", "overrides": [
+      { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+      { "path": "Lighting.InitialRisCandidateCount", "value": "2" },
+      { "path": "enableAdaptiveSampling", "value": "false" }
+    ] },
+    { "name": "ris_4_candidates", "overrides": [
+      { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+      { "path": "Lighting.InitialRisCandidateCount", "value": "4" },
+      { "path": "enableAdaptiveSampling", "value": "false" }
+    ] },
+    { "name": "ris_8_candidates", "overrides": [
+      { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+      { "path": "Lighting.InitialRisCandidateCount", "value": "8" },
+      { "path": "enableAdaptiveSampling", "value": "false" }
+    ] }
+  ]
+}

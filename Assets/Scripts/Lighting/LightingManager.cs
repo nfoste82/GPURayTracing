@@ -18,6 +18,7 @@ namespace PathTracing.Lighting
         private static readonly int SkyboxLight = Shader.PropertyToID("_SkyboxLight");
         private static readonly int SamplingStrategy = Shader.PropertyToID("_LightSamplingStrategy");
         private static readonly int LightSampleCountId = Shader.PropertyToID("_LightSampleCount");
+        private static readonly int InitialRisCandidateCountId = Shader.PropertyToID("_InitialRisCandidateCount");
         private static readonly int LightFalloffScaleId = Shader.PropertyToID("_LightFalloffScale");
         private static readonly int NumLights = Shader.PropertyToID("_NumLights");
         private static readonly int HasTransparentShadowBlockersId = Shader.PropertyToID("_HasTransparentShadowBlockers");
@@ -32,6 +33,9 @@ namespace PathTracing.Lighting
 
         [SerializeField, Range(1, 64), Tooltip("UniformRandom/ImportanceSampled only: how many lights each shading point samples per pass. 1 is fastest/noisiest; higher values reduce noise toward AllLights quality at proportional cost.")]
         private int _lightSampleCount = 1;
+
+        [SerializeField, Range(1, 16), Tooltip("Experimental branch only: number of local primary-surface RIS candidates. Applies to opaque ImportanceSampled direct lighting.")]
+        private int _initialRisCandidateCount = 4;
 
         [SerializeField, Range(0.001f, 1.0f), Tooltip("Higher values make direct light fall off faster with distance.")]
         private float _lightFalloffScale = 0.16f;
@@ -62,6 +66,12 @@ namespace PathTracing.Lighting
         {
             get => _lightSampleCount;
             set => _lightSampleCount = Mathf.Clamp(value, 1, 64);
+        }
+
+        public int InitialRisCandidateCount
+        {
+            get => _initialRisCandidateCount;
+            set => _initialRisCandidateCount = Mathf.Clamp(value, 1, 16);
         }
 
         public float LightFalloffScale
@@ -110,6 +120,7 @@ namespace PathTracing.Lighting
                 1.0f));
             shader.SetInt(SamplingStrategy, (int)_lightSamplingStrategy);
             shader.SetInt(LightSampleCountId, _lightSampleCount);
+            shader.SetInt(InitialRisCandidateCountId, _initialRisCandidateCount);
             shader.SetFloat(LightFalloffScaleId, _lightFalloffScale);
             SetShaderLightCount(shader);
         }
