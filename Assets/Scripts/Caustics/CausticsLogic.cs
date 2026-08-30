@@ -32,12 +32,15 @@ namespace PathTracing.Caustics
         public static bool IsCausticLight(Light light)
         {
             return light.type == (int)PathTracedLightType.Sphere || 
-                   ((light.type == (int)PathTracedLightType.Triangle || light.type == (int)PathTracedLightType.SunTriangle) && light.area > 1e-6f);
+                   ((light.type == (int)PathTracedLightType.Triangle || light.type == (int)PathTracedLightType.SunTriangle)
+                       && light.area > 1e-6f) ||
+                   (light.type == (int)PathTracedLightType.Mesh && light.totalArea > 1e-6f);
         }
         
         public static float GetCausticPairWeight(Light light, Vector3 targetPosition, float targetRadius)
         {
-            var lightPosition = (light.type == (int)PathTracedLightType.Triangle || light.type == (int)PathTracedLightType.SunTriangle)
+            var isTriangle = light.type == (int)PathTracedLightType.Triangle || light.type == (int)PathTracedLightType.SunTriangle;
+            var lightPosition = isTriangle
                 ? light.position + (light.u + light.v) / 3.0f
                 : light.position;
         
@@ -46,9 +49,11 @@ namespace PathTracing.Caustics
             
             var luminance = Vector3.Dot(light.emission, new Vector3(0.2126f, 0.7152f, 0.0722f));
             
-            var emitterScale = (light.type == (int)PathTracedLightType.Triangle || light.type == (int)PathTracedLightType.SunTriangle) ? Mathf.Max(1e-6f, light.area) : 1.0f;
+            var emitterScale = isTriangle ? Mathf.Max(1e-6f, light.area)
+                : light.type == (int)PathTracedLightType.Mesh ? Mathf.Max(1e-6f, light.totalArea)
+                : 1.0f;
             
-            var facing = (light.type == (int)PathTracedLightType.Triangle || light.type == (int)PathTracedLightType.SunTriangle)
+            var facing = isTriangle
                 ? Mathf.Max(0.0f, Vector3.Dot(light.normal, (targetPosition - lightPosition).normalized))
                 : 1.0f;
             

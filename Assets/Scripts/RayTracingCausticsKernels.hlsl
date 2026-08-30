@@ -170,6 +170,25 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
     CausticTargetPair targetPair = _CausticTargetPairs[
         SelectCausticTargetPair(CausticSequenceSample(id.x, 0u))];
     Light light = _Lights[targetPair.lightIndex];
+    if (light.type == LightTypeMesh)
+    {
+        float ignoredTriangleProbability;
+        int triangleIndex = SelectMeshLightTriangle(light, rngState, ignoredTriangleProbability);
+        if (triangleIndex < 0)
+        {
+            return;
+        }
+
+        MeshTriangle meshTriangle = _Triangles[triangleIndex];
+        light.position = meshTriangle.vertex0;
+        light.u = meshTriangle.vertex1 - meshTriangle.vertex0;
+        light.v = meshTriangle.vertex2 - meshTriangle.vertex0;
+        light.normal = meshTriangle.normal;
+        light.area = GetTriangleArea(meshTriangle);
+        // Triangle selection is area weighted, so the combined point density over the full mesh
+        // is uniform at 1 / totalArea. Preserve that full emitter area in the power estimate.
+        light.type = LightTypeTriangle;
+    }
 
     float3 refractorPosition = float3(0.0f, 0.0f, 0.0f);
     float refractorRadius = 0.0f;
@@ -218,7 +237,9 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
             r2 = 1.0f - r2;
         }
         emissionPosition += light.u * r1 + light.v * r2;
-        emissionAreaScale = light.area;
+        emissionAreaScale = _Lights[targetPair.lightIndex].type == LightTypeMesh
+            ? _Lights[targetPair.lightIndex].totalArea
+            : light.area;
     }
 
     // A virtual sun triangle is only an interface to the regular light buffer. Do not aim a

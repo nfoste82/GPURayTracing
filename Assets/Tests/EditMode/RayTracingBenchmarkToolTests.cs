@@ -83,6 +83,15 @@ public class RayTracingBenchmarkToolTests
     }
 
     [Test]
+    public void CausticsLogic_MeshAreaLight_IsEligibleForPhotonEmission()
+    {
+        string source = File.ReadAllText(Path.Combine(Application.dataPath, "Scripts", "Caustics", "CausticsLogic.cs"));
+
+        Assert.That(source, Does.Contain("PathTracedLightType.Mesh"));
+        Assert.That(source, Does.Contain("light.totalArea > 1e-6f"));
+    }
+
+    [Test]
     public void SceneSettings_CausticGatherRadiusDecayRate_PropagatesToGameManager()
     {
         Type gameManagerType = Type.GetType("GameManager, Assembly-CSharp");
