@@ -1,10 +1,14 @@
-# Initial RIS Direct-Lighting Plan
+# Initial RIS Direct-Lighting Design Record
 
 ## Goal
 
-Implement an optional, platform-neutral **initial resampled importance sampling (RIS)** estimator for direct lighting. It should reduce direct-light variance or improve convergence at the same wall-clock budget relative to the current one-light `ImportanceSampled` mode.
+This document records the platform-neutral **initial resampled importance sampling (RIS)** estimator for direct lighting. RIS is now part of the standard renderer path rather than an optional experiment. It reduces direct-light variance or improves convergence at the same wall-clock budget relative to the one-light `ImportanceSampled` mode.
 
-This is local RIS only: one reservoir at one eligible shading point during one path evaluation. It is not spatial/temporal ReSTIR DI, needs no history, motion vectors, or hardware ray tracing, and must remain portable across the project's Unity compute targets, including Metal. The HIPRT-Path-Tracer repository is GPL-3.0; use its algorithms as reference only, never copy its source.
+The original milestone was local RIS only: one reservoir at one eligible shading point during one path evaluation. The renderer now also supports temporal RIS reuse in the supported temporal path. It remains portable across the project's Unity compute targets, including Metal. The HIPRT-Path-Tracer repository is GPL-3.0; use its algorithms as reference only, never copy its source.
+
+## Current Status
+
+Local primary direct-light RIS and temporal RIS are implemented and enabled by default. The candidate count is configurable, participates in accumulation/history invalidation and benchmark metadata, and the ordinary direct-light estimator remains the fallback for unsupported materials/events and later bounces. The implementation retains the single production visibility call site required for acceptable Metal compile times.
 
 ## Scope
 
@@ -13,15 +17,15 @@ In scope:
 - Primary-bounce opaque direct lighting only.
 - Current-frame local weighted reservoir; no persistent GPU resources.
 - Existing emissive-light and environment proposal paths where PDFs are available.
-- Inspector/capture toggle and candidate count so RIS-off/RIS-on can be benchmarked.
+- Inspector/capture candidate count and temporal-reuse state so the standard path can be benchmarked against fallback/reference variants.
 - Correctness tests and equal-work/equal-time convergence measurements.
 
 Not in scope:
 
-- Spatial or temporal ReSTIR, ReSTIR GI, indirect resampling, visibility caching, light presampling, ReGIR, or light trees.
+- Spatial reuse, ReSTIR GI, indirect resampling, visibility caching, light presampling, ReGIR, or light trees.
 - Adaptive-scheduler work. Adaptive sampling remains a separate, useful feature.
 - Glass/water transmission, fog-event, caustic, or later-bounce RIS.
-- New reservoir textures, G-buffer outputs, reprojection, or motion vectors.
+- New reservoir textures, G-buffer outputs, or motion vectors beyond the existing temporal path contract.
 
 ## Existing Constraints
 
@@ -35,7 +39,7 @@ The current direct-light flow is in `RayTracingShared.hlsl`:
 
 Keep **one inlined `SampleSingleLight()` call site** inside `GetLightHittingPoint()`. Adding another inlined light/shadow traversal path previously caused extreme Metal compilation times. Candidate generation and reservoir selection must be cheap helpers; only the selected candidate reaches the existing expensive call site.
 
-The renderer already has environment importance sampling, finite-emitter/BSDF MIS, a shared Lambert/GGX model, deterministic capture, and scene-light PDFs. Preserve the current estimator unchanged when RIS is disabled.
+The renderer already has environment importance sampling, finite-emitter/BSDF MIS, a shared Lambert/GGX model, deterministic capture, and scene-light PDFs. Preserve the ordinary estimator as a fallback/reference when RIS is bypassed.
 
 ## Adaptive Sampling
 
@@ -47,14 +51,13 @@ Current adaptive startup uses the low-resolution bootstrap implemented in `GameM
 - `adaptiveBootstrapFrames` controls bootstrap duration.
 - `adaptiveGuidanceHistoryFrames` controls approximate fine history from the upscaled bootstrap; `0` keeps fine accumulation unbiased and bootstrap display-only.
 
-Every RIS benchmark must be runnable with adaptive sampling off and on. For adaptive-on comparisons, RIS-off and RIS-on must use the exact same serialized or command-line adaptive preset, including bootstrap scale/frame count/history, priority mode, and scheduler settings. Count bootstrap paths in retired-path accounting and report the complete preset in capture metadata.
+Every RIS benchmark must be runnable with adaptive sampling off and on. For adaptive-on comparisons, fallback and RIS variants must use the exact same serialized or command-line adaptive preset, including bootstrap scale/frame count/history, priority mode, and scheduler settings. Count bootstrap paths in retired-path accounting and report the complete preset in capture metadata.
 
 ## Public Controls
 
 Add the smallest setting set under `LightingManager`, mirrored through `SceneSettings`:
 
 ```text
-enableInitialDirectLightingRis   bool, default false
 initialRisCandidateCount        int, range 1-16, default 4
 ```
 
@@ -65,14 +68,14 @@ Upload both shader parameters and include them in:
 - Inspector, benchmark overlay, benchmark CSV, and capture metadata.
 - Generic `RayTracingSceneCapture -rayTracingExperiment` field/property overrides.
 
-Do not add a `LightSamplingStrategy` enum value initially. RIS wraps the existing base proposal, making the baseline clear:
+RIS wraps the existing base proposal rather than adding a `LightSamplingStrategy` enum value:
 
 ```text
 ImportanceSampled + RIS off: one ordinary selected-light estimate
 ImportanceSampled + RIS on: N local candidates, one selected visibility evaluation
 ```
 
-Initially restrict RIS to `ImportanceSampled`. Leave `AllLights` and `UniformRandom` on their existing path until proposal PDFs and cost comparisons are deliberately designed. The current 128-light importance cap is biased when exceeded; benchmark below that cap or against a later unbiased proposal distribution. RIS must not hide this limitation.
+RIS remains attached to `ImportanceSampled`. `AllLights` and `UniformRandom` retain their existing paths because their proposal PDFs and cost tradeoffs are distinct. The current 128-light importance cap is biased when exceeded; benchmark below that cap or against a later unbiased proposal distribution. RIS does not hide this limitation.
 
 ## Estimator
 
@@ -131,9 +134,9 @@ This is ordinary same-receiver local RIS. It needs no temporal/spatial correctio
 
 Trace production visibility only for the selected candidate. Do not skip final visibility, reuse candidate visibility, or replace transparent-shadow transmittance with boolean occlusion.
 
-Before implementation, identify the current complementary emissive-hit/environment MIS logic. Verify a BSDF continuation that hits an emitter remains neither double-counted nor darkened after the RIS direct estimate is added. If that cannot be shown correct without changing the current MIS policy, stop and derive/test the estimator before coding a workaround.
+The complementary emissive-hit/environment MIS logic must remain consistent with the reservoir-selected proposal. A BSDF continuation that hits an emitter must be neither double-counted nor darkened by the RIS direct estimate.
 
-### Current Implementation Blocker (2026-08-28)
+### Historical Implementation Blocker (2026-08-28)
 
 The live renderer confirms this condition blocks the proposed first milestone as currently specified:
 
@@ -141,9 +144,9 @@ The live renderer confirms this condition blocks the proposed first milestone as
 - `TracePathWithDirectLight()` applies the complementary power heuristic when an opaque BRDF continuation reaches an emissive triangle or the environment.
 - A local RIS reservoir resamples NEE candidates based on unshadowed targets, so its selected-sample distribution is no longer the ordinary NEE proposal used by the current terminal-hit MIS calculation.
 
-Therefore routing a RIS-selected triangle or environment candidate through the existing NEE MIS weighting while retaining the existing terminal-hit weight has no demonstrated balance/power-heuristic derivation. It can double-count or underweight paths discoverable by both techniques. The requested implementation explicitly prohibits using an unproven workaround, so no RIS shader path was added.
+This was the blocker before the reservoir-aware estimator was implemented. The current renderer uses the validated reservoir-aware policy rather than treating a selected RIS candidate as an ordinary NEE sample.
 
-Resume only after choosing and validating one of these derivations:
+The historical resolution was to choose and validate one of these derivation paths:
 
 1. Derive the RIS-selected NEE density and use it consistently in both explicit-light and complementary BRDF-hit MIS weights, including the candidate count and reservoir normalization.
 2. Establish a separately validated multi-sample-reservoir MIS estimator for triangle and environment proposals.
@@ -154,13 +157,13 @@ The future derivation needs deterministic CPU/GPU tests that compare high-sample
 ## Implementation Order
 
 1. Inspect the live direct-light/MIS helpers and find a minimal candidate record that does not duplicate the expensive call site.
-2. Add controls, C# propagation, shader upload, hashes, inspector/overlay/capture metadata. With RIS disabled, confirm unchanged output.
-3. Add local reservoir/candidate helpers with no shadow traversal and no persistent allocation.
-4. Route only the selected candidate to the current `SampleSingleLight()` call site. Keep baseline behavior for ineligible paths.
-5. Add deterministic CPU/GPU reservoir tests: zero weight, one candidate, selected-first/last, normalization, non-finite rejection, and chromatic contribution preserved while selection target is luminance.
-6. Add a high-sample colored many-light image fixture: RIS-off/on must agree in mean radiance within reviewed tolerance.
+2. Preserve the controls, C# propagation, shader upload, hashes, inspector/overlay/capture metadata.
+3. Preserve local reservoir/candidate helpers with no shadow traversal and no persistent allocation.
+4. Route only the selected candidate to the current `SampleSingleLight()` call site and keep fallback behavior for ineligible paths.
+5. Maintain deterministic CPU/GPU reservoir tests: zero weight, one candidate, selected-first/last, normalization, non-finite rejection, and chromatic contribution preserved while selection target is luminance.
+6. Maintain a high-sample colored many-light image fixture: fallback and RIS variants must agree in mean radiance within reviewed tolerance.
 7. Add low-sample variance/convergence fixtures, Metal precompile validation, and capture experiments.
-8. Benchmark candidate counts `1`, `2`, `4`, and `8`; choose no default until measurements justify it.
+8. Benchmark candidate counts `1`, `2`, `4`, and `8` as tuning variants around the default configuration.
 
 ## Benchmark Plan
 
@@ -185,8 +188,8 @@ Repeat both with:
 
 Required acceptance evidence:
 
-- RIS-off preserves current deterministic output and performance within measurement noise.
-- High-sample RIS-on/off agree in mean radiance, with no systematic energy or color shift.
+- The ordinary fallback preserves its deterministic output and performance within measurement noise.
+- High-sample fallback/RIS variants agree in mean radiance, with no systematic energy or color shift.
 - At least one many-light fixture has lower error at equal work or equal time for a practical count.
 - RIS does not materially regress ordinary low-light-count scenes.
 - Instrumentation/code review shows one selected shadow evaluation, not N shadow rays per RIS candidate.
@@ -206,22 +209,22 @@ Avoid permanent per-pixel debug resources in the final shader unless a measured 
 
 ## Deferred Follow-Ups
 
-Only after local RIS is correct and beneficial:
+Remaining follow-ups after the now-standard local/temporal RIS path:
 
 1. Add BSDF-hit emissive/environment candidates with a separately validated RIS/MIS derivation.
 2. Replace the capped global importance scan with a portable unbiased light hierarchy/alias distribution.
 3. Add light presampling only if candidate selection is measured as a bottleneck.
-4. Consider temporal ReSTIR for opaque primary hits after motion/history validation.
+4. Extend temporal RIS coverage to additional eligible path/material classes after motion/history validation.
 5. Consider spatial reuse only after temporal/local results establish a need.
 
 ## Compact Future-Session Prompt
 
 ```text
-Read AGENTS.md and AIDocs/00-index.md. Implement only AIDocs/23-initial-ris-direct-lighting-plan.md: local initial RIS for primary opaque direct lighting. Do not implement spatial/temporal ReSTIR, ReSTIR GI, light presampling, light trees, or adaptive-scheduler changes. Preserve the current low-resolution adaptive bootstrap and benchmark RIS with adaptive sampling both off and on.
+Read AGENTS.md and AIDocs/00-index.md. Continue only the remaining follow-up work in AIDocs/23-initial-ris-direct-lighting-plan.md. Local primary direct-light RIS and supported temporal RIS are already standard/default paths. Do not replace them with spatial ReSTIR GI, light presampling, light trees, or adaptive-scheduler changes without a separate design and validation plan.
 
-Add enableInitialDirectLightingRis (default false) and initialRisCandidateCount (1-16, default 4) under LightingManager/SceneSettings, including shader upload, accumulation/history invalidation, inspector, benchmark metadata, and generic experiment overrides. RIS-off must preserve output.
+Preserve the existing initialRisCandidateCount and temporalRisEnabled controls, their default behavior, shader upload, accumulation/history invalidation, inspector, benchmark metadata, and generic experiment overrides.
 
 For eligible bounce-0 opaque ImportanceSampled hits, draw N candidates from the existing proposal, choose one using a local weighted reservoir with unshadowed target luminance/proposalPdf, and trace the existing production shadow/transmittance path only for the selected candidate. Keep one inlined SampleSingleLight call site to avoid Metal compile explosion. Preserve or rigorously rederive current BSDF-hit MIS; stop if it cannot be proven non-double-counted.
 
-Add deterministic reservoir tests, a colored-many-light high-sample energy fixture, Metal precompile validation, and checked-in RayTracingSceneCapture experiment manifests for RIS off/on at 1/2/4/8 candidates. Measure equal-work and equal-time convergence with adaptive off and one unchanged good adaptive preset, including bootstrap settings. Use apply_patch, preserve unrelated work, and update the plan with results.
+Maintain deterministic reservoir tests, colored-many-light energy fixtures, Metal precompile validation, temporal-history coverage, and checked-in RayTracingSceneCapture comparisons for candidate counts 1/2/4/8. Measure equal-work and equal-time convergence with adaptive off and on using unchanged presets. Use apply_patch, preserve unrelated work, and update this record with measured changes.
 ```

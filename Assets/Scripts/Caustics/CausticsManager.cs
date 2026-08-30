@@ -38,14 +38,14 @@ namespace PathTracing.Caustics
 
         [SerializeField, Range(64, 2097252)]
         [Tooltip("Photon attempts traced for each rendered frame. Independent batches are averaged by final-color frame accumulation.")]
-        private int _photonCount = 65536;
+        private int _photonCount = 131072;
 
         [SerializeField, Range(0.001f, 0.3f)]
         private float _gatherRadius = 0.025f;
 
         [SerializeField, Range(0.0f, 1.0f)]
         [Tooltip("Progressively shrinks the gather radius during frame accumulation. Zero keeps the starting radius.")]
-        private float _gatherRadiusDecayRate = 0.0f;
+        private float _gatherRadiusDecayRate = 0.35f;
 
         [SerializeField, HideInInspector]
         private int _seed = 1;

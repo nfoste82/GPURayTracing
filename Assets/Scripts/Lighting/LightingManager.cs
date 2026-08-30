@@ -34,11 +34,11 @@ namespace PathTracing.Lighting
         [SerializeField, Range(1, 64), Tooltip("UniformRandom/ImportanceSampled only: how many lights each shading point samples per pass. 1 is fastest/noisiest; higher values reduce noise toward AllLights quality at proportional cost.")]
         private int _lightSampleCount = 1;
 
-        [SerializeField, Range(1, 16), Tooltip("Experimental branch only: number of local primary-surface RIS candidates. Applies to opaque ImportanceSampled direct lighting.")]
+        [SerializeField, Range(1, 16), Tooltip("Number of local primary-surface RIS candidates. Applies to opaque ImportanceSampled direct lighting.")]
         private int _initialRisCandidateCount = 4;
 
-        [SerializeField, Tooltip("Reserved for temporal RIS. Reuse is unavailable until reservoirs retain sampled points and receiver reprojection validation.")]
-        private bool _temporalRisEnabled;
+        [SerializeField, Tooltip("Enables temporal RIS reuse in the supported temporal rendering path.")]
+        private bool _temporalRisEnabled = true;
 
         [SerializeField, Range(0.001f, 1.0f), Tooltip("Higher values make direct light fall off faster with distance.")]
         private float _lightFalloffScale = 0.16f;
@@ -182,7 +182,7 @@ namespace PathTracing.Lighting
                 emission = light.Color.ToVector3() * Mathf.Max(0.0f, light.Intensity),
                 type = (int)PathTracedLightType.Sphere
             };
-            int insertionIndex = _lightObjects.Count;
+            var insertionIndex = _lightObjects.Count;
             _lights.Insert(insertionIndex, lightData);
             ShiftTriangleLightIndices(triangles, insertionIndex, 1);
             _lightObjects.Add(new PathTracedLight
@@ -285,9 +285,8 @@ namespace PathTracing.Lighting
                 _meshLightTriangleCdf.Add(0.0f);
             }
 
-            for (var meshIndex = 0; meshIndex < meshes.Count; meshIndex++)
+            foreach (var mesh in meshes)
             {
-                var mesh = meshes[meshIndex];
                 if (mesh.lightIndex < 0 || mesh.lightIndex >= _lights.Count)
                 {
                     continue;
@@ -295,7 +294,7 @@ namespace PathTracing.Lighting
 
                 var cumulativeArea = 0.0f;
                 for (var triangleIndex = mesh.triangleStart;
-                    triangleIndex < mesh.triangleStart + mesh.triangleCount; triangleIndex++)
+                     triangleIndex < mesh.triangleStart + mesh.triangleCount; triangleIndex++)
                 {
                     var triangle = triangles[triangleIndex];
                     cumulativeArea += 0.5f * Vector3.Cross(
@@ -310,7 +309,7 @@ namespace PathTracing.Lighting
                 }
 
                 for (var triangleIndex = mesh.triangleStart;
-                    triangleIndex < mesh.triangleStart + mesh.triangleCount; triangleIndex++)
+                     triangleIndex < mesh.triangleStart + mesh.triangleCount; triangleIndex++)
                 {
                     _meshLightTriangleCdf[triangleIndex] /= cumulativeArea;
                 }
@@ -443,9 +442,9 @@ namespace PathTracing.Lighting
             UpdateVirtualSunTriangles(directionalLight, out Light first, out Light second);
             _lights.Insert(insertionIndex, first);
             _lights.Insert(insertionIndex + 1, second);
-            for (int i = 0; i < triangles.Count; i++)
+            for (var i = 0; i < triangles.Count; i++)
             {
-                Triangle triangle = triangles[i];
+                var triangle = triangles[i];
                 if (triangle.lightIndex >= insertionIndex)
                 {
                     triangle.lightIndex += 2;
@@ -469,8 +468,12 @@ namespace PathTracing.Lighting
 
             var lightIndex = _lightObjects.Count + directionalIndex * 2;
             _directionalLights.RemoveAt(directionalIndex);
+            
+            // Each directional light is represented by two adjacent virtual lights.
+            // The second entry shifts into lightIndex after the first removal.
             _lights.RemoveAt(lightIndex);
             _lights.RemoveAt(lightIndex);
+            
             for (var i = 0; i < triangles.Count; i++)
             {
                 var triangle = triangles[i];
@@ -498,10 +501,12 @@ namespace PathTracing.Lighting
                     continue;
                 }
 
-                UpdateVirtualSunTriangles(directionalLight, out Light first, out Light second);
+                UpdateVirtualSunTriangles(directionalLight, out var first, out var second);
+                
                 changed |= !first.Equals(_lights[lightIndex]) || !second.Equals(_lights[lightIndex + 1]);
                 boundsChanged |= LightBoundsChanged(first, _lights[lightIndex])
-                    || LightBoundsChanged(second, _lights[lightIndex + 1]);
+                              || LightBoundsChanged(second, _lights[lightIndex + 1]);
+                
                 _lights[lightIndex] = first;
                 _lights[lightIndex + 1] = second;
             }

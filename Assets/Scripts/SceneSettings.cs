@@ -39,16 +39,16 @@ public sealed class SceneSettings
     public int LightSampleCount = 1;
     // Four candidates is the project default; scene-specific settings can override it.
     public int InitialRisCandidateCount = 4;
-    public bool TemporalRisEnabled = false;
+    public bool TemporalRisEnabled = true;
 
     public bool EnableSpatialDenoising = true;
     public float DenoiserLuminanceSigma = 0.05f;
     public int DenoiserIterations = 1;
 
     public bool EnableCaustics = true;
-    public int CausticPhotonCount = 65536;
-    public float CausticGatherRadius = 0.015f;
-    public float CausticGatherRadiusDecayRate = 0.0f;
+    public int CausticPhotonCount = 131072;
+    public float CausticGatherRadius = 0.025f;
+    public float CausticGatherRadiusDecayRate = 0.35f;
     public int CausticSeed = 1;
     public float CausticIntensity = 1.0f;
 

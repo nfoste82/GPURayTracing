@@ -54,7 +54,7 @@ int _DebugRenderMode;
 int _MaxLightSamples;
 int _LightSamplingStrategy;
 int _LightSampleCount;
-// Experimental primary-surface local RIS budget. This path is intentionally always enabled
+// Standard primary-surface local RIS budget. This path is intentionally always enabled
 // when its bounce/material/strategy eligibility criteria are met.
 int _InitialRisCandidateCount;
 int _UseFrameAccumulation;

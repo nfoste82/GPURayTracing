@@ -10,7 +10,7 @@ The recent texture, mesh-light, glass, specular, imported-model, and procedural-
 2. Unify segment absorption around the active medium and actual distance traveled.
 3. Rework transparent shadow rays as ordered boundary traversal.
 4. Replace the approximate direct specular path with shared BRDF/BSDF evaluation and sampling.
-5. Add multiple importance sampling (MIS) after material and light PDFs are trustworthy.
+5. Preserve and extend the validated multiple-importance/reservoir sampling estimator as new material and light proposals are added.
 6. Address independent correctness/lifecycle hazards and measured CPU-side performance work alongside the renderer sequence where they do not destabilize it.
 
 The medium, BRDF, and opaque-reflection MIS sequence above is now implemented. The recommended next visual-feature sequence is:
@@ -19,7 +19,7 @@ The medium, BRDF, and opaque-reflection MIS sequence above is now implemented. T
 2. Add Henyey-Greenstein anisotropy to `FogVolume`. Expose a bounded phase parameter such as `[-0.9, 0.9]`, preserve the current isotropic result at zero, and use the same phase evaluation and sampling functions for direct fog lighting and continuation rays. Add finite-value, normalization, and forward/backward-scattering probes before changing defaults.
 3. Add an analytic directional/sun light. Extend the light record and sampling path with direction and radiance, use infinite-distance shadow queries, and treat the initial zero-angular-radius form as a delta light outside area-light MIS. Prefer an explicit ray-traced light component or opt-in Unity `Light` bridge; add a finite angular radius later for soft sun shadows.
 4. Extend mesh materials with emission textures. Continuous metallic, glTF-channel metallic/roughness maps, and tangent-space normal maps are implemented. Emission maps still need to participate consistently in emissive hits and light construction; texture resolution, mipmapping, and filtering remain follow-up work.
-5. Add environment-map importance sampling. Build a CPU-side luminance distribution for the sky texture, sample it during next-event estimation, evaluate its solid-angle PDF on BSDF-sampled sky misses, and combine the two techniques with the existing power heuristic. Preserve the shader's single expensive direct-light sampling call-site constraint, and explicitly handle environment rotation, intensity, color space, accumulation invalidation, and zero-luminance maps.
+5. Extend environment-map importance sampling and reservoir proposals where measured useful. The current sky distribution participates in the standard direct-light RIS/MIS path; future changes must preserve environment rotation, intensity, color space, accumulation invalidation, and zero-luminance-map handling.
 
 ## Current Status
 
@@ -30,6 +30,7 @@ The medium, BRDF, and opaque-reflection MIS sequence above is now implemented. T
 - **Shadow boundary traversal: implemented.** Transparent shadow rays process nearest boundaries in order, attenuate actual active-medium segments, pair closed mesh entries/exits, retain a thin/open fallback, and preserve the opaque-only fast path.
 - **Shared BRDF evaluation and sampling: implemented.** Opaque diffuse and metal paths share Lambert/GGX evaluation, Schlick Fresnel, Smith masking-shadowing, mixture PDFs, and `f * abs(N dot L) / pdf` continuation weighting. Dielectric transmission remains on the established medium-stack path while direct dielectric reflection uses shared GGX evaluation.
 - **Multiple importance sampling: implemented for opaque reflection paths.** Explicit sphere/triangle light samples and opaque BRDF continuation samples use solid-angle PDFs and power-heuristic weights; emissive hits receive complementary weighting. Dielectric transmission and zero-radius delta-light fallbacks retain their established paths.
+- **Local and temporal RIS: implemented and enabled by default.** Importance-sampled primary opaque direct-light events use a local weighted reservoir, and supported temporal rendering reuses reservoir information across frames. Candidate count and temporal-reuse settings are included in accumulation/history invalidation and benchmark metadata. Ordinary direct sampling remains the fallback for unsupported events, later bounces, and diagnostic strategies.
 
 ## Priority 0: Protect Upcoming Changes
 
@@ -97,17 +98,17 @@ Status: implemented for opaque diffuse/metal reflection and direct dielectric re
 
 Completion criteria: direct and continuation rays evaluate the same material model, sampled PDFs match their distributions, roughness behavior is shared, and numeric tests cover finite/non-NaN values and known-angle responses.
 
-## Priority 6: Multiple Importance Sampling
+## Priority 6: Multiple Importance And Reservoir Sampling
 
-Status: implemented for opaque diffuse/metal continuation and explicit sphere/triangle light sampling. Full dielectric BSDF integration remains future material work.
+Status: implemented for opaque diffuse/metal continuation, explicit sphere/triangle light sampling, local primary direct-light RIS, and supported temporal RIS reuse. Full dielectric BSDF integration remains future material work.
 
 - Add light-sampling PDFs for sphere and triangle lights in the same measure used by material PDFs.
-- Combine explicit light samples and BRDF/BSDF samples with a documented MIS heuristic, initially the power heuristic.
+- Combine explicit light samples, reservoir-selected samples, and BRDF/BSDF samples with the validated reservoir-aware power heuristic.
 - Ensure emissive hits reached through BSDF sampling are weighted consistently rather than double-counted with next-event estimation.
 - Preserve the shader's single inlined `SampleSingleLight()` call-site constraint to avoid the previous Metal compile-time explosion.
-- Benchmark noise and frame cost across diffuse, glossy, small-light, and many-light fixtures before changing defaults.
+- Continue benchmarking noise and frame cost across diffuse, glossy, small-light, many-light, and moving-camera fixtures as proposals and reuse policies evolve.
 
-Completion criteria: light and material sampling can both discover the same paths without full double-counting, PDFs are comparable and tested, and image/noise regressions show the expected tradeoff.
+Completion criteria: light, reservoir, and material sampling can discover the same paths without full double-counting, PDFs and reservoir normalization are comparable and tested, and image/noise regressions show the expected tradeoff. These criteria are met for the current supported RIS paths and remain applicable to future proposal families.
 
 ## Parallel Correctness And Safety
 

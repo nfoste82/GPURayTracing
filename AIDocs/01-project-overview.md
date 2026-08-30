@@ -38,7 +38,7 @@ The renderer currently ray traces spheres, emissive sphere and mesh lights, regi
 - Emissive sphere and mesh lights.
 - Direct lighting with hard/soft shadow sampling.
 - Smoothness-controlled direct specular highlights. These are an approximate direct-light lobe rather than a fully consistent path-traced BRDF.
-- Selectable direct-light sampling strategy (all lights, uniform random, or importance-sampled) with a configurable per-hit light sample count, for trading noise against cost in many-light scenes.
+- Selectable direct-light sampling strategy (all lights, uniform random, or importance-sampled) with a configurable per-hit light sample count. The importance-sampled path uses local RIS for eligible primary opaque direct-light events, with temporal RIS reuse available in the temporal path.
 - ACES filmic tone mapping with a configurable `exposure` control, applied to the final color (debug modes are left untone-mapped).
 - Transparent/glass objects with Snell refraction, distance-based RGB absorption, approximate sphere and closed-mesh entry/exit traversal, bounded interior-object detection, and bounded mesh total internal reflection.
 - Colored shadows through transparent blockers.
