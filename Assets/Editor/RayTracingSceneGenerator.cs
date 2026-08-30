@@ -355,7 +355,7 @@ public static class RayTracingSceneGenerator
             FieldOfView = 45.0f,
             NumBounces = 10,
             Exposure = 1.0f,
-            FireflyClamp = 0.0f,
+            FireflyClamp = 8.0f,
             // The material-ball room contains its own calibrated mesh area lights.
             LightFalloffScale = 0.005f,
             SkyboxLightColor = new Color32(0, 0, 0, 255),
@@ -483,7 +483,7 @@ public static class RayTracingSceneGenerator
             DirectionalLightRotation = new Vector3(70.0f, -30.0f, 0.0f),
             DirectionalLightAngularRadius = 8.43f,
             CausticIntensity = 0.53f,
-            FireflyClamp = 3f,
+            FireflyClamp = 8f,
         });
         
         var defaultCheckerGray = AssetDatabase.GetBuiltinExtraResource<Texture2D>(DefaultCheckerGrayTexturePath);
@@ -1414,7 +1414,7 @@ public static class RayTracingSceneGenerator
             ShadowQuality = 0,
             CameraFocalDistance = 12.0f, 
             LightFalloffScale = 0.012f, 
-            FireflyClamp = 0.0f,
+            FireflyClamp = 8.0f,
             EnableCaustics = true, 
             CausticPhotonCount = 65536, 
             CausticGatherRadius = 0.28f,
@@ -1496,7 +1496,7 @@ public static class RayTracingSceneGenerator
             ShadowQuality = 0,
             LightFalloffScale = 0.021f, 
             Exposure = 1.5f,
-            FireflyClamp = 3f,
+            FireflyClamp = 8f,
             DirectionalLightIntensity = 1f, 
             DirectionalLightAngularRadius = 1.02f,
             DirectionalLightRotation = new Vector3(90.0f, -30.0f, 0.0f),
@@ -1843,9 +1843,7 @@ public static class RayTracingSceneGenerator
             ShadowQuality = 0,
             CameraFocalDistance = 16.0f, 
             LightFalloffScale = 0.175f,
-            // Preserve the HDR contrast between the emissive panel and the environment in the
-            // source fixture. Per-sample clamping would reduce both to the same luminance.
-            FireflyClamp = 0.0f,
+            FireflyClamp = 8.0f,
             TopLevelBvhMinObjectCount = 0, 
             ShadowBvhMinObjectCount = 0,
             SkyboxLightColor = new Color32(255, 245, 223, 255), 
