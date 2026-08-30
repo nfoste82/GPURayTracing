@@ -10,23 +10,15 @@
   "variants": [
     { "name": "ris_1_candidate", "overrides": [
       { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
-      { "path": "Lighting.InitialRisCandidateCount", "value": "1" },
-      { "path": "enableAdaptiveSampling", "value": "false" }
+      { "path": "Lighting.InitialRisCandidateCount", "value": "4" },
+      { "path": "enableAdaptiveSampling", "value": "false" },
+      { "path": "Lighting.TemporalRisEnabled", "value": "true" }
     ] },
     { "name": "ris_2_candidates", "overrides": [
       { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
-      { "path": "Lighting.InitialRisCandidateCount", "value": "2" },
-      { "path": "enableAdaptiveSampling", "value": "false" }
-    ] },
-    { "name": "ris_4_candidates", "overrides": [
-      { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
       { "path": "Lighting.InitialRisCandidateCount", "value": "4" },
-      { "path": "enableAdaptiveSampling", "value": "false" }
-    ] },
-    { "name": "ris_8_candidates", "overrides": [
-      { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
-      { "path": "Lighting.InitialRisCandidateCount", "value": "8" },
-      { "path": "enableAdaptiveSampling", "value": "false" }
+      { "path": "enableAdaptiveSampling", "value": "false" },
+      { "path": "Lighting.TemporalRisEnabled", "value": "false" }
     ] }
   ]
 }

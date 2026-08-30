@@ -39,6 +39,7 @@ public sealed class SceneSettings
     public int LightSampleCount = 1;
     // Four candidates is the project default; scene-specific settings can override it.
     public int InitialRisCandidateCount = 4;
+    public bool TemporalRisEnabled = false;
 
     public bool EnableSpatialDenoising = true;
     public float DenoiserLuminanceSigma = 0.05f;

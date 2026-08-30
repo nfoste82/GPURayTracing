@@ -37,6 +37,9 @@ namespace PathTracing.Lighting
         [SerializeField, Range(1, 16), Tooltip("Experimental branch only: number of local primary-surface RIS candidates. Applies to opaque ImportanceSampled direct lighting.")]
         private int _initialRisCandidateCount = 4;
 
+        [SerializeField, Tooltip("Reserved for temporal RIS. Reuse is unavailable until reservoirs retain sampled points and receiver reprojection validation.")]
+        private bool _temporalRisEnabled;
+
         [SerializeField, Range(0.001f, 1.0f), Tooltip("Higher values make direct light fall off faster with distance.")]
         private float _lightFalloffScale = 0.16f;
 
@@ -72,6 +75,12 @@ namespace PathTracing.Lighting
         {
             get => _initialRisCandidateCount;
             set => _initialRisCandidateCount = Mathf.Clamp(value, 1, 16);
+        }
+
+        public bool TemporalRisEnabled
+        {
+            get => _temporalRisEnabled;
+            set => _temporalRisEnabled = value;
         }
 
         public float LightFalloffScale

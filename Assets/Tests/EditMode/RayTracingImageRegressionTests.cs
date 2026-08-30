@@ -974,6 +974,7 @@ namespace GPURayTracing.Tests
                 shader.Dispatch(kernel, Mathf.CeilToInt(width / 4.0f), Mathf.CeilToInt(height / 4.0f), 1);
                 if (caustics == null)
                 {
+                    Graphics.CopyTexture(result, beauty);
                     ComputeShader denoiser = AssetDatabase.LoadAssetAtPath<ComputeShader>(DenoiserShaderPath);
                     Assert.That(denoiser, Is.Not.Null);
                     int presentKernel = denoiser.FindKernel("CSPresent");

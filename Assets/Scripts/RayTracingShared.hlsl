@@ -2,14 +2,20 @@
 
 // Create a RenderTexture with enableRandomWrite flag and set it
 // with cs.SetTexture
+#if !defined(RAY_TRACING_ADAPTIVE_TRACE)
 RWTexture2D<float4> Result;
+#endif
 RWTexture2D<float4> AccumulationResult;
+#if !defined(FINAL_COLOR_KERNEL)
 RWTexture2D<float4> Beauty;
+#if !defined(RAY_TRACING_ADAPTIVE_TRACE)
 RWTexture2D<float4> FeatureNormal;
 RWTexture2D<float4> FeatureAlbedo;
 RWTexture2D<float> FeatureDepth;
 RWTexture2D<float> FeatureIdentity;
 RWTexture2D<float> FeatureValidity;
+#endif
+#endif
 RWStructuredBuffer<float4> RegressionResults;
 RWStructuredBuffer<float4> _FocusQueryResult;
 
@@ -230,6 +236,21 @@ static const float WaterHitEpsilon = 0.001f;
 static const float GlassAbsorptionColorFloor = 0.001f;
 static const float GlassNeutralAbsorption = 0.08f;
 static const float ThinTransparentSurfaceDistance = 0.25f;
+
+// Slab AABB test used by terrain and all BVH traversal paths. It must remain outside optional
+// water/terrain blocks because the final-color and feature kernels also use it on Metal.
+bool IntersectAabbInverse(float3 rayOrigin, float3 inverseDirection, float3 boundsMin, float3 boundsMax, float maxDistance, out float entryDistance)
+{
+    float3 t0 = (boundsMin - rayOrigin) * inverseDirection;
+    float3 t1 = (boundsMax - rayOrigin) * inverseDirection;
+    float3 tMin3 = min(t0, t1);
+    float3 tMax3 = max(t0, t1);
+    float tMin = max(max(tMin3.x, tMin3.y), tMin3.z);
+    float tMax = min(min(tMax3.x, tMax3.y), tMax3.z);
+
+    entryDistance = max(0.0f, tMin);
+    return tMax >= entryDistance && tMin < maxDistance;
+}
 
 uint Hash(uint value)
 {
@@ -1024,7 +1045,6 @@ void IntersectWater(Ray ray, inout RayHit bestHit);
 #if defined(TERRAIN_ENABLED)
 void IntersectTerrain(Ray ray, inout RayHit bestHit);
 #endif
-bool IntersectAabbInverse(float3 rayOrigin, float3 inverseDirection, float3 boundsMin, float3 boundsMax, float maxDistance, out float entryDistance);
 
 float GetWaterDistanceAlongRay(Ray ray, float maxDistance)
 {
@@ -1922,23 +1942,6 @@ RayHit IntersectTriangle(Ray ray, RayHit currentHit, MeshTriangle meshTriangle, 
     }
 
     return bestHit;
-}
-
-// Slab AABB test that takes a precomputed inverse ray direction so BVH traversal does not
-// repeat the 3 divides for every node it visits. Returns the entry distance (tMin, clamped to
-// 0 when the ray origin is inside the box) through entryDistance so callers can order child
-// visits near-first; entryDistance is only valid when the function returns true.
-bool IntersectAabbInverse(float3 rayOrigin, float3 inverseDirection, float3 boundsMin, float3 boundsMax, float maxDistance, out float entryDistance)
-{
-    float3 t0 = (boundsMin - rayOrigin) * inverseDirection;
-    float3 t1 = (boundsMax - rayOrigin) * inverseDirection;
-    float3 tMin3 = min(t0, t1);
-    float3 tMax3 = max(t0, t1);
-    float tMin = max(max(tMin3.x, tMin3.y), tMin3.z);
-    float tMax = min(min(tMax3.x, tMax3.y), tMax3.z);
-
-    entryDistance = max(0.0f, tMin);
-    return tMax >= entryDistance && tMin < maxDistance;
 }
 
 bool IntersectAabb(Ray ray, float3 boundsMin, float3 boundsMax, float maxDistance)
@@ -2930,6 +2933,7 @@ struct InitialRisCandidate
     float proposalPdf;
     float risScale;
     int lightIndex;
+    int triangleIndex;
     int isEnvironment;
     int isMeshLight;
     int valid;
@@ -3349,8 +3353,8 @@ int SelectLightForDraw(int iteration, int drawCount, int lightCount, float3 shad
 }
 
 float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
-                            bool volumeEvent, bool initialRis, out bool initialRisSelected,
-                            inout uint rngState)
+                             bool volumeEvent, bool initialRis, out bool initialRisSelected,
+                             uint2 pixel, inout uint rngState)
 {
     initialRisSelected = false;
     int sampleCount = max(1, samplesPerLight);
@@ -3424,6 +3428,8 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
             candidate.valid = 0;
             candidate.isEnvironment = 0;
             candidate.isMeshLight = 0;
+            candidate.lightIndex = -1;
+            candidate.triangleIndex = -1;
             candidate.proposalPdf = 0.0f;
             candidate.risScale = 0.0f;
             if (proposalCount <= 0) continue;
@@ -3470,6 +3476,7 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
                 {
                     int triangleIndex = SelectMeshLightTriangle(candidate.light, rngState, candidate.triangleSelectionProbability);
                     if (triangleIndex < 0) continue;
+                    candidate.triangleIndex = triangleIndex;
                     MeshTriangle sampledTriangle = _Triangles[triangleIndex];
                     candidate.light.position = sampledTriangle.vertex0;
                     candidate.light.u = sampledTriangle.vertex1 - sampledTriangle.vertex0;
@@ -3536,9 +3543,10 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
                 risLightIndex = candidate.isEnvironment != 0 ? -1 : candidate.lightIndex;
             }
         }
+        int effectiveCandidateCount = candidateCount;
         if (selectedRisCandidate.valid != 0 && selectedWeight > 0.0f && IsFiniteRisValue(totalWeight))
         {
-            float reservoirScale = totalWeight / (candidateCount * selectedWeight);
+            float reservoirScale = totalWeight / (effectiveCandidateCount * selectedWeight);
             selectedRisCandidate.risScale = reservoirScale / selectedRisCandidate.proposalPdf;
             initialRisSelected = IsFiniteRisValue(selectedRisCandidate.risScale)
                 && selectedRisCandidate.risScale > 0.0f;
@@ -4143,10 +4151,10 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
 }
 
 float3 GetDirectLight(Ray ray, RayHit hit, bool softShadows, bool initialRis,
-                      out bool initialRisSelected, inout uint rngState)
+                       out bool initialRisSelected, uint2 pixel, inout uint rngState)
 {
     int samplesPerLight = softShadows ? max(1, _ShadowQuality + 1) : 1;
-    return GetLightHittingPoint(ray, hit, samplesPerLight, false, initialRis, initialRisSelected, rngState);
+    return GetLightHittingPoint(ray, hit, samplesPerLight, false, initialRis, initialRisSelected, pixel, rngState);
 }
 
 #if defined(FOG_ENABLED)
@@ -4156,7 +4164,7 @@ float3 GetFogDirectLight(Ray ray, float3 position, bool softShadows, inout uint 
     eventHit.position = position;
     int samplesPerLight = softShadows ? max(1, _ShadowQuality + 1) : 1;
     bool ignoredInitialRisSelection;
-    return GetLightHittingPoint(ray, eventHit, samplesPerLight, true, false, ignoredInitialRisSelection, rngState);
+    return GetLightHittingPoint(ray, eventHit, samplesPerLight, true, false, ignoredInitialRisSelection, uint2(0, 0), rngState);
 }
 #endif
 
@@ -4270,8 +4278,8 @@ float3 TraceVisibleCausticRadiance(Ray ray, inout uint rngState)
     return float3(0.0f, 0.0f, 0.0f);
 }
 
-float3 TracePathWithDirectLight(Ray ray, inout uint rngState, out float directLightLuminance,
-    out float firstSurfaceRoughness)
+float3 TracePathWithDirectLight(Ray ray, uint2 pixel, inout uint rngState, out float directLightLuminance,
+                                out float firstSurfaceRoughness)
 {
     float3 radiance = float3(0.0f, 0.0f, 0.0f);
     float3 throughput = float3(1.0f, 1.0f, 1.0f);
@@ -4387,7 +4395,7 @@ float3 TracePathWithDirectLight(Ray ray, inout uint rngState, out float directLi
                 && _EnvironmentCdfWidth > 0 && _EnvironmentCdfHeight > 0);
             bool useInitialRis = bounce == 0 && hasInitialRisProposal && IsInitialRisEligible(hit);
             float3 directLight = GetDirectLight(ray, hit, softShadows, useInitialRis,
-                sampledInitialRis, rngState);
+                sampledInitialRis, pixel, rngState);
             float3 directLightContribution = throughput * directLight;
             radiance += directLightContribution;
             directLightLuminance += dot(directLightContribution, float3(0.2126f, 0.7152f, 0.0722f));
@@ -4420,11 +4428,11 @@ float3 TracePathWithDirectLight(Ray ray, inout uint rngState, out float directLi
     return radiance;
 }
 
-float3 TracePath(Ray ray, inout uint rngState)
+float3 TracePath(Ray ray, uint2 pixel, inout uint rngState)
 {
     float ignoredDirectLightLuminance;
     float ignoredFirstSurfaceRoughness;
-    return TracePathWithDirectLight(ray, rngState, ignoredDirectLightLuminance, ignoredFirstSurfaceRoughness);
+    return TracePathWithDirectLight(ray, pixel, rngState, ignoredDirectLightLuminance, ignoredFirstSurfaceRoughness);
 }
 
 float3 ClampFirefly(float3 radiance)
@@ -4512,7 +4520,7 @@ float3 GetDebugRenderColor(Ray ray, inout uint rngState)
     if (_DebugRenderMode == DebugDirectLight)
     {
         bool ignoredInitialRisSelection;
-        return saturate(GetDirectLight(ray, hit, true, false, ignoredInitialRisSelection, rngState));
+        return saturate(GetDirectLight(ray, hit, true, false, ignoredInitialRisSelection, uint2(0, 0), rngState));
     }
 
     if (_DebugRenderMode == DebugHitDistance)
@@ -4590,10 +4598,11 @@ float3 GetDebugRenderColor(Ray ray, inout uint rngState)
         return saturate(throughput);
     }
 
-    return TracePath(ray, rngState);
+    return TracePath(ray, uint2(0, 0), rngState);
 }
 #endif // DEBUG_RENDER
 
+#if !defined(FINAL_COLOR_KERNEL) && !defined(RAY_TRACING_ADAPTIVE_TRACE)
 float GetFeatureIdentity(RayHit hit)
 {
     if (DidHitSky(hit))
@@ -4659,6 +4668,7 @@ void WriteDenoiserFeatures(uint2 pixel, uint width, uint height)
     FeatureIdentity[pixel] = GetFeatureIdentity(hit);
     FeatureValidity[pixel] = 1.0f;
 }
+#endif
 
 // Narkowicz 2015 ACES filmic tone mapping approximation. Maps the open-ended
 // HDR radiance range into [0,1] so bright values roll off smoothly instead of

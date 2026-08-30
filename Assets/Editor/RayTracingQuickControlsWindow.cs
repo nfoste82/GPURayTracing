@@ -50,24 +50,28 @@ public sealed class RayTracingQuickControlsWindow : EditorWindow
         GameManager manager = FindGameManager(scene);
         if (manager == null)
         {
-            EditorGUILayout.HelpBox("The active scene has no GameManager.", MessageType.Info);
+            DestroyGameManagerEditor();
+            Repaint();
+            GUIUtility.ExitGUI();
             return;
         }
 
-        _scrollPosition = EditorGUILayout.BeginScrollView(_scrollPosition);
-        DrawGameManagerControls(manager);
-
-        RayTracingQuickControls profile = FindProfile(scene);
-        if (profile != null && profile.Entries.Count > 0)
+        using (var scrollView = new EditorGUILayout.ScrollViewScope(_scrollPosition))
         {
-            EditorGUILayout.Space(10.0f);
-            EditorGUILayout.LabelField("Scene Controls", EditorStyles.boldLabel);
-            foreach (RayTracingQuickControls.Entry entry in profile.Entries)
+            _scrollPosition = scrollView.scrollPosition;
+            DrawGameManagerControls(manager);
+
+            RayTracingQuickControls profile = FindProfile(scene);
+            if (profile != null && profile.Entries.Count > 0)
             {
-                DrawEntry(entry);
+                EditorGUILayout.Space(10.0f);
+                EditorGUILayout.LabelField("Scene Controls", EditorStyles.boldLabel);
+                foreach (RayTracingQuickControls.Entry entry in profile.Entries)
+                {
+                    DrawEntry(entry);
+                }
             }
         }
-        EditorGUILayout.EndScrollView();
     }
 
     private void DrawGameManagerControls(GameManager manager)
@@ -75,7 +79,16 @@ public sealed class RayTracingQuickControlsWindow : EditorWindow
         if (manager == null)
         {
             DestroyGameManagerEditor();
+            Repaint();
+            GUIUtility.ExitGUI();
             return;
+        }
+
+        if (_inspectedManager != null && _inspectedManager != manager)
+        {
+            DestroyGameManagerEditor();
+            Repaint();
+            GUIUtility.ExitGUI();
         }
 
         if (_inspectedManager != manager || _gameManagerEditor == null)
@@ -88,6 +101,10 @@ public sealed class RayTracingQuickControlsWindow : EditorWindow
         if (_gameManagerEditor == null || _gameManagerEditor.target == null)
         {
             DestroyGameManagerEditor();
+            // The scene can change between IMGUI layout and repaint. Abort this
+            // event rather than drawing a different control tree on repaint.
+            Repaint();
+            GUIUtility.ExitGUI();
             return;
         }
 

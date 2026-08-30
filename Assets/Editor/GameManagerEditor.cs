@@ -105,6 +105,7 @@ public sealed class GameManagerEditor : Editor
             if (serializedObject.FindProperty("_lightingManager._lightSamplingStrategy").enumValueIndex == (int)LightSamplingStrategy.ImportanceSampled)
             {
                 DrawLightingProperty("initialRisCandidateCount", "Initial RIS Candidate Count (Experimental)");
+                DrawLightingProperty("temporalRisEnabled", "Temporal RIS Reuse (Unavailable)");
             }
             DrawLightingProperty("lightFalloffScale", "Local Light Falloff Scale");
             DrawDirectionalLighting(manager);
@@ -152,7 +153,6 @@ public sealed class GameManagerEditor : Editor
         DrawSection(manager, "Diagnostics", false, () =>
         {
             DrawProperty("profileStartup");
-            DrawProperty("debugRenderMode");
             DrawProperty("maxLightSamples");
         });
         DrawSection(manager, "Setup", true, () =>

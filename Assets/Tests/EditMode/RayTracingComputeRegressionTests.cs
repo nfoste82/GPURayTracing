@@ -21,7 +21,6 @@ namespace GPURayTracing.Tests
         }
 
         private const string ComputeShaderPath = "Assets/Scripts/RayTracingCompute.compute";
-        private const string DebugShaderPath = "Assets/Resources/RayTracingDebug.compute";
         private const string UtilityShaderPath = "Assets/Resources/RayTracingUtility.compute";
         private const string FeaturesShaderPath = "Assets/Resources/RayTracingFeatures.compute";
         private const string FocusShaderPath = "Assets/Resources/RayTracingFocus.compute";
@@ -547,6 +546,68 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void AdaptiveTrace_DoesNotRequireTemporalRisHistoryUavs()
+        {
+            string traceSource = System.IO.File.ReadAllText(AdaptiveTraceShaderPath);
+            string sharedSource = System.IO.File.ReadAllText("Assets/Scripts/RayTracingShared.hlsl");
+
+            Assert.That(sharedSource, Does.Contain("#if !defined(RAY_TRACING_ADAPTIVE_TRACE)\nRWTexture2D<float4> Result;"));
+            Assert.That(sharedSource, Does.Contain("#if !defined(RAY_TRACING_ADAPTIVE_TRACE)\nRWTexture2D<float4> FeatureNormal;"));
+            Assert.That(traceSource, Does.Not.Contain("_TemporalRisPrevious"));
+            Assert.That(traceSource, Does.Not.Contain("_TemporalRisNext"));
+        }
+
+        [Test]
+        public void AabbTraversalHelper_IsSharedByAllRendererAssets()
+        {
+            string sharedSource = System.IO.File.ReadAllText("Assets/Scripts/RayTracingShared.hlsl");
+            int helperIndex = sharedSource.IndexOf("bool IntersectAabbInverse", StringComparison.Ordinal);
+            int waterBlockIndex = sharedSource.IndexOf("#if defined(WATER_ENABLED)\nfloat GetWaterWaveHeight", StringComparison.Ordinal);
+            int terrainBlockIndex = sharedSource.IndexOf("#if defined(TERRAIN_ENABLED)\nfloat GetTerrainHeight", StringComparison.Ordinal);
+
+            Assert.That(helperIndex, Is.GreaterThanOrEqualTo(0));
+            Assert.That(sharedSource.IndexOf("bool IntersectAabbInverse", helperIndex + 1, StringComparison.Ordinal), Is.EqualTo(-1));
+            Assert.That(helperIndex, Is.LessThan(waterBlockIndex));
+            Assert.That(helperIndex, Is.LessThan(terrainBlockIndex));
+        }
+
+        [Test]
+        public void BulkShaderPrecompile_ExcludesKnownTimedOutDebugKernel()
+        {
+            string source = System.IO.File.ReadAllText("Assets/Editor/RayTracingShaderPrecompiler.cs");
+            int assetsStart = source.IndexOf("private static readonly ShaderAsset[] RendererAssets", StringComparison.Ordinal);
+            int assetsEnd = source.IndexOf(";", assetsStart, StringComparison.Ordinal);
+            string rendererAssets = source.Substring(assetsStart, assetsEnd - assetsStart);
+
+            Assert.That(rendererAssets, Does.Not.Contain("DebugShader"));
+            Assert.That(source, Does.Contain("All Supported Renderer Assets"));
+        }
+
+        [Test]
+        public void GeometryDebugTooling_IsDisabled()
+        {
+            string manager = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+            string inspector = System.IO.File.ReadAllText("Assets/Editor/GameManagerEditor.cs");
+            string precompiler = System.IO.File.ReadAllText("Assets/Editor/RayTracingShaderPrecompiler.cs");
+
+            Assert.That(manager, Does.Contain("debugRenderMode = DebugRenderMode.FinalColor;"));
+            Assert.That(manager, Does.Contain("frame.useGeometryDebugShader = false;"));
+            Assert.That(manager, Does.Not.Contain("FindKernel(\"CSDebugMain\")"));
+            Assert.That(inspector, Does.Not.Contain("DrawProperty(\"debugRenderMode\")"));
+            Assert.That(precompiler, Does.Not.Contain("RayTracingDebug"));
+        }
+
+        [Test]
+        public void TemporalRis_IsUnavailableWithoutReprojectionAndReceiverValidation()
+        {
+            string source = System.IO.File.ReadAllText("Assets/Scripts/RayTracingShared.hlsl");
+            string manager = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+
+            Assert.That(source, Does.Not.Contain("TemporalRis"));
+            Assert.That(manager, Does.Not.Contain("TemporalRis"));
+        }
+
+        [Test]
         public void AdaptiveScheduler_ReusesAllocationBetweenReclassificationFrames()
         {
             string source = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
@@ -859,7 +920,7 @@ namespace GPURayTracing.Tests
             string source = System.IO.File.ReadAllText("Assets/Scripts/RayTracingShared.hlsl");
             Assert.That(source, Does.Contain("int _InitialRisCandidateCount"));
             Assert.That(source, Does.Contain("struct InitialRisCandidate"));
-            Assert.That(source, Does.Contain("totalWeight / (candidateCount * selectedWeight)"));
+            Assert.That(source, Does.Contain("totalWeight / (effectiveCandidateCount * selectedWeight)"));
             Assert.That(source, Does.Contain("GetShadowTransmittance(rayToLight, distanceToLight)"));
             Assert.That(CountOccurrences(source, "GetShadowTransmittance(rayToLight, distanceToLight)"), Is.EqualTo(1),
                 "RIS candidates must reuse SampleSingleLight's only production shadow query.");
@@ -883,6 +944,8 @@ namespace GPURayTracing.Tests
             Assert.That(manager, Does.Contain("Lighting.InitialRisCandidateCount = settings.InitialRisCandidateCount"));
             Assert.That(manager, Does.Contain("AddHash(hash, Lighting.InitialRisCandidateCount)"));
             Assert.That(temporal, Does.Contain("AddHash(hash, _gameManager.Lighting.InitialRisCandidateCount)"));
+            Assert.That(lighting, Does.Contain("TemporalRisEnabled"));
+            Assert.That(manager, Does.Contain("Lighting.TemporalRisEnabled = settings.TemporalRisEnabled"));
         }
 
         [Test]
@@ -1050,7 +1113,6 @@ namespace GPURayTracing.Tests
         public void ProductionComputeKernels_AreOwnedByTheirSplitAssets()
         {
             ComputeShader renderer = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
-            ComputeShader debug = AssetDatabase.LoadAssetAtPath<ComputeShader>(DebugShaderPath);
             ComputeShader utility = AssetDatabase.LoadAssetAtPath<ComputeShader>(UtilityShaderPath);
             ComputeShader features = AssetDatabase.LoadAssetAtPath<ComputeShader>(FeaturesShaderPath);
             ComputeShader focus = AssetDatabase.LoadAssetAtPath<ComputeShader>(FocusShaderPath);
@@ -1059,7 +1121,6 @@ namespace GPURayTracing.Tests
             Assert.That(renderer.HasKernel("ClearAccumulation"), Is.False);
             Assert.That(renderer.HasKernel("CSFeatures"), Is.False);
             Assert.That(renderer.HasKernel("CSFocusQuery"), Is.False);
-            Assert.That(debug.HasKernel("CSDebugMain"), Is.True);
             Assert.That(utility.HasKernel("ClearAccumulation"), Is.True);
             Assert.That(features.HasKernel("CSFeatures"), Is.True);
             Assert.That(focus.HasKernel("CSFocusQuery"), Is.True);

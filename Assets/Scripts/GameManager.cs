@@ -39,7 +39,6 @@ public class GameManager : MonoBehaviour
 
     public ComputeShader shader;
 
-    [SerializeField] private ComputeShader debugShader;
     [SerializeField] private ComputeShader utilityShader;
     [SerializeField] private ComputeShader featuresShader;
     [SerializeField] private ComputeShader focusShader;
@@ -187,7 +186,7 @@ public class GameManager : MonoBehaviour
     [Tooltip("Allows paths to scatter repeatedly in fog. More physical, but slower, noisier, and more likely to wash out high-contrast light shafts.")]
     public bool enableFogMultipleScattering = false;
 
-    public DebugRenderMode debugRenderMode = DebugRenderMode.FinalColor;
+    [HideInInspector] public DebugRenderMode debugRenderMode = DebugRenderMode.FinalColor;
 
     [Tooltip("Master brightness applied before ACES tone mapping. Acts like a camera exposure dial.")]
     [Range(0.0f, 8.0f)]
@@ -680,6 +679,7 @@ public class GameManager : MonoBehaviour
         Lighting.LightSamplingStrategy = settings.LightSamplingStrategy;
         Lighting.LightSampleCount = settings.LightSampleCount;
         Lighting.InitialRisCandidateCount = settings.InitialRisCandidateCount;
+        Lighting.TemporalRisEnabled = settings.TemporalRisEnabled;
         SpatialDenoising.enabled = settings.EnableSpatialDenoising;
         SpatialDenoising.iterations = settings.DenoiserIterations;
         SpatialDenoising.luminanceSigma = settings.DenoiserLuminanceSigma;
@@ -730,10 +730,6 @@ public class GameManager : MonoBehaviour
             adaptiveSchedulerShader = Resources.Load<ComputeShader>("RayTracingAdaptiveScheduler");
         }
 
-        if (debugShader == null)
-        {
-            debugShader = Resources.Load<ComputeShader>("RayTracingDebug");
-        }
         if (utilityShader == null)
         {
             utilityShader = Resources.Load<ComputeShader>("RayTracingUtility");
@@ -746,10 +742,13 @@ public class GameManager : MonoBehaviour
         {
             focusShader = Resources.Load<ComputeShader>("RayTracingFocus");
         }
-        if (debugShader == null || utilityShader == null || featuresShader == null || focusShader == null)
+        if (utilityShader == null || featuresShader == null || focusShader == null)
         {
             Debug.LogError("Split ray tracing compute shaders are missing from Resources.", this);
         }
+        // Geometry diagnostics are temporarily disabled because their Metal kernel can exceed
+        // Unity's compiler timeout. Keep all runtime rendering on the production path.
+        debugRenderMode = DebugRenderMode.FinalColor;
         if (adaptiveTraceShader == null)
         {
             adaptiveTraceShader = Resources.Load<ComputeShader>("RayTracingAdaptiveTrace");
@@ -2129,7 +2128,7 @@ public class GameManager : MonoBehaviour
             useDedicatedCausticsDebugKernel = enableCaustics && causticsShader != null
                 && debugRenderMode == DebugRenderMode.Caustics
         };
-        frame.useGeometryDebugShader = UsesGeometryDebugShader(debugRenderMode) && debugShader != null;
+        frame.useGeometryDebugShader = false;
         // The low-resolution adaptive bootstrap still dispatches CSMain. Do not mark the separate
         // adaptive trace asset as warmed until the bootstrap has actually reached its handoff.
         // Otherwise the first real trace compiles synchronously without the warning frame.
@@ -2198,10 +2197,8 @@ public class GameManager : MonoBehaviour
         }
         
         frame.computeShader = frame.useDedicatedCausticsDebugKernel ? causticsShader
-            : frame.useGeometryDebugShader ? debugShader
             : ShouldUseAdaptiveSampling() ? ActiveAdaptiveTraceShader : HasWaterVolume ? waterShader : shader;
         frame.kernelHandle = frame.computeShader.FindKernel(frame.useDedicatedCausticsDebugKernel ? "CSCausticsDebug"
-            : frame.useGeometryDebugShader ? "CSDebugMain"
             : ShouldUseAdaptiveSampling() ? "CSAdaptiveTrace" : "CSMain");
     }
 
@@ -2222,6 +2219,10 @@ public class GameManager : MonoBehaviour
         
         var dispatchStart = _startupProfilePending ? Stopwatch.GetTimestamp() : 0;
         UpdateTextureFromCompute(frame.computeShader, frame.kernelHandle);
+        if (frame.computeShader == shader)
+        {
+            Graphics.CopyTexture(_outputTexture, _beautyTexture);
+        }
         _presentationSource = _beautyTexture;
         
         if (!frame.useDedicatedCausticsDebugKernel && (ShouldRunSpatialDenoiser() || ShouldRunTemporalDenoiser() || IsFeatureDebugMode() || IsCausticPreservationDebugMode()))
@@ -2357,12 +2358,6 @@ public class GameManager : MonoBehaviour
             RenderTexture.ReleaseTemporary(presentation);
             DestroyRuntimeObject(texture);
         }
-    }
-
-    private static bool UsesGeometryDebugShader(DebugRenderMode mode)
-    {
-        return (mode >= DebugRenderMode.Normals && mode <= DebugRenderMode.GlassScatter && mode != DebugRenderMode.Caustics)
-               || mode == DebugRenderMode.TerrainCells;
     }
 
     private static int GetShaderVariantKey(int shaderKind, bool fogEnabled, bool terrainEnabled)
@@ -3495,7 +3490,7 @@ public class GameManager : MonoBehaviour
     private void SetShaderParameters(ComputeShader targetShader, int kernelHandle)
     {
         BindShaderTextures(targetShader, kernelHandle);
-        BindShaderCameraAndRendererSamplingParameters(targetShader);
+        BindShaderCameraAndRendererSamplingParameters(targetShader, kernelHandle);
         BindShaderKeywordsAndLightingParameters(targetShader, kernelHandle);
         BindShaderEnvironmentAndSceneParameters(targetShader, kernelHandle);
     }
@@ -3554,7 +3549,7 @@ public class GameManager : MonoBehaviour
         targetShader.SetBuffer(kernelHandle, EnvironmentMarginalCdf, _environmentImportanceSampling.MarginalCdfBuffer);
     }
 
-    private void BindShaderCameraAndRendererSamplingParameters(ComputeShader targetShader)
+    private void BindShaderCameraAndRendererSamplingParameters(ComputeShader targetShader, int kernelHandle)
     {
         CameraManager.SetShaderParameters(targetShader);
         _temporalDenoisingManager.SetRayTracingShaderParameters(targetShader, debugRenderMode);
@@ -3606,7 +3601,7 @@ public class GameManager : MonoBehaviour
         targetShader.SetFloat(FireflyClamp, Mathf.Max(0.0f, fireflyClamp));
         
         if (targetShader == waterShader || targetShader == waterFeaturesShader || targetShader == waterFocusShader
-            || targetShader == waterAdaptiveTraceShader || targetShader == debugShader || targetShader == causticsShader)
+            || targetShader == waterAdaptiveTraceShader || targetShader == causticsShader)
         {
             WaterManager.SetShaderParameters(targetShader, Application.isPlaying ? GetRenderTime() : 0.0f);
         }
@@ -3714,6 +3709,7 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, (int)Lighting.LightSamplingStrategy);
             hash = AddHash(hash, Lighting.LightSampleCount);
             hash = AddHash(hash, Lighting.InitialRisCandidateCount);
+            hash = AddHash(hash, Lighting.TemporalRisEnabled ? 1 : 0);
             hash = AddHash(hash, shadowRandomness);
             hash = AddHash(hash, parallaxMaximumStrengthAngle);
             hash = AddHash(hash, Lighting.LightFalloffScale);

@@ -2,6 +2,7 @@
 #pragma kernel CSMain
 #pragma multi_compile _ FOG_ENABLED
 #pragma multi_compile _ TERRAIN_ENABLED
+#define FINAL_COLOR_KERNEL
 #include "RayTracingShared.hlsl"
 
 [numthreads(4,4,1)]
@@ -60,7 +61,7 @@ void CSMain (uint3 id : SV_DispatchThreadID)
             rand(rngState);
         }
 
-        float3 sampleRadiance = ClampFirefly(TracePath(ray, rngState));
+        float3 sampleRadiance = ClampFirefly(TracePath(ray, pixel, rngState));
         result += sampleRadiance;
     }
 
@@ -76,8 +77,6 @@ void CSMain (uint3 id : SV_DispatchThreadID)
         AccumulationResult[pixel] = float4(color, 1);
 
     }
-
-    Beauty[pixel] = float4(color, 1.0f);
 
     Result[pixel] = float4(color, 1);
 }

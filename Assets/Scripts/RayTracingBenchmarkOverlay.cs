@@ -82,6 +82,7 @@ public class RayTracingBenchmarkOverlay : MonoBehaviour
         _builder.Append("Light sampling: ").Append(gameManager.Lighting.LightSamplingStrategy)
             .Append("  Samples: ").Append(gameManager.Lighting.LightSampleCount)
             .Append("  RIS candidates: ").AppendLine(gameManager.Lighting.InitialRisCandidateCount.ToString());
+        _builder.Append("Temporal RIS: unavailable pending reprojection validation").AppendLine();
         _builder.Append("Accumulation: ").Append(gameManager.enableFrameAccumulation ? "on" : "off")
             .Append("  Frames: ").AppendLine(gameManager.AccumulatedFrameCount.ToString());
         _builder.Append("Caustics: ").Append(gameManager.enableCaustics ? "on" : "off");
