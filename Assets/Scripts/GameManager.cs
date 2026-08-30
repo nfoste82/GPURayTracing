@@ -91,6 +91,14 @@ public class GameManager : MonoBehaviour
     [Tooltip("Progressively averages final-color renders while the camera, scene, and quality settings are unchanged. Debug render modes are not accumulated.")]
     public bool enableFrameAccumulation = true;
 
+    [Tooltip("Leaves this percentage of the measured previous render duration idle between live frames. This improves editor responsiveness without interrupting an in-progress render. 0 disables pacing.")]
+    [Range(0.0f, 95.0f)]
+    public float liveFrameIdlePercent = 0.0f;
+
+    [Tooltip("Waits this many milliseconds after each live render before allowing another render call. 0 disables the fixed cooldown. This is CPU-side pacing; it does not interrupt a render already in progress.")]
+    [Range(0.0f, 5000.0f)]
+    public float liveFrameCooldownMilliseconds = 0.0f;
+
     [Range(1, 16)]
     public int numBounces = 8;
 
@@ -358,6 +366,8 @@ public class GameManager : MonoBehaviour
     private bool _adaptiveBootstrapPriorityActive;
     private bool _adaptiveCaptureDiagnostics;
     private bool _renderingPaused;
+    private double _liveFrameDurationSeconds;
+    private long _nextLiveFrameTimestamp;
     private Vector2Int _textureSize;
     private Vector2Int _displayTextureSize;
     private int _accumulatedFrameCount;
@@ -851,6 +861,8 @@ public class GameManager : MonoBehaviour
     {
         _spatialDenoisingManager.ValidateSettings();
         subpixelJitterScale = Mathf.Clamp(subpixelJitterScale, 0.0f, 2.0f);
+        liveFrameIdlePercent = Mathf.Clamp(liveFrameIdlePercent, 0.0f, 95.0f);
+        liveFrameCooldownMilliseconds = Mathf.Clamp(liveFrameCooldownMilliseconds, 0.0f, 5000.0f);
         _temporalDenoisingManager.ValidateSettings();
         CameraManager.cameraOrbitZoom = Mathf.Max(0.1f, CameraManager.cameraOrbitZoom);
         causticPreservationThreshold = Mathf.Clamp(causticPreservationThreshold, 1.5f, 32.0f);
@@ -1779,6 +1791,7 @@ public class GameManager : MonoBehaviour
     internal void ResetFrameAccumulation()
     {
         _causticsManager.ResetProgressiveRadius();
+        _nextLiveFrameTimestamp = 0;
         _accumulatedFrameCount = 0;
         _hasAccumulationStateHash = false;
         _accumulationClearPending = true;
@@ -2085,6 +2098,14 @@ public class GameManager : MonoBehaviour
             Graphics.Blit(_presentationTexture != null ? _presentationTexture : src, dest);
             return;
         }
+
+        if (ShouldDeferLiveFrame())
+        {
+            Graphics.Blit(_presentationTexture != null ? _presentationTexture : src, dest);
+            return;
+        }
+
+        long renderStart = Stopwatch.GetTimestamp();
         
         if (TryPresentStartupFrame(src, dest) || TryDeferShaderVariantWarmup(dest, out var frame))
         {
@@ -2095,10 +2116,41 @@ public class GameManager : MonoBehaviour
         PrepareRenderFrame(ref frame);
         DispatchRenderFrame(ref frame);
         FinalizeRenderFrame(ref frame);
+
         _videoCaptureManager.CompleteRender();
+
+        ScheduleNextLiveFrame(renderStart);
         
         Graphics.Blit(debugRenderMode == DebugRenderMode.FinalColor && !frame.useDedicatedCausticsDebugKernel
             ? _presentationTexture : _outputTexture, dest);
+    }
+
+    private bool ShouldDeferLiveFrame()
+    {
+        if (!Application.isPlaying || _singleFrame || _videoCaptureManager.IsActive || liveFrameIdlePercent <= 0.0f)
+        {
+            return false;
+        }
+
+        return Stopwatch.GetTimestamp() < _nextLiveFrameTimestamp;
+    }
+
+    private void ScheduleNextLiveFrame(long renderStart)
+    {
+        if (!Application.isPlaying || _singleFrame || _videoCaptureManager.IsActive || liveFrameIdlePercent <= 0.0f)
+        {
+            _nextLiveFrameTimestamp = 0;
+            return;
+        }
+
+        double renderSeconds = (Stopwatch.GetTimestamp() - renderStart) / (double)Stopwatch.Frequency;
+        double cooldownSeconds = liveFrameCooldownMilliseconds * 0.001;
+        if (cooldownSeconds <= 0.0 && liveFrameIdlePercent > 0.0f)
+        {
+            cooldownSeconds = renderSeconds * liveFrameIdlePercent / (100.0 - liveFrameIdlePercent);
+        }
+
+        _nextLiveFrameTimestamp = Stopwatch.GetTimestamp() + (long)(cooldownSeconds * Stopwatch.Frequency);
     }
 
     private struct RenderFrame

@@ -71,6 +71,8 @@ public sealed class GameManagerEditor : Editor
             DrawProperty("shadowQuality");
             DrawProperty("subpixelJitterScale");
             DrawProperty("enableFrameAccumulation");
+            DrawProperty("liveFrameIdlePercent", "Live Frame Idle (%)");
+            DrawProperty("liveFrameCooldownMilliseconds", "Live Frame Cooldown (ms)");
             DrawProperty("_singleFrame", "Render Paused View");
             DrawProperty("fireflyClamp");
             DrawProperty("randomNoise");

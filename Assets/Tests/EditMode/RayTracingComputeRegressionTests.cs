@@ -825,6 +825,20 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void LiveFrameIdleCap_PacesCompletedFramesWithoutInterruptingDispatch()
+        {
+            string source = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+            string editor = System.IO.File.ReadAllText("Assets/Editor/GameManagerEditor.cs");
+            Assert.That(source, Does.Contain("liveFrameIdlePercent"));
+            Assert.That(source, Does.Contain("liveFrameCooldownMilliseconds"));
+            Assert.That(source, Does.Contain("ShouldDeferLiveFrame"));
+            Assert.That(source, Does.Contain("ScheduleNextLiveFrame(renderStart)"));
+            Assert.That(source, Does.Contain("_videoCaptureManager.IsActive"));
+            Assert.That(source, Does.Contain("Graphics.Blit(_presentationTexture != null ? _presentationTexture : src, dest)"));
+            Assert.That(editor, Does.Contain("liveFrameIdlePercent"));
+        }
+
+        [Test]
         public void SceneCapture_AdaptivePriorityOverridesAreValidatedAndApplied()
         {
             string source = System.IO.File.ReadAllText("Assets/Editor/RayTracingSceneCapture.cs");

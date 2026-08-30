@@ -38,7 +38,7 @@ Registration caches the `Transform`, `SphereCollider`, shared `Mesh`, and either
 
 Each render callback:
 
-1. Ensures `_outputTexture` matches the current source render target dimensions.
+1. Ensures `_outputTexture` matches the current source render target dimensions. When `liveFrameCooldownMilliseconds` is greater than zero, live Play-mode callbacks that arrive before the cooldown deadline blit the last presentation and skip a new dispatch. The fixed cooldown takes precedence over `liveFrameIdlePercent`; when it is zero, the percentage derives a cooldown from the previous completed render duration. Neither setting interrupts an in-progress render. Single-frame mode and video capture bypass this pacing.
 2. Derives the internal tracing size from the source target and `renderResolutionPercent` (`25-100%`), recreating ray-tracing, accumulation, feature, and denoiser textures if it changes. Linear HDR beauty is Catmull-Rom reconstructed into a full-size presentation texture. When enabled, HDR glare is extracted through a four-level bright-pass pyramid and composited before exposure and ACES tone mapping; the camera aspect remains based on the display target rather than the reduced internal size.
 3. Calls `UpdateSpheres()` to refresh CPU sphere/light structs from cached Unity object references.
 4. Calls `UpdateTriangles()` to refresh registered mesh triangle data only if a cached mesh transform or material value changed.

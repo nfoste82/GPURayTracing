@@ -85,6 +85,9 @@ public class RayTracingBenchmarkOverlay : MonoBehaviour
         _builder.Append("Temporal RIS: unavailable pending reprojection validation").AppendLine();
         _builder.Append("Accumulation: ").Append(gameManager.enableFrameAccumulation ? "on" : "off")
             .Append("  Frames: ").AppendLine(gameManager.AccumulatedFrameCount.ToString());
+        _builder.Append("Live idle cap: ").Append(gameManager.liveFrameIdlePercent.ToString("0.#"))
+            .Append("%  Cooldown: ").Append(gameManager.liveFrameCooldownMilliseconds.ToString("0.#"))
+            .AppendLine(" ms");
         _builder.Append("Caustics: ").Append(gameManager.enableCaustics ? "on" : "off");
         if (gameManager.enableCaustics)
         {
