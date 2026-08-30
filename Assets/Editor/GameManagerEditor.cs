@@ -7,7 +7,6 @@ using PathTracing.Camera;
 using PathTracing.AccelerationStructures;
 using PathTracing.Lighting;
 using UnityEditor;
-using UnityEditorInternal;
 using UnityEngine;
 
 [CustomEditor(typeof(GameManager))]
@@ -26,32 +25,12 @@ public sealed class GameManagerEditor : Editor
     {
         EditorApplication.projectChanged += Repaint;
         EditorApplication.hierarchyChanged += Repaint;
-        EditorApplication.delayCall += EnsureComponentOrder;
     }
 
     private void OnDisable()
     {
         EditorApplication.projectChanged -= Repaint;
         EditorApplication.hierarchyChanged -= Repaint;
-        EditorApplication.delayCall -= EnsureComponentOrder;
-    }
-
-    private void EnsureComponentOrder()
-    {
-        if (target is not GameManager manager || manager == null)
-        {
-            return;
-        }
-
-        Component[] components = manager.GetComponents<Component>();
-        int managerIndex = Array.IndexOf(components, manager);
-        for (int index = managerIndex; index > 1; index--)
-        {
-            if (!ComponentUtility.MoveComponentUp(manager))
-            {
-                break;
-            }
-        }
     }
 
     public override void OnInspectorGUI()
@@ -167,9 +146,9 @@ public sealed class GameManagerEditor : Editor
 
     private void DrawBvhBaking(GameManager manager)
     {
-        List<RayTracingBvhBakeAsset.MeshEntry> entries = RayTracingBvhBakeUtility.GetMeshEntries(manager);
-        string signature = RayTracingBvhBakeUtility.CalculateSignature(entries);
-        BakeStatus status = GetBakeStatus(manager.EditorBvhBake, signature);
+        var entries = RayTracingBvhBakeUtility.GetMeshEntries(manager);
+        var signature = RayTracingBvhBakeUtility.CalculateSignature(entries);
+        var status = GetBakeStatus(manager.EditorBvhBake, signature);
 
         using (new EditorGUI.DisabledScope(EditorApplication.isPlayingOrWillChangePlaymode || string.IsNullOrEmpty(manager.gameObject.scene.path)))
         {
@@ -189,9 +168,9 @@ public sealed class GameManagerEditor : Editor
         DrawProperty("bakeBvhUponExit", "Bake upon exit");
     }
 
-    private void DrawCameraSettings(GameManager manager)
+    private static void DrawCameraSettings(GameManager manager)
     {
-        CameraManager cameraManager = manager.GetComponent<CameraManager>();
+        var cameraManager = manager.GetComponent<CameraManager>();
         if (cameraManager == null)
         {
             EditorGUILayout.HelpBox("CameraManager is required on the GameManager.", MessageType.Error);
@@ -268,7 +247,7 @@ public sealed class GameManagerEditor : Editor
             return;
         }
 
-        RayDirectionalLight[] directionalLights = manager.GetComponentsInChildren<RayDirectionalLight>(true);
+        var directionalLights = manager.GetComponentsInChildren<RayDirectionalLight>(true);
         EditorGUILayout.Space();
         EditorGUILayout.LabelField("Directional Lighting", EditorStyles.boldLabel);
         if (directionalLights.Length == 0)
@@ -277,9 +256,8 @@ public sealed class GameManagerEditor : Editor
             return;
         }
 
-        for (int i = 0; i < directionalLights.Length; i++)
+        foreach (var directionalLight in directionalLights)
         {
-            RayDirectionalLight directionalLight = directionalLights[i];
             var lightObject = new SerializedObject(directionalLight);
             lightObject.Update();
             if (directionalLights.Length > 1)
@@ -294,7 +272,7 @@ public sealed class GameManagerEditor : Editor
 
     private void DrawDenoising()
     {
-        SerializedProperty spatialManager = serializedObject.FindProperty("_spatialDenoisingManager");
+        var spatialManager = serializedObject.FindProperty("_spatialDenoisingManager");
         EditorGUILayout.PropertyField(spatialManager.FindPropertyRelative("enabled"), new GUIContent("Enable Spatial Denoising"));
         using (new EditorGUI.DisabledScope(!spatialManager.FindPropertyRelative("enabled").boolValue))
         {
@@ -306,7 +284,7 @@ public sealed class GameManagerEditor : Editor
         }
 
         EditorGUILayout.Space();
-        SerializedProperty temporalManager = serializedObject.FindProperty("_temporalDenoisingManager");
+        using var temporalManager = serializedObject.FindProperty("_temporalDenoisingManager");
         EditorGUILayout.PropertyField(temporalManager.FindPropertyRelative("enabled"), new GUIContent("Enable Temporal Denoising"));
         using (new EditorGUI.DisabledScope(!temporalManager.FindPropertyRelative("enabled").boolValue))
         {
@@ -342,7 +320,7 @@ public sealed class GameManagerEditor : Editor
 
     private static void DrawWater(GameManager manager)
     {
-        Water water = manager.WaterInternal;
+        var water = manager.WaterInternal;
         if (water == null)
         {
             EditorGUILayout.HelpBox("Add a Water component beneath this GameManager to configure water rendering.", MessageType.Info);
@@ -367,7 +345,7 @@ public sealed class GameManagerEditor : Editor
     private void DrawCaustics()
     {
         DrawProperty("enableCaustics");
-        SerializedProperty caustics = serializedObject.FindProperty("_causticsManager");
+        var caustics = serializedObject.FindProperty("_causticsManager");
         using (new EditorGUI.DisabledScope(!serializedObject.FindProperty("enableCaustics").boolValue))
         {
             EditorGUILayout.PropertyField(caustics.FindPropertyRelative("_photonCount"), new GUIContent("Caustic Photon Count"));
@@ -379,7 +357,7 @@ public sealed class GameManagerEditor : Editor
 
     private static void DrawTerrain(GameManager manager)
     {
-        RayTracingTerrain terrain = manager.GetComponentInChildren<RayTracingTerrain>(true);
+        var terrain = manager.GetComponentInChildren<RayTracingTerrain>(true);
         if (terrain == null)
         {
             EditorGUILayout.HelpBox("Add a RayTracingTerrain beneath this GameManager to configure terrain rendering.", MessageType.Info);
@@ -396,10 +374,10 @@ public sealed class GameManagerEditor : Editor
         terrainObject.ApplyModifiedProperties();
     }
 
-    private void DrawSection(GameManager manager, string title, bool defaultExpanded, Action content)
+    private static void DrawSection(GameManager manager, string title, bool defaultExpanded, Action content)
     {
-        string key = $"{FoldoutPrefix}.{GetManagerIdentifier(manager)}.{title}";
-        bool expanded = EditorPrefs.GetBool(key, defaultExpanded);
+        var key = $"{FoldoutPrefix}.{GetManagerIdentifier(manager)}.{title}";
+        var expanded = EditorPrefs.GetBool(key, defaultExpanded);
         expanded = EditorGUILayout.BeginFoldoutHeaderGroup(expanded, title);
         EditorPrefs.SetBool(key, expanded);
         if (expanded)
@@ -414,7 +392,7 @@ public sealed class GameManagerEditor : Editor
 
     private void DrawProperty(string propertyPath, string label = null)
     {
-        SerializedProperty property = serializedObject.FindProperty(propertyPath);
+        var property = serializedObject.FindProperty(propertyPath);
         if (property == null)
         {
             EditorGUILayout.HelpBox($"Serialized property '{propertyPath}' could not be found on GameManager.", MessageType.Warning);
@@ -426,7 +404,7 @@ public sealed class GameManagerEditor : Editor
 
     private void DrawLightingProperty(string propertyName, string label = null)
     {
-        SerializedProperty property = serializedObject.FindProperty("_lightingManager._" + propertyName);
+        using var property = serializedObject.FindProperty("_lightingManager._" + propertyName);
         if (property == null)
         {
             EditorGUILayout.HelpBox($"Serialized lighting property '{propertyName}' could not be found on GameManager.", MessageType.Warning);
@@ -443,7 +421,7 @@ public sealed class GameManagerEditor : Editor
 
     private void DrawVideoCaptureSettings(GameManager manager)
     {
-        SerializedProperty videoCapture = serializedObject.FindProperty("_videoCaptureManager");
+        using var videoCapture = serializedObject.FindProperty("_videoCaptureManager");
         EditorGUILayout.PropertyField(
             videoCapture.FindPropertyRelative("samplesPerFrame"),
             new GUIContent("Quality Samples Per Output Frame"));
@@ -460,16 +438,16 @@ public sealed class GameManagerEditor : Editor
             EditorGUILayout.PropertyField(videoCapture.FindPropertyRelative("ffmpegPath"));
         }
 
-        int frameCount = VideoCaptureManager.CalculateFrameCount(manager.VideoCapture.duration, manager.VideoCapture.frameTimeStep);
+        var frameCount = VideoCaptureManager.CalculateFrameCount(manager.VideoCapture.duration, manager.VideoCapture.frameTimeStep);
         var overlay = manager.GetComponent<RayTracingBenchmarkOverlay>();
-        float averageFrameMs = overlay != null ? overlay.AverageFrameMs : 0.0f;
-        double estimateSeconds = VideoCaptureManager.EstimateCaptureSeconds(
+        var averageFrameMs = overlay != null ? overlay.AverageFrameMs : 0.0f;
+        var estimateSeconds = VideoCaptureManager.EstimateCaptureSeconds(
             frameCount,
             manager.VideoCapture.samplesPerFrame,
             Mathf.Max(1, manager.numberOfPasses),
             averageFrameMs,
             manager.enableCaustics);
-        string estimate = estimateSeconds > 0.0
+        var estimate = estimateSeconds > 0.0
             ? FormatDuration(estimateSeconds)
             : "available after frame statistics have been collected in Play mode";
         EditorGUILayout.HelpBox(
@@ -486,7 +464,7 @@ public sealed class GameManagerEditor : Editor
         }
         else if (manager.VideoCapture.IsActive)
         {
-            float progress = manager.VideoCapture.FrameCount > 0
+            var progress = manager.VideoCapture.FrameCount > 0
                 ? manager.VideoCapture.CompletedFrameCount / (float)manager.VideoCapture.FrameCount
                 : 0.0f;
             EditorGUI.ProgressBar(
@@ -519,7 +497,7 @@ public sealed class GameManagerEditor : Editor
         {
             if (GUILayout.Button("Save Image"))
             {
-                string path = EditorUtility.SaveFilePanel("Save Ray-Traced Image", string.Empty, "ray-traced-image", "png");
+                var path = EditorUtility.SaveFilePanel("Save Ray-Traced Image", string.Empty, "ray-traced-image", "png");
                 if (string.IsNullOrEmpty(path))
                 {
                     return;
@@ -551,7 +529,7 @@ public sealed class GameManagerEditor : Editor
             return $"{totalSeconds:0.0} seconds";
         }
 
-        TimeSpan duration = TimeSpan.FromSeconds(totalSeconds);
+        var duration = TimeSpan.FromSeconds(totalSeconds);
         return duration.TotalHours >= 1.0
             ? $"{(int)duration.TotalHours}:{duration.Minutes:00}:{duration.Seconds:00}"
             : $"{duration.Minutes}:{duration.Seconds:00}";
@@ -590,7 +568,7 @@ public static class RayTracingBvhBakeUtility
     public static List<RayTracingBvhBakeAsset.MeshEntry> GetMeshEntries(GameManager manager)
     {
         var entriesByKey = new Dictionary<string, RayTracingBvhBakeAsset.MeshEntry>();
-        foreach (PathTracingObject rayObject in manager.GetComponentsInChildren<PathTracingObject>(true))
+        foreach (var rayObject in manager.GetComponentsInChildren<PathTracingObject>(true))
         {
             if (!rayObject.isActiveAndEnabled)
             {
@@ -605,9 +583,9 @@ public static class RayTracingBvhBakeUtility
                 continue;
             }
 
-            bool interpolateNormals = material != null && material.InterpolateNormals;
-            string identity = GetMeshIdentity(filter.sharedMesh);
-            string key = identity + (interpolateNormals ? ":smooth" : ":flat");
+            var interpolateNormals = material != null && material.InterpolateNormals;
+            var identity = GetMeshIdentity(filter.sharedMesh);
+            var key = identity + (interpolateNormals ? ":smooth" : ":flat");
             entriesByKey[key] = new RayTracingBvhBakeAsset.MeshEntry
             {
                 mesh = filter.sharedMesh,
@@ -622,7 +600,7 @@ public static class RayTracingBvhBakeUtility
         var keys = new List<string>(entriesByKey.Keys);
         keys.Sort(StringComparer.Ordinal);
         var entries = new List<RayTracingBvhBakeAsset.MeshEntry>(keys.Count);
-        foreach (string key in keys)
+        foreach (var key in keys)
         {
             entries.Add(entriesByKey[key]);
         }
@@ -641,11 +619,9 @@ public static class RayTracingBvhBakeUtility
             source.Append(';');
         }
 
-        using (var hash = SHA256.Create())
-        {
-            byte[] bytes = hash.ComputeHash(Encoding.UTF8.GetBytes(source.ToString()));
-            return BitConverter.ToString(bytes).Replace("-", string.Empty);
-        }
+        using var hash = SHA256.Create();
+        var bytes = hash.ComputeHash(Encoding.UTF8.GetBytes(source.ToString()));
+        return BitConverter.ToString(bytes).Replace("-", string.Empty);
     }
 
     public static bool IsBakeCurrent(GameManager manager)
@@ -659,7 +635,7 @@ public static class RayTracingBvhBakeUtility
         return IsBakeCurrent(FindBake(manager), entries);
     }
 
-    public static bool IsBakeCurrent(RayTracingBvhBakeAsset bake, List<RayTracingBvhBakeAsset.MeshEntry> entries)
+    private static bool IsBakeCurrent(RayTracingBvhBakeAsset bake, List<RayTracingBvhBakeAsset.MeshEntry> entries)
     {
         if (bake == null)
         {
@@ -706,11 +682,11 @@ public static class RayTracingBvhBakeUtility
     {
         EnsureFolder(BakeFolder);
         EnsureFolder(StreamingBakeFolder);
-        string sceneGuid = AssetDatabase.AssetPathToGUID(manager.gameObject.scene.path);
-        string managerId = GlobalObjectId.GetGlobalObjectIdSlow(manager).targetObjectId.ToString();
-        string fileStem = $"{sceneGuid}_{managerId}";
-        string assetPath = $"{BakeFolder}/{fileStem}.asset";
-        string binaryAssetPath = $"{StreamingBakeFolder}/{fileStem}.bytes";
+        var sceneGuid = AssetDatabase.AssetPathToGUID(manager.gameObject.scene.path);
+        var managerId = GlobalObjectId.GetGlobalObjectIdSlow(manager).targetObjectId.ToString();
+        var fileStem = $"{sceneGuid}_{managerId}";
+        var assetPath = $"{BakeFolder}/{fileStem}.asset";
+        var binaryAssetPath = $"{StreamingBakeFolder}/{fileStem}.bytes";
         var bake = AssetDatabase.LoadAssetAtPath<RayTracingBvhBakeAsset>(assetPath);
         if (bake == null)
         {
@@ -739,16 +715,16 @@ public static class RayTracingBvhBakeUtility
         return assetPath;
     }
 
-    public static RayTracingBvhBakeAsset FindBake(GameManager manager)
+    private static RayTracingBvhBakeAsset FindBake(GameManager manager)
     {
         if (string.IsNullOrEmpty(manager.gameObject.scene.path))
         {
             return null;
         }
 
-        string sceneGuid = AssetDatabase.AssetPathToGUID(manager.gameObject.scene.path);
-        string managerId = GlobalObjectId.GetGlobalObjectIdSlow(manager).targetObjectId.ToString();
-        string assetPath = $"{BakeFolder}/{sceneGuid}_{managerId}.asset";
+        var sceneGuid = AssetDatabase.AssetPathToGUID(manager.gameObject.scene.path);
+        var managerId = GlobalObjectId.GetGlobalObjectIdSlow(manager).targetObjectId.ToString();
+        var assetPath = $"{BakeFolder}/{sceneGuid}_{managerId}.asset";
         return AssetDatabase.LoadAssetAtPath<RayTracingBvhBakeAsset>(assetPath);
     }
 
@@ -758,7 +734,7 @@ public static class RayTracingBvhBakeUtility
         string currentAssetPath,
         string currentBinaryAssetPath)
     {
-        string sceneBakePrefix = sceneGuid + "_";
+        var sceneBakePrefix = sceneGuid + "_";
         var preservedPaths = new HashSet<string>(StringComparer.Ordinal)
         {
             currentAssetPath,
@@ -774,13 +750,13 @@ public static class RayTracingBvhBakeUtility
                     continue;
                 }
 
-                RayTracingBvhBakeAsset bake = FindBake(manager);
+                var bake = FindBake(manager);
                 if (bake == null)
                 {
                     continue;
                 }
 
-                string referencedAssetPath = AssetDatabase.GetAssetPath(bake);
+                var referencedAssetPath = AssetDatabase.GetAssetPath(bake);
                 if (!string.IsNullOrEmpty(referencedAssetPath))
                 {
                     preservedPaths.Add(referencedAssetPath);
@@ -792,7 +768,7 @@ public static class RayTracingBvhBakeUtility
             }
         }
 
-        int deletedCount = DeleteStaleBakeAssets(BakeFolder, ".asset", sceneBakePrefix, preservedPaths);
+        var deletedCount = DeleteStaleBakeAssets(BakeFolder, ".asset", sceneBakePrefix, preservedPaths);
         deletedCount += DeleteStaleBakeAssets(StreamingBakeFolder, ".bytes", sceneBakePrefix, preservedPaths);
         if (deletedCount > 0)
         {
@@ -806,11 +782,11 @@ public static class RayTracingBvhBakeUtility
         string sceneBakePrefix,
         HashSet<string> preservedPaths)
     {
-        int deletedCount = 0;
-        foreach (string guid in AssetDatabase.FindAssets(string.Empty, new[] { folder }))
+        var deletedCount = 0;
+        foreach (var guid in AssetDatabase.FindAssets(string.Empty, new[] { folder }))
         {
-            string path = AssetDatabase.GUIDToAssetPath(guid);
-            string fileName = Path.GetFileName(path);
+            var path = AssetDatabase.GUIDToAssetPath(guid);
+            var fileName = Path.GetFileName(path);
             if (preservedPaths.Contains(path)
                 || !path.EndsWith(extension, StringComparison.OrdinalIgnoreCase)
                 || !fileName.StartsWith(sceneBakePrefix, StringComparison.Ordinal))
@@ -833,13 +809,13 @@ public static class RayTracingBvhBakeUtility
             return false;
         }
 
-        string path = Path.Combine(Application.streamingAssetsPath, bake.streamingAssetsRelativePath);
+        var path = Path.Combine(Application.streamingAssetsPath, bake.streamingAssetsRelativePath);
         if (!File.Exists(path))
         {
             return false;
         }
 
-        long expectedLength = 12L;
+        var expectedLength = 12L;
         foreach (var entry in bake.meshes)
         {
             expectedLength += 8L + entry.triangleCount * 160L + entry.nodeCount * 40L;
@@ -858,7 +834,7 @@ public static class RayTracingBvhBakeUtility
 
     private static string GetMeshDependencyHash(Mesh mesh)
     {
-        string path = AssetDatabase.GetAssetPath(mesh);
+        var path = AssetDatabase.GetAssetPath(mesh);
         return string.IsNullOrEmpty(path)
             ? $"scene:{mesh.vertexCount}:{GetMeshIndexCount(mesh)}"
             : AssetDatabase.GetAssetDependencyHash(path).ToString();
@@ -866,8 +842,8 @@ public static class RayTracingBvhBakeUtility
 
     private static int GetMeshIndexCount(Mesh mesh)
     {
-        int count = 0;
-        for (int i = 0; i < mesh.subMeshCount; i++)
+        var count = 0;
+        for (var i = 0; i < mesh.subMeshCount; i++)
         {
             count += checked((int)mesh.GetIndexCount(i));
         }
@@ -876,8 +852,8 @@ public static class RayTracingBvhBakeUtility
 
     private static void EnsureFolder(string path)
     {
-        string parent = Path.GetDirectoryName(path)?.Replace('\\', '/');
-        string name = Path.GetFileName(path);
+        var parent = Path.GetDirectoryName(path)?.Replace('\\', '/');
+        var name = Path.GetFileName(path);
         if (!AssetDatabase.IsValidFolder(path))
         {
             EnsureFolder(parent);

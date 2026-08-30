@@ -4,6 +4,7 @@ using System.IO;
 using PathTracing.Camera;
 using PathTracing.Lighting;
 using UnityEditor;
+using UnityEditorInternal;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -540,6 +541,7 @@ public static class RayTracingSceneGenerator
 
         var managerObject = new GameObject("Game Manager");
         var manager = managerObject.AddComponent<GameManager>();
+        MoveGameManagerToTop(manager);
         var cameraManager = managerObject.GetComponent<CameraManager>();
         manager.shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
         manager.causticsShader = AssetDatabase.LoadAssetAtPath<ComputeShader>(CausticsShaderPath);
@@ -553,6 +555,19 @@ public static class RayTracingSceneGenerator
         AddDirectionalLight(managerObject.transform, "Directional Light", settings.DirectionalLightRotation, new Color32(255, 244, 222, 255), settings.DirectionalLightIntensity, settings.DirectionalLightAngularRadius);
 
         return new BenchmarkContext(scene, managerObject.transform);
+    }
+
+    private static void MoveGameManagerToTop(GameManager manager)
+    {
+        Component[] components = manager.GetComponents<Component>();
+        int managerIndex = Array.IndexOf(components, manager);
+        for (int index = managerIndex; index > 1; index--)
+        {
+            if (!ComponentUtility.MoveComponentUp(manager))
+            {
+                break;
+            }
+        }
     }
 
     private static void CreateVolumetricFogScene()
