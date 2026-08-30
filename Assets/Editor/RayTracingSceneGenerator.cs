@@ -1661,7 +1661,7 @@ public static class RayTracingSceneGenerator
         AddPrimitiveMesh(context.Root, "Far Mirror Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, roomHeight * 0.5f, backZ), Vector3.zero, new Vector3(roomWidth, roomHeight, 0.04f), Color.white, RayMaterial.MaterialType.Metal, 1.0f, 1.0f);
         AddPrimitiveMesh(context.Root, "Camera-Side Mirror Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, roomHeight * 0.5f, frontZ), Vector3.zero, new Vector3(roomWidth, roomHeight, 0.04f), Color.white, RayMaterial.MaterialType.Metal, 1.0f, 1.0f);
         
-        AddMeshLight(context.Root, "Middle Rectangular Ceiling Light", CreateHorizontalQuadMesh("Middle Rectangular Ceiling Light", 1.35f, 0.46f, 1.0f, 1.0f), new Vector3(0.0f, roomHeight - 0.04f, 0.65f), new Vector3(180.0f, 0.0f, 0.0f), new Vector3(2.0f, 1.0f, 1.0f), new Color32(255, 248, 220, 255), intensity: 2f);
+        AddMeshLight(context.Root, "Middle Rectangular Ceiling Light", CreateHorizontalQuadMesh("Middle Rectangular Ceiling Light", 1.35f, 0.46f, 1.0f, 1.0f), new Vector3(0.0f, roomHeight - 0.04f, 0.65f), Vector3.zero, new Vector3(2.0f, 1.0f, 1.0f), new Color32(255, 248, 220, 255), intensity: 2f);
 
         AddPrimitiveMesh(context.Root, "Near Left Block", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-1.85f, 0.82f, -1.85f), Vector3.zero, new Vector3(1.45f, 1.6f, 1.15f), new Color32(218, 212, 196, 255), RayMaterial.MaterialType.Diffuse, 0.15f, 1.0f);
         AddPrimitiveMesh(context.Root, "Tall Center Block", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-0.55f, 1.55f, 0.8f), Vector3.zero, new Vector3(1.0f, 3.1f, 1.0f), new Color32(220, 216, 202, 255), RayMaterial.MaterialType.Diffuse, 0.12f, 1.0f);

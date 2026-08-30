@@ -2772,6 +2772,13 @@ float GetGgxAlpha(RayHit hit)
     return roughness * roughness;
 }
 
+bool IsNearDeltaSpecular(RayHit hit)
+{
+    // Smoothness 1 is clamped to the renderer's minimum GGX roughness. At that width, direct
+    // area-light samples virtually never overlap the mirror continuation, so MIS must not dim it.
+    return GetBrdfSpecularProbability(hit) >= 1.0f && GetMetallicRoughness(hit).y <= 0.0301f;
+}
+
 float GgxDistribution(float normalDotHalf, float alpha)
 {
     float alphaSquared = alpha * alpha;
@@ -4289,6 +4296,7 @@ float3 TracePathWithDirectLight(Ray ray, uint2 pixel, inout uint rngState, out f
     float3 previousSurfacePosition = float3(0.0f, 0.0f, 0.0f);
     float previousMaterialPdf = 0.0f;
     bool previousDirectLightSampled = false;
+    bool previousNearDeltaSpecular = false;
     bool previousSoftShadows = false;
     bool canGatherCaustics = true;
 
@@ -4363,7 +4371,7 @@ float3 TracePathWithDirectLight(Ray ray, uint2 pixel, inout uint rngState, out f
         if (DidHitLight(hit))
         {
             float misWeight = 1.0f;
-            if (previousDirectLightSampled && previousMaterialPdf > 0.0f)
+            if (previousDirectLightSampled && !previousNearDeltaSpecular && previousMaterialPdf > 0.0f)
             {
                 int lightSampleCount;
                 float lightPdf = GetLightPdfForHit(previousSurfacePosition, hit, previousSoftShadows, lightSampleCount);
@@ -4409,6 +4417,7 @@ float3 TracePathWithDirectLight(Ray ray, uint2 pixel, inout uint rngState, out f
         previousSurfacePosition = hit.position;
         previousMaterialPdf = scatter.materialPdf;
         previousDirectLightSampled = sampledDirectLight;
+        previousNearDeltaSpecular = IsNearDeltaSpecular(hit);
         canGatherCaustics = canGatherCaustics && IsGlassMaterial(hit);
         ray = scatter.ray;
         throughput *= scatter.attenuation;
