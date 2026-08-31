@@ -174,6 +174,14 @@ and transmission so `temporal_ris_static_direct_light_fixed_work.json` can compa
 temporal RIS at the same 200 accumulated samples. This is the acceptance fixture for temporal
 reuse; CornellBox remains a general stability check rather than a temporal-RIS quality benchmark.
 
+`Benchmark_TemporalRisStableDirectLight` separates selection coherence from visibility failure. It
+uses twenty varied finite lights over a large diffuse receiver with no environment, directional
+light, motion, transmission, denoising, or adaptive sampling. A single screen-right blocker creates
+a narrow controlled penumbra strip; the rest of the visible receiver remains unoccluded. This is the
+positive-control fixture: temporal reuse must show an early-frame benefit in its open region before
+visibility-aware changes are justified. It is not a replacement for `TemporalRisStress`, which
+remains the rejection/stability fixture.
+
 `temporal_ris_candidate_split_sweep_fixed_work.json` evaluates local candidate count independently
 from the temporal retained-history `M` cap. Each temporal capture writes
 `temporal_ris_diagnostics.json` beside its timing report. Inspect history acceptance/rejection,
@@ -246,6 +254,33 @@ is not primarily a reprojection-availability failure. Quality worsened monotonic
 selection increased, which makes represented-history correlation and visibility discontinuities the
 leading hypotheses.
 
+The independent `temporal_ris_one_frame_trials` run confirms a limited instantaneous benefit under
+the current four-local-plus-one-history policy: at warm-up lengths 1, 2, 4, and 8, temporal RMSE was
+2.48 to 2.66 percent lower than local RIS across 32 seed-paired trials. It was also 8.53 to 13.56
+percent slower per measured frame. In contrast, the 200-frame static progressive capture lost from
+frame 2 onward and finished 2.71 percent higher RGB RMSE. The current history path is therefore
+active and useful as one additional selection observation, but it does not yet improve long static
+accumulation. Its 98.68 percent history acceptance, 97.76 percent merge rate, and 21.33 percent
+history-selection rate rule out simple reprojection unavailability as the main explanation.
+
+The stable-scene positive control reaches the same conclusion without image-wide visibility
+discontinuities. In `temporal_ris_stable_direct_light_fixed_work`, temporal RIS finished at RGB RMSE
+0.00765151 versus local RIS at 0.00733272: a 4.35-percent regression after 200 accumulated frames.
+It already loses at frame 2 (0.0678062 versus 0.0664890) and remains behind at frames 4, 8, 16, 32,
+64, and 128. Its apparent 0.50-percent lower average render time (120.45 ms versus 121.06 ms) is too
+small to treat as a benefit. The diagnostic counters show normal reuse: 98.85-percent history
+acceptance, 98.15-percent merge rate, 20.68-percent history-selection rate, and mean effective M
+of 4.951.
+
+The independent `temporal_ris_stable_direct_light_one_frame_trials` positive control does show the
+intended reset-frame effect. Across 32 paired seeds, temporal RMSE was lower by 2.74, 2.82, 2.86,
+and 2.83 percent at warm-ups 1, 2, 4, and 8 respectively. Measured-frame time was higher by 8.52,
+12.17, 9.15, and 12.25 percent. Temporal mean linear luminance was consistently about 0.21 to 0.23
+percent higher, so a temporal-on high-sample mean comparison remains required. The reference
+difference images show the controlled blocker/shadow region, but the progressive regression is also
+present across the broad open receiver. Visibility boundaries can amplify the issue, but they are
+not its sole cause.
+
 Treat the following as ordered gates. Do not tune a later stage to compensate for a failed earlier
 one.
 
@@ -264,14 +299,17 @@ one.
 
 ### 3. Prove Mean Correctness
 
-Status: reservoir normalization is now covered by the production GPU regression probe. It verifies
-local normalization, capped temporal target-ratio mass, local/history selected-target normalization,
-and zero/invalid history rejection through the same helpers used by `CSMain`. Full direct-light mean
-agreement across proposal families remains the next gate. The deterministic raw-HDR mesh-triangle
-fixture now compares the ordinary NEE plus complementary BRDF-hit estimator with local RIS counts
-1, 2, 4, and 8 at 1,024 samples per pixel; every configuration agrees within two percent per RGB
-channel. Environment-only and mixed sphere/triangle/environment coverage remains required before
-this gate is complete.
+Status: reservoir normalization is covered by the production GPU regression probe. It verifies local
+normalization, capped temporal target-ratio mass, local/history selected-target normalization, and
+zero/invalid history rejection through the same helpers used by `CSMain`. Raw-HDR production-image
+fixtures now compare ordinary NEE plus complementary continuation-hit contributions with local RIS
+counts 1, 2, 4, and 8 for mesh-triangle-only, environment-only, and mixed sphere/triangle/environment
+lighting. Triangle and environment fixtures use 1,024 samples per pixel with a two-percent per-RGB
+channel tolerance; the noisier mixed fixture uses 16,384 samples per pixel with a 3.5-percent
+tolerance. The mixed fixture exposed that continuation-hit MIS omitted the local RIS proposal branch
+probability; `TracePath()` now carries the preceding initial-RIS state and applies that branch PDF to
+triangle-light and sky-miss competing PDFs. The focused three-fixture run passes. Temporal-on
+production-image comparison remains required before this gate is complete.
 
 1. Add deterministic CPU/GPU checks for triangle-only, environment-only, and mixed
    sphere/triangle/environment lighting.
@@ -286,6 +324,13 @@ this gate is complete.
 
 ### 4. Measure The Intended Benefit
 
+The checked-in `temporal_ris_one_frame_trials.json` runs this gate at 1024x1024 with 32
+deterministic seed-paired trials for warm-up lengths 1, 2, 4, and 8. For each trial it starts
+from empty temporal history, accumulates the configured warm-up frames, and measures exactly one
+non-accumulated frame against the trusted temporal-off reference. It writes per-trial RMSE, mean
+linear luminance, and measured render time to `temporal_ris_one_frame_trials.csv`, with sample
+means and unbiased variances in `temporal_ris_one_frame_summary.csv`.
+
 1. Run independent one-frame trials: empty history, a specified warm-up length, one measured
    non-accumulated frame, and many fixed seeds. Report mean, variance, RMSE, and time.
 2. Separately run independent progressive sequences and report error at 1, 2, 4, 8, 16, 32, 64,
@@ -294,6 +339,18 @@ this gate is complete.
    instantaneous low-SPP images while losing to independent local RIS in a long static average.
 4. If only the former wins, limit temporal reuse to reset/interactive presentation rather than the
    static progressive path.
+5. Run `temporal_ris_stable_direct_light_fixed_work.json` and
+   `temporal_ris_stable_direct_light_one_frame_trials.json` using the
+   `TemporalRisStableDirectLight` reference. Compare the
+   open receiver and controlled penumbra strip separately with reference difference heatmaps.
+   If temporal reuse does not win in the open region, audit stored proposal density, target-ratio
+   mass, and final normalization before adding visibility-aware heuristics. If it wins only in the
+   open region, prioritize spatially localized visibility/selection diagnostics for the penumbra.
+
+Status: complete. The open-region positive control did not improve progressive convergence despite
+its reset-frame gain. Before visibility-aware heuristics, audit whether recursively stored history
+creates correlation that is not represented by its nominal capped M, then test previous-frame-only
+history and normalized-local-reservoir-as-one-observation variants.
 
 ### 5. Limit History Persistence
 
@@ -327,6 +384,8 @@ this gate is complete.
    history selection, visibility mismatch, and reservoir age.
 3. Consider a nearby-pixel search only after exact reprojection validation, because it can cross
    direct-light visibility boundaries.
+4. Use `TemporalRisStableDirectLight` to distinguish a global history-selection problem from a
+   penumbra-local visibility problem before changing temporal confidence or history persistence.
 
 ### 8. Optimize Only A Winning Estimator
 

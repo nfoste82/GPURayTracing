@@ -85,6 +85,9 @@ public static class RayTracingSceneCapture
         public double durationSeconds;
         public double cooldownSeconds = DefaultCooldownSeconds;
         public string referenceRoot = DefaultReferenceRoot;
+        public int[] temporalRisWarmupFrames;
+        public int temporalRisTrialsPerWarmup;
+        public int temporalRisFirstSeed = 1;
         public ExperimentVariant[] variants;
     }
 
@@ -164,6 +167,29 @@ public static class RayTracingSceneCapture
             : this(imagePath, measuredFrames, totalMilliseconds, retiredPaths)
         {
             this.adaptiveDiagnostics = adaptiveDiagnostics;
+        }
+    }
+
+    private readonly struct TemporalRisTrialResult
+    {
+        public readonly int warmupFrames;
+        public readonly int trial;
+        public readonly int seed;
+        public readonly string variant;
+        public readonly double milliseconds;
+        public readonly double rgbRmse;
+        public readonly double meanLuminance;
+
+        public TemporalRisTrialResult(int warmupFrames, int trial, int seed, string variant,
+            double milliseconds, double rgbRmse, double meanLuminance)
+        {
+            this.warmupFrames = warmupFrames;
+            this.trial = trial;
+            this.seed = seed;
+            this.variant = variant;
+            this.milliseconds = milliseconds;
+            this.rgbRmse = rgbRmse;
+            this.meanLuminance = meanLuminance;
         }
     }
 
@@ -518,6 +544,13 @@ public static class RayTracingSceneCapture
 
                 string sceneRoot = Path.Combine(experimentRoot, SanitizePathSegment(sceneName));
                 Directory.CreateDirectory(sceneRoot);
+                if (experiment.temporalRisWarmupFrames != null && experiment.temporalRisWarmupFrames.Length > 0)
+                {
+                    RunTemporalRisOneFrameTrials(manager, experiment, sceneRoot, referencePath);
+                    File.WriteAllText(Path.Combine(sceneRoot, "experiment.json"), JsonUtility.ToJson(experiment, true));
+                    WriteCaptureLog(sceneRoot, label);
+                    continue;
+                }
                 var results = new List<ExperimentVariantResult>();
                 for (int index = 0; index < experiment.variants.Length; index++)
                 {
@@ -583,6 +616,16 @@ public static class RayTracingSceneCapture
         if (experiment.width <= 0 || experiment.height <= 0 || experiment.samples <= 0
             || experiment.durationSeconds < 0.0 || experiment.cooldownSeconds < 0.0)
             throw new InvalidOperationException("Experiment dimensions, samples, duration, and cooldown must be valid non-negative values.");
+        if (experiment.temporalRisWarmupFrames != null && experiment.temporalRisWarmupFrames.Length > 0)
+        {
+            if (experiment.temporalRisTrialsPerWarmup <= 0)
+                throw new InvalidOperationException("Temporal RIS one-frame trials require a positive temporalRisTrialsPerWarmup.");
+            foreach (int warmupFrames in experiment.temporalRisWarmupFrames)
+            {
+                if (warmupFrames < 0)
+                    throw new InvalidOperationException("Temporal RIS warm-up frame counts must be non-negative.");
+            }
+        }
         if (string.IsNullOrWhiteSpace(experiment.referenceRoot)) experiment.referenceRoot = DefaultReferenceRoot;
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (ExperimentVariant variant in experiment.variants)
@@ -640,6 +683,160 @@ public static class RayTracingSceneCapture
                 CsvNumber(metrics.luminanceMeanRelativeAbsoluteError), CsvNumber(metrics.luminanceFractionAbove0_01)));
         }
         File.WriteAllLines(Path.Combine(outputRoot, "variant_comparison.csv"), lines);
+    }
+
+    private static void RunTemporalRisOneFrameTrials(GameManager manager, CaptureExperiment experiment,
+        string outputRoot, string referencePath)
+    {
+        var results = new List<TemporalRisTrialResult>();
+        try
+        {
+            InitializeBatchRenderer(manager, experiment.width, experiment.height);
+            _captureTarget = new RenderTexture(experiment.width, experiment.height, 24, RenderTextureFormat.ARGB32)
+            {
+                name = "Temporal RIS One-Frame Trials",
+                enableRandomWrite = true
+            };
+            _captureTarget.Create();
+            _captureSource = new RenderTexture(experiment.width, experiment.height, 0, RenderTextureFormat.ARGB32);
+            _captureSource.Create();
+            manager.renderTextureCamera.targetTexture = _captureTarget;
+            manager.randomNoise = false;
+            manager.enableFrameAccumulation = true;
+            manager.enableAdaptiveSampling = false;
+            manager.TemporalDenoising.enabled = false;
+            manager.debugRenderMode = DebugRenderMode.FinalColor;
+            manager.numberOfPasses = 1;
+            manager._singleFrame = true;
+
+            // Compile/defer the production variant before counting trial warm-up frames.
+            ResetAccumulation(manager);
+            for (int warmup = 0; warmup < 4 && manager.AccumulatedFrameCount == 0; warmup++)
+            {
+                manager.RenderImage(_captureSource, _captureTarget);
+            }
+            ResetAccumulation(manager);
+
+            Color[] referencePixels = LoadCachedReferencePixels(referencePath);
+            foreach (int warmupFrames in experiment.temporalRisWarmupFrames)
+            {
+                for (int trial = 0; trial < experiment.temporalRisTrialsPerWarmup; trial++)
+                {
+                    int seed = experiment.temporalRisFirstSeed + trial;
+                    foreach (ExperimentVariant variant in experiment.variants)
+                    {
+                        ApplyExperimentOverrides(manager, variant.overrides);
+                        manager.CaptureRandomSeed = seed;
+                        ResetAccumulation(manager);
+                        manager.ResetCaptureSampleSequence();
+                        manager.ClearTemporalRisDiagnostics();
+                        for (int frame = 0; frame < warmupFrames; frame++)
+                        {
+                            manager.RenderImage(_captureSource, _captureTarget);
+                            SynchronizeDurationCaptureGpu();
+                        }
+
+                        manager.enableFrameAccumulation = false;
+                        if (manager.Lighting.TemporalRisEnabled)
+                        {
+                            manager.PreserveTemporalRisHistoryForNextNonAccumulatedFrame();
+                        }
+                        var stopwatch = Stopwatch.StartNew();
+                        manager.RenderImage(_captureSource, _captureTarget);
+                        SynchronizeDurationCaptureGpu();
+                        stopwatch.Stop();
+                        Color[] pixels = manager.ReadCurrentFinalColorPixels();
+                        VariantComparisonMetrics metrics = CalculateReferenceMetrics(pixels, referencePixels, true);
+                        results.Add(new TemporalRisTrialResult(warmupFrames, trial + 1, seed, variant.name,
+                            stopwatch.Elapsed.TotalMilliseconds, metrics.rgbRootMeanSquaredError, MeanLuminance(pixels)));
+                        manager.enableFrameAccumulation = true;
+                    }
+                }
+            }
+        }
+        finally
+        {
+            manager.CaptureRandomSeed = 1;
+            manager.enableFrameAccumulation = true;
+            ResetAccumulation(manager);
+            ReleaseCaptureTarget(manager.renderTextureCamera);
+        }
+
+        WriteTemporalRisOneFrameTrialReports(outputRoot, results);
+    }
+
+    private static float MeanLuminance(Color[] pixels)
+    {
+        double total = 0.0;
+        foreach (Color pixel in pixels)
+        {
+            total += 0.2126 * pixel.r + 0.7152 * pixel.g + 0.0722 * pixel.b;
+        }
+        return (float)(total / Math.Max(1, pixels.Length));
+    }
+
+    private static void WriteTemporalRisOneFrameTrialReports(string outputRoot, List<TemporalRisTrialResult> results)
+    {
+        var lines = new List<string>
+        {
+            "warmup_frames,trial,seed,variant,measured_render_ms,rgb_rmse,mean_linear_luminance"
+        };
+        foreach (TemporalRisTrialResult result in results)
+        {
+            lines.Add(string.Join(",", result.warmupFrames.ToString(CultureInfo.InvariantCulture),
+                result.trial.ToString(CultureInfo.InvariantCulture), result.seed.ToString(CultureInfo.InvariantCulture),
+                result.variant, result.milliseconds.ToString("R", CultureInfo.InvariantCulture),
+                result.rgbRmse.ToString("R", CultureInfo.InvariantCulture),
+                result.meanLuminance.ToString("R", CultureInfo.InvariantCulture)));
+        }
+        File.WriteAllLines(Path.Combine(outputRoot, "temporal_ris_one_frame_trials.csv"), lines);
+
+        var summary = new List<string> { "warmup_frames,variant,trials,mean_render_ms,render_ms_variance,mean_rgb_rmse,rgb_rmse_variance,mean_linear_luminance,luminance_variance" };
+        var warmupFramesSet = new HashSet<int>();
+        var variants = new HashSet<string>(StringComparer.Ordinal);
+        foreach (TemporalRisTrialResult result in results)
+        {
+            warmupFramesSet.Add(result.warmupFrames);
+            variants.Add(result.variant);
+        }
+        foreach (int warmupFrames in warmupFramesSet)
+        {
+            foreach (string variant in variants)
+            {
+                List<TemporalRisTrialResult> group = results.FindAll(result => result.warmupFrames == warmupFrames && result.variant == variant);
+                var milliseconds = group.ConvertAll(result => result.milliseconds);
+                var rmse = group.ConvertAll(result => result.rgbRmse);
+                var luminance = group.ConvertAll(result => (double)result.meanLuminance);
+                summary.Add(string.Join(",", warmupFrames.ToString(CultureInfo.InvariantCulture), variant,
+                    group.Count.ToString(CultureInfo.InvariantCulture), Mean(group.ConvertAll(result => result.milliseconds)).ToString("R", CultureInfo.InvariantCulture),
+                    Variance(milliseconds).ToString("R", CultureInfo.InvariantCulture),
+                    Mean(rmse).ToString("R", CultureInfo.InvariantCulture),
+                    Variance(rmse).ToString("R", CultureInfo.InvariantCulture),
+                    Mean(luminance).ToString("R", CultureInfo.InvariantCulture),
+                    Variance(luminance).ToString("R", CultureInfo.InvariantCulture)));
+            }
+        }
+        File.WriteAllLines(Path.Combine(outputRoot, "temporal_ris_one_frame_summary.csv"), summary);
+    }
+
+    private static double Variance(List<double> values)
+    {
+        if (values.Count < 2) return 0.0;
+        double mean = Mean(values);
+        double sum = 0.0;
+        foreach (double value in values)
+        {
+            double delta = value - mean;
+            sum += delta * delta;
+        }
+        return sum / (values.Count - 1);
+    }
+
+    private static double Mean(List<double> values)
+    {
+        double sum = 0.0;
+        foreach (double value in values) sum += value;
+        return values.Count == 0 ? 0.0 : sum / values.Count;
     }
 
     private static void GenerateReference(GameManager manager, string scenePath, string referenceRoot,
@@ -1399,7 +1596,7 @@ public static class RayTracingSceneCapture
     private static void ResetAccumulation(GameManager manager)
     {
         MethodInfo reset = typeof(GameManager).GetMethod("ResetFrameAccumulation",
-            BindingFlags.Instance | BindingFlags.NonPublic);
+            BindingFlags.Instance | BindingFlags.NonPublic, null, Type.EmptyTypes, null);
         reset?.Invoke(manager, null);
     }
 

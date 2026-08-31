@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "label": "temporal_ris_stable_direct_light_one_frame_trials",
+  "scenes": ["Assets/Scenes/Generated/TemporalRisStableDirectLight.unity"],
+  "width": 1024,
+  "height": 1024,
+  "samples": 1,
+  "durationSeconds": 0.0,
+  "cooldownSeconds": 0.0,
+  "referenceRoot": "Assets/Editor/RayTracingSceneReferences",
+  "temporalRisWarmupFrames": [1, 2, 4, 8],
+  "temporalRisTrialsPerWarmup": 32,
+  "temporalRisFirstSeed": 1,
+  "variants": [
+    { "name": "local_ris", "overrides": [
+      { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+      { "path": "Lighting.InitialRisCandidateCount", "value": "4" },
+      { "path": "Lighting.TemporalRisEnabled", "value": "false" },
+      { "path": "enableAdaptiveSampling", "value": "false" }
+    ] },
+    { "name": "temporal_ris", "overrides": [
+      { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+      { "path": "Lighting.InitialRisCandidateCount", "value": "4" },
+      { "path": "Lighting.TemporalRisEnabled", "value": "true" },
+      { "path": "Lighting.TemporalRisHistoryMCap", "value": "1" },
+      { "path": "enableAdaptiveSampling", "value": "false" }
+    ] }
+  ]
+}

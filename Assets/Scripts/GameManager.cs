@@ -222,6 +222,10 @@ public class GameManager : MonoBehaviour
 
     public bool randomNoise = false;
 
+    // Capture-only deterministic seed override used by independent estimator trials.
+    public int CaptureRandomSeed { get; set; } = 1;
+    private bool _preserveTemporalRisHistoryForNextNonAccumulatedFrame;
+
     public Texture skyboxTexture;
 
     [Header("Environment Lighting")]
@@ -1806,8 +1810,16 @@ public class GameManager : MonoBehaviour
 
     internal void ResetFrameAccumulation()
     {
+        ResetFrameAccumulation(true);
+    }
+
+    internal void ResetFrameAccumulation(bool invalidateTemporalRisHistory)
+    {
         _causticsManager.ResetProgressiveRadius();
-        _temporalRisManager.InvalidateHistory();
+        if (invalidateTemporalRisHistory)
+        {
+            _temporalRisManager.InvalidateHistory();
+        }
         _nextLiveFrameTimestamp = 0;
         _accumulatedFrameCount = 0;
         _hasAccumulationStateHash = false;
@@ -1827,6 +1839,16 @@ public class GameManager : MonoBehaviour
     public void SetRenderingPaused(bool paused)
     {
         _renderingPaused = paused;
+    }
+
+    public void PreserveTemporalRisHistoryForNextNonAccumulatedFrame()
+    {
+        _preserveTemporalRisHistoryForNextNonAccumulatedFrame = true;
+    }
+
+    public void ResetCaptureSampleSequence()
+    {
+        _renderedFrameCount = 0;
     }
 
     public bool AdaptiveCaptureDiagnosticsEnabled => _adaptiveCaptureDiagnostics;
@@ -2262,7 +2284,8 @@ public class GameManager : MonoBehaviour
         }
         else
         {
-            ResetFrameAccumulation();
+            ResetFrameAccumulation(!_preserveTemporalRisHistoryForNextNonAccumulatedFrame);
+            _preserveTemporalRisHistoryForNextNonAccumulatedFrame = false;
         }
         
         frame.computeShader = frame.useDedicatedCausticsDebugKernel ? causticsShader
@@ -3636,7 +3659,7 @@ public class GameManager : MonoBehaviour
         }
         else
         {
-            targetShader.SetInt(Seed, 1);
+            targetShader.SetInt(Seed, Mathf.Max(1, CaptureRandomSeed));
         }
 
         targetShader.SetInt(NumberOfPasses, numberOfPasses);

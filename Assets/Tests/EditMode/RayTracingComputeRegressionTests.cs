@@ -631,6 +631,8 @@ namespace GPURayTracing.Tests
 
             Assert.That(generator, Does.Contain("CreateTemporalRisStressScene()"));
             Assert.That(generator, Does.Contain("Benchmark_TemporalRisStress"));
+            Assert.That(generator, Does.Contain("CreateTemporalRisStableDirectLightScene()"));
+            Assert.That(generator, Does.Contain("Benchmark_TemporalRisStableDirectLight"));
             Assert.That(manifest, Does.Contain("TemporalRisStress.unity"));
             Assert.That(manifest, Does.Contain("\"samples\": 200"));
             Assert.That(manifest, Does.Contain("\"name\": \"local_ris\""));
@@ -641,6 +643,19 @@ namespace GPURayTracing.Tests
                 "Assets/Editor/RayTracingExperiments/temporal_ris_candidate_split_sweep_fixed_work.json");
             Assert.That(sweep, Does.Contain("Lighting.TemporalRisHistoryMCap"));
             Assert.That(sweep, Does.Contain("temporal_local_1_history_4"));
+
+            string stableProgressive = System.IO.File.ReadAllText(
+                "Assets/Editor/RayTracingExperiments/temporal_ris_stable_direct_light_fixed_work.json");
+            Assert.That(stableProgressive, Does.Contain("TemporalRisStableDirectLight.unity"));
+            Assert.That(stableProgressive, Does.Contain("\"samples\": 200"));
+            Assert.That(stableProgressive, Does.Contain("\"name\": \"local_ris\""));
+            Assert.That(stableProgressive, Does.Contain("\"name\": \"temporal_ris\""));
+
+            string stableTrials = System.IO.File.ReadAllText(
+                "Assets/Editor/RayTracingExperiments/temporal_ris_stable_direct_light_one_frame_trials.json");
+            Assert.That(stableTrials, Does.Contain("TemporalRisStableDirectLight.unity"));
+            Assert.That(stableTrials, Does.Contain("\"temporalRisWarmupFrames\": [1, 2, 4, 8]"));
+            Assert.That(stableTrials, Does.Contain("\"temporalRisTrialsPerWarmup\": 32"));
         }
 
         [Test]

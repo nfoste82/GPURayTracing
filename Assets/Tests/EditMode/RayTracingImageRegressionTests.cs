@@ -437,6 +437,65 @@ namespace GPURayTracing.Tests
             }
         }
 
+        [Test]
+        public void InitialRis_EnvironmentMeanMatchesOrdinaryNeeAndBrdfSkyEstimator()
+        {
+            SphereData[] spheres =
+            {
+                Sphere(new Vector3(0.0f, 0.75f, 1.5f), new Vector3(0.45f, 0.62f, 0.78f),
+                    0.75f, 0.2f, 1.0f, 1.0f, 0)
+            };
+            Vector3 cameraPosition = new Vector3(0.0f, 1.6f, -4.5f);
+            Quaternion cameraRotation = Quaternion.Euler(4.0f, 0.0f, 0.0f);
+            Color sky = new Color(1.3f, 1.0f, 0.72f, 1.0f);
+            Vector4[] reference = RenderSignature(spheres, false, cameraPosition, cameraRotation,
+                width: 16, height: 16, numberOfPasses: 1024, skyboxColor: sky,
+                environmentLightingEnabled: true, lightSamplingStrategy: 0, applyToneMapping: false);
+
+            for (int candidateCount = 1; candidateCount <= 8; candidateCount *= 2)
+            {
+                Vector4[] ris = RenderSignature(spheres, false, cameraPosition, cameraRotation,
+                    width: 16, height: 16, numberOfPasses: 1024, skyboxColor: sky,
+                    environmentLightingEnabled: true, lightSamplingStrategy: 2,
+                    initialRisCandidateCount: candidateCount, applyToneMapping: false);
+
+                AssertMeanRadianceMatches(reference, ris, 0.02f,
+                    $"environment RIS candidate count {candidateCount}");
+            }
+        }
+
+        [Test]
+        public void InitialRis_MixedSphereTriangleAndEnvironmentMeanMatchesOrdinaryNee()
+        {
+            CreateEmissiveQuad(out MeshTriangleData[] triangles, out MeshInfoData[] meshes,
+                out BvhNodeData[] bvhNodes, out LightData[] lights, true);
+            Array.Resize(ref lights, 2);
+            lights[1] = SphereLight(new Vector3(-2.0f, 2.6f, -0.8f), new Vector3(3.0f, 1.2f, 0.5f), 0.35f);
+            SphereData[] spheres =
+            {
+                Sphere(new Vector3(0.0f, 0.75f, 1.5f), new Vector3(0.75f, 0.35f, 0.12f),
+                    0.75f, 0.2f, 1.0f, 1.0f, 0)
+            };
+            Vector3 cameraPosition = new Vector3(0.0f, 1.6f, -4.5f);
+            Quaternion cameraRotation = Quaternion.Euler(4.0f, 0.0f, 0.0f);
+            Color sky = new Color(0.24f, 0.30f, 0.36f, 1.0f);
+            Vector4[] reference = RenderSignature(spheres, false, cameraPosition, cameraRotation,
+                triangles, meshes, bvhNodes, lights, width: 16, height: 16, numberOfPasses: 16384,
+                skyboxColor: sky, environmentLightingEnabled: true, lightSamplingStrategy: 0,
+                applyToneMapping: false);
+
+            for (int candidateCount = 1; candidateCount <= 8; candidateCount *= 2)
+            {
+                Vector4[] ris = RenderSignature(spheres, false, cameraPosition, cameraRotation,
+                    triangles, meshes, bvhNodes, lights, width: 16, height: 16, numberOfPasses: 16384,
+                    skyboxColor: sky, environmentLightingEnabled: true, lightSamplingStrategy: 2,
+                    initialRisCandidateCount: candidateCount, applyToneMapping: false);
+
+                AssertMeanRadianceMatches(reference, ris, 0.035f,
+                    $"mixed RIS candidate count {candidateCount}");
+            }
+        }
+
         [TestCase(0)]
         [TestCase(1)]
         [TestCase(2)]
@@ -816,6 +875,30 @@ namespace GPURayTracing.Tests
             return cdf;
         }
 
+        private static void CreateUniformEnvironmentCdf(int width, int height,
+            out float[] conditional, out float[] marginal)
+        {
+            conditional = new float[width * height];
+            marginal = new float[height];
+            float totalWeight = 0.0f;
+            for (int y = 0; y < height; y++)
+            {
+                float rowWeight = Mathf.Sin((y + 0.5f) * Mathf.PI / height);
+                totalWeight += rowWeight;
+                marginal[y] = totalWeight;
+                for (int x = 0; x < width; x++)
+                {
+                    conditional[y * width + x] = (x + 1.0f) / width;
+                }
+            }
+
+            for (int y = 0; y < height; y++)
+            {
+                marginal[y] /= totalWeight;
+            }
+            marginal[height - 1] = 1.0f;
+        }
+
         private static float GetAverageLuminance(Vector4[] signature)
         {
             float luminance = 0.0f;
@@ -866,7 +949,8 @@ namespace GPURayTracing.Tests
             bool includeReceiver = true,
             int lightSamplingStrategy = 0,
             int initialRisCandidateCount = 1,
-            bool applyToneMapping = true)
+            bool applyToneMapping = true,
+            bool environmentLightingEnabled = false)
         {
             if (!SystemInfo.supportsComputeShaders)
             {
@@ -913,7 +997,14 @@ namespace GPURayTracing.Tests
             ComputeBuffer topLevelBuffer = CreateDummyBuffer(48);
             ComputeBuffer shadowBuffer = CreateDummyBuffer(48);
             ComputeBuffer meshLightCdfBuffer = CreateBuffer(CreateMeshLightTriangleCdf(triangles, lights), sizeof(float));
-            ComputeBuffer environmentCdfBuffer = CreateDummyBuffer(4);
+            const int environmentCdfWidth = 4;
+            const int environmentCdfHeight = 4;
+            CreateUniformEnvironmentCdf(environmentCdfWidth, environmentCdfHeight,
+                out float[] environmentConditionalCdf, out float[] environmentMarginalCdf);
+            ComputeBuffer environmentConditionalCdfBuffer = environmentLightingEnabled
+                ? CreateBuffer(environmentConditionalCdf, sizeof(float)) : CreateDummyBuffer(4);
+            ComputeBuffer environmentMarginalCdfBuffer = environmentLightingEnabled
+                ? CreateBuffer(environmentMarginalCdf, sizeof(float)) : CreateDummyBuffer(4);
             ComputeBuffer causticPhotonBuffer = CreateDummyBuffer(40);
             ComputeBuffer causticMetadataBuffer = CreateDummyBuffer(24);
             ComputeBuffer causticGridHeadBuffer = CreateDummyBuffer(4);
@@ -951,15 +1042,15 @@ namespace GPURayTracing.Tests
                 shader.SetTexture(kernel, "_MeshMetallicRoughnessTextures", meshDataTextures);
                 shader.SetTexture(kernel, "_MeshNormalTextures", meshNormalTextures);
                 shader.SetTexture(kernel, "_MeshParallaxTextures", meshParallaxTextures);
-                // The production shader always declares environment CDF resources. These
-                // fixtures intentionally test the non-environment path, so bind harmless dummy
-                // buffers and disable the feature explicitly.
-                shader.SetInt("_EnvironmentLightEnabled", 0);
+                shader.SetInt("_EnvironmentLightEnabled", environmentLightingEnabled ? 1 : 0);
                 shader.SetInt("_EnvironmentLightSampleCount", 1);
-                shader.SetInt("_EnvironmentCdfWidth", 1);
-                shader.SetInt("_EnvironmentCdfHeight", 1);
-                shader.SetBuffer(kernel, "_EnvironmentConditionalCdf", environmentCdfBuffer);
-                shader.SetBuffer(kernel, "_EnvironmentMarginalCdf", environmentCdfBuffer);
+                shader.SetFloat("_EnvironmentHighlightThreshold", 0.0f);
+                shader.SetFloat("_EnvironmentHighlightSoftKnee", 0.0f);
+                shader.SetFloat("_EnvironmentHighlightIntensity", 0.0f);
+                shader.SetInt("_EnvironmentCdfWidth", environmentLightingEnabled ? environmentCdfWidth : 1);
+                shader.SetInt("_EnvironmentCdfHeight", environmentLightingEnabled ? environmentCdfHeight : 1);
+                shader.SetBuffer(kernel, "_EnvironmentConditionalCdf", environmentConditionalCdfBuffer);
+                shader.SetBuffer(kernel, "_EnvironmentMarginalCdf", environmentMarginalCdfBuffer);
                 shader.SetBuffer(kernel, "_Spheres", sphereBuffer);
                 shader.SetBuffer(kernel, "_Lights", lightBuffer);
                 shader.SetBuffer(kernel, "_Triangles", triangleBuffer);
@@ -1051,7 +1142,8 @@ namespace GPURayTracing.Tests
                 topLevelBuffer.Release();
                 shadowBuffer.Release();
                 meshLightCdfBuffer.Release();
-                environmentCdfBuffer.Release();
+                environmentConditionalCdfBuffer.Release();
+                environmentMarginalCdfBuffer.Release();
                 causticPhotonBuffer.Release();
                 causticMetadataBuffer.Release();
                 causticGridHeadBuffer.Release();

@@ -3383,6 +3383,7 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
             float materialPdf;
             float3 brdf = EvaluateMaterialBrdf(ray, hit, ptToOffset, materialPdf);
             float misWeight = useRisCandidate ? risCandidate.risScale * environmentPdf
+                * PowerHeuristic(risCandidate.proposalPdf, materialPdf)
                 : PowerHeuristic(environmentPdf, materialPdf);
             lightTotal += GetSkyboxColor(ptToOffset) * _SkyboxLight.xyz * shadowTransmittance
                 * brdf * rayNormalDot * misWeight / environmentPdf;
@@ -3405,7 +3406,9 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
         if ((light.type == LightTypeTriangle || light.type == LightTypeSunTriangle) && lightShapePdf > 0.0f)
         {
             float lightPdf = lightSelectionPdf * triangleSelectionProbability * lightShapePdf;
-            float misWeight = useRisCandidate ? risCandidate.risScale : PowerHeuristic(lightTechniqueSampleCount * lightPdf, materialPdf);
+            float misWeight = useRisCandidate ? risCandidate.risScale
+                * PowerHeuristic(risCandidate.proposalPdf * triangleSelectionProbability * lightShapePdf, materialPdf)
+                : PowerHeuristic(lightTechniqueSampleCount * lightPdf, materialPdf);
             float distanceScale = max(1.0f, distanceToLight * distanceToLight * max(0.001f, _LightFalloffScale));
             float lightStrength = saturate(dot(light.normal, -ptToOffset)) * light.area / distanceScale;
             if (light.type == LightTypeSunTriangle)
@@ -3668,6 +3671,7 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
             bool chooseEnvironment = sampleEnvironment && (lightCount <= 0 || rand(rngState) < branchPdf);
             float3 unshadowed = 0.0f;
             float proposalPdf = 0.0f;
+            float materialPdf = 0.0f;
             if (chooseEnvironment)
             {
                 uint y = SelectEnvironmentCdf(true, 0u, (uint)_EnvironmentCdfHeight, rand(rngState));
@@ -3686,7 +3690,6 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
                 candidate.distance = RayMaxDistance;
                 candidate.samplePosition = hit.position;
                 candidate.isEnvironment = 1;
-                float materialPdf;
                 float3 brdf = EvaluateMaterialBrdf(ray, hit, candidate.direction, materialPdf);
                 proposalPdf = branchPdf * candidate.environmentPdf;
                 unshadowed = GetSkyboxColor(candidate.direction) * _SkyboxLight.xyz * brdf
@@ -3744,7 +3747,6 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
                     candidate.distance = sqrt(distanceSquared);
                     candidate.direction = toLight / candidate.distance;
                 }
-                float materialPdf;
                 float3 materialResponse = EvaluateMaterialBrdf(ray, hit, candidate.direction, materialPdf);
                 float normalDotLight = saturate(dot(hit.normal, candidate.direction));
                 proposalPdf = branchPdf * selectionPdf;
@@ -3758,6 +3760,16 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
                 }
                 else if (directional) unshadowed = candidate.light.emission * materialResponse * normalDotLight;
                 else unshadowed = candidate.light.emission * GetDirectLightFalloff(candidate.distance, candidate.light.radius) * materialResponse * normalDotLight;
+            }
+
+            if (candidate.isEnvironment != 0)
+            {
+                unshadowed *= PowerHeuristic(proposalPdf, materialPdf);
+            }
+            else if (candidate.light.type == LightTypeTriangle || candidate.light.type == LightTypeSunTriangle)
+            {
+                float lightShapePdf = GetLightShapePdf(candidate.light, hit.position, candidate.samplePosition);
+                unshadowed *= PowerHeuristic(proposalPdf * candidate.triangleSelectionProbability * lightShapePdf, materialPdf);
             }
 
             float3 weightedContribution = proposalPdf > 1e-8f ? max(0.0f, unshadowed / proposalPdf) : 0.0f;
@@ -3897,6 +3909,16 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
     // For random strategies the per-draw weights already include the 1/drawCount averaging,
     // so no extra division is needed here.
     return accumulated;
+}
+
+float GetInitialRisProposalBranchPdf()
+{
+    int proposalCount = _NumLights > 0 ? 1 : 0;
+    if (_EnvironmentLightEnabled != 0 && _EnvironmentCdfWidth > 0 && _EnvironmentCdfHeight > 0)
+    {
+        proposalCount++;
+    }
+    return proposalCount > 0 ? 1.0f / proposalCount : 0.0f;
 }
 
 float GetLightPdfForHit(float3 shadingPosition, RayHit lightHit, bool softShadows, out int sampleCount)
@@ -4575,6 +4597,7 @@ float3 TracePathWithDirectLight(Ray ray, uint2 pixel, inout uint rngState, out f
     float3 previousSurfacePosition = float3(0.0f, 0.0f, 0.0f);
     float previousMaterialPdf = 0.0f;
     bool previousDirectLightSampled = false;
+    bool previousInitialRisSampled = false;
     bool previousNearDeltaSpecular = false;
     bool previousSoftShadows = false;
     bool canGatherCaustics = true;
@@ -4616,6 +4639,7 @@ float3 TracePathWithDirectLight(Ray ray, uint2 pixel, inout uint rngState, out f
             ray.origin = eventPosition + ray.direction * 0.001f;
             previousMaterialPdf = 0.0f;
             previousDirectLightSampled = false;
+            previousInitialRisSampled = false;
             if (!HasPathEnergy(throughput) || !ApplyRussianRoulette(throughput, bounce, rngState))
             {
                 break;
@@ -4639,7 +4663,9 @@ float3 TracePathWithDirectLight(Ray ray, uint2 pixel, inout uint rngState, out f
                 float environmentPdf = GetEnvironmentPdf(ray.direction);
                 if (environmentPdf > 0.0f)
                 {
-                    misWeight = PowerHeuristic(previousMaterialPdf, _EnvironmentLightSampleCount * environmentPdf);
+                    float directPdf = _EnvironmentLightSampleCount * environmentPdf;
+                    if (previousInitialRisSampled) directPdf *= GetInitialRisProposalBranchPdf();
+                    misWeight = PowerHeuristic(previousMaterialPdf, directPdf);
                 }
             }
             radiance += throughput * GetTerminalHitColor(ray, hit) * misWeight;
@@ -4656,6 +4682,7 @@ float3 TracePathWithDirectLight(Ray ray, uint2 pixel, inout uint rngState, out f
                 float lightPdf = GetLightPdfForHit(previousSurfacePosition, hit, previousSoftShadows, lightSampleCount);
                 if (lightPdf > 0.0f)
                 {
+                    if (previousInitialRisSampled) lightPdf *= GetInitialRisProposalBranchPdf();
                     misWeight = PowerHeuristic(previousMaterialPdf, lightSampleCount * lightPdf);
                 }
             }
@@ -4696,6 +4723,7 @@ float3 TracePathWithDirectLight(Ray ray, uint2 pixel, inout uint rngState, out f
         previousSurfacePosition = hit.position;
         previousMaterialPdf = scatter.materialPdf;
         previousDirectLightSampled = sampledDirectLight;
+        previousInitialRisSampled = sampledInitialRis;
         previousNearDeltaSpecular = IsNearDeltaSpecular(hit);
         canGatherCaustics = canGatherCaustics && IsGlassMaterial(hit);
         ray = scatter.ray;

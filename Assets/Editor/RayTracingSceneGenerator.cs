@@ -106,6 +106,7 @@ public static class RayTracingSceneGenerator
             CreateShadowBlockersScene();
             CreateManyLightsScene();
             CreateTemporalRisStressScene();
+            CreateTemporalRisStableDirectLightScene();
             CreateManyMeshesScene();
             CreateGlassScene();
             CreateGlassTransmissionScene();
@@ -1222,6 +1223,52 @@ public static class RayTracingSceneGenerator
                 new Vector3(x, 1.35f, z), Vector3.zero, new Vector3(0.75f, 2.7f, 0.75f),
                 new Color32(180, 180, 180, 255), RayMaterial.MaterialType.Diffuse, 0.1f, 1.0f);
         }
+
+        Save(context.Scene, sceneName);
+    }
+
+    // Separates temporal light-selection coherence from visibility discontinuities. The open
+    // receiver dominates the image; the right-side strip has one controlled penumbra.
+    private static void CreateTemporalRisStableDirectLightScene()
+    {
+        const string sceneName = "Benchmark_TemporalRisStableDirectLight";
+        if (ShouldSkipExistingScene(sceneName))
+        {
+            return;
+        }
+
+        var context = CreateBaseScene(new SceneSettings
+        {
+            SceneName = sceneName,
+            CameraPosition = new Vector3(0.0f, 7.2f, -16.5f),
+            CameraEuler = new Vector3(21.5f, 0.0f, 0.0f),
+            FieldOfView = 34.0f,
+            NumBounces = 2,
+            ShadowQuality = 0,
+            DirectionalLightIntensity = 0.0f,
+            EnableEnvironmentLighting = false,
+            EnableSpatialDenoising = false,
+            LightFalloffScale = 0.075f,
+            ShadowBvhMinObjectCount = 1024
+        });
+
+        AddFloor(context.Root, new Vector2(0.0f, 5.0f), new Vector2(20.0f, 20.0f), 0.12f, "Diffuse Receiver");
+        for (var i = 0; i < 20; i++)
+        {
+            float angle = i * Mathf.PI * 2.0f / 20.0f;
+            float radius = 6.8f + (i % 4) * 0.8f;
+            float intensity = 1.2f + (i % 5) * 0.65f;
+            Color color = Color.HSVToRGB((i * 0.61803398875f) % 1.0f, 0.3f + (i % 3) * 0.12f, 1.0f);
+            AddLight(context.Root, $"Stable Competing Light {i + 1}",
+                new Vector3(Mathf.Cos(angle) * radius, 4.8f + (i % 3) * 0.55f, Mathf.Sin(angle) * radius + 4.8f),
+                0.16f + (i % 3) * 0.04f, color, intensity);
+        }
+
+        // This single blocker affects only a narrow screen-right receiver strip, so the open
+        // region can establish whether reprojected selection itself provides an early-frame gain.
+        AddPrimitiveMesh(context.Root, "Controlled Penumbra Blocker", RayMeshPrimitive.PrimitiveType.Cube,
+            new Vector3(5.2f, 1.6f, 4.1f), Vector3.zero, new Vector3(0.8f, 3.2f, 2.6f),
+            new Color32(175, 175, 175, 255), RayMaterial.MaterialType.Diffuse, 0.1f, 1.0f);
 
         Save(context.Scene, sceneName);
     }
