@@ -598,13 +598,49 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
-        public void TemporalRis_IsUnavailableWithoutReprojectionAndReceiverValidation()
+        public void TemporalRis_UsesValidatedReprojectedReservoirHistory()
         {
             string source = System.IO.File.ReadAllText("Assets/Scripts/RayTracingShared.hlsl");
             string manager = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+            string temporalManager = System.IO.File.ReadAllText("Assets/Scripts/Lighting/TemporalRisManager.cs");
 
-            Assert.That(source, Does.Not.Contain("TemporalRis"));
-            Assert.That(manager, Does.Not.Contain("TemporalRis"));
+            Assert.That(source, Does.Contain("_TemporalRisPreviousReservoir"));
+            Assert.That(source, Does.Contain("RWStructuredBuffer<TemporalRisReservoir> _TemporalRisNextReservoir"));
+            Assert.That(source, Does.Contain("GetTemporalRisPreviousPixel"));
+            Assert.That(source, Does.Contain("StoreTemporalRisReservoir"));
+            Assert.That(source, Does.Contain("_TemporalRisHistoryValid"));
+            Assert.That(source, Does.Contain("ReprojectTemporalRisCandidate"));
+            Assert.That(source, Does.Contain("retainedPreviousFraction"));
+            Assert.That(source, Does.Contain("GetInitialRisReservoirScale"));
+            Assert.That(source, Does.Contain("GetTemporalRisMergedWeight"));
+            Assert.That(manager, Does.Contain("ShouldRunTemporalRis"));
+            Assert.That(manager, Does.Contain("TemporalRisManager"));
+            Assert.That(manager, Does.Contain("_temporalRisManager.InvalidateHistory()"));
+            Assert.That(temporalManager, Does.Contain("gameManager.Lighting.InitialRisCandidateCount + gameManager.Lighting.TemporalRisHistoryMCap"));
+            Assert.That(temporalManager, Does.Contain("public void InvalidateHistory()"));
+            Assert.That(source, Does.Contain("_TemporalRisDiagnostics"));
+            Assert.That(temporalManager, Does.Contain("DiagnosticsCount = 10"));
+        }
+
+        [Test]
+        public void TemporalRis_StaticDirectLightBenchmark_UsesComparableVariants()
+        {
+            string generator = System.IO.File.ReadAllText("Assets/Editor/RayTracingSceneGenerator.cs");
+            string manifest = System.IO.File.ReadAllText(
+                "Assets/Editor/RayTracingExperiments/temporal_ris_static_direct_light_fixed_work.json");
+
+            Assert.That(generator, Does.Contain("CreateTemporalRisStressScene()"));
+            Assert.That(generator, Does.Contain("Benchmark_TemporalRisStress"));
+            Assert.That(manifest, Does.Contain("TemporalRisStress.unity"));
+            Assert.That(manifest, Does.Contain("\"samples\": 200"));
+            Assert.That(manifest, Does.Contain("\"name\": \"local_ris\""));
+            Assert.That(manifest, Does.Contain("\"name\": \"temporal_ris\""));
+            Assert.That(manifest, Does.Contain("\"path\": \"Lighting.TemporalRisEnabled\", \"value\": \"false\""));
+            Assert.That(manifest, Does.Contain("\"path\": \"Lighting.TemporalRisEnabled\", \"value\": \"true\""));
+            string sweep = System.IO.File.ReadAllText(
+                "Assets/Editor/RayTracingExperiments/temporal_ris_candidate_split_sweep_fixed_work.json");
+            Assert.That(sweep, Does.Contain("Lighting.TemporalRisHistoryMCap"));
+            Assert.That(sweep, Does.Contain("temporal_local_1_history_4"));
         }
 
         [Test]
@@ -908,6 +944,12 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("candidate.durationSeconds > selectedMetadata.durationSeconds"));
             Assert.That(source, Does.Contain("CultureInfo.InvariantCulture, out durationSeconds"));
             Assert.That(source, Does.Contain("WriteReferenceMetadata"));
+            Assert.That(source, Does.Contain("manager.Lighting.TemporalRisEnabled = false"));
+            Assert.That(source, Does.Contain("schemaVersion = 2"));
+            Assert.That(source, Does.Contain("sceneSha256"));
+            Assert.That(source, Does.Contain("shaderSha256"));
+            Assert.That(source, Does.Contain("settingsSha256"));
+            Assert.That(source, Does.Contain("sourceRevision"));
         }
 
         [Test]
@@ -960,6 +1002,9 @@ namespace GPURayTracing.Tests
             Assert.That(temporal, Does.Contain("AddHash(hash, _gameManager.Lighting.InitialRisCandidateCount)"));
             Assert.That(lighting, Does.Contain("TemporalRisEnabled"));
             Assert.That(manager, Does.Contain("Lighting.TemporalRisEnabled = settings.TemporalRisEnabled"));
+            Assert.That(lighting, Does.Contain("TemporalRisHistoryMCap"));
+            Assert.That(settings, Does.Contain("TemporalRisHistoryMCap = 1"));
+            Assert.That(manager, Does.Contain("Lighting.TemporalRisHistoryMCap = settings.TemporalRisHistoryMCap"));
         }
 
         [Test]
@@ -978,7 +1023,7 @@ namespace GPURayTracing.Tests
             }
 
             int kernel = shader.FindKernel("CSRegressionProbe");
-            var buffer = new ComputeBuffer(42, sizeof(float) * 4);
+            var buffer = new ComputeBuffer(44, sizeof(float) * 4);
             var sphereBuffer = new ComputeBuffer(1, 64);
             try
             {
@@ -997,7 +1042,7 @@ namespace GPURayTracing.Tests
                 shader.SetBuffer(kernel, "RegressionResults", buffer);
                 shader.Dispatch(kernel, 1, 1, 1);
 
-                var results = new Vector4[42];
+                var results = new Vector4[44];
                 buffer.GetData(results);
 
                 AssertVector(results[0], new Vector4(0.70710677f, 0.70710677f, 0.0f, 1.0f), "reflection");
@@ -1043,6 +1088,9 @@ namespace GPURayTracing.Tests
                 AssertVector(results[39], new Vector4(0.04f, 0.04f, 0.04f, 0.04f), "glass F0 is independent of opacity and color");
                 AssertVector(results[40], new Vector4(0.232f, 0.232f, 1.0f, 1.0f), "glass specular minimum controls Fresnel reflection");
                 AssertVector(results[41], new Vector4(0.0f, -1.0f, 0.0f, 1.0f), "sphere inside hit uses inward shading and outward geometric normals");
+                AssertVector(results[42], new Vector4(1.25f, 2.0f, 1.1111111f, 0.8333333f),
+                    "local and temporal RIS reservoir normalization", 0.0002f);
+                AssertVector(results[43], Vector4.zero, "temporal RIS invalid-history rejection");
             }
             finally
             {

@@ -87,6 +87,10 @@ public sealed class GameManagerEditor : Editor
             {
                 DrawLightingProperty("initialRisCandidateCount", "Initial RIS Candidate Count");
                 DrawLightingProperty("temporalRisEnabled", "Temporal RIS Reuse");
+                if (serializedObject.FindProperty("_lightingManager._temporalRisEnabled").boolValue)
+                {
+                    DrawLightingProperty("temporalRisHistoryMCap", "Temporal RIS History M Cap");
+                }
             }
             DrawLightingProperty("lightFalloffScale", "Local Light Falloff Scale");
             DrawDirectionalLighting(manager);

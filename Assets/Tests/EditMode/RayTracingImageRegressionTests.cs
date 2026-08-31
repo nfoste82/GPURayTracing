@@ -411,6 +411,32 @@ namespace GPURayTracing.Tests
             }
         }
 
+        [Test]
+        public void InitialRis_TriangleLightMeanMatchesOrdinaryNeeAndBrdfHitEstimator()
+        {
+            CreateEmissiveQuad(out MeshTriangleData[] triangles, out MeshInfoData[] meshes,
+                out BvhNodeData[] bvhNodes, out LightData[] lights, true);
+            Vector4[] reference = RenderSignature(
+                new[] { Sphere(new Vector3(0.0f, 0.75f, 1.5f), new Vector3(0.75f, 0.35f, 0.12f),
+                    0.75f, 0.2f, 1.0f, 1.0f, 0) },
+                false, new Vector3(0.0f, 1.6f, -4.5f), Quaternion.Euler(4.0f, 0.0f, 0.0f),
+                triangles, meshes, bvhNodes, lights, width: 16, height: 16, numberOfPasses: 1024,
+                lightSamplingStrategy: 0, applyToneMapping: false);
+
+            for (int candidateCount = 1; candidateCount <= 8; candidateCount *= 2)
+            {
+                Vector4[] ris = RenderSignature(
+                    new[] { Sphere(new Vector3(0.0f, 0.75f, 1.5f), new Vector3(0.75f, 0.35f, 0.12f),
+                        0.75f, 0.2f, 1.0f, 1.0f, 0) },
+                    false, new Vector3(0.0f, 1.6f, -4.5f), Quaternion.Euler(4.0f, 0.0f, 0.0f),
+                    triangles, meshes, bvhNodes, lights, width: 16, height: 16, numberOfPasses: 1024,
+                    lightSamplingStrategy: 2, initialRisCandidateCount: candidateCount, applyToneMapping: false);
+
+                AssertMeanRadianceMatches(reference, ris, 0.02f,
+                    $"triangle-light RIS candidate count {candidateCount}");
+            }
+        }
+
         [TestCase(0)]
         [TestCase(1)]
         [TestCase(2)]
@@ -801,6 +827,22 @@ namespace GPURayTracing.Tests
             return luminance / signature.Length;
         }
 
+        private static void AssertMeanRadianceMatches(Vector4[] reference, Vector4[] actual,
+            float relativeTolerance, string scene)
+        {
+            Vector4 expectedMean = reference[0];
+            Vector4 actualMean = actual[0];
+            for (int channel = 0; channel < 3; channel++)
+            {
+                float expected = expectedMean[channel];
+                float observed = actualMean[channel];
+                float relativeError = Mathf.Abs(observed - expected) / Mathf.Max(0.01f, Mathf.Abs(expected));
+                Assert.That(relativeError, Is.LessThanOrEqualTo(relativeTolerance),
+                    $"{scene} changed mean radiance on channel {channel}: reference {expected}, actual {observed}, " +
+                    $"relative error {relativeError}.");
+            }
+        }
+
         private static Vector4[] RenderSignature(
             SphereData[] spheres,
             bool waterEnabled,
@@ -823,7 +865,8 @@ namespace GPURayTracing.Tests
             bool includePeak = false,
             bool includeReceiver = true,
             int lightSamplingStrategy = 0,
-            int initialRisCandidateCount = 1)
+            int initialRisCandidateCount = 1,
+            bool applyToneMapping = true)
         {
             if (!SystemInfo.supportsComputeShaders)
             {
@@ -975,20 +1018,23 @@ namespace GPURayTracing.Tests
                 if (caustics == null)
                 {
                     Graphics.CopyTexture(result, beauty);
-                    ComputeShader denoiser = AssetDatabase.LoadAssetAtPath<ComputeShader>(DenoiserShaderPath);
-                    Assert.That(denoiser, Is.Not.Null);
-                    int presentKernel = denoiser.FindKernel("CSPresent");
-                    denoiser.SetTexture(presentKernel, "InputBeauty", beauty);
-                    denoiser.SetTexture(presentKernel, "PresentationResult", result);
-                    denoiser.SetFloat("_Exposure", 1.0f);
-                    denoiser.SetInt("_EnableGlare", 0);
-                    denoiser.SetTexture(presentKernel, "GlareMip0", beauty);
-                    denoiser.SetTexture(presentKernel, "GlareMip1", beauty);
-                    denoiser.SetTexture(presentKernel, "GlareMip2", beauty);
-                    denoiser.SetTexture(presentKernel, "GlareMip3", beauty);
-                    denoiser.Dispatch(presentKernel, Mathf.CeilToInt(width / 8.0f), Mathf.CeilToInt(height / 8.0f), 1);
+                    if (applyToneMapping)
+                    {
+                        ComputeShader denoiser = AssetDatabase.LoadAssetAtPath<ComputeShader>(DenoiserShaderPath);
+                        Assert.That(denoiser, Is.Not.Null);
+                        int presentKernel = denoiser.FindKernel("CSPresent");
+                        denoiser.SetTexture(presentKernel, "InputBeauty", beauty);
+                        denoiser.SetTexture(presentKernel, "PresentationResult", result);
+                        denoiser.SetFloat("_Exposure", 1.0f);
+                        denoiser.SetInt("_EnableGlare", 0);
+                        denoiser.SetTexture(presentKernel, "GlareMip0", beauty);
+                        denoiser.SetTexture(presentKernel, "GlareMip1", beauty);
+                        denoiser.SetTexture(presentKernel, "GlareMip2", beauty);
+                        denoiser.SetTexture(presentKernel, "GlareMip3", beauty);
+                        denoiser.Dispatch(presentKernel, Mathf.CeilToInt(width / 8.0f), Mathf.CeilToInt(height / 8.0f), 1);
+                    }
                 }
-                return ReadSignature(result, width, height, probes, includePeak);
+                return ReadSignature(applyToneMapping ? result : beauty, width, height, probes, includePeak);
             }
             finally
             {

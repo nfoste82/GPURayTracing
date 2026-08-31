@@ -242,6 +242,19 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
         opaqueGlassHit.transmission,
         1.0f);
 
+    // Keep reservoir normalization checks in the GPU probe so local and temporal paths use the
+    // same helpers as the production renderer rather than duplicated CPU algebra.
+    float localReservoirScale = GetInitialRisReservoirScale(10.0f, 4, 2.0f);
+    float retainedHistoryWeight = GetTemporalRisMergedWeight(12.0f, 6, 2, 3.0f, 1.5f);
+    float combinedHistoryScale = GetInitialRisReservoirScale(8.0f + retainedHistoryWeight, 6, 1.5f);
+    float combinedLocalScale = GetInitialRisReservoirScale(8.0f + retainedHistoryWeight, 6, 2.0f);
+    RegressionResults[42] = float4(localReservoirScale, retainedHistoryWeight, combinedHistoryScale, combinedLocalScale);
+    RegressionResults[43] = float4(
+        GetTemporalRisMergedWeight(12.0f, 0, 2, 3.0f, 1.5f),
+        GetTemporalRisMergedWeight(12.0f, 6, 0, 3.0f, 1.5f),
+        GetTemporalRisMergedWeight(12.0f, 6, 2, 0.0f, 1.5f),
+        GetInitialRisReservoirScale(10.0f, 4, 0.0f));
+
     Sphere normalProbeSphere;
     normalProbeSphere.position = float3(0.0f, 0.0f, 0.0f);
     normalProbeSphere.color = 1.0f;

@@ -37,8 +37,11 @@ namespace PathTracing.Lighting
         [SerializeField, Range(1, 16), Tooltip("Number of local primary-surface RIS candidates. Applies to opaque ImportanceSampled direct lighting.")]
         private int _initialRisCandidateCount = 4;
 
-        [SerializeField, Tooltip("Enables temporal RIS reuse in the supported temporal rendering path.")]
+        [SerializeField, Tooltip("Reuses validated primary opaque direct-light reservoirs across static frames. Requires one path sample per pixel; fog, animated water, dynamic scenes, transmission, and highly smooth receivers fall back to local RIS.")]
         private bool _temporalRisEnabled = true;
+
+        [SerializeField, Range(0, 16), Tooltip("Maximum represented candidates retained from a validated temporal RIS reservoir. Use benchmark sweeps to tune this separately from the current-frame RIS candidate count.")]
+        private int _temporalRisHistoryMCap = 1;
 
         [SerializeField, Range(0.001f, 1.0f), Tooltip("Higher values make direct light fall off faster with distance.")]
         private float _lightFalloffScale = 0.16f;
@@ -81,6 +84,12 @@ namespace PathTracing.Lighting
         {
             get => _temporalRisEnabled;
             set => _temporalRisEnabled = value;
+        }
+
+        public int TemporalRisHistoryMCap
+        {
+            get => _temporalRisHistoryMCap;
+            set => _temporalRisHistoryMCap = Mathf.Clamp(value, 0, 16);
         }
 
         public float LightFalloffScale

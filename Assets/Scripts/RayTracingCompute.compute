@@ -2,6 +2,7 @@
 #pragma kernel CSMain
 #pragma multi_compile _ FOG_ENABLED
 #pragma multi_compile _ TERRAIN_ENABLED
+#pragma multi_compile _ TEMPORAL_RIS_ENABLED
 #define FINAL_COLOR_KERNEL
 #include "RayTracingShared.hlsl"
 

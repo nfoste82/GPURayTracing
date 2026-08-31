@@ -172,6 +172,7 @@ public class GameManager : MonoBehaviour
     public SpatialDenoisingManager SpatialDenoising => _spatialDenoisingManager ??= new SpatialDenoisingManager();
     public GlareManager Glare => _glareManager ??= new GlareManager();
     public TemporalDenoisingManager TemporalDenoising => _temporalDenoisingManager ??= new TemporalDenoisingManager();
+    private readonly TemporalRisManager _temporalRisManager = new ();
 
     [Tooltip("Builds a photon map for sphere and triangle-light caustics through glass, closed meshes, and the registered water volume. Disabled by default.")]
     public bool enableCaustics = false;
@@ -479,6 +480,12 @@ public class GameManager : MonoBehaviour
     public Water WaterInternal => WaterManager.Water;
     public Vector2Int DisplayTextureSize => _displayTextureSize;
     public int AccumulatedFrameCount => _accumulatedFrameCount;
+
+    public void ClearTemporalRisDiagnostics() => _temporalRisManager.ClearDiagnostics();
+
+    public uint[] ReadTemporalRisDiagnosticsForCapture() => _temporalRisManager.ReadDiagnostics();
+
+    public void InvalidateTemporalRisHistory() => _temporalRisManager.InvalidateHistory();
     public int SphereLightCount => Lighting.SphereLightCount;
     
     public int MeshLightCount
@@ -690,6 +697,7 @@ public class GameManager : MonoBehaviour
         Lighting.LightSampleCount = settings.LightSampleCount;
         Lighting.InitialRisCandidateCount = settings.InitialRisCandidateCount;
         Lighting.TemporalRisEnabled = settings.TemporalRisEnabled;
+        Lighting.TemporalRisHistoryMCap = settings.TemporalRisHistoryMCap;
         SpatialDenoising.enabled = settings.EnableSpatialDenoising;
         SpatialDenoising.iterations = settings.DenoiserIterations;
         SpatialDenoising.luminanceSigma = settings.DenoiserLuminanceSigma;
@@ -976,6 +984,8 @@ public class GameManager : MonoBehaviour
         _adaptiveDispatchArgumentsBuffer = new ComputeBuffer(3, sizeof(uint), ComputeBufferType.IndirectArguments);
         ResetFrameAccumulation();
         _temporalDenoisingManager.ResetHistory();
+        _temporalRisManager.ReleaseResources();
+        _temporalRisManager.ReleaseResources();
     }
 
     private RenderTexture CreateFeatureTexture(RenderTextureFormat format)
@@ -1060,6 +1070,12 @@ public class GameManager : MonoBehaviour
     {
         _temporalDenoisingManager.ReleaseResources();
     }
+
+    private bool ShouldRunTemporalRis() => Lighting.TemporalRisEnabled && numberOfPasses == 1
+        && !ShouldUseAdaptiveSampling() && debugRenderMode == DebugRenderMode.FinalColor;
+
+    private bool IsTemporalRisUnsupported() => IsFogEnabled() || _temporalDenoisingManager.DynamicSceneChanged || WaterManager.IsAnimated;
+
 
     private void Update()
     {
@@ -1791,6 +1807,7 @@ public class GameManager : MonoBehaviour
     internal void ResetFrameAccumulation()
     {
         _causticsManager.ResetProgressiveRadius();
+        _temporalRisManager.InvalidateHistory();
         _nextLiveFrameTimestamp = 0;
         _accumulatedFrameCount = 0;
         _hasAccumulationStateHash = false;
@@ -2277,11 +2294,12 @@ public class GameManager : MonoBehaviour
         }
         _presentationSource = _beautyTexture;
         
-        if (!frame.useDedicatedCausticsDebugKernel && (ShouldRunSpatialDenoiser() || ShouldRunTemporalDenoiser() || IsFeatureDebugMode() || IsCausticPreservationDebugMode()))
+        if (!frame.useDedicatedCausticsDebugKernel && (ShouldRunSpatialDenoiser() || ShouldRunTemporalDenoiser() || ShouldRunTemporalRis() || IsFeatureDebugMode() || IsCausticPreservationDebugMode()))
         {
             UpdateFeaturesFromCompute();
         }
-        
+        if (!frame.useDedicatedCausticsDebugKernel && ShouldRunTemporalRis()) _temporalRisManager.Commit(this);
+
         if (!frame.useDedicatedCausticsDebugKernel && IsFeatureDebugMode())
         {
             PresentFeatureDebugMode();
@@ -3556,6 +3574,12 @@ public class GameManager : MonoBehaviour
         targetShader.SetTexture(kernelHandle, MeshMetallicRoughnessTextures, _meshMetallicRoughnessTextureArray);
         targetShader.SetTexture(kernelHandle, MeshNormalTextures, _meshNormalTextureArray);
         targetShader.SetTexture(kernelHandle, MeshParallaxTextures, _meshParallaxTextureArray);
+        if (targetShader == shader)
+        {
+            if (ShouldRunTemporalRis()) targetShader.EnableKeyword("TEMPORAL_RIS_ENABLED");
+            else targetShader.DisableKeyword("TEMPORAL_RIS_ENABLED");
+            if (ShouldRunTemporalRis()) _temporalRisManager.Bind(targetShader, kernelHandle, this, true, IsTemporalRisUnsupported());
+        }
     }
 
     private void BindEnvironmentImportanceSampling(ComputeShader targetShader, int kernelHandle)
@@ -3762,6 +3786,7 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, Lighting.LightSampleCount);
             hash = AddHash(hash, Lighting.InitialRisCandidateCount);
             hash = AddHash(hash, Lighting.TemporalRisEnabled ? 1 : 0);
+            hash = AddHash(hash, Lighting.TemporalRisHistoryMCap);
             hash = AddHash(hash, shadowRandomness);
             hash = AddHash(hash, parallaxMaximumStrengthAngle);
             hash = AddHash(hash, Lighting.LightFalloffScale);

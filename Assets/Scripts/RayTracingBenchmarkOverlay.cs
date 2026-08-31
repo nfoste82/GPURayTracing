@@ -82,7 +82,8 @@ public class RayTracingBenchmarkOverlay : MonoBehaviour
         _builder.Append("Light sampling: ").Append(gameManager.Lighting.LightSamplingStrategy)
             .Append("  Samples: ").Append(gameManager.Lighting.LightSampleCount)
             .Append("  RIS candidates: ").AppendLine(gameManager.Lighting.InitialRisCandidateCount.ToString());
-        _builder.Append("Temporal RIS: ").AppendLine(gameManager.Lighting.TemporalRisEnabled ? "enabled" : "fallback");
+        _builder.Append("Temporal RIS: ").Append(gameManager.Lighting.TemporalRisEnabled ? "enabled" : "fallback")
+            .Append("  History M cap: ").AppendLine(gameManager.Lighting.TemporalRisHistoryMCap.ToString());
         _builder.Append("Accumulation: ").Append(gameManager.enableFrameAccumulation ? "on" : "off")
             .Append("  Frames: ").AppendLine(gameManager.AccumulatedFrameCount.ToString());
         _builder.Append("Live idle cap: ").Append(gameManager.liveFrameIdlePercent.ToString("0.#"))

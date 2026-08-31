@@ -18,9 +18,9 @@ public sealed class SceneSettings
     public bool EnableFrameAccumulation = true;
 
     public bool EnableAdaptiveSampling = false;
-    public int AdaptiveSamplingMinSamples = 8;
-    public int AdaptiveBootstrapFrames = 4;
-    public float AdaptiveBootstrapResolutionScale = 0.25f;
+    public int AdaptiveSamplingMinSamples = 2;
+    public int AdaptiveBootstrapFrames = 96;
+    public float AdaptiveBootstrapResolutionScale = 0.5f;
     public int AdaptiveGuidanceMaxUpdates = 2;
     public int AdaptiveGuidanceHistoryFrames = 2;
     public GameManager.AdaptivePriorityMode AdaptivePriorityMode = GameManager.AdaptivePriorityMode.WelfordStandardError;
@@ -40,6 +40,7 @@ public sealed class SceneSettings
     // Four candidates is the project default; scene-specific settings can override it.
     public int InitialRisCandidateCount = 4;
     public bool TemporalRisEnabled = true;
+    public int TemporalRisHistoryMCap = 1;
 
     public bool EnableSpatialDenoising = true;
     public float DenoiserLuminanceSigma = 0.05f;

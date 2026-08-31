@@ -8,7 +8,7 @@ The original milestone was local RIS only: one reservoir at one eligible shading
 
 ## Current Status
 
-Local primary direct-light RIS and temporal RIS are implemented and enabled by default. The candidate count is configurable, participates in accumulation/history invalidation and benchmark metadata, and the ordinary direct-light estimator remains the fallback for unsupported materials/events and later bounces. The implementation retains the single production visibility call site required for acceptable Metal compile times.
+Local primary direct-light RIS is enabled by default. Temporal ReSTIR-DI now maintains a separate camera-reprojected ping-pong reservoir history for static, primary opaque, non-reactive receivers when rendering one path sample per pixel. It is deliberately disabled for dynamic scenes, fog, animated water, transmission, highly smooth receivers, adaptive tracing, and multi-sample-per-pixel dispatches. History is limited to one represented prior candidate in addition to the current local reservoir because longer visibility-unaware histories produced persistent clumps in finite area-light penumbrae. The candidate count participates in accumulation/history invalidation and benchmark metadata, and the ordinary direct-light estimator remains the fallback for unsupported materials/events and later bounces. The implementation retains the single production visibility call site required for acceptable Metal compile times.
 
 ## Scope
 
@@ -167,6 +167,21 @@ The future derivation needs deterministic CPU/GPU tests that compare high-sample
 
 ## Benchmark Plan
 
+`Benchmark_TemporalRisStress` is the focused static temporal fixture. It uses twelve small,
+alternating-color finite lights over a diffuse floor with opaque pillars that create direct-light
+visibility boundaries. It disables environment lighting, directional lighting, denoising, motion,
+and transmission so `temporal_ris_static_direct_light_fixed_work.json` can compare local RIS and
+temporal RIS at the same 200 accumulated samples. This is the acceptance fixture for temporal
+reuse; CornellBox remains a general stability check rather than a temporal-RIS quality benchmark.
+
+`temporal_ris_candidate_split_sweep_fixed_work.json` evaluates local candidate count independently
+from the temporal retained-history `M` cap. Each temporal capture writes
+`temporal_ris_diagnostics.json` beside its timing report. Inspect history acceptance/rejection,
+merge/selection rates, and mean retained/effective `M` before interpreting quality changes. The
+history cap defaults to one because larger visibility-unaware histories can create persistent
+finite-area-light penumbra clumps; it is a benchmark tuning control, not evidence that a larger
+value is safe by itself.
+
 Use `RayTracingSceneCapture -rayTracingExperiment` with a checked-in manifest. Create named variants differing only in:
 
 ```text
@@ -216,6 +231,145 @@ Remaining follow-ups after the now-standard local/temporal RIS path:
 3. Add light presampling only if candidate selection is measured as a bottleneck.
 4. Extend temporal RIS coverage to additional eligible path/material classes after motion/history validation.
 5. Consider spatial reuse only after temporal/local results establish a need.
+
+## Temporal RIS Net-Benefit Roadmap
+
+Temporal RIS is enabled in existing production scene settings, but that older path does not consume
+temporal reservoir data. Do not change that setting as part of this work. The implemented reservoir
+reuse path remains experimental until it passes the acceptance gates below.
+
+The candidate-split capture `temporal_ris_candidate_split_sweep_fixed_work_2` found local RIS
+superior to every tested temporal split on `Benchmark_TemporalRisStress`. The closest configuration,
+four fresh candidates plus one represented history candidate, was still 2.1 percent higher RGB RMSE
+and 3.2 percent slower than local four-candidate RIS. History acceptance was 99.17 percent, so this
+is not primarily a reprojection-availability failure. Quality worsened monotonically as history
+selection increased, which makes represented-history correlation and visibility discontinuities the
+leading hypotheses.
+
+Treat the following as ordered gates. Do not tune a later stage to compensate for a failed earlier
+one.
+
+### 2. Correct The Benchmark Baseline
+
+1. Temporal reservoir history must be invalidated whenever progressive accumulation resets. This
+   includes capture setup, a new capture variant, renderer-state invalidation, render-size changes,
+   and any other operation that calls `GameManager.ResetFrameAccumulation()`.
+2. Each capture variant starts with empty temporal history. The capture's shader warm-up may compile
+   shaders, but cannot seed measured history after the following accumulation reset.
+3. Generate an explicitly temporal-off trusted reference for `TemporalRisStress`, preferably using
+   `AllLights` or a high-sample local RIS configuration. Reference metadata must record RIS state,
+   candidate count, history cap, light strategy, seed, relevant renderer settings, scene/settings
+   hash, source revision, and shader revision.
+4. Re-run the candidate split in normal and reverse variant orders. Results must not depend on order.
+
+### 3. Prove Mean Correctness
+
+Status: reservoir normalization is now covered by the production GPU regression probe. It verifies
+local normalization, capped temporal target-ratio mass, local/history selected-target normalization,
+and zero/invalid history rejection through the same helpers used by `CSMain`. Full direct-light mean
+agreement across proposal families remains the next gate. The deterministic raw-HDR mesh-triangle
+fixture now compares the ordinary NEE plus complementary BRDF-hit estimator with local RIS counts
+1, 2, 4, and 8 at 1,024 samples per pixel; every configuration agrees within two percent per RGB
+channel. Environment-only and mixed sphere/triangle/environment coverage remains required before
+this gate is complete.
+
+1. Add deterministic CPU/GPU checks for triangle-only, environment-only, and mixed
+   sphere/triangle/environment lighting.
+2. Compare explicit RIS NEE plus complementary BRDF-hit-emitter/environment contributions with a
+   trusted high-sample estimator for local counts 1, 2, 4, and 8, with temporal reuse disabled and
+   enabled.
+3. Derive or repair the reservoir-aware NEE/BRDF MIS pairing before temporal tuning. The current
+   explicit RIS path and continuation-hit MIS must be proven complementary; source-shape assertions
+   are insufficient.
+4. Add synthetic reservoir tests for stored selected target, target-ratio history mass, capped `M`,
+   forced local/history selection, and final normalization.
+
+### 4. Measure The Intended Benefit
+
+1. Run independent one-frame trials: empty history, a specified warm-up length, one measured
+   non-accumulated frame, and many fixed seeds. Report mean, variance, RMSE, and time.
+2. Separately run independent progressive sequences and report error at 1, 2, 4, 8, 16, 32, 64,
+   128, and 200 frames.
+3. Record lag autocorrelation and estimate effective sample size. A temporal estimator may improve
+   instantaneous low-SPP images while losing to independent local RIS in a long static average.
+4. If only the former wins, limit temporal reuse to reset/interactive presentation rather than the
+   static progressive path.
+
+### 5. Limit History Persistence
+
+1. Test a previous-frame-only history variant against recursively accumulated history.
+2. Test storing a normalized local reservoir as one temporal observation rather than granting its
+   local candidate count persistent temporal confidence.
+3. Track reservoir age/ancestry and test short maximum ages of 1, 2, 4, and 8 frames.
+4. Tune to a bounded history-selection rate, not nominal `M`. Begin below the current harmful
+   21-percent rate of the four-local-plus-one-history configuration.
+5. Retain only variants that improve one-frame quality without losing equal-time progressive
+   convergence through excessive correlation.
+
+### 6. Add Visibility Awareness Conservatively
+
+1. Store the already-computed final visibility/transmittance result with the reservoir for
+   diagnostics. Never assume it remains current visibility.
+2. Measure history selection, visibility changes, age, and error around direct-light penumbrae.
+3. Test rejecting samples that were fully occluded when stored, with high-sample mean validation.
+4. Test conservative confidence reduction for aged samples and near-discontinuity reprojections.
+5. Only if those fail, prototype one current-receiver visibility test for history in a separate
+   compact path/kernel. Do not duplicate the inlined `SampleSingleLight()` shadow traversal in
+   `CSMain`.
+6. A two-reservoir defensive/pairwise correction is the maximum follow-up scope. Derive it
+   independently and preserve the current fresh reservoir as the canonical candidate.
+
+### 7. Tighten Reprojection Validation
+
+1. Compare exact same-pixel reuse, current matrix reprojection, and stricter world-space
+   plane-distance/normal validation.
+2. Add capture-only maps for source pixel, accepted/rejected history, receiver displacement,
+   history selection, visibility mismatch, and reservoir age.
+3. Consider a nearby-pixel search only after exact reprojection validation, because it can cross
+   direct-light visibility boundaries.
+
+### 8. Optimize Only A Winning Estimator
+
+1. Use repeated equal-time captures with randomized order and cooldown.
+2. Report completed frames, fresh candidates, temporal selections, and final error, not only
+   nominal effective `M`.
+3. Profile feature generation, structured-buffer traffic, reprojection, and diagnostics separately.
+4. Disable capture diagnostics for final timing, retain one inlined production
+   `SampleSingleLight()` call site, and precompile/measure the Metal variant.
+
+### 9. Validate Across Scene Classes
+
+Require success on the temporal stress scene, an unoccluded many-light scene, a single area-light
+penumbra scene, environment-only, mixed triangle/environment, camera pan, disocclusion, CornellBox,
+and a low-light-count overhead check. Dynamic geometry, fog, animated water, transmission, adaptive
+sampling, and highly smooth receivers remain out of scope until static opaque reuse succeeds.
+
+### 10. Acceptance Evidence
+
+A candidate is acceptable only when it has lower equal-time linear-HDR error in its declared target
+mode, agrees in high-sample mean radiance and color with the trusted reference, creates no reviewed
+penumbra/disocclusion artifacts, and retains acceptable Metal compile/runtime cost. The ordinary
+local RIS fallback must remain unchanged.
+
+### 11. Reference Implementation Boundaries
+
+HIPRT-Path-Tracer is a useful algorithmic reference for concepts such as canonical fresh reservoirs,
+small history confidence caps, temporal validation, and visibility-aware correction. It is GPL-3.0:
+do not copy its source, comments, or structure into this project. Independently derive and implement
+any adopted algorithm.
+
+### 12. Recommended Execution Sequence
+
+1. Complete the baseline/isolation work in section 2.
+2. Validate RIS/BRDF MIS mean correctness.
+3. Separate independent-frame variance from progressive convergence.
+4. Add age, autocorrelation, contribution, and visibility diagnostics.
+5. Test one-frame-only and collapsed-confidence temporal policies.
+6. Test age-decayed, low-selection-rate policies.
+7. Add stored-visibility diagnostics and reject previously occluded history experimentally.
+8. Escalate to a compact current-history visibility query only if justified.
+9. Consider a derived two-reservoir defensive correction only if simpler policies fail.
+10. Optimize only the first estimator that passes quality gates, then complete the scene matrix.
 
 ## Compact Future-Session Prompt
 
