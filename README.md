@@ -118,3 +118,4 @@ Thanks to these projects and blogs which have been great reference and learning 
 * https://github.com/tylertms/vkrt
 * https://blog.yiningkarlli.com/2015/03/adaptive-sampling.html
 * https://jo.dreggn.org/home/2009_stopping.pdf
+* https://github.com/TomClabault/HIPRT-Path-Tracer

@@ -105,6 +105,8 @@ public static class RayTracingSceneGenerator
             CreateManySpheresScene();
             CreateShadowBlockersScene();
             CreateManyLightsScene();
+            CreateTemporalRisStressScene();
+            CreateTemporalRisStableDirectLightScene();
             CreateManyMeshesScene();
             CreateGlassScene();
             CreateGlassTransmissionScene();
@@ -401,11 +403,6 @@ public static class RayTracingSceneGenerator
         Save(context.Scene, sceneName);
     }
 
-    public static void RegenerateKhronosGltfBrowserScene()
-    {
-        GenerateScenes(new[] { GetScenePath("KhronosGltfBrowser") }, true);
-    }
-
     private static void ConfigureSurfaceMaps(GameObject obj, Texture2D albedo, Texture2D normal, Texture2D height, Texture2D roughness, float parallaxStrength, Vector2 uvScale)
     {
         var material = obj.GetComponent<RayMaterial>();
@@ -418,7 +415,7 @@ public static class RayTracingSceneGenerator
         material.TextureUvScale = uvScale;
     }
 
-    public static void CreateTeapotMaterialScene()
+    private static void CreateTeapotMaterialScene()
     {
         const string sceneName = "Benchmark_TeapotMaterials";
         Directory.CreateDirectory(GeneratedSceneFolder);
@@ -546,6 +543,10 @@ public static class RayTracingSceneGenerator
         manager.shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
         manager.causticsShader = AssetDatabase.LoadAssetAtPath<ComputeShader>(CausticsShaderPath);
         cameraManager.renderTextureCamera = camera;
+        // Generated scenes use the production local-RIS path. Reuse prototypes remain
+        // explicit opt-in experiment overrides rather than scene defaults.
+        settings.TemporalRisEnabled = false;
+        settings.SpatialRisEnabled = false;
         manager.InitSceneSettings(settings);
         manager.skyboxTexture = AssetDatabase.LoadAssetAtPath<Texture>(SkyboxPath);
 
@@ -1181,6 +1182,99 @@ public static class RayTracingSceneGenerator
         }
 
         Save(context.Scene, "Benchmark_ManyLights");
+    }
+
+    // Static, opaque direct-light fixture for comparing temporal reuse against local RIS. The
+    // alternating small lights compete at the floor and the pillars create hard visibility
+    // changes without introducing transmission, motion, or indirect-light-dominated noise.
+    private static void CreateTemporalRisStressScene()
+    {
+        const string sceneName = "Benchmark_TemporalRisStress";
+        if (ShouldSkipExistingScene(sceneName))
+        {
+            return;
+        }
+
+        var context = CreateBaseScene(new SceneSettings
+        {
+            SceneName = sceneName,
+            CameraPosition = new Vector3(0.0f, 6.2f, -15.5f),
+            CameraEuler = new Vector3(19.0f, 0.0f, 0.0f),
+            FieldOfView = 35.0f,
+            NumBounces = 2,
+            ShadowQuality = 0,
+            DirectionalLightIntensity = 0.0f,
+            EnableEnvironmentLighting = false,
+            EnableSpatialDenoising = false,
+            LightFalloffScale = 0.075f,
+            ShadowBvhMinObjectCount = 1024
+        });
+        AddFloor(context.Root, new Vector2(0.0f, 4.5f), new Vector2(18.0f, 18.0f), 0.15f, "Diffuse Receiver");
+
+        for (var i = 0; i < 12; i++)
+        {
+            var x = (i % 4 - 1.5f) * 3.5f;
+            var z = (i / 4) * 3.1f + 0.8f;
+            var color = i % 2 == 0 ? new Color32(255, 224, 186, 255) : new Color32(184, 218, 255, 255);
+            AddLight(context.Root, $"Competing Light {i + 1}", new Vector3(x, 3.2f + (i % 3) * 0.45f, z), 0.12f, color, 3.0f);
+        }
+
+        for (var i = 0; i < 6; i++)
+        {
+            var x = (i % 3 - 1.0f) * 4.0f;
+            var z = 2.4f + (i / 3) * 4.5f;
+            AddPrimitiveMesh(context.Root, $"Visibility Pillar {i + 1}", RayMeshPrimitive.PrimitiveType.Cube,
+                new Vector3(x, 1.35f, z), Vector3.zero, new Vector3(0.75f, 2.7f, 0.75f),
+                new Color32(180, 180, 180, 255), RayMaterial.MaterialType.Diffuse, 0.1f, 1.0f);
+        }
+
+        Save(context.Scene, sceneName);
+    }
+
+    // Separates temporal light-selection coherence from visibility discontinuities. The open
+    // receiver dominates the image; the right-side strip has one controlled penumbra.
+    private static void CreateTemporalRisStableDirectLightScene()
+    {
+        const string sceneName = "Benchmark_TemporalRisStableDirectLight";
+        if (ShouldSkipExistingScene(sceneName))
+        {
+            return;
+        }
+
+        var context = CreateBaseScene(new SceneSettings
+        {
+            SceneName = sceneName,
+            CameraPosition = new Vector3(0.0f, 7.2f, -16.5f),
+            CameraEuler = new Vector3(21.5f, 0.0f, 0.0f),
+            FieldOfView = 34.0f,
+            NumBounces = 2,
+            ShadowQuality = 0,
+            DirectionalLightIntensity = 0.0f,
+            EnableEnvironmentLighting = false,
+            EnableSpatialDenoising = false,
+            LightFalloffScale = 0.075f,
+            ShadowBvhMinObjectCount = 1024
+        });
+
+        AddFloor(context.Root, new Vector2(0.0f, 5.0f), new Vector2(20.0f, 20.0f), 0.12f, "Diffuse Receiver");
+        for (var i = 0; i < 20; i++)
+        {
+            float angle = i * Mathf.PI * 2.0f / 20.0f;
+            float radius = 6.8f + (i % 4) * 0.8f;
+            float intensity = 1.2f + (i % 5) * 0.65f;
+            Color color = Color.HSVToRGB((i * 0.61803398875f) % 1.0f, 0.3f + (i % 3) * 0.12f, 1.0f);
+            AddLight(context.Root, $"Stable Competing Light {i + 1}",
+                new Vector3(Mathf.Cos(angle) * radius, 4.8f + (i % 3) * 0.55f, Mathf.Sin(angle) * radius + 4.8f),
+                0.16f + (i % 3) * 0.04f, color, intensity);
+        }
+
+        // This single blocker affects only a narrow screen-right receiver strip, so the open
+        // region can establish whether reprojected selection itself provides an early-frame gain.
+        AddPrimitiveMesh(context.Root, "Controlled Penumbra Blocker", RayMeshPrimitive.PrimitiveType.Cube,
+            new Vector3(5.2f, 1.6f, 4.1f), Vector3.zero, new Vector3(0.8f, 3.2f, 2.6f),
+            new Color32(175, 175, 175, 255), RayMaterial.MaterialType.Diffuse, 0.1f, 1.0f);
+
+        Save(context.Scene, sceneName);
     }
 
     private static void CreateManyMeshesScene()

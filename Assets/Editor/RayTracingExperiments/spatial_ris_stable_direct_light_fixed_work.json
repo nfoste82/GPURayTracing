@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "label": "spatial_ris_stable_direct_light_fixed_work",
+  "scenes": ["Assets/Scenes/Generated/TemporalRisStableDirectLight.unity"],
+  "width": 1024,
+  "height": 1024,
+  "samples": 200,
+  "durationSeconds": 0.0,
+  "cooldownSeconds": 12.0,
+  "referenceRoot": "Assets/Editor/RayTracingSceneReferences",
+  "variants": [
+    { "name": "local_ris", "overrides": [
+      { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+      { "path": "Lighting.InitialRisCandidateCount", "value": "4" },
+      { "path": "Lighting.TemporalRisEnabled", "value": "false" },
+      { "path": "Lighting.SpatialRisEnabled", "value": "false" },
+      { "path": "enableAdaptiveSampling", "value": "false" }
+    ] },
+    { "name": "spatial_ris", "overrides": [
+      { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+      { "path": "Lighting.InitialRisCandidateCount", "value": "4" },
+      { "path": "Lighting.TemporalRisEnabled", "value": "false" },
+      { "path": "Lighting.SpatialRisEnabled", "value": "true" },
+      { "path": "Lighting.SpatialRisNeighborCount", "value": "4" },
+      { "path": "enableAdaptiveSampling", "value": "false" }
+    ] }
+  ]
+}

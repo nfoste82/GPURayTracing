@@ -37,8 +37,17 @@ namespace PathTracing.Lighting
         [SerializeField, Range(1, 16), Tooltip("Number of local primary-surface RIS candidates. Applies to opaque ImportanceSampled direct lighting.")]
         private int _initialRisCandidateCount = 4;
 
-        [SerializeField, Tooltip("Enables temporal RIS reuse in the supported temporal rendering path.")]
-        private bool _temporalRisEnabled = true;
+        [SerializeField, Tooltip("Experimental: reuses validated primary opaque direct-light reservoirs across static frames. Slower and incomplete compared with local RIS; requires one path sample per pixel. Disabled by default.")]
+        private bool _temporalRisEnabled = false;
+
+        [SerializeField, Range(0, 16), Tooltip("Maximum represented candidates retained from a validated temporal RIS reservoir. Use benchmark sweeps to tune this separately from the current-frame RIS candidate count.")]
+        private int _temporalRisHistoryMCap = 1;
+
+        [SerializeField, Tooltip("Experimental: reuses current-frame local RIS reservoirs from cardinal screen-space neighbors. Spatial reuse takes precedence when both spatial and temporal controls are enabled; combined temporal-spatial reuse is not implemented.")]
+        private bool _spatialRisEnabled;
+
+        [SerializeField, Range(1, 4), Tooltip("Experimental spatial RIS neighbor count. Neighbors are visited in a deterministic cardinal pattern.")]
+        private int _spatialRisNeighborCount = 4;
 
         [SerializeField, Range(0.001f, 1.0f), Tooltip("Higher values make direct light fall off faster with distance.")]
         private float _lightFalloffScale = 0.16f;
@@ -81,6 +90,24 @@ namespace PathTracing.Lighting
         {
             get => _temporalRisEnabled;
             set => _temporalRisEnabled = value;
+        }
+
+        public int TemporalRisHistoryMCap
+        {
+            get => _temporalRisHistoryMCap;
+            set => _temporalRisHistoryMCap = Mathf.Clamp(value, 0, 16);
+        }
+
+        public bool SpatialRisEnabled
+        {
+            get => _spatialRisEnabled;
+            set => _spatialRisEnabled = value;
+        }
+
+        public int SpatialRisNeighborCount
+        {
+            get => _spatialRisNeighborCount;
+            set => _spatialRisNeighborCount = Mathf.Clamp(value, 1, 4);
         }
 
         public float LightFalloffScale

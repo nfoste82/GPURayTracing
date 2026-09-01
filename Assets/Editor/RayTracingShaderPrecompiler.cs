@@ -14,6 +14,7 @@ public static class RayTracingShaderPrecompiler
     private const string AdaptiveSchedulerShaderPath = "Assets/Resources/RayTracingAdaptiveScheduler.compute";
     private const string UtilityShaderPath = "Assets/Resources/RayTracingUtility.compute";
     private const string FeaturesShaderPath = "Assets/Resources/RayTracingFeatures.compute";
+    private const string SpatialRisPrepassShaderPath = "Assets/Resources/RayTracingSpatialRisPrepass.compute";
     private const string FocusShaderPath = "Assets/Resources/RayTracingFocus.compute";
     private const string RegressionProbeShaderPath = "Assets/Resources/RayTracingRegressionProbe.compute";
     private const string CausticsShaderPath = "Assets/Resources/RayTracingCaustics.compute";
@@ -64,9 +65,11 @@ public static class RayTracingShaderPrecompiler
     private static readonly ShaderAsset Utility = new ShaderAsset("Utility", UtilityShaderPath, VariantSet.None,
         "ClearAccumulation", "UpscaleAdaptiveBootstrap", "SeedAdaptiveBootstrap", "ComposeAdaptiveBootstrap");
     private static readonly ShaderAsset Features = new ShaderAsset("Features", FeaturesShaderPath, VariantSet.FogTerrain, "CSFeatures");
+    private static readonly ShaderAsset SpatialRisPrepass = new ShaderAsset("Spatial RIS Prepass", SpatialRisPrepassShaderPath, VariantSet.FogTerrain,
+        "CSSpatialRisPrepass");
     private static readonly ShaderAsset Focus = new ShaderAsset("Focus", FocusShaderPath, VariantSet.Terrain, "CSFocusQuery");
     private static readonly ShaderAsset RegressionProbe = new ShaderAsset("Regression Probe", RegressionProbeShaderPath, VariantSet.None, "CSRegressionProbe");
-    private static readonly ShaderAsset[] RendererAssets = { Main, Water, AdaptiveTrace, AdaptiveScheduler, Utility, Features, Focus, RegressionProbe };
+    private static readonly ShaderAsset[] RendererAssets = { Main, Water, AdaptiveTrace, AdaptiveScheduler, Utility, Features, SpatialRisPrepass, Focus, RegressionProbe };
 
     [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Main Final Color/All Fog + Terrain Variants")]
     private static void PrecompileMainAllVariants() => Precompile(new[] { Main }, true);
@@ -97,6 +100,9 @@ public static class RayTracingShaderPrecompiler
 
     [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Features/All Fog + Terrain Variants")]
     private static void PrecompileFeatures() => Precompile(new[] { Features }, true);
+
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Spatial RIS Prepass/All Fog + Terrain Variants")]
+    private static void PrecompileSpatialRisPrepass() => Precompile(new[] { SpatialRisPrepass }, true);
 
     [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Focus/All Terrain Variants")]
     private static void PrecompileFocus() => Precompile(new[] { Focus }, true);

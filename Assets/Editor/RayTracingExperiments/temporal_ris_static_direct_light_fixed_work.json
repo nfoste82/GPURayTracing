@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "label": "temporal_ris_static_direct_light_fixed_work",
+  "scenes": ["Assets/Scenes/Generated/TemporalRisStress.unity"],
+  "width": 1024,
+  "height": 1024,
+  "samples": 200,
+  "durationSeconds": 0.0,
+  "cooldownSeconds": 12.0,
+  "referenceRoot": "Assets/Editor/RayTracingSceneReferences",
+  "variants": [
+    { "name": "local_ris", "overrides": [
+      { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+      { "path": "Lighting.InitialRisCandidateCount", "value": "4" },
+      { "path": "Lighting.TemporalRisEnabled", "value": "false" },
+      { "path": "enableAdaptiveSampling", "value": "false" }
+    ] },
+    { "name": "temporal_ris", "overrides": [
+      { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+      { "path": "Lighting.InitialRisCandidateCount", "value": "4" },
+      { "path": "Lighting.TemporalRisEnabled", "value": "true" },
+      { "path": "enableAdaptiveSampling", "value": "false" }
+    ] }
+  ]
+}

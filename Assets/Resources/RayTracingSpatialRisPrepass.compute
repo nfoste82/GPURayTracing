@@ -1,0 +1,55 @@
+#pragma kernel CSSpatialRisPrepass
+#pragma multi_compile _ FOG_ENABLED
+#pragma multi_compile _ TERRAIN_ENABLED
+#pragma multi_compile _ TEMPORAL_RIS_ENABLED
+#define SPATIAL_RIS_PREPASS
+#include "../Scripts/RayTracingShared.hlsl"
+
+[numthreads(4,4,1)]
+void CSSpatialRisPrepass(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    FeatureValidity.GetDimensions(width, height);
+    if (id.x >= width || id.y >= height) return;
+    uint2 pixel = id.xy;
+    uint rngState = CreateRngState(pixel, _SampleOffset);
+    float2 pixelJitter = float2(rand(rngState), rand(rngState));
+    if (_SubpixelJitterScale != 1.0f) pixelJitter = (pixelJitter - 0.5f) * _SubpixelJitterScale + 0.5f;
+    float2 uv = ((pixel + pixelJitter) / float2(width, height)) * 2.0f - 1.0f;
+    if (_UseTemporalJitter != 0) uv += _FrameJitterNdc;
+    Ray ray = CreateCameraRay(uv);
+    if (_ApertureRadius > 0.0f)
+    {
+        float3 forward = normalize(mul(_CameraToWorld, float4(0.0f, 0.0f, -1.0f, 0.0f)).xyz);
+        float3 focalPoint = ray.origin + ray.direction * (_FocalDistance / max(0.0001f, dot(ray.direction, forward)));
+        float2 aperture = SampleAperture(rngState) * _ApertureRadius;
+        ray.origin += normalize(mul(_CameraToWorld, float4(1, 0, 0, 0)).xyz) * aperture.x
+            + normalize(mul(_CameraToWorld, float4(0, 1, 0, 0)).xyz) * aperture.y;
+        ray.direction = normalize(focalPoint - ray.origin);
+    }
+    else { rand(rngState); rand(rngState); rand(rngState); rand(rngState); rand(rngState); rand(rngState); }
+
+    RayHit hit = GetNearestIntersection(ray);
+    uint index = pixel.y * width + pixel.x;
+    TemporalRisReservoir reservoir;
+    reservoir.data0 = 0.0f; reservoir.data1 = 0.0f; reservoir.data2 = 0.0f; reservoir.data3 = 0.0f;
+    if (!DidHitSky(hit) && !DidHitLight(hit) && IsSpatialRisEligible(hit))
+    {
+        bool selected;
+        InitialRisCandidate candidate;
+        float weightSum;
+        int reservoirM;
+        GetLightHittingPoint(ray, hit, max(1, _ShadowQuality + 1), false, true, selected, pixel, rngState,
+            true, candidate, weightSum, reservoirM);
+        if (selected)
+        {
+            reservoir.data0 = float4(candidate.samplePosition, candidate.distance);
+            reservoir.data1 = float4(candidate.direction, candidate.isEnvironment != 0 ? candidate.environmentPdf : candidate.triangleSelectionProbability);
+            reservoir.data2 = float4(weightSum, weightSum / max(1, reservoirM) / max(1e-8f, candidate.risScale), candidate.proposalPdf, reservoirM);
+            reservoir.data3 = float4(candidate.lightIndex, candidate.triangleIndex, candidate.isEnvironment, candidate.valid);
+        }
+    }
+    _SpatialRisLocalWriteReservoir[index] = reservoir;
+    _SpatialRisPostCandidateRngWrite[index] = rngState;
+    WriteSpatialRisReceiverFeatures(pixel, hit);
+}

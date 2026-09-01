@@ -41,6 +41,7 @@ public class GameManager : MonoBehaviour
 
     [SerializeField] private ComputeShader utilityShader;
     [SerializeField] private ComputeShader featuresShader;
+    [SerializeField] private ComputeShader spatialRisPrepassShader;
     [SerializeField] private ComputeShader focusShader;
     [SerializeField] private ComputeShader adaptiveSchedulerShader;
     [SerializeField] private ComputeShader adaptiveTraceShader;
@@ -172,6 +173,7 @@ public class GameManager : MonoBehaviour
     public SpatialDenoisingManager SpatialDenoising => _spatialDenoisingManager ??= new SpatialDenoisingManager();
     public GlareManager Glare => _glareManager ??= new GlareManager();
     public TemporalDenoisingManager TemporalDenoising => _temporalDenoisingManager ??= new TemporalDenoisingManager();
+    private readonly TemporalRisManager _temporalRisManager = new ();
 
     [Tooltip("Builds a photon map for sphere and triangle-light caustics through glass, closed meshes, and the registered water volume. Disabled by default.")]
     public bool enableCaustics = false;
@@ -220,6 +222,10 @@ public class GameManager : MonoBehaviour
     public float fireflyClamp = 1.0f;
 
     public bool randomNoise = false;
+
+    // Capture-only deterministic seed override used by independent estimator trials.
+    public int CaptureRandomSeed { get; set; } = 1;
+    private bool _preserveTemporalRisHistoryForNextNonAccumulatedFrame;
 
     public Texture skyboxTexture;
 
@@ -479,6 +485,12 @@ public class GameManager : MonoBehaviour
     public Water WaterInternal => WaterManager.Water;
     public Vector2Int DisplayTextureSize => _displayTextureSize;
     public int AccumulatedFrameCount => _accumulatedFrameCount;
+
+    public void ClearTemporalRisDiagnostics() => _temporalRisManager.ClearDiagnostics();
+
+    public uint[] ReadTemporalRisDiagnosticsForCapture() => _temporalRisManager.ReadDiagnostics();
+
+    public void InvalidateTemporalRisHistory() => _temporalRisManager.InvalidateHistory();
     public int SphereLightCount => Lighting.SphereLightCount;
     
     public int MeshLightCount
@@ -690,6 +702,9 @@ public class GameManager : MonoBehaviour
         Lighting.LightSampleCount = settings.LightSampleCount;
         Lighting.InitialRisCandidateCount = settings.InitialRisCandidateCount;
         Lighting.TemporalRisEnabled = settings.TemporalRisEnabled;
+        Lighting.TemporalRisHistoryMCap = settings.TemporalRisHistoryMCap;
+        Lighting.SpatialRisEnabled = settings.SpatialRisEnabled;
+        Lighting.SpatialRisNeighborCount = settings.SpatialRisNeighborCount;
         SpatialDenoising.enabled = settings.EnableSpatialDenoising;
         SpatialDenoising.iterations = settings.DenoiserIterations;
         SpatialDenoising.luminanceSigma = settings.DenoiserLuminanceSigma;
@@ -748,11 +763,15 @@ public class GameManager : MonoBehaviour
         {
             featuresShader = Resources.Load<ComputeShader>("RayTracingFeatures");
         }
+        if (spatialRisPrepassShader == null)
+        {
+            spatialRisPrepassShader = Resources.Load<ComputeShader>("RayTracingSpatialRisPrepass");
+        }
         if (focusShader == null)
         {
             focusShader = Resources.Load<ComputeShader>("RayTracingFocus");
         }
-        if (utilityShader == null || featuresShader == null || focusShader == null)
+        if (utilityShader == null || featuresShader == null || focusShader == null || spatialRisPrepassShader == null)
         {
             Debug.LogError("Split ray tracing compute shaders are missing from Resources.", this);
         }
@@ -976,6 +995,8 @@ public class GameManager : MonoBehaviour
         _adaptiveDispatchArgumentsBuffer = new ComputeBuffer(3, sizeof(uint), ComputeBufferType.IndirectArguments);
         ResetFrameAccumulation();
         _temporalDenoisingManager.ResetHistory();
+        _temporalRisManager.ReleaseResources();
+        _temporalRisManager.ReleaseResources();
     }
 
     private RenderTexture CreateFeatureTexture(RenderTextureFormat format)
@@ -1060,6 +1081,12 @@ public class GameManager : MonoBehaviour
     {
         _temporalDenoisingManager.ReleaseResources();
     }
+
+    private bool ShouldRunTemporalRis() => (Lighting.TemporalRisEnabled || Lighting.SpatialRisEnabled) && numberOfPasses == 1
+        && !ShouldUseAdaptiveSampling() && debugRenderMode == DebugRenderMode.FinalColor;
+
+    private bool IsTemporalRisUnsupported() => IsFogEnabled() || _temporalDenoisingManager.DynamicSceneChanged || WaterManager.IsAnimated;
+
 
     private void Update()
     {
@@ -1361,6 +1388,23 @@ public class GameManager : MonoBehaviour
         {
             DispatchAdaptiveSampling();
             return;
+        }
+
+        if (targetShader == shader && Lighting.SpatialRisEnabled && ShouldRunTemporalRis()
+            && !IsTemporalRisUnsupported() && spatialRisPrepassShader != null)
+        {
+            var prepassKernel = spatialRisPrepassShader.FindKernel("CSSpatialRisPrepass");
+            SetShaderParameters(spatialRisPrepassShader, prepassKernel);
+            spatialRisPrepassShader.SetTexture(prepassKernel, FeatureNormal, _featureNormalTexture);
+            spatialRisPrepassShader.SetTexture(prepassKernel, FeatureAlbedo, _featureAlbedoTexture);
+            spatialRisPrepassShader.SetTexture(prepassKernel, FeatureDepth, _featureDepthTexture);
+            spatialRisPrepassShader.SetTexture(prepassKernel, FeatureIdentity, _featureIdentityTexture);
+            spatialRisPrepassShader.SetTexture(prepassKernel, FeatureValidity, _featureValidityTexture);
+            _temporalRisManager.BindSpatialPrepass(spatialRisPrepassShader, prepassKernel, this);
+            var spatialGroupsX = Mathf.CeilToInt(_textureSize.x / (float)RenderThreadCountX);
+            var spatialGroupsY = Mathf.CeilToInt(_textureSize.y / (float)RenderThreadCountY);
+            ComputeDispatch.Dispatch(spatialRisPrepassShader, prepassKernel, spatialGroupsX, spatialGroupsY, 1);
+            _temporalRisManager.BindSpatialResolve(targetShader, kernelHandle, this);
         }
 
         targetShader.SetTexture(kernelHandle, Result, _outputTexture);
@@ -1790,7 +1834,16 @@ public class GameManager : MonoBehaviour
 
     internal void ResetFrameAccumulation()
     {
+        ResetFrameAccumulation(true);
+    }
+
+    internal void ResetFrameAccumulation(bool invalidateTemporalRisHistory)
+    {
         _causticsManager.ResetProgressiveRadius();
+        if (invalidateTemporalRisHistory)
+        {
+            _temporalRisManager.InvalidateHistory();
+        }
         _nextLiveFrameTimestamp = 0;
         _accumulatedFrameCount = 0;
         _hasAccumulationStateHash = false;
@@ -1810,6 +1863,16 @@ public class GameManager : MonoBehaviour
     public void SetRenderingPaused(bool paused)
     {
         _renderingPaused = paused;
+    }
+
+    public void PreserveTemporalRisHistoryForNextNonAccumulatedFrame()
+    {
+        _preserveTemporalRisHistoryForNextNonAccumulatedFrame = true;
+    }
+
+    public void ResetCaptureSampleSequence()
+    {
+        _renderedFrameCount = 0;
     }
 
     public bool AdaptiveCaptureDiagnosticsEnabled => _adaptiveCaptureDiagnostics;
@@ -2245,7 +2308,8 @@ public class GameManager : MonoBehaviour
         }
         else
         {
-            ResetFrameAccumulation();
+            ResetFrameAccumulation(!_preserveTemporalRisHistoryForNextNonAccumulatedFrame);
+            _preserveTemporalRisHistoryForNextNonAccumulatedFrame = false;
         }
         
         frame.computeShader = frame.useDedicatedCausticsDebugKernel ? causticsShader
@@ -2277,11 +2341,12 @@ public class GameManager : MonoBehaviour
         }
         _presentationSource = _beautyTexture;
         
-        if (!frame.useDedicatedCausticsDebugKernel && (ShouldRunSpatialDenoiser() || ShouldRunTemporalDenoiser() || IsFeatureDebugMode() || IsCausticPreservationDebugMode()))
+        if (!frame.useDedicatedCausticsDebugKernel && (ShouldRunSpatialDenoiser() || ShouldRunTemporalDenoiser() || ShouldRunTemporalRis() || IsFeatureDebugMode() || IsCausticPreservationDebugMode()))
         {
             UpdateFeaturesFromCompute();
         }
-        
+        if (!frame.useDedicatedCausticsDebugKernel && ShouldRunTemporalRis()) _temporalRisManager.Commit(this);
+
         if (!frame.useDedicatedCausticsDebugKernel && IsFeatureDebugMode())
         {
             PresentFeatureDebugMode();
@@ -3556,6 +3621,12 @@ public class GameManager : MonoBehaviour
         targetShader.SetTexture(kernelHandle, MeshMetallicRoughnessTextures, _meshMetallicRoughnessTextureArray);
         targetShader.SetTexture(kernelHandle, MeshNormalTextures, _meshNormalTextureArray);
         targetShader.SetTexture(kernelHandle, MeshParallaxTextures, _meshParallaxTextureArray);
+        if (targetShader == shader)
+        {
+            if (ShouldRunTemporalRis()) targetShader.EnableKeyword("TEMPORAL_RIS_ENABLED");
+            else targetShader.DisableKeyword("TEMPORAL_RIS_ENABLED");
+            if (ShouldRunTemporalRis()) _temporalRisManager.Bind(targetShader, kernelHandle, this, true, IsTemporalRisUnsupported());
+        }
     }
 
     private void BindEnvironmentImportanceSampling(ComputeShader targetShader, int kernelHandle)
@@ -3612,7 +3683,7 @@ public class GameManager : MonoBehaviour
         }
         else
         {
-            targetShader.SetInt(Seed, 1);
+            targetShader.SetInt(Seed, Mathf.Max(1, CaptureRandomSeed));
         }
 
         targetShader.SetInt(NumberOfPasses, numberOfPasses);
@@ -3762,6 +3833,9 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, Lighting.LightSampleCount);
             hash = AddHash(hash, Lighting.InitialRisCandidateCount);
             hash = AddHash(hash, Lighting.TemporalRisEnabled ? 1 : 0);
+            hash = AddHash(hash, Lighting.TemporalRisHistoryMCap);
+            hash = AddHash(hash, Lighting.SpatialRisEnabled ? 1 : 0);
+            hash = AddHash(hash, Lighting.SpatialRisNeighborCount);
             hash = AddHash(hash, shadowRandomness);
             hash = AddHash(hash, parallaxMaximumStrengthAngle);
             hash = AddHash(hash, Lighting.LightFalloffScale);

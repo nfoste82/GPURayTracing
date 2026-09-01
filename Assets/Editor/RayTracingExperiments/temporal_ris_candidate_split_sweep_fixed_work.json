@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "label": "temporal_ris_candidate_split_sweep_fixed_work",
+  "scenes": ["Assets/Scenes/Generated/TemporalRisStress.unity"],
+  "width": 1024,
+  "height": 1024,
+  "samples": 200,
+  "durationSeconds": 0.0,
+  "cooldownSeconds": 12.0,
+  "referenceRoot": "Assets/Editor/RayTracingSceneReferences",
+  "variants": [
+    { "name": "local_4", "overrides": [
+      { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+      { "path": "Lighting.InitialRisCandidateCount", "value": "4" },
+      { "path": "Lighting.TemporalRisEnabled", "value": "false" },
+      { "path": "enableAdaptiveSampling", "value": "false" }
+    ] },
+    { "name": "temporal_local_4_history_1", "overrides": [
+      { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+      { "path": "Lighting.InitialRisCandidateCount", "value": "4" },
+      { "path": "Lighting.TemporalRisEnabled", "value": "true" },
+      { "path": "Lighting.TemporalRisHistoryMCap", "value": "1" },
+      { "path": "enableAdaptiveSampling", "value": "false" }
+    ] },
+    { "name": "temporal_local_2_history_2", "overrides": [
+      { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+      { "path": "Lighting.InitialRisCandidateCount", "value": "2" },
+      { "path": "Lighting.TemporalRisEnabled", "value": "true" },
+      { "path": "Lighting.TemporalRisHistoryMCap", "value": "2" },
+      { "path": "enableAdaptiveSampling", "value": "false" }
+    ] },
+    { "name": "temporal_local_1_history_4", "overrides": [
+      { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+      { "path": "Lighting.InitialRisCandidateCount", "value": "1" },
+      { "path": "Lighting.TemporalRisEnabled", "value": "true" },
+      { "path": "Lighting.TemporalRisHistoryMCap", "value": "4" },
+      { "path": "enableAdaptiveSampling", "value": "false" }
+    ] },
+    { "name": "temporal_local_4_history_4", "overrides": [
+      { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+      { "path": "Lighting.InitialRisCandidateCount", "value": "4" },
+      { "path": "Lighting.TemporalRisEnabled", "value": "true" },
+      { "path": "Lighting.TemporalRisHistoryMCap", "value": "4" },
+      { "path": "enableAdaptiveSampling", "value": "false" }
+    ] }
+  ]
+}
