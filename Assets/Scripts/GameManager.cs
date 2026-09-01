@@ -41,6 +41,7 @@ public class GameManager : MonoBehaviour
 
     [SerializeField] private ComputeShader utilityShader;
     [SerializeField] private ComputeShader featuresShader;
+    [SerializeField] private ComputeShader spatialRisPrepassShader;
     [SerializeField] private ComputeShader focusShader;
     [SerializeField] private ComputeShader adaptiveSchedulerShader;
     [SerializeField] private ComputeShader adaptiveTraceShader;
@@ -702,6 +703,8 @@ public class GameManager : MonoBehaviour
         Lighting.InitialRisCandidateCount = settings.InitialRisCandidateCount;
         Lighting.TemporalRisEnabled = settings.TemporalRisEnabled;
         Lighting.TemporalRisHistoryMCap = settings.TemporalRisHistoryMCap;
+        Lighting.SpatialRisEnabled = settings.SpatialRisEnabled;
+        Lighting.SpatialRisNeighborCount = settings.SpatialRisNeighborCount;
         SpatialDenoising.enabled = settings.EnableSpatialDenoising;
         SpatialDenoising.iterations = settings.DenoiserIterations;
         SpatialDenoising.luminanceSigma = settings.DenoiserLuminanceSigma;
@@ -760,11 +763,15 @@ public class GameManager : MonoBehaviour
         {
             featuresShader = Resources.Load<ComputeShader>("RayTracingFeatures");
         }
+        if (spatialRisPrepassShader == null)
+        {
+            spatialRisPrepassShader = Resources.Load<ComputeShader>("RayTracingSpatialRisPrepass");
+        }
         if (focusShader == null)
         {
             focusShader = Resources.Load<ComputeShader>("RayTracingFocus");
         }
-        if (utilityShader == null || featuresShader == null || focusShader == null)
+        if (utilityShader == null || featuresShader == null || focusShader == null || spatialRisPrepassShader == null)
         {
             Debug.LogError("Split ray tracing compute shaders are missing from Resources.", this);
         }
@@ -1075,7 +1082,7 @@ public class GameManager : MonoBehaviour
         _temporalDenoisingManager.ReleaseResources();
     }
 
-    private bool ShouldRunTemporalRis() => Lighting.TemporalRisEnabled && numberOfPasses == 1
+    private bool ShouldRunTemporalRis() => (Lighting.TemporalRisEnabled || Lighting.SpatialRisEnabled) && numberOfPasses == 1
         && !ShouldUseAdaptiveSampling() && debugRenderMode == DebugRenderMode.FinalColor;
 
     private bool IsTemporalRisUnsupported() => IsFogEnabled() || _temporalDenoisingManager.DynamicSceneChanged || WaterManager.IsAnimated;
@@ -1381,6 +1388,23 @@ public class GameManager : MonoBehaviour
         {
             DispatchAdaptiveSampling();
             return;
+        }
+
+        if (targetShader == shader && Lighting.SpatialRisEnabled && ShouldRunTemporalRis()
+            && !IsTemporalRisUnsupported() && spatialRisPrepassShader != null)
+        {
+            var prepassKernel = spatialRisPrepassShader.FindKernel("CSSpatialRisPrepass");
+            SetShaderParameters(spatialRisPrepassShader, prepassKernel);
+            spatialRisPrepassShader.SetTexture(prepassKernel, FeatureNormal, _featureNormalTexture);
+            spatialRisPrepassShader.SetTexture(prepassKernel, FeatureAlbedo, _featureAlbedoTexture);
+            spatialRisPrepassShader.SetTexture(prepassKernel, FeatureDepth, _featureDepthTexture);
+            spatialRisPrepassShader.SetTexture(prepassKernel, FeatureIdentity, _featureIdentityTexture);
+            spatialRisPrepassShader.SetTexture(prepassKernel, FeatureValidity, _featureValidityTexture);
+            _temporalRisManager.BindSpatialPrepass(spatialRisPrepassShader, prepassKernel, this);
+            var spatialGroupsX = Mathf.CeilToInt(_textureSize.x / (float)RenderThreadCountX);
+            var spatialGroupsY = Mathf.CeilToInt(_textureSize.y / (float)RenderThreadCountY);
+            ComputeDispatch.Dispatch(spatialRisPrepassShader, prepassKernel, spatialGroupsX, spatialGroupsY, 1);
+            _temporalRisManager.BindSpatialResolve(targetShader, kernelHandle, this);
         }
 
         targetShader.SetTexture(kernelHandle, Result, _outputTexture);
@@ -3810,6 +3834,8 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, Lighting.InitialRisCandidateCount);
             hash = AddHash(hash, Lighting.TemporalRisEnabled ? 1 : 0);
             hash = AddHash(hash, Lighting.TemporalRisHistoryMCap);
+            hash = AddHash(hash, Lighting.SpatialRisEnabled ? 1 : 0);
+            hash = AddHash(hash, Lighting.SpatialRisNeighborCount);
             hash = AddHash(hash, shadowRandomness);
             hash = AddHash(hash, parallaxMaximumStrengthAngle);
             hash = AddHash(hash, Lighting.LightFalloffScale);

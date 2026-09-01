@@ -86,8 +86,17 @@ public sealed class GameManagerEditor : Editor
             if (serializedObject.FindProperty("_lightingManager._lightSamplingStrategy").enumValueIndex == (int)LightSamplingStrategy.ImportanceSampled)
             {
                 DrawLightingProperty("initialRisCandidateCount", "Initial RIS Candidate Count");
-                DrawLightingProperty("temporalRisEnabled", "Temporal RIS Reuse");
-                if (serializedObject.FindProperty("_lightingManager._temporalRisEnabled").boolValue)
+                DrawLightingProperty("temporalRisEnabled", "Temporal RIS Reuse (Experimental)");
+                DrawLightingProperty("spatialRisEnabled", "Spatial RIS Reuse (Experimental)");
+                if (serializedObject.FindProperty("_lightingManager._spatialRisEnabled").boolValue)
+                {
+                    DrawLightingProperty("spatialRisNeighborCount", "Spatial RIS Neighbor Count");
+                    if (serializedObject.FindProperty("_lightingManager._temporalRisEnabled").boolValue)
+                    {
+                        EditorGUILayout.HelpBox("Spatial RIS currently takes precedence over temporal RIS. Enabling both does not combine temporal and spatial reuse.", MessageType.Info);
+                    }
+                }
+                else if (serializedObject.FindProperty("_lightingManager._temporalRisEnabled").boolValue)
                 {
                     DrawLightingProperty("temporalRisHistoryMCap", "Temporal RIS History M Cap");
                 }

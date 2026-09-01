@@ -613,10 +613,17 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("retainedPreviousFraction"));
             Assert.That(source, Does.Contain("GetInitialRisReservoirScale"));
             Assert.That(source, Does.Contain("GetTemporalRisMergedWeight"));
+            Assert.That(source, Does.Contain("unshadowed *= PowerHeuristic(candidate.proposalPdf, materialPdf);"));
+            Assert.That(source, Does.Contain("candidate.proposalPdf * candidate.triangleSelectionProbability * lightShapePdf"));
+            Assert.That(source, Does.Contain("uint temporalReuseRngState = Hash(rngState ^ 0x9e3779b9u);"));
+            Assert.That(source, Does.Contain("rand(temporalReuseRngState) * totalWeight < mergedWeight"));
+            Assert.That(source, Does.Contain("uint spatialReuseRngState = Hash(rngState ^ 0x85ebca6bu);"));
+            Assert.That(source, Does.Contain("rand(spatialReuseRngState) * totalWeight < mergedWeight"));
             Assert.That(manager, Does.Contain("ShouldRunTemporalRis"));
             Assert.That(manager, Does.Contain("TemporalRisManager"));
             Assert.That(manager, Does.Contain("_temporalRisManager.InvalidateHistory()"));
-            Assert.That(temporalManager, Does.Contain("gameManager.Lighting.InitialRisCandidateCount + gameManager.Lighting.TemporalRisHistoryMCap"));
+            Assert.That(temporalManager, Does.Contain("gameManager.Lighting.InitialRisCandidateCount + (gameManager.Lighting.SpatialRisEnabled"));
+            Assert.That(temporalManager, Does.Contain("gameManager.Lighting.TemporalRisHistoryMCap"));
             Assert.That(temporalManager, Does.Contain("public void InvalidateHistory()"));
             Assert.That(source, Does.Contain("_TemporalRisDiagnostics"));
             Assert.That(temporalManager, Does.Contain("DiagnosticsCount = 10"));
@@ -814,8 +821,11 @@ namespace GPURayTracing.Tests
             Assert.That(window, Does.Contain("settings.txt"));
             Assert.That(window, Does.Contain("metrics.csv"));
             Assert.That(window, Does.Contain("rgb_psnr_db,rgb_rmse,psnr_db_improvement,rmse_improvement"));
+            Assert.That(window, Does.Contain("reference_metrics_available,reference_status"));
+            Assert.That(window, Does.Contain("rgb_mean_linear,rgb_mean_luminance"));
+            Assert.That(window, Does.Contain("ReadCurrentFinalColorPixels"));
             Assert.That(window, Does.Contain("CalculatePsnrImprovement"));
-            Assert.That(window, Does.Not.Contain("reference_status"));
+            Assert.That(window, Does.Contain("SanitizeCsvValue"));
             Assert.That(window, Does.Contain("run_complete.txt"));
             Assert.That(window, Does.Contain("StopEditorRunRecording"));
             Assert.That(window, Does.Contain("recordedFrames"));
@@ -1020,6 +1030,24 @@ namespace GPURayTracing.Tests
             Assert.That(lighting, Does.Contain("TemporalRisHistoryMCap"));
             Assert.That(settings, Does.Contain("TemporalRisHistoryMCap = 1"));
             Assert.That(manager, Does.Contain("Lighting.TemporalRisHistoryMCap = settings.TemporalRisHistoryMCap"));
+        }
+
+        [Test]
+        public void RisReuse_IsExperimentalAndDisabledByDefault()
+        {
+            string lighting = System.IO.File.ReadAllText("Assets/Scripts/Lighting/LightingManager.cs");
+            string settings = System.IO.File.ReadAllText("Assets/Scripts/SceneSettings.cs");
+            string editor = System.IO.File.ReadAllText("Assets/Editor/GameManagerEditor.cs");
+            string generator = System.IO.File.ReadAllText("Assets/Editor/RayTracingSceneGenerator.cs");
+
+            Assert.That(lighting, Does.Contain("private bool _temporalRisEnabled = false"));
+            Assert.That(lighting, Does.Contain("Experimental: reuses validated primary opaque direct-light reservoirs"));
+            Assert.That(settings, Does.Contain("public bool TemporalRisEnabled = false"));
+            Assert.That(settings, Does.Contain("public bool SpatialRisEnabled = false"));
+            Assert.That(editor, Does.Contain("Temporal RIS Reuse (Experimental)"));
+            Assert.That(editor, Does.Contain("Spatial RIS Reuse (Experimental)"));
+            Assert.That(generator, Does.Not.Contain("TemporalRisEnabled = true"));
+            Assert.That(generator, Does.Not.Contain("SpatialRisEnabled = true"));
         }
 
         [Test]

@@ -131,6 +131,8 @@ public static class RayTracingSceneCapture
         public bool temporalRisEnabled;
         public int initialRisCandidateCount;
         public int temporalRisHistoryMCap;
+        public bool spatialRisEnabled;
+        public int spatialRisNeighborCount;
         public string lightSamplingStrategy;
         public int lightSampleCount;
         public int maxLightSamples;
@@ -858,6 +860,7 @@ public static class RayTracingSceneCapture
         Debug.Log($"Generating {durationSeconds:0.###}-second reference at {width}x{height} for '{scenePath}'.");
         // A reference must not contain the experimental temporal reservoir estimator it evaluates.
         manager.Lighting.TemporalRisEnabled = false;
+        manager.Lighting.SpatialRisEnabled = false;
         manager.InvalidateTemporalRisHistory();
         string sceneName = Path.GetFileNameWithoutExtension(scenePath);
         CaptureResult result = CaptureVariant(manager, sceneName, directory, Path.GetFileNameWithoutExtension(imagePath),
@@ -1164,7 +1167,7 @@ public static class RayTracingSceneCapture
             WriteTimingReport(diagnosticsRoot, label, sceneName, adaptiveSampling, measuredFrames, durationSeconds,
                 captureWidth, captureHeight, stopwatch.Elapsed.TotalMilliseconds, retiredPaths);
             if (adaptiveDiagnostics != null) WriteAdaptiveDiagnostics(diagnosticsRoot, adaptiveDiagnostics, adaptiveFrames);
-            WriteTemporalRisDiagnostics(diagnosticsRoot, manager, temporalRisDiagnostics);
+            WriteRisReuseDiagnostics(diagnosticsRoot, manager, temporalRisDiagnostics);
             if (adaptiveDiagnostics != null)
             {
                 WriteAdaptiveFrameTelemetry(diagnosticsRoot, adaptiveFrames);
@@ -1176,30 +1179,40 @@ public static class RayTracingSceneCapture
         return new CaptureResult(outputPath, measuredFrames, stopwatch.Elapsed.TotalMilliseconds, retiredPaths, adaptiveDiagnostics);
     }
 
-    private static void WriteTemporalRisDiagnostics(string outputRoot, GameManager manager, uint[] diagnostics)
+    private static void WriteRisReuseDiagnostics(string outputRoot, GameManager manager, uint[] diagnostics)
     {
-        if (!manager.Lighting.TemporalRisEnabled || diagnostics.Length < TemporalRisManager.DiagnosticsCount) return;
+        bool temporalEnabled = manager.Lighting.TemporalRisEnabled;
+        bool spatialEnabled = manager.Lighting.SpatialRisEnabled;
+        if ((!temporalEnabled && !spatialEnabled) || diagnostics.Length < TemporalRisManager.DiagnosticsCount) return;
         ulong eligible = diagnostics[TemporalRisManager.EligibleCount];
+        int configuredReuseCandidateCount = spatialEnabled
+            ? manager.Lighting.SpatialRisNeighborCount
+            : manager.Lighting.TemporalRisHistoryMCap;
+        ulong reuseOpportunities = spatialEnabled
+            ? eligible * (ulong)configuredReuseCandidateCount
+            : eligible;
         ulong accepted = diagnostics[TemporalRisManager.HistoryAcceptedCount];
         ulong merged = diagnostics[TemporalRisManager.HistoryMergedCount];
         string report = "{\n" +
+            $"  \"reuseMode\": \"{(spatialEnabled ? "spatial" : "temporal")}\",\n" +
             $"  \"configuredLocalCandidateCount\": {manager.Lighting.InitialRisCandidateCount},\n" +
-            $"  \"configuredHistoryMCap\": {manager.Lighting.TemporalRisHistoryMCap},\n" +
+            $"  \"configuredReuseCandidateCount\": {configuredReuseCandidateCount},\n" +
             $"  \"eligiblePrimaryHits\": {eligible},\n" +
-            $"  \"historyAccepted\": {accepted},\n" +
-            $"  \"historyAcceptanceRate\": {(eligible > 0 ? (double)accepted / eligible : 0.0):R},\n" +
-            $"  \"historyRejectedOutOfBounds\": {diagnostics[TemporalRisManager.HistoryOutOfBoundsCount]},\n" +
-            $"  \"historyRejectedFeatures\": {diagnostics[TemporalRisManager.HistoryFeatureRejectedCount]},\n" +
-            $"  \"historyRejectedReservoir\": {diagnostics[TemporalRisManager.HistoryReservoirRejectedCount]},\n" +
-            $"  \"historyRejectedZeroTarget\": {diagnostics[TemporalRisManager.HistoryZeroTargetCount]},\n" +
-            $"  \"historyMerged\": {merged},\n" +
-            $"  \"historyMergeRate\": {(eligible > 0 ? (double)merged / eligible : 0.0):R},\n" +
-            $"  \"historySelected\": {diagnostics[TemporalRisManager.HistorySelectedCount]},\n" +
-            $"  \"historySelectionRate\": {(merged > 0 ? (double)diagnostics[TemporalRisManager.HistorySelectedCount] / merged : 0.0):R},\n" +
-            $"  \"meanRetainedHistoryM\": {(merged > 0 ? (double)diagnostics[TemporalRisManager.RetainedMTotal] / merged : 0.0):R},\n" +
+            $"  \"reuseOpportunities\": {reuseOpportunities},\n" +
+            $"  \"reuseAccepted\": {accepted},\n" +
+            $"  \"reuseAcceptanceRate\": {(reuseOpportunities > 0 ? (double)accepted / reuseOpportunities : 0.0):R},\n" +
+            $"  \"reuseRejectedOutOfBounds\": {diagnostics[TemporalRisManager.HistoryOutOfBoundsCount]},\n" +
+            $"  \"reuseRejectedFeatures\": {diagnostics[TemporalRisManager.HistoryFeatureRejectedCount]},\n" +
+            $"  \"reuseRejectedReservoir\": {diagnostics[TemporalRisManager.HistoryReservoirRejectedCount]},\n" +
+            $"  \"reuseRejectedZeroTarget\": {diagnostics[TemporalRisManager.HistoryZeroTargetCount]},\n" +
+            $"  \"reuseMerged\": {merged},\n" +
+            $"  \"reuseMergeRate\": {(reuseOpportunities > 0 ? (double)merged / reuseOpportunities : 0.0):R},\n" +
+            $"  \"reuseSelected\": {diagnostics[TemporalRisManager.HistorySelectedCount]},\n" +
+            $"  \"reuseSelectionRate\": {(merged > 0 ? (double)diagnostics[TemporalRisManager.HistorySelectedCount] / merged : 0.0):R},\n" +
+            $"  \"meanRetainedReuseM\": {(merged > 0 ? (double)diagnostics[TemporalRisManager.RetainedMTotal] / merged : 0.0):R},\n" +
             $"  \"meanEffectiveReservoirM\": {(eligible > 0 ? (double)diagnostics[TemporalRisManager.EffectiveMTotal] / eligible : 0.0):R}\n" +
             "}\n";
-        File.WriteAllText(Path.Combine(outputRoot, "temporal_ris_diagnostics.json"), report);
+        File.WriteAllText(Path.Combine(outputRoot, spatialEnabled ? "spatial_ris_diagnostics.json" : "temporal_ris_diagnostics.json"), report);
     }
 
     private static void WriteAdaptiveDiagnostics(string outputRoot, GameManager.AdaptiveDiagnosticsData diagnostics,
@@ -1945,6 +1958,7 @@ public static class RayTracingSceneCapture
             File.Move(result.imagePath, imagePath);
         }
         manager.Lighting.TemporalRisEnabled = false;
+        manager.Lighting.SpatialRisEnabled = false;
         manager.InvalidateTemporalRisHistory();
         metadata = WriteReferenceMetadata(Path.ChangeExtension(imagePath, ".json"), manager, scenePath, imagePath, ReferenceWidth, ReferenceHeight,
             ReferenceDurationSeconds, result.measuredFrames);
@@ -1960,6 +1974,8 @@ public static class RayTracingSceneCapture
             temporalRisEnabled = manager.Lighting.TemporalRisEnabled,
             initialRisCandidateCount = manager.Lighting.InitialRisCandidateCount,
             temporalRisHistoryMCap = manager.Lighting.TemporalRisHistoryMCap,
+            spatialRisEnabled = manager.Lighting.SpatialRisEnabled,
+            spatialRisNeighborCount = manager.Lighting.SpatialRisNeighborCount,
             lightSamplingStrategy = manager.Lighting.LightSamplingStrategy.ToString(),
             lightSampleCount = manager.Lighting.LightSampleCount,
             maxLightSamples = manager.maxLightSamples,

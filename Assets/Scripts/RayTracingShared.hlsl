@@ -4,7 +4,9 @@
 // with cs.SetTexture
 #if !defined(RAY_TRACING_ADAPTIVE_TRACE)
 RWTexture2D<float4> Result;
-#if defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
+int _SpatialRisEnabled;
+int _SpatialRisNeighborCount;
+#if (defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)) || defined(SPATIAL_RIS_PREPASS)
 struct TemporalRisReservoir
 {
     float4 data0;
@@ -12,6 +14,7 @@ struct TemporalRisReservoir
     float4 data2;
     float4 data3;
 };
+#if defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
 StructuredBuffer<TemporalRisReservoir> _TemporalRisPreviousReservoir;
 Texture2D<float4> _TemporalRisPreviousNormal;
 Texture2D<float> _TemporalRisPreviousDepth;
@@ -28,6 +31,15 @@ float _TemporalRisDepthThreshold;
 float _TemporalRisNormalThreshold;
 int2 _TemporalRisTextureSize;
 RWStructuredBuffer<uint> _TemporalRisDiagnostics;
+#endif
+StructuredBuffer<TemporalRisReservoir> _SpatialRisLocalReservoir;
+StructuredBuffer<uint> _SpatialRisPostCandidateRng;
+RWStructuredBuffer<TemporalRisReservoir> _SpatialRisLocalWriteReservoir;
+RWStructuredBuffer<uint> _SpatialRisPostCandidateRngWrite;
+Texture2D<float4> _SpatialRisReceiverNormal;
+Texture2D<float> _SpatialRisReceiverDepth;
+Texture2D<float> _SpatialRisReceiverIdentity;
+Texture2D<float> _SpatialRisReceiverValidity;
 #endif
 #endif
 RWTexture2D<float4> AccumulationResult;
@@ -2971,7 +2983,7 @@ struct InitialRisCandidate
     int valid;
 };
 
-#if defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
+#if (defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)) || defined(SPATIAL_RIS_PREPASS)
 bool IsInitialRisEligible(RayHit hit);
 bool IsFiniteRisValue(float value);
 bool IsFiniteRisColor(float3 value);
@@ -2981,10 +2993,35 @@ float GetTemporalRisReceiverIdentity(RayHit hit)
     return hit.obj_radius > 0.0f ? 2.0f + hit.objectIndex : 1000000.0f + hit.meshIndex;
 }
 
+#if defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
 bool IsTemporalRisEligible(RayHit hit)
 {
     return _TemporalRisEnabled != 0 && _TemporalRisUnsupported == 0 && IsInitialRisEligible(hit)
         && hit.lightIndex < 0 && hit.smoothness <= 0.8f;
+}
+
+bool IsSpatialRisEligible(RayHit hit)
+{
+    return _SpatialRisEnabled != 0 && _TemporalRisUnsupported == 0 && IsInitialRisEligible(hit)
+        && hit.lightIndex < 0 && hit.smoothness <= 0.8f;
+}
+#elif defined(SPATIAL_RIS_PREPASS)
+bool IsSpatialRisEligible(RayHit hit)
+{
+    return _SpatialRisEnabled != 0 && IsInitialRisEligible(hit)
+        && hit.lightIndex < 0 && hit.smoothness <= 0.8f;
+}
+#endif
+
+#if defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
+bool IsTemporalRisReceiverMatch(RayHit hit, uint2 sourcePixel)
+{
+    if (_TemporalRisPreviousValidity[sourcePixel] <= 0.5f) return false;
+    if (_TemporalRisPreviousIdentity[sourcePixel] != GetTemporalRisReceiverIdentity(hit)) return false;
+    float relativeDepth = abs(_TemporalRisPreviousDepth[sourcePixel] - hit.distance)
+        / max(0.001f, min(_TemporalRisPreviousDepth[sourcePixel], hit.distance));
+    if (relativeDepth > _TemporalRisDepthThreshold) return false;
+    return dot(normalize(_TemporalRisPreviousNormal[sourcePixel].xyz), normalize(hit.normal)) >= _TemporalRisNormalThreshold;
 }
 
 bool GetTemporalRisPreviousPixel(RayHit hit, uint2 pixel, out uint2 previousPixel)
@@ -3099,6 +3136,73 @@ bool LoadTemporalRisCandidate(uint2 previousPixel, out InitialRisCandidate candi
     return true;
 }
 
+bool LoadSpatialRisCandidate(uint2 sourcePixel, RayHit hit, out InitialRisCandidate candidate,
+                             out float weightSum, out float selectedTarget, out int reservoirM,
+                             bool recordDiagnostics)
+{
+    candidate.valid = 0;
+    weightSum = 0.0f;
+    selectedTarget = 0.0f;
+    reservoirM = 0;
+    if (_SpatialRisReceiverValidity[sourcePixel] <= 0.5f
+        || _SpatialRisReceiverIdentity[sourcePixel] != GetTemporalRisReceiverIdentity(hit))
+    {
+        if (recordDiagnostics) InterlockedAdd(_TemporalRisDiagnostics[3], 1);
+        return false;
+    }
+    float relativeDepth = abs(_SpatialRisReceiverDepth[sourcePixel] - hit.distance)
+        / max(0.001f, min(_SpatialRisReceiverDepth[sourcePixel], hit.distance));
+    if (relativeDepth > _TemporalRisDepthThreshold
+        || dot(normalize(_SpatialRisReceiverNormal[sourcePixel].xyz), normalize(hit.normal)) < _TemporalRisNormalThreshold)
+    {
+        if (recordDiagnostics) InterlockedAdd(_TemporalRisDiagnostics[3], 1);
+        return false;
+    }
+
+    uint index = sourcePixel.y * (uint)_TemporalRisTextureSize.x + sourcePixel.x;
+    TemporalRisReservoir reservoir = _SpatialRisLocalReservoir[index];
+    if (reservoir.data3.w < 0.5f || reservoir.data2.x <= 0.0f || reservoir.data2.y <= 0.0f || reservoir.data2.w < 1.0f)
+    {
+        if (recordDiagnostics) InterlockedAdd(_TemporalRisDiagnostics[4], 1);
+        return false;
+    }
+    candidate.samplePosition = reservoir.data0.xyz;
+    candidate.distance = reservoir.data0.w;
+    candidate.direction = reservoir.data1.xyz;
+    candidate.environmentPdf = reservoir.data1.w;
+    candidate.proposalPdf = reservoir.data2.z;
+    candidate.lightIndex = (int)reservoir.data3.x;
+    candidate.triangleIndex = (int)reservoir.data3.y;
+    candidate.isEnvironment = (int)reservoir.data3.z;
+    candidate.isMeshLight = candidate.triangleIndex >= 0 ? 1 : 0;
+    candidate.triangleSelectionProbability = candidate.isEnvironment != 0 ? 1.0f : reservoir.data1.w;
+    candidate.risScale = 0.0f;
+    if (candidate.isEnvironment == 0)
+    {
+        if (candidate.lightIndex < 0 || candidate.lightIndex >= _NumLights)
+        {
+            if (recordDiagnostics) InterlockedAdd(_TemporalRisDiagnostics[4], 1);
+            return false;
+        }
+        candidate.light = _Lights[candidate.lightIndex];
+        if (candidate.triangleIndex >= 0)
+        {
+            MeshTriangle meshTriangle = _Triangles[candidate.triangleIndex];
+            candidate.light.position = meshTriangle.vertex0;
+            candidate.light.u = meshTriangle.vertex1 - meshTriangle.vertex0;
+            candidate.light.v = meshTriangle.vertex2 - meshTriangle.vertex0;
+            candidate.light.normal = meshTriangle.normal;
+            candidate.light.area = GetTriangleArea(meshTriangle);
+            candidate.light.type = LightTypeTriangle;
+        }
+    }
+    candidate.valid = 1;
+    weightSum = reservoir.data2.x;
+    selectedTarget = reservoir.data2.y;
+    reservoirM = (int)reservoir.data2.w;
+    return true;
+}
+
 float EvaluateTemporalRisCandidateTarget(Ray ray, RayHit hit, InitialRisCandidate candidate)
 {
     float3 unshadowed = 0.0f;
@@ -3126,6 +3230,17 @@ float EvaluateTemporalRisCandidateTarget(Ray ray, RayHit hit, InitialRisCandidat
         unshadowed = candidate.light.emission * GetDirectLightFalloff(candidate.distance, candidate.light.radius)
             * materialResponse * normalDotLight;
     }
+
+    if (candidate.isEnvironment != 0)
+    {
+        unshadowed *= PowerHeuristic(candidate.proposalPdf, materialPdf);
+    }
+    else if (candidate.light.type == LightTypeTriangle || candidate.light.type == LightTypeSunTriangle)
+    {
+        float lightShapePdf = GetLightShapePdf(candidate.light, hit.position, candidate.samplePosition);
+        unshadowed *= PowerHeuristic(candidate.proposalPdf * candidate.triangleSelectionProbability * lightShapePdf, materialPdf);
+    }
+
     float target = dot(max(0.0f, unshadowed), float3(0.2126f, 0.7152f, 0.0722f));
     return IsFiniteRisValue(target) ? target : 0.0f;
 }
@@ -3151,6 +3266,7 @@ bool ReprojectTemporalRisCandidate(RayHit hit, inout InitialRisCandidate candida
     return true;
 }
 #endif
+#endif
 
 bool IsFiniteRisValue(float value)
 {
@@ -3164,8 +3280,40 @@ bool IsFiniteRisColor(float3 value)
 
 float GetInitialRisReservoirScale(float weightSum, int candidateCount, float selectedTarget)
 {
+    // Equivalent to totalWeight / (effectiveCandidateCount * selectedWeight), expressed in
+    // target measure so reused candidates retain their own proposal PDF.
     return weightSum > 0.0f && selectedTarget > 0.0f
         ? weightSum / (max(1, candidateCount) * max(1e-8f, selectedTarget)) : 0.0f;
+}
+
+void InitializeRisCandidate(out InitialRisCandidate candidate)
+{
+    Light emptyLight;
+    emptyLight.position = 0.0f;
+    emptyLight.emission = 0.0f;
+    emptyLight.u = 0.0f;
+    emptyLight.radius = 0.0f;
+    emptyLight.v = 0.0f;
+    emptyLight.area = 0.0f;
+    emptyLight.normal = 0.0f;
+    emptyLight.type = 0;
+    emptyLight.triangleStart = 0;
+    emptyLight.triangleCount = 0;
+    emptyLight.totalArea = 0.0f;
+    emptyLight.padding = 0.0f;
+    candidate.light = emptyLight;
+    candidate.samplePosition = 0.0f;
+    candidate.direction = 0.0f;
+    candidate.distance = 0.0f;
+    candidate.environmentPdf = 0.0f;
+    candidate.triangleSelectionProbability = 0.0f;
+    candidate.valid = 0;
+    candidate.isEnvironment = 0;
+    candidate.isMeshLight = 0;
+    candidate.lightIndex = -1;
+    candidate.triangleIndex = -1;
+    candidate.proposalPdf = 0.0f;
+    candidate.risScale = 0.0f;
 }
 
 float GetTemporalRisMergedWeight(float previousWeightSum, int previousM, int retainedPreviousM,
@@ -3586,8 +3734,9 @@ int SelectLightForDraw(int iteration, int drawCount, int lightCount, float3 shad
 }
 
 float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
-                             bool volumeEvent, bool initialRis, out bool initialRisSelected,
-                             uint2 pixel, inout uint rngState)
+                              bool volumeEvent, bool initialRis, out bool initialRisSelected,
+                              uint2 pixel, inout uint rngState, bool reservoirOnly,
+                              out InitialRisCandidate reservoirCandidate, out float reservoirWeightSum, out int reservoirM)
 {
     initialRisSelected = false;
     int sampleCount = max(1, samplesPerLight);
@@ -3644,9 +3793,14 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
     // SINGLE inlined SampleSingleLight call site. Finite-light and environment samples both use
     // this visibility path so the Metal compiler sees only one shadow-BVH traversal body.
     bool useInitialRis = initialRis && !volumeEvent && IsInitialRisEligible(hit);
+#if defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
+    bool useSpatialRis = useInitialRis && IsSpatialRisEligible(hit);
+#endif
     InitialRisCandidate selectedRisCandidate;
     selectedRisCandidate.valid = 0;
     int risLightIndex = 0;
+    reservoirWeightSum = 0.0f;
+    reservoirM = 0;
     if (useInitialRis)
     {
         int proposalCount = (lightCount > 0 ? 1 : 0) + (sampleEnvironment ? 1 : 0);
@@ -3654,26 +3808,24 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
         float selectedWeight = 0.0f;
         int candidateCount = max(1, _InitialRisCandidateCount);
         int candidateIndex;
-        [loop]
-        for (candidateIndex = 0; candidateIndex < candidateCount; candidateIndex++)
+#if defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
+        if (!useSpatialRis)
+#endif
         {
-            InitialRisCandidate candidate;
-            candidate.valid = 0;
-            candidate.isEnvironment = 0;
-            candidate.isMeshLight = 0;
-            candidate.lightIndex = -1;
-            candidate.triangleIndex = -1;
-            candidate.proposalPdf = 0.0f;
-            candidate.risScale = 0.0f;
-            if (proposalCount <= 0) continue;
-
-            float branchPdf = 1.0f / proposalCount;
-            bool chooseEnvironment = sampleEnvironment && (lightCount <= 0 || rand(rngState) < branchPdf);
-            float3 unshadowed = 0.0f;
-            float proposalPdf = 0.0f;
-            float materialPdf = 0.0f;
-            if (chooseEnvironment)
+            [loop]
+            for (candidateIndex = 0; candidateIndex < candidateCount; candidateIndex++)
             {
+                InitialRisCandidate candidate;
+                InitializeRisCandidate(candidate);
+                if (proposalCount <= 0) continue;
+
+                float branchPdf = 1.0f / proposalCount;
+                bool chooseEnvironment = sampleEnvironment && (lightCount <= 0 || rand(rngState) < branchPdf);
+                float3 unshadowed = 0.0f;
+                float proposalPdf = 0.0f;
+                float materialPdf = 0.0f;
+                if (chooseEnvironment)
+                {
                 uint y = SelectEnvironmentCdf(true, 0u, (uint)_EnvironmentCdfHeight, rand(rngState));
                 uint x = SelectEnvironmentCdf(false, y * (uint)_EnvironmentCdfWidth, (uint)_EnvironmentCdfWidth, rand(rngState));
                 float2 distributionUv = (float2(x, y) + float2(rand(rngState), rand(rngState)))
@@ -3694,9 +3846,9 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
                 proposalPdf = branchPdf * candidate.environmentPdf;
                 unshadowed = GetSkyboxColor(candidate.direction) * _SkyboxLight.xyz * brdf
                     * saturate(dot(hit.normal, candidate.direction));
-            }
-            else
-            {
+                }
+                else
+                {
                 float ignoredWeight;
                 float selectionPdf;
                 int candidateLightIndex = SelectLightForDraw(0, 1, lightCount, hit.position, rngState, ignoredWeight, selectionPdf);
@@ -3760,38 +3912,44 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
                 }
                 else if (directional) unshadowed = candidate.light.emission * materialResponse * normalDotLight;
                 else unshadowed = candidate.light.emission * GetDirectLightFalloff(candidate.distance, candidate.light.radius) * materialResponse * normalDotLight;
-            }
+                }
 
-            if (candidate.isEnvironment != 0)
-            {
+                if (candidate.isEnvironment != 0)
+                {
                 unshadowed *= PowerHeuristic(proposalPdf, materialPdf);
-            }
-            else if (candidate.light.type == LightTypeTriangle || candidate.light.type == LightTypeSunTriangle)
-            {
+                }
+                else if (candidate.light.type == LightTypeTriangle || candidate.light.type == LightTypeSunTriangle)
+                {
                 float lightShapePdf = GetLightShapePdf(candidate.light, hit.position, candidate.samplePosition);
                 unshadowed *= PowerHeuristic(proposalPdf * candidate.triangleSelectionProbability * lightShapePdf, materialPdf);
-            }
+                }
 
-            float3 weightedContribution = proposalPdf > 1e-8f ? max(0.0f, unshadowed / proposalPdf) : 0.0f;
-            float weight = dot(weightedContribution, float3(0.2126f, 0.7152f, 0.0722f));
-            if (!IsFiniteRisColor(weightedContribution) || !IsFiniteRisValue(weight) || weight <= 0.0f) continue;
-            candidate.valid = 1;
-            candidate.proposalPdf = proposalPdf;
-            totalWeight += weight;
-            if (rand(rngState) * totalWeight < weight)
-            {
-                selectedRisCandidate = candidate;
-                selectedWeight = weight;
-                risLightIndex = candidate.isEnvironment != 0 ? -1 : candidate.lightIndex;
+                float3 weightedContribution = proposalPdf > 1e-8f ? max(0.0f, unshadowed / proposalPdf) : 0.0f;
+                float weight = dot(weightedContribution, float3(0.2126f, 0.7152f, 0.0722f));
+                if (!IsFiniteRisColor(weightedContribution) || !IsFiniteRisValue(weight) || weight <= 0.0f) continue;
+                candidate.valid = 1;
+                candidate.proposalPdf = proposalPdf;
+                totalWeight += weight;
+                if (rand(rngState) * totalWeight < weight)
+                {
+                    selectedRisCandidate = candidate;
+                    selectedWeight = weight;
+                    risLightIndex = candidate.isEnvironment != 0 ? -1 : candidate.lightIndex;
+                }
             }
         }
-        int effectiveCandidateCount = candidateCount;
+        int effectiveCandidateCount =
+#if defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
+            useSpatialRis ? 0 :
+#endif
+            candidateCount;
 #if defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
         // Reweight a validated reservoir by the current receiver target before merging. This is
         // the temporal ReSTIR-DI cross-domain correction; visibility remains deferred.
-        if (IsTemporalRisEligible(hit))
+        if (_SpatialRisEnabled == 0 && IsTemporalRisEligible(hit))
         {
             InterlockedAdd(_TemporalRisDiagnostics[0], 1);
+            uint temporalReuseRngState = Hash(rngState ^ 0x9e3779b9u);
             uint2 previousPixel;
             InitialRisCandidate temporalCandidate;
             float previousWeightSum;
@@ -3810,6 +3968,7 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
                 int retainedPreviousM = min(previousM, max(0, _TemporalRisMaxM - candidateCount));
                 if (retainedPreviousM > 0)
                 {
+                    float retainedPreviousFraction = (float)retainedPreviousM / max(1, previousM);
                     float mergedWeight = GetTemporalRisMergedWeight(previousWeightSum, previousM, retainedPreviousM,
                         previousTarget, currentTarget);
                     if (IsFiniteRisValue(mergedWeight) && mergedWeight > 0.0f && IsFiniteRisValue(temporalWeight))
@@ -3817,7 +3976,7 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
                         InterlockedAdd(_TemporalRisDiagnostics[6], 1);
                         InterlockedAdd(_TemporalRisDiagnostics[8], (uint)retainedPreviousM);
                         totalWeight += mergedWeight;
-                        if (rand(rngState) * totalWeight < mergedWeight)
+                        if (rand(temporalReuseRngState) * totalWeight < mergedWeight)
                         {
                             selectedRisCandidate = temporalCandidate;
                             selectedWeight = temporalWeight;
@@ -3834,6 +3993,65 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
             }
         }
 #endif
+ #if defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
+        if (useSpatialRis)
+        {
+            // The prepass owns local generation. Restart from its post-candidate state so final
+            // path sampling preserves the local RIS RNG contract while only neighbor merges add RNG.
+            uint reservoirIndex = pixel.y * (uint)_TemporalRisTextureSize.x + pixel.x;
+            rngState = _SpatialRisPostCandidateRng[reservoirIndex];
+            uint spatialReuseRngState = Hash(rngState ^ 0x85ebca6bu);
+            totalWeight = 0.0f;
+            effectiveCandidateCount = 0;
+            selectedRisCandidate.valid = 0;
+            selectedWeight = 0.0f;
+            InterlockedAdd(_TemporalRisDiagnostics[0], 1);
+            bool selectedSpatialNeighbor = false;
+            int neighbor;
+            [loop]
+            for (neighbor = 0; neighbor <= _SpatialRisNeighborCount; neighbor++)
+            {
+                int2 offset = neighbor == 0 ? int2(0, 0) : neighbor == 1 ? int2(-1, 0)
+                    : neighbor == 2 ? int2(1, 0) : neighbor == 3 ? int2(0, -1) : int2(0, 1);
+                int2 source = int2(pixel) + offset;
+                if (any(source < 0) || source.x >= _TemporalRisTextureSize.x || source.y >= _TemporalRisTextureSize.y)
+                {
+                    if (neighbor > 0) InterlockedAdd(_TemporalRisDiagnostics[2], 1);
+                    continue;
+                }
+                InitialRisCandidate spatialCandidate;
+                float sourceWeightSum;
+                float sourceTarget;
+                int sourceM;
+                if (!LoadSpatialRisCandidate(uint2(source), hit, spatialCandidate, sourceWeightSum, sourceTarget, sourceM, neighbor > 0)
+                    || !ReprojectTemporalRisCandidate(hit, spatialCandidate)) continue;
+                if (neighbor > 0) InterlockedAdd(_TemporalRisDiagnostics[1], 1);
+                float currentTarget = EvaluateTemporalRisCandidateTarget(ray, hit, spatialCandidate);
+                float mergedWeight = GetTemporalRisMergedWeight(sourceWeightSum, sourceM, sourceM, sourceTarget, currentTarget);
+                if (!IsFiniteRisValue(mergedWeight) || mergedWeight <= 0.0f)
+                {
+                    if (neighbor > 0) InterlockedAdd(_TemporalRisDiagnostics[5], 1);
+                    continue;
+                }
+                if (neighbor > 0)
+                {
+                    InterlockedAdd(_TemporalRisDiagnostics[6], 1);
+                    InterlockedAdd(_TemporalRisDiagnostics[8], (uint)sourceM);
+                }
+                totalWeight += mergedWeight;
+                if (rand(spatialReuseRngState) * totalWeight < mergedWeight)
+                {
+                    selectedRisCandidate = spatialCandidate;
+                    selectedWeight = currentTarget / max(1e-8f, spatialCandidate.proposalPdf);
+                    risLightIndex = spatialCandidate.isEnvironment != 0 ? -1 : spatialCandidate.lightIndex;
+                    selectedSpatialNeighbor = neighbor > 0;
+                }
+                effectiveCandidateCount += sourceM;
+            }
+            if (selectedSpatialNeighbor) InterlockedAdd(_TemporalRisDiagnostics[7], 1);
+            InterlockedAdd(_TemporalRisDiagnostics[9], (uint)effectiveCandidateCount);
+        }
+ #endif
         if (selectedRisCandidate.valid != 0 && selectedWeight > 0.0f && IsFiniteRisValue(totalWeight))
         {
             float selectedTarget = selectedWeight * selectedRisCandidate.proposalPdf;
@@ -3841,7 +4059,7 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
             initialRisSelected = IsFiniteRisValue(selectedRisCandidate.risScale)
                 && selectedRisCandidate.risScale > 0.0f;
 #if defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
-            if (IsTemporalRisEligible(hit))
+            if (!useSpatialRis && IsTemporalRisEligible(hit))
             {
                 InterlockedAdd(_TemporalRisDiagnostics[9], (uint)effectiveCandidateCount);
                 StoreTemporalRisReservoir(pixel, hit, selectedRisCandidate, totalWeight,
@@ -3849,6 +4067,14 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
             }
 #endif
         }
+        reservoirWeightSum = totalWeight;
+        reservoirM = effectiveCandidateCount;
+    }
+
+    reservoirCandidate = selectedRisCandidate;
+    if (reservoirOnly)
+    {
+        return float3(0.0f, 0.0f, 0.0f);
     }
 
     float3 accumulated = float3(0.0f, 0.0f, 0.0f);
@@ -4462,7 +4688,11 @@ float3 GetDirectLight(Ray ray, RayHit hit, bool softShadows, bool initialRis,
                        out bool initialRisSelected, uint2 pixel, inout uint rngState)
 {
     int samplesPerLight = softShadows ? max(1, _ShadowQuality + 1) : 1;
-    return GetLightHittingPoint(ray, hit, samplesPerLight, false, initialRis, initialRisSelected, pixel, rngState);
+    InitialRisCandidate ignoredCandidate;
+    float ignoredWeightSum;
+    int ignoredM;
+    return GetLightHittingPoint(ray, hit, samplesPerLight, false, initialRis, initialRisSelected, pixel, rngState,
+        false, ignoredCandidate, ignoredWeightSum, ignoredM);
 }
 
 #if defined(FOG_ENABLED)
@@ -4472,7 +4702,11 @@ float3 GetFogDirectLight(Ray ray, float3 position, bool softShadows, inout uint 
     eventHit.position = position;
     int samplesPerLight = softShadows ? max(1, _ShadowQuality + 1) : 1;
     bool ignoredInitialRisSelection;
-    return GetLightHittingPoint(ray, eventHit, samplesPerLight, true, false, ignoredInitialRisSelection, uint2(0, 0), rngState);
+    InitialRisCandidate ignoredCandidate;
+    float ignoredWeightSum;
+    int ignoredM;
+    return GetLightHittingPoint(ray, eventHit, samplesPerLight, true, false, ignoredInitialRisSelection, uint2(0, 0), rngState,
+        false, ignoredCandidate, ignoredWeightSum, ignoredM);
 }
 #endif
 
@@ -4959,6 +5193,29 @@ float3 GetFeatureIdentityDebugColor(float identity)
 
 // Feature buffers use an unjittered pinhole primary ray. This makes their surface decisions
 // stable across stochastic path samples; beauty remains independently sampled and accumulated.
+#if defined(SPATIAL_RIS_PREPASS)
+// Spatial validation must describe the exact primary ray that generated the local reservoir.
+// The normal denoiser features remain unjittered and are refreshed after CSMain finishes.
+void WriteSpatialRisReceiverFeatures(uint2 pixel, RayHit hit)
+{
+    if (DidHitSky(hit))
+    {
+        FeatureNormal[pixel] = 0.0f;
+        FeatureAlbedo[pixel] = 0.0f;
+        FeatureDepth[pixel] = 0.0f;
+        FeatureIdentity[pixel] = 0.0f;
+        FeatureValidity[pixel] = 0.0f;
+        return;
+    }
+
+    FeatureNormal[pixel] = float4(normalize(hit.normal), 0.0f);
+    FeatureAlbedo[pixel] = float4(saturate(GetAlbedo(hit)), 1.0f);
+    FeatureDepth[pixel] = hit.distance;
+    FeatureIdentity[pixel] = GetTemporalRisReceiverIdentity(hit);
+    FeatureValidity[pixel] = 1.0f;
+}
+#endif
+
 void WriteDenoiserFeatures(uint2 pixel, uint width, uint height)
 {
     float2 uv = ((float2(pixel) + 0.5f) / float2(width, height)) * 2.0f - 1.0f;

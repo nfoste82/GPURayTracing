@@ -567,16 +567,39 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         File.WriteAllText(Path.Combine(_editorRunFolder, "settings.txt"), settings);
 
         _editorRunWriter = new StreamWriter(Path.Combine(_editorRunFolder, "metrics.csv"), false);
-        _editorRunWriter.WriteLine("frame,elapsed_seconds,rgb_psnr_db,rgb_rmse,psnr_db_improvement,rmse_improvement");
+        _editorRunWriter.WriteLine("frame,elapsed_seconds,rgb_psnr_db,rgb_rmse,psnr_db_improvement,rmse_improvement,reference_metrics_available,reference_status,rgb_mean_linear,rgb_mean_luminance");
         _editorRunWriter.Flush();
         _editorRunFrameCount = 0;
         _hasPreviousEditorRunMetrics = false;
     }
 
-    private void RecordEditorRunFrame(int frame, bool available, double psnr, double rmse, string _)
+    private void RecordEditorRunFrame(int frame, bool available, double psnr, double rmse, string status)
     {
         if (_editorRunWriter == null || _liveManager == null) return;
 
+        Color[] pixels = _liveManager.ReadCurrentFinalColorPixels();
+        double red = 0.0;
+        double green = 0.0;
+        double blue = 0.0;
+        double luminance = 0.0;
+        if (pixels != null && pixels.Length > 0)
+        {
+            foreach (Color pixel in pixels)
+            {
+                red += pixel.r;
+                green += pixel.g;
+                blue += pixel.b;
+                luminance += pixel.r * 0.2126 + pixel.g * 0.7152 + pixel.b * 0.0722;
+            }
+            double inversePixelCount = 1.0 / pixels.Length;
+            red *= inversePixelCount;
+            green *= inversePixelCount;
+            blue *= inversePixelCount;
+            luminance *= inversePixelCount;
+        }
+        string meanRgb = string.Join(";", red.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+            green.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+            blue.ToString("R", System.Globalization.CultureInfo.InvariantCulture));
         string psnrValue = available
             ? (double.IsPositiveInfinity(psnr) ? "Infinity" : psnr.ToString("R", System.Globalization.CultureInfo.InvariantCulture))
             : "NaN";
@@ -594,7 +617,11 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         }
         _editorRunWriter.WriteLine(string.Join(",", frame,
             (EditorApplication.timeSinceStartup - _editorRunStartTime).ToString("R", System.Globalization.CultureInfo.InvariantCulture),
-            psnrValue, rmseValue, psnrImprovement, rmseImprovement));
+            psnrValue, rmseValue, psnrImprovement, rmseImprovement,
+            available ? "true" : "false",
+            SanitizeCsvValue(available ? "available" : status),
+            meanRgb,
+            luminance.ToString("R", System.Globalization.CultureInfo.InvariantCulture)));
         if (available)
         {
             _previousEditorRunPsnr = psnr;
@@ -603,6 +630,11 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         }
         _editorRunFrameCount++;
         _editorRunWriter.Flush();
+    }
+
+    private static string SanitizeCsvValue(string value)
+    {
+        return string.IsNullOrEmpty(value) ? "" : value.Replace(',', ';').Replace('\r', ' ').Replace('\n', ' ');
     }
 
     private static string CalculatePsnrImprovement(double current, double previous)

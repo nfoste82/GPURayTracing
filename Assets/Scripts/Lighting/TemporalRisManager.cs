@@ -22,6 +22,16 @@ namespace PathTracing.Lighting
         private static readonly int PreviousIdentity = Shader.PropertyToID("_TemporalRisPreviousIdentity");
         private static readonly int PreviousValidity = Shader.PropertyToID("_TemporalRisPreviousValidity");
         private static readonly int Diagnostics = Shader.PropertyToID("_TemporalRisDiagnostics");
+        private static readonly int SpatialEnabled = Shader.PropertyToID("_SpatialRisEnabled");
+        private static readonly int SpatialNeighborCount = Shader.PropertyToID("_SpatialRisNeighborCount");
+        private static readonly int SpatialLocalReservoir = Shader.PropertyToID("_SpatialRisLocalReservoir");
+        private static readonly int SpatialPostCandidateRng = Shader.PropertyToID("_SpatialRisPostCandidateRng");
+        private static readonly int SpatialLocalWriteReservoir = Shader.PropertyToID("_SpatialRisLocalWriteReservoir");
+        private static readonly int SpatialPostCandidateRngWrite = Shader.PropertyToID("_SpatialRisPostCandidateRngWrite");
+        private static readonly int SpatialReceiverNormal = Shader.PropertyToID("_SpatialRisReceiverNormal");
+        private static readonly int SpatialReceiverDepth = Shader.PropertyToID("_SpatialRisReceiverDepth");
+        private static readonly int SpatialReceiverIdentity = Shader.PropertyToID("_SpatialRisReceiverIdentity");
+        private static readonly int SpatialReceiverValidity = Shader.PropertyToID("_SpatialRisReceiverValidity");
 
         private const int ReservoirStride = sizeof(float) * 16;
         public const int DiagnosticsCount = 10;
@@ -37,6 +47,8 @@ namespace PathTracing.Lighting
         public const int EffectiveMTotal = 9;
         private readonly ComputeBuffer[] _reservoirs = new ComputeBuffer[2];
         private ComputeBuffer _diagnostics;
+        private ComputeBuffer _spatialLocalReservoir;
+        private ComputeBuffer _spatialPostCandidateRng;
         private readonly RenderTexture[] _normal = new RenderTexture[2];
         private readonly RenderTexture[] _depth = new RenderTexture[2];
         private readonly RenderTexture[] _identity = new RenderTexture[2];
@@ -58,6 +70,33 @@ namespace PathTracing.Lighting
                 _validity[i] = CreateTexture(size, RenderTextureFormat.RHalf);
             }
             _diagnostics = new ComputeBuffer(DiagnosticsCount, sizeof(uint));
+            _spatialLocalReservoir = new ComputeBuffer(count, ReservoirStride);
+            _spatialPostCandidateRng = new ComputeBuffer(count, sizeof(uint));
+        }
+
+        public void BindSpatialPrepass(ComputeShader shader, int kernel, GameManager gameManager)
+        {
+            EnsureResources(gameManager.TextureSize);
+            shader.SetInt(SpatialEnabled, 1);
+            shader.SetInt(SpatialNeighborCount, gameManager.Lighting.SpatialRisNeighborCount);
+            shader.SetInt(Unsupported, 0);
+            shader.SetInt(MaxM, gameManager.Lighting.InitialRisCandidateCount + gameManager.Lighting.SpatialRisNeighborCount);
+            shader.SetFloat(DepthThreshold, 0.05f);
+            shader.SetFloat(NormalThreshold, 0.9f);
+            shader.SetInts(TextureSize, gameManager.TextureSize.x, gameManager.TextureSize.y);
+            shader.SetBuffer(kernel, SpatialLocalWriteReservoir, _spatialLocalReservoir);
+            shader.SetBuffer(kernel, SpatialPostCandidateRngWrite, _spatialPostCandidateRng);
+        }
+
+        public void BindSpatialResolve(ComputeShader shader, int kernel, GameManager gameManager)
+        {
+            EnsureResources(gameManager.TextureSize);
+            shader.SetBuffer(kernel, SpatialLocalReservoir, _spatialLocalReservoir);
+            shader.SetBuffer(kernel, SpatialPostCandidateRng, _spatialPostCandidateRng);
+            shader.SetTexture(kernel, SpatialReceiverNormal, gameManager.FeatureNormalTexture);
+            shader.SetTexture(kernel, SpatialReceiverDepth, gameManager.FeatureDepthTexture);
+            shader.SetTexture(kernel, SpatialReceiverIdentity, gameManager.FeatureIdentityTexture);
+            shader.SetTexture(kernel, SpatialReceiverValidity, gameManager.FeatureValidityTexture);
         }
 
         public void Bind(ComputeShader shader, int kernel, GameManager gameManager, bool enabled, bool unsupported)
@@ -72,9 +111,12 @@ namespace PathTracing.Lighting
             var current = GL.GetGPUProjectionMatrix(camera.projectionMatrix, false) * camera.worldToCameraMatrix;
             if (!_historyValid) _previousViewProjection = current;
             shader.SetInt(Enabled, enabled ? 1 : 0);
+            shader.SetInt(SpatialEnabled, gameManager.Lighting.SpatialRisEnabled ? 1 : 0);
+            shader.SetInt(SpatialNeighborCount, gameManager.Lighting.SpatialRisNeighborCount);
             shader.SetInt(HistoryValid, _historyValid ? 1 : 0);
             shader.SetInt(Unsupported, unsupported ? 1 : 0);
-            shader.SetInt(MaxM, gameManager.Lighting.InitialRisCandidateCount + gameManager.Lighting.TemporalRisHistoryMCap);
+            shader.SetInt(MaxM, gameManager.Lighting.InitialRisCandidateCount + (gameManager.Lighting.SpatialRisEnabled
+                ? gameManager.Lighting.SpatialRisNeighborCount : gameManager.Lighting.TemporalRisHistoryMCap));
             shader.SetFloat(DepthThreshold, 0.05f);
             shader.SetFloat(NormalThreshold, 0.9f);
             shader.SetInts(TextureSize, gameManager.TextureSize.x, gameManager.TextureSize.y);
@@ -85,7 +127,12 @@ namespace PathTracing.Lighting
             shader.SetBuffer(kernel, Diagnostics, _diagnostics);
             shader.SetTexture(kernel, PreviousNormal, _normal[read]); shader.SetTexture(kernel, PreviousDepth, _depth[read]);
             shader.SetTexture(kernel, PreviousIdentity, _identity[read]); shader.SetTexture(kernel, PreviousValidity, _validity[read]);
+            // These resources are declared by every temporal-RIS final-color variant. Bind them
+            // even when spatial reuse is off so Unity does not reject the dispatch before the
+            // shader can take its _SpatialRisEnabled fallback branch.
+            BindSpatialResolve(shader, kernel, gameManager);
         }
+
 
         public void Commit(GameManager manager)
         {
@@ -133,6 +180,10 @@ namespace PathTracing.Lighting
             }
             _diagnostics?.Release();
             _diagnostics = null;
+            _spatialLocalReservoir?.Release();
+            _spatialLocalReservoir = null;
+            _spatialPostCandidateRng?.Release();
+            _spatialPostCandidateRng = null;
             _historyValid = false;
             _readIsA = true;
         }

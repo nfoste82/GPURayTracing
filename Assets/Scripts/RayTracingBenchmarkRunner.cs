@@ -288,6 +288,8 @@ public class RayTracingBenchmarkRunner : MonoBehaviour
         AppendSetting(builder, "initial_ris_candidate_count", gameManager.Lighting.InitialRisCandidateCount);
         AppendSetting(builder, "temporal_ris_enabled", gameManager.Lighting.TemporalRisEnabled);
         AppendSetting(builder, "temporal_ris_history_m_cap", gameManager.Lighting.TemporalRisHistoryMCap);
+        AppendSetting(builder, "spatial_ris_enabled", gameManager.Lighting.SpatialRisEnabled);
+        AppendSetting(builder, "spatial_ris_neighbor_count", gameManager.Lighting.SpatialRisNeighborCount);
         AppendSetting(builder, "max_light_samples", gameManager.maxLightSamples);
         AppendSetting(builder, "frame_accumulation", gameManager.enableFrameAccumulation);
         AppendSetting(builder, "debug_render_mode", gameManager.debugRenderMode);

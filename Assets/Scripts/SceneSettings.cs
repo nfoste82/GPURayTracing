@@ -39,8 +39,12 @@ public sealed class SceneSettings
     public int LightSampleCount = 1;
     // Four candidates is the project default; scene-specific settings can override it.
     public int InitialRisCandidateCount = 4;
-    public bool TemporalRisEnabled = true;
+    // Experimental and incomplete; local RIS is the default production path.
+    public bool TemporalRisEnabled = false;
     public int TemporalRisHistoryMCap = 1;
+    // Experimental and incomplete; local RIS is the default production path.
+    public bool SpatialRisEnabled = false;
+    public int SpatialRisNeighborCount = 4;
 
     public bool EnableSpatialDenoising = true;
     public float DenoiserLuminanceSigma = 0.05f;

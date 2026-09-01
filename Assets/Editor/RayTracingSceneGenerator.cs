@@ -543,6 +543,10 @@ public static class RayTracingSceneGenerator
         manager.shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
         manager.causticsShader = AssetDatabase.LoadAssetAtPath<ComputeShader>(CausticsShaderPath);
         cameraManager.renderTextureCamera = camera;
+        // Generated scenes use the production local-RIS path. Reuse prototypes remain
+        // explicit opt-in experiment overrides rather than scene defaults.
+        settings.TemporalRisEnabled = false;
+        settings.SpatialRisEnabled = false;
         manager.InitSceneSettings(settings);
         manager.skyboxTexture = AssetDatabase.LoadAssetAtPath<Texture>(SkyboxPath);
 
