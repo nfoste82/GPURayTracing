@@ -5,7 +5,7 @@ Full disclosure that LLMs were used to assist during the later work on this proj
 ## Features:
 * GPU compute-shader path tracing for spheres and registered triangle meshes
 * Emissive sphere and mesh lights with direct-light
-* Resampled important sampling, temporal reservoir resampling, and multi-importance sampling.
+* Resampled important sampling and multi-importance sampling.
 * Surface reflections (configurable smoothness of surfaces), diffuse indirect lighting, directional lighting, and multiple ray bounces
 * Reflection/refraction, distance-based absorption, and colored transparent shadows
 * Photon-mapped caustics
