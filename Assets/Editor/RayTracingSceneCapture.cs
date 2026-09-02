@@ -758,7 +758,7 @@ public static class RayTracingSceneCapture
         }
         finally
         {
-            manager.CaptureRandomSeed = 1;
+            manager.CaptureRandomSeed = 0;
             manager.enableFrameAccumulation = true;
             ResetAccumulation(manager);
             ReleaseCaptureTarget(manager.renderTextureCamera);
@@ -1041,7 +1041,6 @@ public static class RayTracingSceneCapture
         string referencePath = null,
         bool writeConvergenceMetrics = false)
     {
-        manager.randomNoise = false;
         manager.enableFrameAccumulation = true;
         manager.enableAdaptiveSampling = adaptiveSampling;
         manager.adaptivePriorityMode = adaptivePriorityMode;

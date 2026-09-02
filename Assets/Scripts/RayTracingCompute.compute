@@ -25,10 +25,10 @@ void CSMain (uint3 id : SV_DispatchThreadID)
     [loop]
     for (int i = 0; i < samplesThisPixel; i++)
     {
-        uint rngState = CreateRngState(pixel, _SampleOffset + (uint)i);
+        uint4 rngState = CreateRngState(pixel, _SampleOffset + (uint)i);
+        SetRngDimension(rngState, SampleDimensionPixelFilter);
         float2 pixelJitter = float2(rand(rngState), rand(rngState));
-        // Keep the default sequence and pixel footprint bit-for-bit unchanged for existing
-        // renders. Wider filters trade aliasing for deliberate cross-pixel blur.
+        // Wider filters trade aliasing for deliberate cross-pixel blur.
         if (_SubpixelJitterScale != 1.0f)
         {
             pixelJitter = (pixelJitter - 0.5f) * _SubpixelJitterScale + 0.5f;
@@ -42,6 +42,7 @@ void CSMain (uint3 id : SV_DispatchThreadID)
 
         if (_ApertureRadius > 0.0f)
         {
+            SetRngDimension(rngState, SampleDimensionLens);
             float3 cameraForward = normalize(mul(_CameraToWorld, float4(0.0f, 0.0f, -1.0f, 0.0f)).xyz);
             float focusRayDistance = _FocalDistance / max(0.0001f, dot(ray.direction, cameraForward));
             float3 focalPoint = ray.origin + ray.direction * focusRayDistance;
@@ -53,13 +54,7 @@ void CSMain (uint3 id : SV_DispatchThreadID)
         }
         else
         {
-            // Preserve the established downstream path-sampling sequence when the lens is pinhole.
-            rand(rngState);
-            rand(rngState);
-            rand(rngState);
-            rand(rngState);
-            rand(rngState);
-            rand(rngState);
+            SetRngDimension(rngState, SampleDimensionLens);
         }
 
         float3 sampleRadiance = ClampFirefly(TracePath(ray, pixel, rngState));

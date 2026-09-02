@@ -32,6 +32,7 @@ Important shader globals:
 - `_LightSampleCount`: for the random/importance strategies, how many lights each shading point draws per hit. Ignored by the all-lights strategy.
 - `_MaxLightSamples`: diagnostic cap on how many lights any strategy considers. `0` means no cap (use the real light count); a positive value clamps the considered light count to confirm the per-hit light loop is the bottleneck.
 - `_Seed`: integer seed used to initialize per-pixel/per-pass shader RNG state.
+- `_SobolDirectionNumbers`: runtime-uploaded 2568-dimensional Joe-Kuo direction-number table used by the Burley-style shuffled, Owen-scrambled path sampler.
 - `_NumSpheres`, `_NumLights`, `_NumTriangles`, `_NumMeshes`: active buffer counts.
 - `_NumTopLevelBvhNodes`: active top-level object BVH node count; `0` means first-hit traversal uses flat object loops.
 - `_NumShadowBvhNodes`: active shadow-only BVH node count; `0` means shadow traversal uses flat blocker loops.
@@ -115,7 +116,7 @@ The scene also uploads a top-level BVH over ray-traced spheres, emissive light s
 3. Transforming the direction through `_CameraToWorld`.
 4. Normalizing the result.
 
-`CSMain` maps each pixel to `[-1, 1]` UV space with subpixel jitter from `rand()`. The jitter samples the full pixel footprint by default (`_SubpixelJitterScale = 1`); progressive accumulation and `_NumberOfPasses` increase the number of such samples rather than widening that footprint.
+`CSMain` maps each pixel to `[-1, 1]` UV space with dimensions `0-1` of the per-pixel Burley-style shuffled, Owen-scrambled Sobol sequence. The jitter samples the full pixel footprint by default (`_SubpixelJitterScale = 1`); progressive accumulation and `_NumberOfPasses` increase the number of such samples rather than widening that footprint.
 
 ## Tone Mapping And Exposure
 

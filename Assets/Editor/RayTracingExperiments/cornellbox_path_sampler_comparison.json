@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "label": "cornellbox_path_sampler_comparison",
+  "scenes": ["Assets/Scenes/Generated/CornellBox.unity"],
+  "width": 1024,
+  "height": 1024,
+  "samples": 100,
+  "durationSeconds": 0.0,
+  "cooldownSeconds": 12.0,
+  "referenceRoot": "Assets/Editor/RayTracingSceneReferences",
+  "variants": [
+    {
+      "name": "standard_rng_fixed_seed",
+      "overrides": [
+        { "path": "subpixelJitterScale", "value": "1.0" },
+        { "path": "useOwenScrambledSobol", "value": "false" },
+        { "path": "randomNoise", "value": "false" },
+        { "path": "samplingSeed", "value": "1" },
+        { "path": "sobolDimensionLimit", "value": "2568" }
+      ]
+    },
+    {
+      "name": "owen_scrambled_sobol_random_noise",
+      "overrides": [
+        { "path": "subpixelJitterScale", "value": "1.0" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "randomNoise", "value": "true" },
+        { "path": "samplingSeed", "value": "1" },
+        { "path": "sobolDimensionLimit", "value": "2568" }
+      ]
+    },
+    {
+      "name": "owen_scrambled_sobol_fixed_seed",
+      "overrides": [
+        { "path": "subpixelJitterScale", "value": "1.0" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "randomNoise", "value": "false" },
+        { "path": "samplingSeed", "value": "1" },
+        { "path": "sobolDimensionLimit", "value": "2568" }
+      ]
+    }
+  ]
+}

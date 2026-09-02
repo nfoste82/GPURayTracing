@@ -28,6 +28,7 @@ namespace GPURayTracing.Tests
         private const string AdaptiveTraceShaderPath = "Assets/Resources/RayTracingAdaptiveTrace.compute";
         private const string RegressionProbeShaderPath = "Assets/Resources/RayTracingRegressionProbe.compute";
         private const string DenoiserShaderPath = "Assets/Resources/RayTracingSpatialDenoiser.compute";
+        private const string SharedShaderPath = "Assets/Scripts/RayTracingShared.hlsl";
         private const float Epsilon = 0.0001f;
         // Transform.eulerAngles round-trips through a quaternion, producing roughly 0.00025 degrees
         // of platform-dependent error near the pitch limits.
@@ -43,6 +44,87 @@ namespace GPURayTracing.Tests
                 offset += fragment.Length;
             }
             return count;
+        }
+
+        [Test]
+        public void PathSampler_UsesOwenScrambledSobolWithStableSemanticDimensions()
+        {
+            string shared = System.IO.File.ReadAllText(SharedShaderPath);
+            string main = System.IO.File.ReadAllText(ComputeShaderPath);
+            string adaptive = System.IO.File.ReadAllText(AdaptiveTraceShaderPath);
+
+            Assert.That(shared, Does.Contain("uint4 CreateRngState(uint2 pixel, uint sampleIndex)"));
+            Assert.That(shared, Does.Contain("uint OwenScramble(uint value, uint seed)"));
+            Assert.That(shared, Does.Contain("uint SobolBits(uint sampleIndex, uint dimension)"));
+            Assert.That(shared, Does.Contain("float SobolSample(uint sampleIndex, uint dimension, uint scramble)"));
+            Assert.That(shared, Does.Contain("StructuredBuffer<uint> _SobolDirectionNumbers"));
+            Assert.That(shared, Does.Contain("static const uint SampleDimensionsPerBounce = 160u"));
+            Assert.That(shared, Does.Contain("static const uint SampleDimensionScatterOffset = 112u"));
+            Assert.That(shared, Does.Contain("static const uint SampleDimensionRouletteOffset = 156u"));
+            Assert.That(shared, Does.Contain("uint block = dimension >> 2u"));
+            Assert.That(shared, Does.Contain("uint shuffledIndex = OwenScramble(sampleIndex"));
+            Assert.That(shared, Does.Contain("OwenScramble(SobolBits(shuffledIndex, dimension)"));
+            Assert.That(shared, Does.Contain("dimension < (uint)clamp(_SobolDimensionLimit, 1, 2568)"));
+            Assert.That(shared, Does.Contain("_UseOwenScrambledSobol != 0"));
+            Assert.That(shared, Does.Contain("_SobolDimensionLimit"));
+            Assert.That(shared, Does.Contain("rngState.w = Hash(rngState.w ^ dimension)"));
+            Assert.That(shared, Does.Contain("BounceSampleDimension((uint)bounce, SampleDimensionDirectLightOffset)"));
+            Assert.That(shared, Does.Contain("BounceSampleDimension((uint)bounce, SampleDimensionScatterOffset)"));
+            Assert.That(shared, Does.Contain("BounceSampleDimension((uint)bounce, SampleDimensionRouletteOffset)"));
+            Assert.That(main, Does.Contain("SetRngDimension(rngState, SampleDimensionPixelFilter)"));
+            Assert.That(main, Does.Contain("SetRngDimension(rngState, SampleDimensionLens)"));
+            Assert.That(adaptive, Does.Contain("CreateRngState(pixel, (uint)previousState.x + localSample)"));
+
+            string inspector = System.IO.File.ReadAllText("Assets/Editor/GameManagerEditor.cs");
+            Assert.That(inspector, Does.Contain("DrawSamplerSettings(manager)"));
+            Assert.That(inspector, Does.Contain("Owen-Scrambled Sobol"));
+        }
+
+        [Test]
+        public void SobolDirectionNumbers_MatchJoeKuoReferenceCoordinates()
+        {
+            Type directionType = Type.GetType("PathTracing.Sampling.SobolDirectionNumbers, Assembly-CSharp");
+            Assert.That(directionType, Is.Not.Null);
+            MethodInfo buildMethod = directionType.GetMethod("BuildDirectionNumbers", new[] { typeof(string) });
+            Assert.That(buildMethod, Is.Not.Null);
+            string encodedParameters = System.IO.File.ReadAllText("Assets/Resources/SobolJoeKuoParameters.txt");
+            uint[] directions = (uint[])buildMethod.Invoke(null, new object[] { encodedParameters });
+            Assert.That(directions.Length, Is.EqualTo(2568 * 32));
+
+            Assert.That(EvaluateSobolBits(directions, 1u, 0), Is.EqualTo(0x80000000u));
+            Assert.That(EvaluateSobolBits(directions, 2u, 0), Is.EqualTo(0x40000000u));
+            Assert.That(EvaluateSobolBits(directions, 3u, 0), Is.EqualTo(0xc0000000u));
+            Assert.That(EvaluateSobolBits(directions, 2u, 1), Is.EqualTo(0xc0000000u));
+            Assert.That(EvaluateSobolBits(directions, 3u, 1), Is.EqualTo(0x40000000u));
+            Assert.That(EvaluateSobolBits(directions, 2u, 2), Is.EqualTo(0xc0000000u));
+            Assert.That(EvaluateSobolBits(directions, 3u, 2), Is.EqualTo(0x40000000u));
+        }
+
+        private static uint EvaluateSobolBits(uint[] directions, uint index, int dimension)
+        {
+            uint value = 0u;
+            int offset = dimension * 32;
+            for (int bit = 0; index != 0u; bit++, index >>= 1)
+            {
+                if ((index & 1u) != 0u)
+                {
+                    value ^= directions[offset + bit];
+                }
+            }
+            return value;
+        }
+
+        [Test]
+        public void ExperimentCapture_PreservesVariantRandomNoiseOverride()
+        {
+            string capture = System.IO.File.ReadAllText("Assets/Editor/RayTracingSceneCapture.cs");
+            int captureVariantStart = capture.IndexOf("private static CaptureResult CaptureVariant(", StringComparison.Ordinal);
+            int captureVariantEnd = capture.IndexOf("private static void WriteRisReuseDiagnostics", captureVariantStart, StringComparison.Ordinal);
+
+            Assert.That(captureVariantStart, Is.GreaterThanOrEqualTo(0));
+            Assert.That(captureVariantEnd, Is.GreaterThan(captureVariantStart));
+            string captureVariant = capture.Substring(captureVariantStart, captureVariantEnd - captureVariantStart);
+            Assert.That(captureVariant, Does.Not.Contain("manager.randomNoise = false"));
         }
 
         [Test]
@@ -1391,6 +1473,39 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void GameManager_AccumulationStateHash_ResetsWhenPathSamplerChanges()
+        {
+            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+            Assert.That(managerType, Is.Not.Null, "Could not load GameManager from Assembly-CSharp");
+
+            var gameObject = new GameObject("Path Sampler State Hash Test");
+            var cameraObject = new GameObject("Path Sampler State Hash Camera");
+            try
+            {
+                Component manager = gameObject.AddComponent(managerType);
+                Camera camera = cameraObject.AddComponent<Camera>();
+                Component cameraManager = gameObject.GetComponent(Type.GetType("CameraManager, Assembly-CSharp"));
+                cameraManager.GetType().GetField("renderTextureCamera").SetValue(cameraManager, camera);
+
+                MethodInfo hashMethod = managerType.GetMethod("CalculateAccumulationStateHash", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.That(hashMethod, Is.Not.Null);
+                int defaultHash = (int)hashMethod.Invoke(manager, null);
+
+                managerType.GetField("sobolDimensionLimit").SetValue(manager, 128);
+                Assert.That(hashMethod.Invoke(manager, null), Is.Not.EqualTo(defaultHash));
+
+                managerType.GetField("sobolDimensionLimit").SetValue(manager, 2568);
+                managerType.GetField("samplingSeed").SetValue(manager, 2);
+                Assert.That(hashMethod.Invoke(manager, null), Is.Not.EqualTo(defaultHash));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(gameObject);
+                UnityEngine.Object.DestroyImmediate(cameraObject);
+            }
+        }
+
+        [Test]
         public void GameManager_AdaptiveSamplingToggle_RemainsDisabledByDefault()
         {
             Type managerType = Type.GetType("GameManager, Assembly-CSharp");
@@ -1551,6 +1666,7 @@ namespace GPURayTracing.Tests
             var dummyPhotonNext = new ComputeBuffer(1, sizeof(int));
             var dummyTargetPair = new ComputeBuffer(1, 32);
             var dummyTargetTriangle = new ComputeBuffer(1, 12);
+            var dummySobolDirections = new ComputeBuffer(1, sizeof(uint));
             try
             {
                 initialState.SetPixels(initialStatePixels);
@@ -1595,9 +1711,12 @@ namespace GPURayTracing.Tests
                     shader.SetBuffer(kernel, "_CausticPhotonNext", dummyPhotonNext);
                     shader.SetBuffer(kernel, "_CausticTargetPairs", dummyTargetPair);
                     shader.SetBuffer(kernel, "_CausticTargetTriangles", dummyTargetTriangle);
+                    shader.SetBuffer(kernel, "_SobolDirectionNumbers", dummySobolDirections);
                     shader.SetInt("_AdaptiveWorkListCapacity", pixelCount);
                     shader.SetInt("_AdaptivePriorityMode", 1);
                     shader.SetInt("_Seed", 12345);
+                    shader.SetInt("_UseOwenScrambledSobol", 0);
+                    shader.SetInt("_SobolDimensionLimit", 1);
                     shader.SetInt("_NumSpheres", 0);
                     shader.SetInt("_NumLights", 0);
                     shader.SetInt("_NumTriangles", 0);
@@ -1649,7 +1768,7 @@ namespace GPURayTracing.Tests
                 dummySphere.Release(); dummyLight.Release(); dummyTriangle.Release(); dummyMesh.Release(); dummyBvh.Release();
                 dummyTopLevelBvh.Release(); dummyMeshLightCdf.Release(); dummyEnvironmentCdf.Release(); dummyPhoton.Release();
                 dummyPhotonMetadata.Release(); dummyPhotonGrid.Release(); dummyPhotonNext.Release(); dummyTargetPair.Release();
-                dummyTargetTriangle.Release();
+                dummyTargetTriangle.Release(); dummySobolDirections.Release();
                 adaptiveState.Release(); adaptiveAccumulation.Release(); adaptiveBeauty.Release(); adaptiveResult.Release();
                 adaptiveM2.Release(); adaptiveAlternating.Release(); referenceState.Release(); referenceM2.Release(); referenceAlternating.Release(); referenceAccumulation.Release(); referenceResult.Release();
                 UnityEngine.Object.DestroyImmediate(initialState); UnityEngine.Object.DestroyImmediate(initialAccumulation);
@@ -2328,6 +2447,15 @@ namespace GPURayTracing.Tests
                 "useDedicatedCausticsDebugKernel ? \"CSCausticsDebug\" : \"CSMain\""));
             Assert.That(managerSource, Does.Contain(
                 "debugRenderMode == DebugRenderMode.FinalColor || debugRenderMode == DebugRenderMode.Caustics"));
+        }
+
+        [Test]
+        public void CausticPhotonTracing_UsesSharedRngStateWithHashFallback()
+        {
+            string shaderSource = System.IO.File.ReadAllText("Assets/Scripts/RayTracingCausticsKernels.hlsl");
+
+            Assert.That(shaderSource, Does.Contain("inout uint4 rngState"));
+            Assert.That(shaderSource, Does.Contain("uint4 rngState = uint4(id.x, 4096u, causticHashSeed, causticHashSeed)"));
         }
 
         private static uint Sum(uint[] values)

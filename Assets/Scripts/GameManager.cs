@@ -11,6 +11,7 @@ using PathTracing.Caustics;
 using PathTracing.Denoising;
 using PathTracing.Lighting;
 using PathTracing.PathTracedTypes;
+using PathTracing.Sampling;
 using PathTracing.Shapes;
 using PathTracing.TemporalDenoising;
 using UnityEngine;
@@ -116,6 +117,18 @@ public class GameManager : MonoBehaviour
 
     [Range(0f, 1.5f)]
     public float shadowRandomness = 0.65f;
+
+    [Header("Path Sampler")]
+    [Tooltip("Uses Owen-scrambled Sobol samples for camera and path dimensions. Disable only to compare against the hash-RNG baseline.")]
+    public bool useOwenScrambledSobol = true;
+
+    [Tooltip("Number of camera and path dimensions using Burley-style shuffled, Owen-scrambled Sobol coordinates. Higher dimensions use the unbiased hash fallback.")]
+    [Range(1, SobolDirectionNumbers.MaximumDimensions)]
+    public int sobolDimensionLimit = SobolDirectionNumbers.MaximumDimensions;
+
+    [Tooltip("Deterministic seed for the per-pixel Owen scramble when Random Noise is disabled.")]
+    [Min(1)]
+    public int samplingSeed = 1;
 
     [Tooltip("Redistributes a fixed image-wide full-resolution path budget using group uncertainty. It never automatically stops rendering.")]
     public bool enableAdaptiveSampling = false;
@@ -224,7 +237,7 @@ public class GameManager : MonoBehaviour
     public bool randomNoise = false;
 
     // Capture-only deterministic seed override used by independent estimator trials.
-    public int CaptureRandomSeed { get; set; } = 1;
+    public int CaptureRandomSeed { get; set; }
     private bool _preserveTemporalRisHistoryForNextNonAccumulatedFrame;
 
     public Texture skyboxTexture;
@@ -568,6 +581,9 @@ public class GameManager : MonoBehaviour
     private static readonly int MeshNormalTextures = Shader.PropertyToID("_MeshNormalTextures");
     private static readonly int MeshParallaxTextures = Shader.PropertyToID("_MeshParallaxTextures");
     private static readonly int Seed = Shader.PropertyToID("_Seed");
+    private static readonly int UseOwenScrambledSobol = Shader.PropertyToID("_UseOwenScrambledSobol");
+    private static readonly int SobolDimensionLimit = Shader.PropertyToID("_SobolDimensionLimit");
+    private static readonly int SobolDirectionNumberBuffer = Shader.PropertyToID("_SobolDirectionNumbers");
     private static readonly int NumberOfPasses = Shader.PropertyToID("_NumberOfPasses");
     private static readonly int SubpixelJitterScale = Shader.PropertyToID("_SubpixelJitterScale");
     private static readonly int NumBounces = Shader.PropertyToID("_NumBounces");
@@ -664,6 +680,7 @@ public class GameManager : MonoBehaviour
     private const int RenderThreadCountY = 4;
     private const int MaxCausticGridCells = 262144;
     private FogVolume _fogVolume;
+    private readonly SobolDirectionNumbers _sobolDirectionNumbers = new ();
     private readonly Stopwatch _startupStopwatch = Stopwatch.StartNew();
     private readonly List<string> _startupProfilePhases = new ();
     private double _startupRegistrationMilliseconds;
@@ -681,6 +698,9 @@ public class GameManager : MonoBehaviour
         numberOfPasses = settings.NumberOfPasses;
         subpixelJitterScale = settings.SubpixelJitterScale;
         enableFrameAccumulation = settings.EnableFrameAccumulation;
+        useOwenScrambledSobol = settings.UseOwenScrambledSobol;
+        sobolDimensionLimit = settings.SobolDimensionLimit;
+        samplingSeed = settings.SamplingSeed;
         enableAdaptiveSampling = settings.EnableAdaptiveSampling;
         adaptiveSamplingMinSamples = settings.AdaptiveSamplingMinSamples;
         adaptiveBootstrapFrames = settings.AdaptiveBootstrapFrames;
@@ -1242,6 +1262,7 @@ public class GameManager : MonoBehaviour
         
         _lightingManager.ReleaseBuffers();
         _environmentImportanceSampling.Dispose();
+        _sobolDirectionNumbers.Dispose();
         
         _causticsManager.ReleaseResources();
         
@@ -3683,9 +3704,12 @@ public class GameManager : MonoBehaviour
         }
         else
         {
-            targetShader.SetInt(Seed, Mathf.Max(1, CaptureRandomSeed));
+            targetShader.SetInt(Seed, Mathf.Max(1, CaptureRandomSeed > 0 ? CaptureRandomSeed : samplingSeed));
         }
 
+        targetShader.SetInt(UseOwenScrambledSobol, useOwenScrambledSobol ? 1 : 0);
+        targetShader.SetInt(SobolDimensionLimit, Mathf.Clamp(sobolDimensionLimit, 1, SobolDirectionNumbers.MaximumDimensions));
+        targetShader.SetBuffer(kernelHandle, SobolDirectionNumberBuffer, _sobolDirectionNumbers.Buffer);
         targetShader.SetInt(NumberOfPasses, numberOfPasses);
         targetShader.SetFloat(SubpixelJitterScale, subpixelJitterScale);
         targetShader.SetInt(NumBounces, numBounces);
@@ -3811,6 +3835,9 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, _textureSize.x);
             hash = AddHash(hash, _textureSize.y);
             hash = AddHash(hash, numberOfPasses);
+            hash = AddHash(hash, useOwenScrambledSobol ? 1 : 0);
+            hash = AddHash(hash, sobolDimensionLimit);
+            hash = AddHash(hash, samplingSeed);
             hash = AddHash(hash, enableAdaptiveSampling ? 1 : 0);
             hash = AddHash(hash, adaptiveSamplingMinSamples);
             hash = AddHash(hash, adaptiveBootstrapFrames);

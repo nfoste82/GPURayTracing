@@ -12,7 +12,8 @@ void CSSpatialRisPrepass(uint3 id : SV_DispatchThreadID)
     FeatureValidity.GetDimensions(width, height);
     if (id.x >= width || id.y >= height) return;
     uint2 pixel = id.xy;
-    uint rngState = CreateRngState(pixel, _SampleOffset);
+    uint4 rngState = CreateRngState(pixel, _SampleOffset);
+    SetRngDimension(rngState, SampleDimensionPixelFilter);
     float2 pixelJitter = float2(rand(rngState), rand(rngState));
     if (_SubpixelJitterScale != 1.0f) pixelJitter = (pixelJitter - 0.5f) * _SubpixelJitterScale + 0.5f;
     float2 uv = ((pixel + pixelJitter) / float2(width, height)) * 2.0f - 1.0f;
@@ -20,6 +21,7 @@ void CSSpatialRisPrepass(uint3 id : SV_DispatchThreadID)
     Ray ray = CreateCameraRay(uv);
     if (_ApertureRadius > 0.0f)
     {
+        SetRngDimension(rngState, SampleDimensionLens);
         float3 forward = normalize(mul(_CameraToWorld, float4(0.0f, 0.0f, -1.0f, 0.0f)).xyz);
         float3 focalPoint = ray.origin + ray.direction * (_FocalDistance / max(0.0001f, dot(ray.direction, forward)));
         float2 aperture = SampleAperture(rngState) * _ApertureRadius;
@@ -27,7 +29,7 @@ void CSSpatialRisPrepass(uint3 id : SV_DispatchThreadID)
             + normalize(mul(_CameraToWorld, float4(0, 1, 0, 0)).xyz) * aperture.y;
         ray.direction = normalize(focalPoint - ray.origin);
     }
-    else { rand(rngState); rand(rngState); rand(rngState); rand(rngState); rand(rngState); rand(rngState); }
+    else { SetRngDimension(rngState, SampleDimensionLens); }
 
     RayHit hit = GetNearestIntersection(ray);
     uint index = pixel.y * width + pixel.x;
@@ -35,6 +37,7 @@ void CSSpatialRisPrepass(uint3 id : SV_DispatchThreadID)
     reservoir.data0 = 0.0f; reservoir.data1 = 0.0f; reservoir.data2 = 0.0f; reservoir.data3 = 0.0f;
     if (!DidHitSky(hit) && !DidHitLight(hit) && IsSpatialRisEligible(hit))
     {
+        SetRngDimension(rngState, BounceSampleDimension(0u, SampleDimensionDirectLightOffset));
         bool selected;
         InitialRisCandidate candidate;
         float weightSum;
@@ -50,6 +53,6 @@ void CSSpatialRisPrepass(uint3 id : SV_DispatchThreadID)
         }
     }
     _SpatialRisLocalWriteReservoir[index] = reservoir;
-    _SpatialRisPostCandidateRngWrite[index] = rngState;
+    _SpatialRisPostCandidateRngWrite[index] = rngState.w;
     WriteSpatialRisReceiverFeatures(pixel, hit);
 }

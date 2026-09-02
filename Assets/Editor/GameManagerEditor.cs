@@ -59,6 +59,7 @@ public sealed class GameManagerEditor : Editor
         });
         DrawSection(manager, "Sampling and Accumulation", true, () =>
         {
+            DrawSamplerSettings(manager);
             DrawProperty("shadowRandomness", "Local Light Shadow Randomness");
             DrawProperty("enableAdaptiveSampling", "Adaptive Sampling (Experimental)");
             DrawProperty("recordEditorRun", "Record Editor Run");
@@ -401,6 +402,22 @@ public sealed class GameManagerEditor : Editor
             EditorGUILayout.Space(2.0f);
         }
         EditorGUILayout.EndFoldoutHeaderGroup();
+    }
+
+    private void DrawSamplerSettings(GameManager manager)
+    {
+        EditorGUILayout.LabelField("Path Sampler", EditorStyles.boldLabel);
+        DrawProperty("useOwenScrambledSobol", "Owen-Scrambled Sobol");
+        if (serializedObject.FindProperty("useOwenScrambledSobol").boolValue)
+        {
+            DrawProperty("sobolDimensionLimit", "Low-Discrepancy Dimension Limit");
+        }
+        DrawProperty("samplingSeed", "Scramble Seed");
+        DrawProperty("randomNoise", "Randomize Seed Each Frame");
+        EditorGUILayout.HelpBox(
+            "Sobol uses Joe-Kuo direction numbers with Burley-style nested sample-index shuffling and independent Owen scrambling. Dimensions above the configured limit use the unbiased hash fallback; randomizing the seed each frame trades deterministic progressive convergence for temporal variation.",
+            MessageType.None);
+        EditorGUILayout.Space(2.0f);
     }
 
     private void DrawProperty(string propertyPath, string label = null)

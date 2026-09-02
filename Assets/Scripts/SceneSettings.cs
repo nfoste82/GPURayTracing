@@ -1,5 +1,6 @@
 using PathTracing.Camera;
 using PathTracing.Lighting;
+using PathTracing.Sampling;
 using UnityEngine;
 
 public sealed class SceneSettings
@@ -16,6 +17,9 @@ public sealed class SceneSettings
     public int NumberOfPasses = 1;
     public float SubpixelJitterScale = 1.4f;
     public bool EnableFrameAccumulation = true;
+    public bool UseOwenScrambledSobol = true;
+    public int SobolDimensionLimit = SobolDirectionNumbers.MaximumDimensions;
+    public int SamplingSeed = 1;
 
     public bool EnableAdaptiveSampling = false;
     public int AdaptiveSamplingMinSamples = 2;

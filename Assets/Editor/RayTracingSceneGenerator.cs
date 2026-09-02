@@ -1739,6 +1739,7 @@ public static class RayTracingSceneGenerator
             ShadowBvhMinObjectCount = 0, 
             SkyboxLightColor = new Color32(0, 0, 0, 255),
             DirectionalLightIntensity = 0.0f,
+            EnableCaustics = false,
         });
 
         const float roomWidth = 6.0f;

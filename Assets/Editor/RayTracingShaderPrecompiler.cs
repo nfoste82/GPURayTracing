@@ -331,7 +331,7 @@ public static class RayTracingShaderPrecompiler
         private readonly ComputeBuffer uint2Buffer = new ComputeBuffer(64, 8);
         private readonly ComputeBuffer uintBuffer = new ComputeBuffer(64, 4);
         public readonly string[] FloatBufferNames = { "_EnvironmentConditionalCdf", "_EnvironmentMarginalCdf", "_MeshLightTriangleCdf", "_CausticPhotonMetadata", "_CausticGridCellHeads", "_CausticPhotonNext", "_TerrainHeights" };
-        public readonly string[] StructuredBufferNames = { "_Spheres", "_Lights", "_Triangles", "_Meshes", "_BvhNodes", "_TopLevelBvhNodes", "_ShadowBvhNodes", "_CausticPhotons", "_TerrainCells", "RegressionResults", "_FocusQueryResult" };
+        public readonly string[] StructuredBufferNames = { "_Spheres", "_Lights", "_Triangles", "_Meshes", "_BvhNodes", "_TopLevelBvhNodes", "_ShadowBvhNodes", "_CausticPhotons", "_TerrainCells", "_SobolDirectionNumbers", "RegressionResults", "_FocusQueryResult" };
         public readonly string[] AdaptiveBufferNames = { "AdaptiveWorkList", "AdaptiveTraceWorkList", "AdaptiveGroupState", "AdaptiveGroupInfo", "AdaptiveProbeGroups", "AdaptiveGroupBucket", "AdaptiveGroupExtraDemand", "AdaptiveRawBucketDemand", "AdaptiveWorkListMetadata", "AdaptiveDispatchArgs" };
 
         public DummyResources()

@@ -63,7 +63,7 @@ bool TraceCausticPhotonTransport(
     Ray photonRay,
     RayHit firstHit,
     float3 initialPower,
-    inout uint rngState,
+    inout uint4 rngState,
     out CausticPhoton photon)
 {
     photon.position = float3(0.0f, 0.0f, 0.0f);
@@ -166,7 +166,10 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
         return;
     }
 
-    uint rngState = Hash(_CausticSeed ^ (_CausticFrameIndex * 2246822519u) ^ (id.x * 26699u));
+    uint causticHashSeed = Hash(_CausticSeed ^ (_CausticFrameIndex * 2246822519u) ^ (id.x * 26699u));
+    // Photon transport remains independent of the camera sampler by starting beyond every
+    // supported Sobol dimension, which forces rand() onto its hash fallback.
+    uint4 rngState = uint4(id.x, 4096u, causticHashSeed, causticHashSeed);
     CausticTargetPair targetPair = _CausticTargetPairs[
         SelectCausticTargetPair(CausticSequenceSample(id.x, 0u))];
     Light light = _Lights[targetPair.lightIndex];
@@ -476,10 +479,10 @@ void CSCausticsDebug(uint3 id : SV_DispatchThreadID)
     [loop]
     for (int i = 0; i < _NumberOfPasses; i++)
     {
-        uint rngState = CreateRngState(id.xy, _SampleOffset + (uint)i);
+        uint4 rngState = CreateRngState(id.xy, _SampleOffset + (uint)i);
+        SetRngDimension(rngState, SampleDimensionPixelFilter);
         float2 pixelJitter = float2(rand(rngState), rand(rngState));
-        // Keep the default sequence and pixel footprint bit-for-bit unchanged for existing
-        // renders. Wider filters trade aliasing for deliberate cross-pixel blur.
+        // Wider filters trade aliasing for deliberate cross-pixel blur.
         if (_SubpixelJitterScale != 1.0f)
         {
             pixelJitter = (pixelJitter - 0.5f) * _SubpixelJitterScale + 0.5f;

@@ -130,6 +130,7 @@ On `Start()`, `GameManager` ensures that the generic benchmark runner and live p
 - `_CameraInverseProjection`
 - `_SkyboxLight`
 - `_Seed`
+- `_SobolDirectionNumbers`, `_UseOwenScrambledSobol`, and `_SobolDimensionLimit`
 - `_SampleOffset`
 - `_NumberOfPasses`
 - `_NumBounces`

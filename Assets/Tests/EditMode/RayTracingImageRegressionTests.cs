@@ -997,6 +997,7 @@ namespace GPURayTracing.Tests
             ComputeBuffer topLevelBuffer = CreateDummyBuffer(48);
             ComputeBuffer shadowBuffer = CreateDummyBuffer(48);
             ComputeBuffer meshLightCdfBuffer = CreateBuffer(CreateMeshLightTriangleCdf(triangles, lights), sizeof(float));
+            ComputeBuffer sobolDirectionBuffer = CreateDummyBuffer(sizeof(uint));
             const int environmentCdfWidth = 4;
             const int environmentCdfHeight = 4;
             CreateUniformEnvironmentCdf(environmentCdfWidth, environmentCdfHeight,
@@ -1059,6 +1060,7 @@ namespace GPURayTracing.Tests
                 shader.SetBuffer(kernel, "_TopLevelBvhNodes", topLevelBuffer);
                 shader.SetBuffer(kernel, "_ShadowBvhNodes", shadowBuffer);
                 shader.SetBuffer(kernel, "_MeshLightTriangleCdf", meshLightCdfBuffer);
+                shader.SetBuffer(kernel, "_SobolDirectionNumbers", sobolDirectionBuffer);
 
                 // Unity view-space camera rays point down -Z; cameraToWorld includes that handedness
                 // conversion, unlike Transform.localToWorldMatrix.
@@ -1072,6 +1074,8 @@ namespace GPURayTracing.Tests
                 shader.SetInt("_UseTemporalJitter", 0);
                 shader.SetVector("_SkyboxLight", Vector4.one);
                 shader.SetInt("_Seed", 1);
+                shader.SetInt("_UseOwenScrambledSobol", 0);
+                shader.SetInt("_SobolDimensionLimit", 1);
                 shader.SetInt("_SampleOffset", 0);
                 shader.SetInt("_NumberOfPasses", numberOfPasses);
                 shader.SetFloat("_SubpixelJitterScale", 1.0f);
@@ -1142,6 +1146,7 @@ namespace GPURayTracing.Tests
                 topLevelBuffer.Release();
                 shadowBuffer.Release();
                 meshLightCdfBuffer.Release();
+                sobolDirectionBuffer.Release();
                 environmentConditionalCdfBuffer.Release();
                 environmentMarginalCdfBuffer.Release();
                 causticPhotonBuffer.Release();

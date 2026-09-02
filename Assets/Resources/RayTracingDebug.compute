@@ -23,7 +23,8 @@ void CSDebugMain(uint3 id : SV_DispatchThreadID)
     [loop]
     for (int i = 0; i < samplesThisPixel; i++)
     {
-        uint rngState = CreateRngState(pixel, _SampleOffset + (uint)i);
+        uint4 rngState = CreateRngState(pixel, _SampleOffset + (uint)i);
+        SetRngDimension(rngState, SampleDimensionPixelFilter);
         float2 pixelJitter = float2(rand(rngState), rand(rngState));
         if (_SubpixelJitterScale != 1.0f)
         {
@@ -38,6 +39,7 @@ void CSDebugMain(uint3 id : SV_DispatchThreadID)
 
         if (_ApertureRadius > 0.0f)
         {
+            SetRngDimension(rngState, SampleDimensionLens);
             float3 cameraForward = normalize(mul(_CameraToWorld, float4(0.0f, 0.0f, -1.0f, 0.0f)).xyz);
             float focusRayDistance = _FocalDistance / max(0.0001f, dot(ray.direction, cameraForward));
             float3 focalPoint = ray.origin + ray.direction * focusRayDistance;
@@ -49,12 +51,7 @@ void CSDebugMain(uint3 id : SV_DispatchThreadID)
         }
         else
         {
-            rand(rngState);
-            rand(rngState);
-            rand(rngState);
-            rand(rngState);
-            rand(rngState);
-            rand(rngState);
+            SetRngDimension(rngState, SampleDimensionLens);
         }
 
         result += GetDebugRenderColor(ray, rngState);
