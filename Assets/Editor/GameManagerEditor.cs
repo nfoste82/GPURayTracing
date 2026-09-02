@@ -415,7 +415,7 @@ public sealed class GameManagerEditor : Editor
         DrawProperty("samplingSeed", "Scramble Seed");
         DrawProperty("randomNoise", "Randomize Seed Each Frame");
         EditorGUILayout.HelpBox(
-            "Sobol uses Joe-Kuo direction numbers with Burley-style nested sample-index shuffling and independent Owen scrambling. The default limit of 168 covers camera and first-bounce sampling, retaining most of the convergence benefit while later bounces use the faster unbiased hash fallback. Randomizing the seed each frame trades deterministic progressive convergence for temporal variation.",
+            "Sobol uses Joe-Kuo direction numbers with Burley-style nested sample-index shuffling and independent Owen scrambling. The default limit of 328 covers camera and the first two path bounces; later bounces use the faster unbiased hash fallback. Randomizing the seed each frame trades deterministic progressive convergence for temporal variation.",
             MessageType.None);
         EditorGUILayout.Space(2.0f);
     }

@@ -159,7 +159,7 @@ public static class RayTracingSceneGenerator
             CameraOrbitZoom = Vector3.Distance(MaterialBallRoomCameraPosition, MaterialBallRoomFocusPosition),
             FieldOfView = 10.3f,
             NumberOfPasses = 1,
-            NumBounces = 8,
+            NumBounces = 6,
             EnableSpatialDenoising = true,
             EnableCaustics = false,
             DirectionalLightIntensity = 0.0f,

@@ -26,7 +26,7 @@ RenderSettings:
   m_AmbientIntensity: 1
   m_AmbientMode: 0
   m_SubtractiveShadowColor: {r: 0.42, g: 0.478, b: 0.627, a: 1}
-  m_SkyboxMaterial: {fileID: 10304, guid: 0000000000000000f000000000000000, type: 0}
+  m_SkyboxMaterial: {fileID: 0}
   m_HaloStrength: 0.5
   m_FlareStrength: 1
   m_FlareFadeSpeed: 3
@@ -4420,6 +4420,7 @@ MonoBehaviour:
   shader: {fileID: 7200000, guid: adaed5b09d5374556b1cda0917c8f291, type: 3}
   utilityShader: {fileID: 0}
   featuresShader: {fileID: 0}
+  spatialRisPrepassShader: {fileID: 0}
   focusShader: {fileID: 0}
   adaptiveSchedulerShader: {fileID: 0}
   adaptiveTraceShader: {fileID: 0}
@@ -4429,28 +4430,31 @@ MonoBehaviour:
   waterAdaptiveTraceShader: {fileID: 0}
   causticsShader: {fileID: 7200000, guid: 3f6f46a7edd34f308c1eac1557178d41, type: 3}
   causticPreservationThreshold: 4
-  renderResolutionPercent: 75
+  renderResolutionPercent: 100
   numberOfPasses: 1
   subpixelJitterScale: 1.4
   enableFrameAccumulation: 1
   liveFrameIdlePercent: 0
   liveFrameCooldownMilliseconds: 0
-  numBounces: 8
+  numBounces: 6
   shadowQuality: 0
   topLevelBvhMinObjectCount: 64
   shadowBvhMinObjectCount: 64
   shadowRandomness: 0.65
+  useOwenScrambledSobol: 1
+  sobolDimensionLimit: 328
+  samplingSeed: 1
   enableAdaptiveSampling: 0
   recordEditorRun: 0
   adaptiveSamplingMinSamples: 8
   adaptivePriorityMode: 0
-  adaptiveNormalizePriorityByLuminance: 0
+  adaptiveNormalizePriorityByLuminance: 0.35
   adaptiveReclassificationInterval: 4
   adaptiveHighestBucketSampleRate: 2
   adaptiveMaxPathsPerPixel: 4
   adaptiveBootstrapGroupDivisor: 16
-  adaptiveBootstrapFrames: 4
-  adaptiveBootstrapResolutionScale: 0.25
+  adaptiveBootstrapFrames: 96
+  adaptiveBootstrapResolutionScale: 0.5
   adaptiveGuidanceHistoryFrames: 2
   adaptiveGuidanceChangeThreshold: 0.02
   adaptiveGuidanceMaxUpdates: 2
@@ -4464,6 +4468,9 @@ MonoBehaviour:
     _lightSampleCount: 1
     _initialRisCandidateCount: 4
     _temporalRisEnabled: 0
+    _temporalRisHistoryMCap: 1
+    _spatialRisEnabled: 0
+    _spatialRisNeighborCount: 4
     _lightFalloffScale: 0.08
     _skyboxLightColor:
       serializedVersion: 2

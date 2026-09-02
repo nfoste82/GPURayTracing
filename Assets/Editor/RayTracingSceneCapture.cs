@@ -562,7 +562,7 @@ public static class RayTracingSceneCapture
                     string variantName = SanitizePathSegment(variant.name);
                     CaptureResult result = CaptureVariant(manager, sceneName, sceneRoot, variantName,
                         experiment.samples, experiment.width, experiment.height, experiment.durationSeconds,
-                        DebugRenderMode.FinalColor, false, GameManager.AdaptivePriorityMode.WelfordStandardError,
+                        DebugRenderMode.FinalColor, manager.enableAdaptiveSampling, manager.adaptivePriorityMode,
                         true, false, false, referencePath, true);
                     WriteReferenceMetrics(sceneRoot, variantName, result, referencePath, reference);
                     results.Add(new ExperimentVariantResult(variantName, result));
@@ -615,9 +615,10 @@ public static class RayTracingSceneCapture
         if (string.IsNullOrWhiteSpace(experiment.label) || experiment.scenes == null || experiment.scenes.Length == 0
             || experiment.variants == null || experiment.variants.Length < 2)
             throw new InvalidOperationException("An experiment requires a label, at least one scene, and at least two variants.");
-        if (experiment.width <= 0 || experiment.height <= 0 || experiment.samples <= 0
-            || experiment.durationSeconds < 0.0 || experiment.cooldownSeconds < 0.0)
-            throw new InvalidOperationException("Experiment dimensions, samples, duration, and cooldown must be valid non-negative values.");
+        if (experiment.width <= 0 || experiment.height <= 0 || experiment.samples < 0
+            || experiment.durationSeconds < 0.0 || experiment.cooldownSeconds < 0.0
+            || (experiment.samples <= 0 && experiment.durationSeconds <= 0.0))
+            throw new InvalidOperationException("Experiment dimensions and cooldown must be valid, with either a positive sample count or duration.");
         if (experiment.temporalRisWarmupFrames != null && experiment.temporalRisWarmupFrames.Length > 0)
         {
             if (experiment.temporalRisTrialsPerWarmup <= 0)
@@ -2987,10 +2988,10 @@ public static class RayTracingSceneCapture
             || !TryGetOptionalIntegerArgument("-rayTracingAdaptiveReclassificationInterval", 1, 8, out int? reclassificationInterval)
             || !TryGetOptionalFloatArgument("-rayTracingAdaptiveHighestBucketSampleRate", 1.0f, 8.0f, out float? highestBucketSampleRate)
             || !TryGetOptionalIntegerArgument("-rayTracingAdaptiveMaxPathsPerPixel", 1, 16, out int? maxPathsPerPixel)
-            || !TryGetOptionalIntegerArgument("-rayTracingAdaptiveBootstrapFrames", 1, 64, out int? bootstrapFrames)
-            || !TryGetOptionalFloatArgument("-rayTracingAdaptiveBootstrapResolutionScale", 0.125f, 0.5f, out float? bootstrapResolutionScale)
-            || !TryGetOptionalIntegerArgument("-rayTracingAdaptiveGuidanceHistoryFrames", 0, 8, out int? guidanceHistoryFrames)
-            || !TryGetOptionalIntegerArgument("-rayTracingAdaptiveBootstrapGroupDivisor", 1, 16, out int? bootstrapGroupDivisor))
+            || !TryGetOptionalIntegerArgument("-rayTracingAdaptiveBootstrapFrames", 1, 512, out int? bootstrapFrames)
+            || !TryGetOptionalFloatArgument("-rayTracingAdaptiveBootstrapResolutionScale", 0.10f, 0.75f, out float? bootstrapResolutionScale)
+            || !TryGetOptionalIntegerArgument("-rayTracingAdaptiveGuidanceHistoryFrames", 0, 64, out int? guidanceHistoryFrames)
+            || !TryGetOptionalIntegerArgument("-rayTracingAdaptiveBootstrapGroupDivisor", 4, 16, out int? bootstrapGroupDivisor))
         {
             return false;
         }

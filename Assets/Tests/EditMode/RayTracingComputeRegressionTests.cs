@@ -66,6 +66,7 @@ namespace GPURayTracing.Tests
             Assert.That(shared, Does.Contain("uint block = dimension >> 2u"));
             Assert.That(shared, Does.Contain("rngState.shuffledIndex = ShuffleSobolIndex"));
             Assert.That(shared, Does.Contain("SobolSample(rngState.shuffledIndex, dimension, rngState.scramble)"));
+            Assert.That(shared, Does.Contain("if (firstInRange || (dimension & 3u) == 0u)"));
             Assert.That(shared, Does.Contain("uint bitIndex = (uint)firstbitlow(sampleIndex)"));
             Assert.That(shared, Does.Contain("sampleIndex &= sampleIndex - 1u"));
             Assert.That(shared, Does.Contain("dimension < (uint)clamp(_SobolDimensionLimit, 1, 2568)"));
@@ -78,6 +79,14 @@ namespace GPURayTracing.Tests
             Assert.That(main, Does.Contain("SetRngDimension(rngState, SampleDimensionPixelFilter)"));
             Assert.That(main, Does.Contain("SetRngDimension(rngState, SampleDimensionLens)"));
             Assert.That(adaptive, Does.Contain("RngState rngState = CreateRngState(pixel, (uint)previousState.x + localSample)"));
+
+            int setDimensionStart = shared.IndexOf("void SetRngDimension(inout RngState rngState, uint dimension)", StringComparison.Ordinal);
+            int causticSampleStart = shared.IndexOf("float CausticSequenceSample", setDimensionStart, StringComparison.Ordinal);
+            Assert.That(setDimensionStart, Is.GreaterThanOrEqualTo(0));
+            Assert.That(causticSampleStart, Is.GreaterThan(setDimensionStart));
+            string setDimension = shared.Substring(setDimensionStart, causticSampleStart - setDimensionStart);
+            Assert.That(setDimension, Does.Not.Contain("ShuffleSobolIndex"),
+                "Semantic dimension changes must not pay for a Sobol shuffle until rand() consumes the range.");
 
             string inspector = System.IO.File.ReadAllText("Assets/Editor/GameManagerEditor.cs");
             Assert.That(inspector, Does.Contain("DrawSamplerSettings(manager)"));
@@ -458,7 +467,7 @@ namespace GPURayTracing.Tests
             int end = managerSource.IndexOf("private void PrepareRenderFrame", start, StringComparison.Ordinal);
             string warmup = managerSource.Substring(start, end - start);
 
-            Assert.That(warmup, Does.Contain("_adaptiveBootstrapFrameCount >= Mathf.Clamp(adaptiveBootstrapFrames, 1, 8)"));
+            Assert.That(warmup, Does.Contain("_adaptiveBootstrapFrameCount >= Mathf.Clamp(adaptiveBootstrapFrames, 1, 512)"));
             Assert.That(warmup, Does.Contain("useAdaptiveTraceShader ? 4"));
         }
 
@@ -1019,6 +1028,7 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("-rayTracingAdaptiveHighestBucketSampleRate"));
             Assert.That(source, Does.Contain("-rayTracingAdaptiveMaxPathsPerPixel"));
             Assert.That(source, Does.Contain("-rayTracingAdaptiveBootstrapFrames"));
+            Assert.That(source, Does.Contain("TryGetOptionalIntegerArgument(\"-rayTracingAdaptiveBootstrapFrames\", 1, 512"));
             Assert.That(source, Does.Contain("-rayTracingAdaptiveBootstrapResolutionScale"));
             Assert.That(source, Does.Contain("-rayTracingAdaptiveGuidanceHistoryFrames"));
             Assert.That(source, Does.Contain("-rayTracingAdaptiveBootstrapGroupDivisor"));
@@ -1026,6 +1036,16 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("ApplyAdaptiveSamplingOverrides"));
             Assert.That(source, Does.Contain("private const double MaximumTimedCaptureSeconds = 600.0"));
             Assert.That(source, Does.Contain("GetCommandLineArgument(\"-rayTracingDurationSeconds\") != null"));
+        }
+
+        [Test]
+        public void SceneCapture_ExperimentsPreserveVariantAdaptiveSamplingAndAllowTimedRuns()
+        {
+            string source = System.IO.File.ReadAllText("Assets/Editor/RayTracingSceneCapture.cs");
+
+            Assert.That(source, Does.Contain("DebugRenderMode.FinalColor, manager.enableAdaptiveSampling, manager.adaptivePriorityMode"));
+            Assert.That(source, Does.Contain("experiment.samples < 0"));
+            Assert.That(source, Does.Contain("experiment.samples <= 0 && experiment.durationSeconds <= 0.0"));
         }
 
         [Test]
@@ -1498,7 +1518,7 @@ namespace GPURayTracing.Tests
                 managerType.GetField("sobolDimensionLimit").SetValue(manager, 2568);
                 Assert.That(hashMethod.Invoke(manager, null), Is.Not.EqualTo(defaultHash));
 
-                managerType.GetField("sobolDimensionLimit").SetValue(manager, 168);
+                managerType.GetField("sobolDimensionLimit").SetValue(manager, 328);
                 managerType.GetField("samplingSeed").SetValue(manager, 2);
                 Assert.That(hashMethod.Invoke(manager, null), Is.Not.EqualTo(defaultHash));
             }

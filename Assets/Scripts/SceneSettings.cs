@@ -18,7 +18,7 @@ public sealed class SceneSettings
     public float SubpixelJitterScale = 1.4f;
     public bool EnableFrameAccumulation = true;
     public bool UseOwenScrambledSobol = true;
-    public int SobolDimensionLimit = 168;
+    public int SobolDimensionLimit = 328;
     public int SamplingSeed = 1;
 
     public bool EnableAdaptiveSampling = false;

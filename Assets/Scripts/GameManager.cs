@@ -122,9 +122,9 @@ public class GameManager : MonoBehaviour
     [Tooltip("Uses Owen-scrambled Sobol samples for camera and path dimensions. Disable only to compare against the hash-RNG baseline.")]
     public bool useOwenScrambledSobol = true;
 
-    [Tooltip("Number of camera and path dimensions using Burley-style shuffled, Owen-scrambled Sobol coordinates. The default covers camera and first-bounce sampling; higher dimensions use the faster unbiased hash fallback.")]
+    [Tooltip("Number of camera and path dimensions using Burley-style shuffled, Owen-scrambled Sobol coordinates. The default covers camera plus the first two path bounces; higher dimensions use the faster unbiased hash fallback.")]
     [Range(1, SobolDirectionNumbers.MaximumDimensions)]
-    public int sobolDimensionLimit = 168;
+    public int sobolDimensionLimit = 328;
 
     [Tooltip("Deterministic seed for the per-pixel Owen scramble when Random Noise is disabled.")]
     [Min(1)]
@@ -154,7 +154,7 @@ public class GameManager : MonoBehaviour
     [Range(1, 16), Tooltip("Number of rotating whole-group batches used while full-resolution adaptive bootstrap samples are still required. Higher values avoid a single expensive all-pixel handoff.")]
     public int adaptiveBootstrapGroupDivisor = 16;
 
-    [Range(1, 256), Tooltip("Frames rendered uniformly at the bootstrap resolution before full-resolution adaptive sampling begins.")]
+    [Range(1, 512), Tooltip("Frames rendered uniformly at the bootstrap resolution before full-resolution adaptive sampling begins.")]
     public int adaptiveBootstrapFrames = 8;
     [Range(0.125f, 0.5f), Tooltip("Resolution used by the normal CSMain bootstrap renderer before full-resolution adaptive sampling begins.")]
     public float adaptiveBootstrapResolutionScale = 0.25f;
@@ -1440,7 +1440,7 @@ public class GameManager : MonoBehaviour
 
     private void DispatchAdaptiveSampling()
     {
-        if (_adaptiveBootstrapFrameCount < Mathf.Clamp(adaptiveBootstrapFrames, 1, 8))
+        if (_adaptiveBootstrapFrameCount < Mathf.Clamp(adaptiveBootstrapFrames, 1, 512))
         {
             DispatchAdaptiveBootstrap();
             return;
@@ -2269,7 +2269,7 @@ public class GameManager : MonoBehaviour
         // adaptive trace asset as warmed until the bootstrap has actually reached its handoff.
         // Otherwise the first real trace compiles synchronously without the warning frame.
         bool useAdaptiveTraceShader = ShouldUseAdaptiveSampling()
-            && _adaptiveBootstrapFrameCount >= Mathf.Clamp(adaptiveBootstrapFrames, 1, 8);
+            && _adaptiveBootstrapFrameCount >= Mathf.Clamp(adaptiveBootstrapFrames, 1, 512);
         frame.requestedVariant = GetShaderVariantKey(frame.useDedicatedCausticsDebugKernel ? 2
                 : frame.useGeometryDebugShader ? 1 : useAdaptiveTraceShader ? 4 : HasWaterVolume ? 3 : 0, frame.fogEnabled,
             _terrainManager != null && _terrainManager.Terrain != null);

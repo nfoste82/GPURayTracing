@@ -378,13 +378,9 @@ float SobolSample(uint shuffledIndex, uint dimension, uint scramble)
 
 void SetRngDimension(inout RngState rngState, uint dimension)
 {
-    // The high bit marks the first sample after a semantic jump so rand() does not rebuild a
-    // shuffle already cached here when the range starts on a four-dimensional block boundary.
+    // Defer the block shuffle until the range actually consumes a Sobol coordinate. Some semantic
+    // ranges are selected before a branch determines that no random sample is needed.
     rngState.dimension = dimension | 0x80000000u;
-    if (_UseOwenScrambledSobol != 0 && dimension < (uint)clamp(_SobolDimensionLimit, 1, 2568))
-    {
-        rngState.shuffledIndex = ShuffleSobolIndex(rngState.sampleIndex, dimension, rngState.scramble);
-    }
 }
 
 float CausticSequenceSample(uint photonIndex, uint dimension)
@@ -414,7 +410,7 @@ float rand(inout RngState rngState)
     rngState.dimension = dimension + 1u;
     if (_UseOwenScrambledSobol != 0 && dimension < (uint)clamp(_SobolDimensionLimit, 1, 2568))
     {
-        if (!firstInRange && (dimension & 3u) == 0u)
+        if (firstInRange || (dimension & 3u) == 0u)
         {
             rngState.shuffledIndex = ShuffleSobolIndex(rngState.sampleIndex, dimension, rngState.scramble);
         }
