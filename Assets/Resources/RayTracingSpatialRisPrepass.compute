@@ -12,7 +12,7 @@ void CSSpatialRisPrepass(uint3 id : SV_DispatchThreadID)
     FeatureValidity.GetDimensions(width, height);
     if (id.x >= width || id.y >= height) return;
     uint2 pixel = id.xy;
-    uint4 rngState = CreateRngState(pixel, _SampleOffset);
+    RngState rngState = CreateRngState(pixel, _SampleOffset);
     SetRngDimension(rngState, SampleDimensionPixelFilter);
     float2 pixelJitter = float2(rand(rngState), rand(rngState));
     if (_SubpixelJitterScale != 1.0f) pixelJitter = (pixelJitter - 0.5f) * _SubpixelJitterScale + 0.5f;
@@ -53,6 +53,6 @@ void CSSpatialRisPrepass(uint3 id : SV_DispatchThreadID)
         }
     }
     _SpatialRisLocalWriteReservoir[index] = reservoir;
-    _SpatialRisPostCandidateRngWrite[index] = rngState.w;
+    _SpatialRisPostCandidateRngWrite[index] = rngState.fallback;
     WriteSpatialRisReceiverFeatures(pixel, hit);
 }

@@ -313,16 +313,26 @@ static const uint SampleDimensionFogOffset = 0u;
 static const uint SampleDimensionDirectLightOffset = 4u;
 static const uint SampleDimensionScatterOffset = 112u;
 static const uint SampleDimensionRouletteOffset = 156u;
-// x = path sample index, y = next semantic dimension, z = per-pixel scramble, w = hash fallback.
-uint4 CreateRngState(uint2 pixel, uint sampleIndex)
+
+struct RngState
+{
+    uint sampleIndex;
+    uint dimension;
+    uint scramble;
+    uint fallback;
+    uint shuffledIndex;
+};
+
+RngState CreateRngState(uint2 pixel, uint sampleIndex)
 {
     uint pixelScramble = Hash(_Seed ^ (pixel.x * 1973u) ^ (pixel.y * 9277u));
-    return uint4(sampleIndex, 0u, pixelScramble, Hash(pixelScramble ^ (sampleIndex * 26699u)));
-}
-
-void SetRngDimension(inout uint4 rngState, uint dimension)
-{
-    rngState.y = dimension;
+    RngState rngState;
+    rngState.sampleIndex = sampleIndex;
+    rngState.dimension = 0u;
+    rngState.scramble = pixelScramble;
+    rngState.fallback = Hash(pixelScramble ^ (sampleIndex * 26699u));
+    rngState.shuffledIndex = sampleIndex;
+    return rngState;
 }
 
 uint OwenScramble(uint value, uint seed)
@@ -340,27 +350,41 @@ uint SobolBits(uint sampleIndex, uint dimension)
 {
     uint result = 0u;
     uint directionOffset = dimension * 32u;
+    // Only set index bits contribute. Walking them directly avoids branches and direction-buffer
+    // reads for every zero bit while producing exactly the same Sobol coordinate.
     [loop]
-    for (uint bitIndex = 0u; bitIndex < 32u && sampleIndex != 0u; bitIndex++)
+    while (sampleIndex != 0u)
     {
-        if ((sampleIndex & 1u) != 0u)
-        {
-            result ^= _SobolDirectionNumbers[directionOffset + bitIndex];
-        }
-        sampleIndex >>= 1u;
+        uint bitIndex = (uint)firstbitlow(sampleIndex);
+        result ^= _SobolDirectionNumbers[directionOffset + bitIndex];
+        sampleIndex &= sampleIndex - 1u;
     }
     return result;
 }
 
-float SobolSample(uint sampleIndex, uint dimension, uint scramble)
+uint ShuffleSobolIndex(uint sampleIndex, uint dimension, uint scramble)
 {
-    // Burley's construction uses one nested shuffle per four-dimensional Sobol block,
-    // then independently Owen-scrambles each resulting coordinate.
     uint block = dimension >> 2u;
-    uint shuffledIndex = OwenScramble(sampleIndex, Hash(scramble ^ (block * 0x68bc21ebu)));
+    return OwenScramble(sampleIndex, Hash(scramble ^ (block * 0x68bc21ebu)));
+}
+
+float SobolSample(uint shuffledIndex, uint dimension, uint scramble)
+{
+    // The caller caches Burley's nested index shuffle across each four-dimensional block.
     uint dimensionSeed = Hash(scramble ^ (dimension * 0x9e3779b9u));
     uint value = OwenScramble(SobolBits(shuffledIndex, dimension), dimensionSeed);
     return min((value + 0.5f) * 2.3283064365386963e-10f, 0.99999994f);
+}
+
+void SetRngDimension(inout RngState rngState, uint dimension)
+{
+    // The high bit marks the first sample after a semantic jump so rand() does not rebuild a
+    // shuffle already cached here when the range starts on a four-dimensional block boundary.
+    rngState.dimension = dimension | 0x80000000u;
+    if (_UseOwenScrambledSobol != 0 && dimension < (uint)clamp(_SobolDimensionLimit, 1, 2568))
+    {
+        rngState.shuffledIndex = ShuffleSobolIndex(rngState.sampleIndex, dimension, rngState.scramble);
+    }
 }
 
 float CausticSequenceSample(uint photonIndex, uint dimension)
@@ -383,16 +407,22 @@ float CausticDecorrelatedSample(uint photonIndex, uint dimension)
     return min((bits + 0.5f) * 2.3283064365386963e-10f, 0.99999994f);
 }
 
-float rand(inout uint4 rngState)
+float rand(inout RngState rngState)
 {
-    uint dimension = rngState.y++;
+    bool firstInRange = (rngState.dimension & 0x80000000u) != 0u;
+    uint dimension = rngState.dimension & 0x7fffffffu;
+    rngState.dimension = dimension + 1u;
     if (_UseOwenScrambledSobol != 0 && dimension < (uint)clamp(_SobolDimensionLimit, 1, 2568))
     {
-        return SobolSample(rngState.x, dimension, rngState.z);
+        if (!firstInRange && (dimension & 3u) == 0u)
+        {
+            rngState.shuffledIndex = ShuffleSobolIndex(rngState.sampleIndex, dimension, rngState.scramble);
+        }
+        return SobolSample(rngState.shuffledIndex, dimension, rngState.scramble);
     }
 
-    rngState.w = Hash(rngState.w ^ dimension);
-    return (rngState.w & 0x00ffffffu) / 16777216.0f;
+    rngState.fallback = Hash(rngState.fallback ^ dimension);
+    return (rngState.fallback & 0x00ffffffu) / 16777216.0f;
 }
 
 float rand(inout uint rngState)
@@ -625,7 +655,7 @@ Ray CreateCameraRay(float2 uv)
     return CreateRay(origin, direction);
 }
 
-float2 SampleConcentricDisk(inout uint4 rngState)
+float2 SampleConcentricDisk(inout RngState rngState)
 {
     float2 offset = float2(rand(rngState), rand(rngState)) * 2.0f - 1.0f;
     if (offset.x == 0.0f && offset.y == 0.0f)
@@ -649,7 +679,7 @@ float2 SampleConcentricDisk(inout uint4 rngState)
     return radius * float2(cos(angle), sin(angle));
 }
 
-float2 SampleAperture(inout uint4 rngState)
+float2 SampleAperture(inout RngState rngState)
 {
     float2 samplePosition;
     int bladeCount = max(0, _ApertureBladeCount);
@@ -2103,7 +2133,7 @@ float GetFogTransmittanceAlongSegment(float3 startPosition, float3 endPosition)
     return exp(-max(0.0f, _FogDensity) * GetFogDistanceAlongSegment(startPosition, endPosition));
 }
 
-bool SampleFogScatteringEvent(Ray ray, float maxDistance, inout uint4 rngState, out float eventDistance)
+bool SampleFogScatteringEvent(Ray ray, float maxDistance, inout RngState rngState, out float eventDistance)
 {
     eventDistance = 0.0f;
     float entryDistance;
@@ -2119,7 +2149,7 @@ bool SampleFogScatteringEvent(Ray ray, float maxDistance, inout uint4 rngState, 
 }
 #endif
 
-float3 SampleUniformSphere(inout uint4 rngState)
+float3 SampleUniformSphere(inout RngState rngState)
 {
     float z = 1.0f - 2.0f * rand(rngState);
     float phi = 2.0f * PI * rand(rngState);
@@ -2513,14 +2543,14 @@ void CreateBasisFromNormal(float3 normal, out float3 tangent, out float3 bitange
     bitangent = cross(normal, tangent);
 }
 
-float2 SampleDisk(inout uint4 rngState)
+float2 SampleDisk(inout RngState rngState)
 {
     float radius = sqrt(rand(rngState));
     float angle = 2.0f * PI * rand(rngState);
     return float2(cos(angle), sin(angle)) * radius;
 }
 
-float3 SampleCone(float3 axis, float angularRadius, inout uint4 rngState)
+float3 SampleCone(float3 axis, float angularRadius, inout RngState rngState)
 {
     if (angularRadius <= 1e-6f)
     {
@@ -2964,7 +2994,7 @@ float GetTriangleArea(MeshTriangle meshTriangle)
         meshTriangle.vertex2 - meshTriangle.vertex0));
 }
 
-int SelectMeshLightTriangle(Light light, inout uint4 rngState, out float triangleProbability)
+int SelectMeshLightTriangle(Light light, inout RngState rngState, out float triangleProbability)
 {
     triangleProbability = 0.0f;
     if (light.triangleCount <= 0 || light.totalArea <= 1e-8f)
@@ -3409,7 +3439,7 @@ bool IsInitialRisEligible(RayHit hit)
 float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
                            float lightSelectionPdf, int lightTechniqueSampleCount,
                            bool volumeEvent, InitialRisCandidate risCandidate,
-                           inout uint4 rngState)
+                           inout RngState rngState)
 {
     float3 lightTotal = float3(0.0f, 0.0f, 0.0f);
     bool useRisCandidate = risCandidate.valid != 0;
@@ -3742,7 +3772,7 @@ float LightImportanceWeight(int lightIndex, float3 shadingPosition)
 //  outSelectionPdf: probability of selecting the returned light for one draw
 //  returns     : the light index to sample
 int SelectLightForDraw(int iteration, int drawCount, int lightCount, float3 shadingPosition,
-                       inout uint4 rngState, out float outWeight, out float outSelectionPdf)
+                       inout RngState rngState, out float outWeight, out float outSelectionPdf)
 {
     if (_LightSamplingStrategy == LightSamplingUniformRandom)
     {
@@ -3807,7 +3837,7 @@ int SelectLightForDraw(int iteration, int drawCount, int lightCount, float3 shad
 
 float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
                               bool volumeEvent, bool initialRis, out bool initialRisSelected,
-                              uint2 pixel, inout uint4 rngState, bool reservoirOnly,
+                               uint2 pixel, inout RngState rngState, bool reservoirOnly,
                               out InitialRisCandidate reservoirCandidate, out float reservoirWeightSum, out int reservoirM)
 {
     initialRisSelected = false;
@@ -4021,7 +4051,7 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
         if (_SpatialRisEnabled == 0 && IsTemporalRisEligible(hit))
         {
             InterlockedAdd(_TemporalRisDiagnostics[0], 1);
-            uint temporalReuseRngState = Hash(rngState.w ^ 0x9e3779b9u);
+            uint temporalReuseRngState = Hash(rngState.fallback ^ 0x9e3779b9u);
             uint2 previousPixel;
             InitialRisCandidate temporalCandidate;
             float previousWeightSum;
@@ -4071,8 +4101,8 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
             // The prepass owns local generation. Restart from its post-candidate state so final
             // path sampling preserves the local RIS RNG contract while only neighbor merges add RNG.
             uint reservoirIndex = pixel.y * (uint)_TemporalRisTextureSize.x + pixel.x;
-            rngState.w = _SpatialRisPostCandidateRng[reservoirIndex];
-            uint spatialReuseRngState = Hash(rngState.w ^ 0x85ebca6bu);
+            rngState.fallback = _SpatialRisPostCandidateRng[reservoirIndex];
+            uint spatialReuseRngState = Hash(rngState.fallback ^ 0x85ebca6bu);
             totalWeight = 0.0f;
             effectiveCandidateCount = 0;
             selectedRisCandidate.valid = 0;
@@ -4349,7 +4379,7 @@ float GetEnvironmentPdf(float3 direction)
     return texelProbability / texelSolidAngle;
 }
 
-float3 GetRandomizedNormalBasedOnAmount(float3 normal, float amount, inout uint4 rngState)
+float3 GetRandomizedNormalBasedOnAmount(float3 normal, float amount, inout RngState rngState)
 {
     float3 normalWithRand = normalize( float3(
                 normal.x + rand(rngState) * (1 - amount) - rand(rngState) * (1 - amount),
@@ -4420,7 +4450,7 @@ float3 GetCausticOpticalNormal(RayHit hit)
     return hit.normal;
 }
 
-float3 GetDiffuseScatterDirection(float3 normal, inout uint4 rngState)
+float3 GetDiffuseScatterDirection(float3 normal, inout RngState rngState)
 {
     float2 diskSample = SampleDisk(rngState);
     float z = sqrt(max(0.0f, 1.0f - dot(diskSample, diskSample)));
@@ -4431,7 +4461,7 @@ float3 GetDiffuseScatterDirection(float3 normal, inout uint4 rngState)
     return normalize(tangent * diskSample.x + bitangent * diskSample.y + normal * z);
 }
 
-float3 SampleGgxHalfDirection(float3 normal, float alpha, inout uint4 rngState)
+float3 SampleGgxHalfDirection(float3 normal, float alpha, inout RngState rngState)
 {
     float u1 = rand(rngState);
     float u2 = rand(rngState);
@@ -4445,7 +4475,7 @@ float3 SampleGgxHalfDirection(float3 normal, float alpha, inout uint4 rngState)
     return normalize(tangent * (cos(phi) * sinTheta) + bitangent * (sin(phi) * sinTheta) + normal * cosTheta);
 }
 
-float3 SampleDielectricBoundaryNormal(float3 opticalNormal, float3 geometricNormal, float3 incidentDirection, float smoothness, float sourceRefraction, float targetRefraction, inout uint4 rngState)
+float3 SampleDielectricBoundaryNormal(float3 opticalNormal, float3 geometricNormal, float3 incidentDirection, float smoothness, float sourceRefraction, float targetRefraction, inout RngState rngState)
 {
     float3 geometricBoundaryNormal = dot(incidentDirection, geometricNormal) < 0.0f ? geometricNormal : -geometricNormal;
     float3 opticalBoundaryNormal = dot(opticalNormal, geometricBoundaryNormal) >= 0.0f ? opticalNormal : -opticalNormal;
@@ -4479,7 +4509,7 @@ float3 SampleDielectricBoundaryNormal(float3 opticalNormal, float3 geometricNorm
     return geometricBoundaryNormal;
 }
 
-BrdfSample SampleMaterialBrdf(Ray ray, RayHit hit, inout uint4 rngState)
+BrdfSample SampleMaterialBrdf(Ray ray, RayHit hit, inout RngState rngState)
 {
     BrdfSample sample;
     sample.direction = hit.normal;
@@ -4526,7 +4556,7 @@ bool ShouldSampleDirectLight(float3 throughput)
     return max(throughput.x, max(throughput.y, throughput.z)) > MinDirectLightThroughput;
 }
 
-void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int remainingBounces, bool entering, float sourceRefraction, float targetRefraction, float3 boundaryNormal, inout uint4 rngState, out int bouncesConsumed, out int mediumTransition, out float mediumDistanceTraveled)
+void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int remainingBounces, bool entering, float sourceRefraction, float targetRefraction, float3 boundaryNormal, inout RngState rngState, out int bouncesConsumed, out int mediumTransition, out float mediumDistanceTraveled)
 {
     bouncesConsumed = 1;
     mediumTransition = MediumTransitionNone;
@@ -4562,7 +4592,7 @@ void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int r
     mediumTransition = MediumTransitionEnter;
 }
 
-void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int remainingBounces, bool entering, float sourceRefraction, float targetRefraction, float3 boundaryNormal, inout uint4 rngState, out int bouncesConsumed, out int mediumTransition, out float mediumDistanceTraveled)
+void ApplyPlanarTransmission(inout Ray ray, Ray sourceRay, inout RayHit hit, int remainingBounces, bool entering, float sourceRefraction, float targetRefraction, float3 boundaryNormal, inout RngState rngState, out int bouncesConsumed, out int mediumTransition, out float mediumDistanceTraveled)
 {
     bouncesConsumed = 1;
     mediumTransition = MediumTransitionNone;
@@ -4690,7 +4720,7 @@ int ApplyWaterTransmission(inout Ray ray, Ray sourceRay, RayHit hit, bool enteri
 }
 #endif
 
-ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, int remainingBounces, in MediumStack mediumStack, inout uint4 rngState)
+ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, int remainingBounces, in MediumStack mediumStack, inout RngState rngState)
 {
     float3 albedo = GetAlbedo(hit);
     float3 roughNormal = GetRandomizedNormalBasedOnAmount(hit.normal, hit.smoothness, rngState);
@@ -4757,7 +4787,7 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
 }
 
 float3 GetDirectLight(Ray ray, RayHit hit, bool softShadows, bool initialRis,
-                       out bool initialRisSelected, uint2 pixel, inout uint4 rngState)
+                       out bool initialRisSelected, uint2 pixel, inout RngState rngState)
 {
     int samplesPerLight = softShadows ? max(1, _ShadowQuality + 1) : 1;
     InitialRisCandidate ignoredCandidate;
@@ -4768,7 +4798,7 @@ float3 GetDirectLight(Ray ray, RayHit hit, bool softShadows, bool initialRis,
 }
 
 #if defined(FOG_ENABLED)
-float3 GetFogDirectLight(Ray ray, float3 position, bool softShadows, inout uint4 rngState)
+float3 GetFogDirectLight(Ray ray, float3 position, bool softShadows, inout RngState rngState)
 {
     RayHit eventHit = CreateRayHit();
     eventHit.position = position;
@@ -4782,7 +4812,7 @@ float3 GetFogDirectLight(Ray ray, float3 position, bool softShadows, inout uint4
 }
 #endif
 
-bool ApplyRussianRoulette(inout float3 throughput, int bounce, inout uint4 rngState)
+bool ApplyRussianRoulette(inout float3 throughput, int bounce, inout RngState rngState)
 {
     if (bounce < 2)
     {
@@ -4854,7 +4884,7 @@ float3 GatherCausticRadiance(RayHit hit)
     return photonPower * GetAlbedo(hit) * (_CausticIntensity / normalization);
 }
 
-float3 TraceVisibleCausticRadiance(Ray ray, inout uint4 rngState)
+float3 TraceVisibleCausticRadiance(Ray ray, inout RngState rngState)
 {
     float3 throughput = float3(1.0f, 1.0f, 1.0f);
     MediumStack mediumStack = CreateMediumStack(ray.origin);
@@ -4892,7 +4922,7 @@ float3 TraceVisibleCausticRadiance(Ray ray, inout uint4 rngState)
     return float3(0.0f, 0.0f, 0.0f);
 }
 
-float3 TracePathWithDirectLight(Ray ray, uint2 pixel, inout uint4 rngState, out float directLightLuminance,
+float3 TracePathWithDirectLight(Ray ray, uint2 pixel, inout RngState rngState, out float directLightLuminance,
                                 out float firstSurfaceRoughness)
 {
     float3 radiance = float3(0.0f, 0.0f, 0.0f);
@@ -5057,7 +5087,7 @@ float3 TracePathWithDirectLight(Ray ray, uint2 pixel, inout uint4 rngState, out 
     return radiance;
 }
 
-float3 TracePath(Ray ray, uint2 pixel, inout uint4 rngState)
+float3 TracePath(Ray ray, uint2 pixel, inout RngState rngState)
 {
     float ignoredDirectLightLuminance;
     float ignoredFirstSurfaceRoughness;
@@ -5079,7 +5109,7 @@ float3 ClampFirefly(float3 radiance)
 }
 
 #if DEBUG_RENDER
-float3 GetDebugRenderColor(Ray ray, inout uint4 rngState)
+float3 GetDebugRenderColor(Ray ray, inout RngState rngState)
 {
     RayHit hit = GetNearestIntersection(ray);
 

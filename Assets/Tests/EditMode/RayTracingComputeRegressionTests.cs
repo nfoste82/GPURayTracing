@@ -53,27 +53,31 @@ namespace GPURayTracing.Tests
             string main = System.IO.File.ReadAllText(ComputeShaderPath);
             string adaptive = System.IO.File.ReadAllText(AdaptiveTraceShaderPath);
 
-            Assert.That(shared, Does.Contain("uint4 CreateRngState(uint2 pixel, uint sampleIndex)"));
+            Assert.That(shared, Does.Contain("struct RngState"));
+            Assert.That(shared, Does.Contain("RngState CreateRngState(uint2 pixel, uint sampleIndex)"));
             Assert.That(shared, Does.Contain("uint OwenScramble(uint value, uint seed)"));
             Assert.That(shared, Does.Contain("uint SobolBits(uint sampleIndex, uint dimension)"));
-            Assert.That(shared, Does.Contain("float SobolSample(uint sampleIndex, uint dimension, uint scramble)"));
+            Assert.That(shared, Does.Contain("uint ShuffleSobolIndex(uint sampleIndex, uint dimension, uint scramble)"));
+            Assert.That(shared, Does.Contain("float SobolSample(uint shuffledIndex, uint dimension, uint scramble)"));
             Assert.That(shared, Does.Contain("StructuredBuffer<uint> _SobolDirectionNumbers"));
             Assert.That(shared, Does.Contain("static const uint SampleDimensionsPerBounce = 160u"));
             Assert.That(shared, Does.Contain("static const uint SampleDimensionScatterOffset = 112u"));
             Assert.That(shared, Does.Contain("static const uint SampleDimensionRouletteOffset = 156u"));
             Assert.That(shared, Does.Contain("uint block = dimension >> 2u"));
-            Assert.That(shared, Does.Contain("uint shuffledIndex = OwenScramble(sampleIndex"));
-            Assert.That(shared, Does.Contain("OwenScramble(SobolBits(shuffledIndex, dimension)"));
+            Assert.That(shared, Does.Contain("rngState.shuffledIndex = ShuffleSobolIndex"));
+            Assert.That(shared, Does.Contain("SobolSample(rngState.shuffledIndex, dimension, rngState.scramble)"));
+            Assert.That(shared, Does.Contain("uint bitIndex = (uint)firstbitlow(sampleIndex)"));
+            Assert.That(shared, Does.Contain("sampleIndex &= sampleIndex - 1u"));
             Assert.That(shared, Does.Contain("dimension < (uint)clamp(_SobolDimensionLimit, 1, 2568)"));
             Assert.That(shared, Does.Contain("_UseOwenScrambledSobol != 0"));
             Assert.That(shared, Does.Contain("_SobolDimensionLimit"));
-            Assert.That(shared, Does.Contain("rngState.w = Hash(rngState.w ^ dimension)"));
+            Assert.That(shared, Does.Contain("rngState.fallback = Hash(rngState.fallback ^ dimension)"));
             Assert.That(shared, Does.Contain("BounceSampleDimension((uint)bounce, SampleDimensionDirectLightOffset)"));
             Assert.That(shared, Does.Contain("BounceSampleDimension((uint)bounce, SampleDimensionScatterOffset)"));
             Assert.That(shared, Does.Contain("BounceSampleDimension((uint)bounce, SampleDimensionRouletteOffset)"));
             Assert.That(main, Does.Contain("SetRngDimension(rngState, SampleDimensionPixelFilter)"));
             Assert.That(main, Does.Contain("SetRngDimension(rngState, SampleDimensionLens)"));
-            Assert.That(adaptive, Does.Contain("CreateRngState(pixel, (uint)previousState.x + localSample)"));
+            Assert.That(adaptive, Does.Contain("RngState rngState = CreateRngState(pixel, (uint)previousState.x + localSample)"));
 
             string inspector = System.IO.File.ReadAllText("Assets/Editor/GameManagerEditor.cs");
             Assert.That(inspector, Does.Contain("DrawSamplerSettings(manager)"));
@@ -1491,10 +1495,10 @@ namespace GPURayTracing.Tests
                 Assert.That(hashMethod, Is.Not.Null);
                 int defaultHash = (int)hashMethod.Invoke(manager, null);
 
-                managerType.GetField("sobolDimensionLimit").SetValue(manager, 128);
+                managerType.GetField("sobolDimensionLimit").SetValue(manager, 2568);
                 Assert.That(hashMethod.Invoke(manager, null), Is.Not.EqualTo(defaultHash));
 
-                managerType.GetField("sobolDimensionLimit").SetValue(manager, 2568);
+                managerType.GetField("sobolDimensionLimit").SetValue(manager, 168);
                 managerType.GetField("samplingSeed").SetValue(manager, 2);
                 Assert.That(hashMethod.Invoke(manager, null), Is.Not.EqualTo(defaultHash));
             }
@@ -2454,8 +2458,9 @@ namespace GPURayTracing.Tests
         {
             string shaderSource = System.IO.File.ReadAllText("Assets/Scripts/RayTracingCausticsKernels.hlsl");
 
-            Assert.That(shaderSource, Does.Contain("inout uint4 rngState"));
-            Assert.That(shaderSource, Does.Contain("uint4 rngState = uint4(id.x, 4096u, causticHashSeed, causticHashSeed)"));
+            Assert.That(shaderSource, Does.Contain("inout RngState rngState"));
+            Assert.That(shaderSource, Does.Contain("rngState.dimension = 4096u"));
+            Assert.That(shaderSource, Does.Contain("rngState.fallback = causticHashSeed"));
         }
 
         private static uint Sum(uint[] values)

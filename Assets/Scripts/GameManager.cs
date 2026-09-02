@@ -122,9 +122,9 @@ public class GameManager : MonoBehaviour
     [Tooltip("Uses Owen-scrambled Sobol samples for camera and path dimensions. Disable only to compare against the hash-RNG baseline.")]
     public bool useOwenScrambledSobol = true;
 
-    [Tooltip("Number of camera and path dimensions using Burley-style shuffled, Owen-scrambled Sobol coordinates. Higher dimensions use the unbiased hash fallback.")]
+    [Tooltip("Number of camera and path dimensions using Burley-style shuffled, Owen-scrambled Sobol coordinates. The default covers camera and first-bounce sampling; higher dimensions use the faster unbiased hash fallback.")]
     [Range(1, SobolDirectionNumbers.MaximumDimensions)]
-    public int sobolDimensionLimit = SobolDirectionNumbers.MaximumDimensions;
+    public int sobolDimensionLimit = 168;
 
     [Tooltip("Deterministic seed for the per-pixel Owen scramble when Random Noise is disabled.")]
     [Min(1)]

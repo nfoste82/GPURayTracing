@@ -28,7 +28,7 @@ void CSAdaptiveTrace(uint3 id : SV_DispatchThreadID)
     [loop]
     for (uint localSample = 0u; localSample < workItem.y; localSample++)
     {
-        uint4 rngState = CreateRngState(pixel, (uint)previousState.x + localSample);
+        RngState rngState = CreateRngState(pixel, (uint)previousState.x + localSample);
         SetRngDimension(rngState, SampleDimensionPixelFilter);
         float2 pixelJitter = float2(rand(rngState), rand(rngState));
         if (_SubpixelJitterScale != 1.0f) pixelJitter = (pixelJitter - 0.5f) * _SubpixelJitterScale + 0.5f;
@@ -90,7 +90,7 @@ void CSAdaptiveTraceReference(uint3 id : SV_DispatchThreadID)
     [loop]
     for (int i = 0; i < samplesThisPixel; i++)
     {
-        uint4 rngState = CreateRngState(pixel, (uint)oldCount + (uint)i);
+        RngState rngState = CreateRngState(pixel, (uint)oldCount + (uint)i);
         SetRngDimension(rngState, SampleDimensionPixelFilter);
         float2 pixelJitter = float2(rand(rngState), rand(rngState));
         if (_SubpixelJitterScale != 1.0f) pixelJitter = (pixelJitter - 0.5f) * _SubpixelJitterScale + 0.5f;

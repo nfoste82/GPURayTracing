@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "label": "cornellbox_path_sampler_dimension_sweep_30_seconds",
+  "scenes": ["Assets/Scenes/Generated/CornellBox.unity"],
+  "width": 1024,
+  "height": 1024,
+  "durationSeconds": 30.0,
+  "cooldownSeconds": 12.0,
+  "referenceRoot": "Assets/Editor/RayTracingSceneReferences",
+  "variants": [
+    {
+      "name": "standard_rng_fixed_seed",
+      "overrides": [
+        { "path": "subpixelJitterScale", "value": "1.0" },
+        { "path": "useOwenScrambledSobol", "value": "false" },
+        { "path": "randomNoise", "value": "false" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "owen_sobol_first_bounce",
+      "overrides": [
+        { "path": "subpixelJitterScale", "value": "1.0" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "randomNoise", "value": "false" },
+        { "path": "samplingSeed", "value": "1" },
+        { "path": "sobolDimensionLimit", "value": "168" }
+      ]
+    },
+    {
+      "name": "owen_sobol_first_two_bounces",
+      "overrides": [
+        { "path": "subpixelJitterScale", "value": "1.0" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "randomNoise", "value": "false" },
+        { "path": "samplingSeed", "value": "1" },
+        { "path": "sobolDimensionLimit", "value": "328" }
+      ]
+    },
+    {
+      "name": "owen_sobol_first_four_bounces",
+      "overrides": [
+        { "path": "subpixelJitterScale", "value": "1.0" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "randomNoise", "value": "false" },
+        { "path": "samplingSeed", "value": "1" },
+        { "path": "sobolDimensionLimit", "value": "648" }
+      ]
+    },
+    {
+      "name": "owen_sobol_all_bounces",
+      "overrides": [
+        { "path": "subpixelJitterScale", "value": "1.0" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "randomNoise", "value": "false" },
+        { "path": "samplingSeed", "value": "1" },
+        { "path": "sobolDimensionLimit", "value": "2568" }
+      ]
+    }
+  ]
+}
