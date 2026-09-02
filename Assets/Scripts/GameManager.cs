@@ -2131,6 +2131,10 @@ public class GameManager : MonoBehaviour
     private void SetPhotonTraceSceneParameters(int traceKernel)
     {
         EnsureMeshTextureArrays();
+
+        // Photon RNG starts beyond the Sobol range and uses hash fallback, but the shared rand()
+        // implementation still leaves this structured buffer in the compiled kernel interface.
+        causticsShader.SetBuffer(traceKernel, SobolDirectionNumberBuffer, _sobolDirectionNumbers.Buffer);
         
         causticsShader.SetTexture(traceKernel, MeshAlbedoTextures, _meshAlbedoTextureArray);
         causticsShader.SetTexture(traceKernel, MeshMetallicRoughnessTextures, _meshMetallicRoughnessTextureArray);

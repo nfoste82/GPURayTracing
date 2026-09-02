@@ -1030,8 +1030,8 @@ namespace GPURayTracing.Tests
                     shader.SetInt("_CausticsEnabled", 1);
                     causticMap = DispatchCausticPhotons(
                         shader, sphereBuffer, lightBuffer, triangleBuffer, meshBuffer, bvhBuffer,
-                        topLevelBuffer, shadowBuffer, spheres.Length, lights.Length, triangles.Length,
-                        meshes.Length, caustics);
+                        topLevelBuffer, shadowBuffer, sobolDirectionBuffer,
+                        spheres.Length, lights.Length, triangles.Length, meshes.Length, caustics);
                     SetCausticBuffers(shader, kernel, causticMap);
                     SetCausticParameters(shader, caustics);
                 }
@@ -1252,12 +1252,14 @@ namespace GPURayTracing.Tests
             ComputeBuffer bvhBuffer = CreateBuffer(bvhNodes, 48);
             ComputeBuffer topLevelBuffer = CreateDummyBuffer(48);
             ComputeBuffer shadowBuffer = CreateDummyBuffer(48);
+            ComputeBuffer sobolDirectionBuffer = CreateDummyBuffer(4);
             CausticMap map = null;
             try
             {
                 map = DispatchCausticPhotons(
                     shader, sphereBuffer, lightBuffer, triangleBuffer, meshBuffer, bvhBuffer,
-                    topLevelBuffer, shadowBuffer, spheres.Length, lights.Length, triangles.Length, meshes.Length, options);
+                    topLevelBuffer, shadowBuffer, sobolDirectionBuffer,
+                    spheres.Length, lights.Length, triangles.Length, meshes.Length, options);
                 metadata = new uint[6];
                 map.metadata.GetData(metadata);
                 var photons = new CausticPhotonData[checked((int)metadata[3])];
@@ -1278,6 +1280,7 @@ namespace GPURayTracing.Tests
                 bvhBuffer.Release();
                 topLevelBuffer.Release();
                 shadowBuffer.Release();
+                sobolDirectionBuffer.Release();
             }
         }
 
@@ -1290,6 +1293,7 @@ namespace GPURayTracing.Tests
             ComputeBuffer bvhBuffer,
             ComputeBuffer topLevelBuffer,
             ComputeBuffer shadowBuffer,
+            ComputeBuffer sobolDirectionBuffer,
             int sphereCount,
             int lightCount,
             int triangleCount,
@@ -1327,6 +1331,7 @@ namespace GPURayTracing.Tests
             shader.SetBuffer(traceKernel, "_BvhNodes", bvhBuffer);
             shader.SetBuffer(traceKernel, "_TopLevelBvhNodes", topLevelBuffer);
             shader.SetBuffer(traceKernel, "_ShadowBvhNodes", shadowBuffer);
+            shader.SetBuffer(traceKernel, "_SobolDirectionNumbers", sobolDirectionBuffer);
             ComputeBuffer meshLightCdfBuffer = CreateDummyBuffer(4);
             shader.SetBuffer(traceKernel, "_MeshLightTriangleCdf", meshLightCdfBuffer);
             shader.SetBuffer(traceKernel, "_CausticTargetPairs", map.targetPairs);
