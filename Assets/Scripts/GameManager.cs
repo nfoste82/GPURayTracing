@@ -218,6 +218,16 @@ public class GameManager : MonoBehaviour
     [Tooltip("Redistributes bright HDR radiance into a camera/eye-like glare halo before exposure and ACES tone mapping.")]
     public bool enableGlare = false;
 
+    [Header("Image Export")]
+    [Tooltip("Applies fast approximate anti-aliasing to PNG exports only. This does not affect the live render.")]
+    public bool exportWithFxaa = false;
+
+    [Tooltip("Applies morphological anti-aliasing to PNG exports only. This does not affect the live render.")]
+    public bool exportWithSmaa = false;
+
+    [Tooltip("Opens the exported PNG with the operating system's default image application.")]
+    public bool openImageAfterExport = false;
+
     [Tooltip("Linear HDR luminance at which glare begins. Lower values spread more of the image into the halo.")]
     [Range(0.0f, 16.0f)]
     public float glareThreshold = 1.0f;
@@ -2436,6 +2446,10 @@ public class GameManager : MonoBehaviour
         try
         {
             File.WriteAllBytes(path, EncodeCurrentOutputPng());
+            if (openImageAfterExport)
+            {
+                Application.OpenURL(new Uri(Path.GetFullPath(path)).AbsoluteUri);
+            }
         }
         catch (Exception exception)
         {
@@ -2480,6 +2494,7 @@ public class GameManager : MonoBehaviour
         var width = Mathf.Max(1, _displayTextureSize.x);
         var height = Mathf.Max(1, _displayTextureSize.y);
         var presentation = RenderTexture.GetTemporary(width, height, 0, RenderTextureFormat.ARGB32);
+        RenderTexture antiAliasedPresentation = null;
         var previous = RenderTexture.active;
         var texture = new Texture2D(width, height, TextureFormat.RGB24, false);
         
@@ -2489,7 +2504,21 @@ public class GameManager : MonoBehaviour
                 ? _presentationTexture ?? _outputTexture
                 : _outputTexture;
             Graphics.Blit(currentOutput, presentation);
-            RenderTexture.active = presentation;
+            var output = presentation;
+            if (exportWithFxaa || exportWithSmaa)
+            {
+                antiAliasedPresentation = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32)
+                {
+                    enableRandomWrite = true
+                };
+                antiAliasedPresentation.Create();
+                if (_spatialDenoisingManager.ApplyExportAntiAliasing(presentation, antiAliasedPresentation, exportWithSmaa))
+                {
+                    output = antiAliasedPresentation;
+                }
+            }
+
+            RenderTexture.active = output;
             texture.ReadPixels(new Rect(0, 0, width, height), 0, 0, false);
             texture.Apply(false, false);
             return texture.EncodeToPNG();
@@ -2497,6 +2526,7 @@ public class GameManager : MonoBehaviour
         finally
         {
             RenderTexture.active = previous;
+            DestroyRuntimeObject(antiAliasedPresentation);
             RenderTexture.ReleaseTemporary(presentation);
             DestroyRuntimeObject(texture);
         }

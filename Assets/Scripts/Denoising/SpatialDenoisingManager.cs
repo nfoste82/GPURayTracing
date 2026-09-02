@@ -35,6 +35,7 @@ namespace PathTracing.Denoising
         private static readonly int GlareMip1 = UnityEngine.Shader.PropertyToID("GlareMip1");
         private static readonly int GlareMip2 = UnityEngine.Shader.PropertyToID("GlareMip2");
         private static readonly int GlareMip3 = UnityEngine.Shader.PropertyToID("GlareMip3");
+        private static readonly int SmaaEdges = UnityEngine.Shader.PropertyToID("SmaaEdges");
 
         [Tooltip("Applies an edge-aware spatial A-trous filter to linear HDR beauty. This does not use temporal history.")]
         public bool enabled = true;
@@ -120,6 +121,46 @@ namespace PathTracing.Denoising
             Shader.SetTexture(kernel, GlareMip2, source);
             Shader.SetTexture(kernel, GlareMip3, source);
             ComputeDispatch.Dispatch(Shader, kernel, Mathf.CeilToInt(destination.width / 8.0f), Mathf.CeilToInt(destination.height / 8.0f), 1);
+        }
+
+        public bool ApplyExportAntiAliasing(RenderTexture source, RenderTexture destination, bool useSmaa)
+        {
+            EnsureShader();
+            if (Shader == null || source == null || destination == null)
+            {
+                return false;
+            }
+
+            int groupsX = Mathf.CeilToInt(destination.width / 8.0f);
+            int groupsY = Mathf.CeilToInt(destination.height / 8.0f);
+            if (!useSmaa)
+            {
+                var kernel = Shader.FindKernel("CSFXAA");
+                Shader.SetTexture(kernel, InputBeauty, source);
+                Shader.SetTexture(kernel, FilteredBeauty, destination);
+                ComputeDispatch.Dispatch(Shader, kernel, groupsX, groupsY, 1);
+                return true;
+            }
+
+            var edges = CreateTextureInternal(new Vector2Int(destination.width, destination.height), RenderTextureFormat.ARGBHalf);
+            try
+            {
+                var edgeKernel = Shader.FindKernel("CSSMAAEdge");
+                Shader.SetTexture(edgeKernel, InputBeauty, source);
+                Shader.SetTexture(edgeKernel, SmaaEdges, edges);
+                ComputeDispatch.Dispatch(Shader, edgeKernel, groupsX, groupsY, 1);
+
+                var blendKernel = Shader.FindKernel("CSSMAABlend");
+                Shader.SetTexture(blendKernel, InputBeauty, source);
+                Shader.SetTexture(blendKernel, SmaaEdges, edges);
+                Shader.SetTexture(blendKernel, FilteredBeauty, destination);
+                ComputeDispatch.Dispatch(Shader, blendKernel, groupsX, groupsY, 1);
+                return true;
+            }
+            finally
+            {
+                Release(edges);
+            }
         }
 
         public void PresentFeatureDebug(DebugRenderMode mode, RenderTexture normal, RenderTexture albedo, RenderTexture depth,

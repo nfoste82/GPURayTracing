@@ -3,9 +3,9 @@
 Full disclosure that LLMs were used to assist during the later work on this project.
 
 ## Features:
-* GPU compute-shader path tracing for spheres and registered triangle meshes
-* Emissive sphere and mesh lights with direct-light
-* Resampled important sampling and multi-importance sampling.
+* GPU compute-shader path tracing for spheres and triangle meshes
+* Emissive sphere and mesh lights with direct-light, environment lighting
+* Resampled importance sampling, multi-importance sampling, Smith-GGX importance sampling, and Owen-Sobol scrambling
 * Surface reflections (configurable smoothness of surfaces), diffuse indirect lighting, directional lighting, and multiple ray bounces
 * Reflection/refraction, distance-based absorption, and colored transparent shadows
 * Photon-mapped caustics
@@ -20,14 +20,17 @@ Full disclosure that LLMs were used to assist during the later work on this proj
 * glTF/GLB import support, including automatic conversion of base-color, metallic-roughness, normal, and transmission/IOR material data into ray-traced materials.
 * Support for Unity terrains with multi-texture splatting
 
-## Features missing or approximate:
+## Experimental/Incomplete features:
+* Temporal denoising (experimental)
+* Adaptive sampling (experimental)
+* Spatial and temporal RIS (experimental)
+
+## Missing, future considerations:
 * Spectral refractions (different wavelengths of light refract differently), current lighting system does not handle wavelengths
-* Temporal denoising is a work-in-progress
-* Considering adding the option for machine-learning-based upscaling and denoising, and when rendering in real time, possibly even frame insertion to improve frame rate
+* Machine-learning-based upscaling and denoising
 * Heterogeneous fog
 * Subsurface scattering
-* Shader compilation can take quite a while, I'd like to optimize this
-* Environment mapped lighting instead of just direct sky reflections
+* Shader compilation speedups, compilation takes a long time currently
 
 Depending on the scene and quality, and your hardware, your frame rate may vary by quite a bit. Real-time can look decent on the right hardware with the right scene and settings. Some features like water, caustics, or large polygonal meshes are too expensive to look good in real-time currently.
 

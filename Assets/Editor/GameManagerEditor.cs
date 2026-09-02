@@ -521,8 +521,34 @@ public sealed class GameManagerEditor : Editor
         }
     }
 
-    private static void DrawImageExport(GameManager manager)
+    private void DrawImageExport(GameManager manager)
     {
+        var fxaa = serializedObject.FindProperty("exportWithFxaa");
+        var smaa = serializedObject.FindProperty("exportWithSmaa");
+        EditorGUI.BeginChangeCheck();
+        var useFxaa = EditorGUILayout.ToggleLeft("FXAA (Fast Anti-Aliasing)", fxaa.boolValue);
+        if (EditorGUI.EndChangeCheck())
+        {
+            fxaa.boolValue = useFxaa;
+            if (useFxaa)
+            {
+                smaa.boolValue = false;
+            }
+        }
+
+        EditorGUI.BeginChangeCheck();
+        var useSmaa = EditorGUILayout.ToggleLeft("SMAA (Morphological Anti-Aliasing)", smaa.boolValue);
+        if (EditorGUI.EndChangeCheck())
+        {
+            smaa.boolValue = useSmaa;
+            if (useSmaa)
+            {
+                fxaa.boolValue = false;
+            }
+        }
+
+        DrawProperty("openImageAfterExport", "Open Image After Saving");
+        EditorGUILayout.HelpBox("Anti-aliasing is applied only to exported PNGs; the live render is unchanged.", MessageType.None);
         using (new EditorGUI.DisabledScope(!EditorApplication.isPlaying))
         {
             if (GUILayout.Button("Save Image"))

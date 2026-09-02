@@ -8,6 +8,9 @@
 #pragma kernel CSGeneratePreservationMask
 #pragma kernel CSVisualizeTemporal
 #pragma kernel CSVisualizeFeature
+#pragma kernel CSFXAA
+#pragma kernel CSSMAAEdge
+#pragma kernel CSSMAABlend
 
 Texture2D<float4> InputBeauty;
 Texture2D<float4> GlareMip0;
@@ -43,6 +46,7 @@ RWTexture2D<float> NextValidity;
 RWTexture2D<float> NextHistoryLength;
 RWTexture2D<float2> TemporalDiagnostics;
 RWTexture2D<float> GeneratedPreservationMask;
+RWTexture2D<float4> SmaaEdges;
 float4x4 _CurrentUnjitteredViewProjection;
 float4x4 _PreviousUnjitteredViewProjection;
 float4x4 _CameraToWorld;
@@ -136,6 +140,83 @@ float3 ACESFilmicToneMap(float3 color)
     float3 a = color * (color + 0.0245786f) - 0.000090537f;
     float3 b = color * (0.983729f * color + 0.4329510f) + 0.238081f;
     return saturate(mul(acesOutput, a / b));
+}
+
+float3 LoadColor(Texture2D<float4> source, int2 pixel, uint width, uint height)
+{
+    return source.Load(int3(clamp(pixel, int2(0, 0), int2(width - 1, height - 1)), 0)).rgb;
+}
+
+[numthreads(8, 8, 1)]
+void CSFXAA(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    FilteredBeauty.GetDimensions(width, height);
+    if (id.x >= width || id.y >= height) return;
+
+    int2 pixel = id.xy;
+    float3 center = LoadColor(InputBeauty, pixel, width, height);
+    float3 north = LoadColor(InputBeauty, pixel + int2(0, 1), width, height);
+    float3 south = LoadColor(InputBeauty, pixel + int2(0, -1), width, height);
+    float3 east = LoadColor(InputBeauty, pixel + int2(1, 0), width, height);
+    float3 west = LoadColor(InputBeauty, pixel + int2(-1, 0), width, height);
+    float centerLuminance = Luminance(center);
+    float minimumLuminance = min(centerLuminance, min(min(Luminance(north), Luminance(south)), min(Luminance(east), Luminance(west))));
+    float maximumLuminance = max(centerLuminance, max(max(Luminance(north), Luminance(south)), max(Luminance(east), Luminance(west))));
+    float contrast = maximumLuminance - minimumLuminance;
+    if (contrast < max(0.0312f, maximumLuminance * 0.125f))
+    {
+        FilteredBeauty[id.xy] = float4(center, 1.0f);
+        return;
+    }
+
+    float horizontalGradient = abs(Luminance(west) - Luminance(east));
+    float verticalGradient = abs(Luminance(south) - Luminance(north));
+    // Blend along, rather than across, the detected edge to retain its contrast.
+    float3 sampleA = horizontalGradient >= verticalGradient ? west : south;
+    float3 sampleB = horizontalGradient >= verticalGradient ? east : north;
+    FilteredBeauty[id.xy] = float4((center + sampleA + sampleB) * (1.0f / 3.0f), 1.0f);
+}
+
+[numthreads(8, 8, 1)]
+void CSSMAAEdge(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    SmaaEdges.GetDimensions(width, height);
+    if (id.x >= width || id.y >= height) return;
+
+    int2 pixel = id.xy;
+    float center = Luminance(LoadColor(InputBeauty, pixel, width, height));
+    float left = Luminance(LoadColor(InputBeauty, pixel + int2(-1, 0), width, height));
+    float top = Luminance(LoadColor(InputBeauty, pixel + int2(0, 1), width, height));
+    float threshold = max(0.0312f, center * 0.1f);
+    SmaaEdges[id.xy] = float4(abs(center - left) >= threshold, abs(center - top) >= threshold, 0.0f, 1.0f);
+}
+
+[numthreads(8, 8, 1)]
+void CSSMAABlend(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    FilteredBeauty.GetDimensions(width, height);
+    if (id.x >= width || id.y >= height) return;
+
+    int2 pixel = id.xy;
+    int2 maximumPixel = int2(width - 1, height - 1);
+    float2 edge = SmaaEdges[id.xy].xy;
+    float horizontal = max(edge.x, SmaaEdges[uint2(clamp(pixel + int2(1, 0), int2(0, 0), maximumPixel))].x);
+    float vertical = max(edge.y, SmaaEdges[uint2(clamp(pixel + int2(0, 1), int2(0, 0), maximumPixel))].y);
+    float3 center = LoadColor(InputBeauty, pixel, width, height);
+    if (horizontal == 0.0f && vertical == 0.0f)
+    {
+        FilteredBeauty[id.xy] = float4(center, 1.0f);
+        return;
+    }
+
+    float3 horizontalBlend = (LoadColor(InputBeauty, pixel + int2(-1, 0), width, height) + LoadColor(InputBeauty, pixel + int2(1, 0), width, height)) * 0.5f;
+    float3 verticalBlend = (LoadColor(InputBeauty, pixel + int2(0, -1), width, height) + LoadColor(InputBeauty, pixel + int2(0, 1), width, height)) * 0.5f;
+    float blendWeight = horizontal + vertical;
+    float3 blend = (horizontalBlend * horizontal + verticalBlend * vertical) / blendWeight;
+    FilteredBeauty[id.xy] = float4(lerp(center, blend, 0.25f), 1.0f);
 }
 
 float4 SampleCatmullRom(Texture2D<float4> source, float2 uv)

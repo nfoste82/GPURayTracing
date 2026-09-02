@@ -28,6 +28,17 @@ namespace GPURayTracing.Tests
         private const string AdaptiveTraceShaderPath = "Assets/Resources/RayTracingAdaptiveTrace.compute";
         private const string RegressionProbeShaderPath = "Assets/Resources/RayTracingRegressionProbe.compute";
         private const string DenoiserShaderPath = "Assets/Resources/RayTracingSpatialDenoiser.compute";
+
+        [Test]
+        public void ExportAntiAliasing_ComputeShaderExposesFxaaAndSmaaKernels()
+        {
+            ComputeShader denoiser = AssetDatabase.LoadAssetAtPath<ComputeShader>(DenoiserShaderPath);
+
+            Assert.That(denoiser, Is.Not.Null);
+            Assert.That(denoiser.FindKernel("CSFXAA"), Is.GreaterThanOrEqualTo(0));
+            Assert.That(denoiser.FindKernel("CSSMAAEdge"), Is.GreaterThanOrEqualTo(0));
+            Assert.That(denoiser.FindKernel("CSSMAABlend"), Is.GreaterThanOrEqualTo(0));
+        }
         private const string SharedShaderPath = "Assets/Scripts/RayTracingShared.hlsl";
         private const float Epsilon = 0.0001f;
         // Transform.eulerAngles round-trips through a quaternion, producing roughly 0.00025 degrees
