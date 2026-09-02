@@ -12,7 +12,7 @@
       "name": "standard_rng_fixed_seed",
       "overrides": [
         { "path": "subpixelJitterScale", "value": "1.0" },
-        { "path": "useOwenScrambledSobol", "value": "false" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
         { "path": "randomNoise", "value": "false" },
         { "path": "samplingSeed", "value": "1" },
         { "path": "sobolDimensionLimit", "value": "328" }
@@ -23,7 +23,7 @@
       "overrides": [
         { "path": "subpixelJitterScale", "value": "1.0" },
         { "path": "useOwenScrambledSobol", "value": "true" },
-        { "path": "randomNoise", "value": "false" },
+        { "path": "randomNoise", "value": "true" },
         { "path": "samplingSeed", "value": "1" },
         { "path": "sobolDimensionLimit", "value": "328" }
       ]

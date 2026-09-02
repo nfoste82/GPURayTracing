@@ -1172,10 +1172,11 @@ namespace GPURayTracing.Tests
             }
 
             int kernel = shader.FindKernel("CSRegressionProbe");
-            var buffer = new ComputeBuffer(44, sizeof(float) * 4);
-            var sphereBuffer = new ComputeBuffer(1, 64);
-            try
-            {
+                var buffer = new ComputeBuffer(47, sizeof(float) * 4);
+                var sphereBuffer = new ComputeBuffer(1, 64);
+                var sobolBuffer = new ComputeBuffer(1, sizeof(uint));
+                try
+                {
                 shader.SetInt("_NumSpheres", 0);
                 shader.SetInt("_WaterEnabled", 1);
                 shader.SetVector("_WaterCenter", Vector4.zero);
@@ -1187,11 +1188,14 @@ namespace GPURayTracing.Tests
                 shader.SetFloat("_WaterRefraction", 2.0f);
                 shader.SetFloat("_WaterWaveAmplitude", 0.0f);
                 shader.SetFloat("_FireflyClamp", 1.0f);
+                shader.SetInt("_UseOwenScrambledSobol", 0);
+                shader.SetInt("_Seed", 12345);
                 shader.SetBuffer(kernel, "_Spheres", sphereBuffer);
+                shader.SetBuffer(kernel, "_SobolDirectionNumbers", sobolBuffer);
                 shader.SetBuffer(kernel, "RegressionResults", buffer);
                 shader.Dispatch(kernel, 1, 1, 1);
 
-                var results = new Vector4[44];
+                var results = new Vector4[47];
                 buffer.GetData(results);
 
                 AssertVector(results[0], new Vector4(0.70710677f, 0.70710677f, 0.0f, 1.0f), "reflection");
@@ -1240,12 +1244,53 @@ namespace GPURayTracing.Tests
                 AssertVector(results[42], new Vector4(1.25f, 2.0f, 1.1111111f, 0.8333333f),
                     "local and temporal RIS reservoir normalization", 0.0002f);
                 AssertVector(results[43], Vector4.zero, "temporal RIS invalid-history rejection");
+                Assert.That(results[44].x, Is.EqualTo(results[44].y).Within(0.00001f),
+                    "GGX evaluation must report the visible-normal reflection PDF");
+                Assert.That(results[44].w, Is.GreaterThan(0.0001f),
+                    "The oblique GGX probe must distinguish VNDF from the old NDF PDF");
+                AssertFinitePositiveSample(results[45], results[46]);
+                Assert.That(results[45].w, Is.EqualTo(results[46].w).Within(0.00001f),
+                    "The sampled GGX VNDF PDF must match shared BRDF evaluation");
             }
             finally
             {
                 sphereBuffer.Release();
+                sobolBuffer.Release();
                 buffer.Release();
             }
+        }
+
+        [Test]
+        public void ProductionShader_UsesSamplingEfficiencyHotPaths()
+        {
+            string shader = System.IO.File.ReadAllText(SharedShaderPath);
+
+            StringAssert.Contains("while (low < high)", shader,
+                "Mesh-light triangle CDF selection should use logarithmic binary search.");
+            StringAssert.Contains("SampleGgxVisibleNormal(hit.normal, viewDirection, GetGgxAlpha(hit), rngState)", shader,
+                "Opaque GGX continuation should sample the visible-normal distribution.");
+            StringAssert.Contains("float visibleNormalPdf = distribution * GgxSmithG1(normalDotView, alpha)", shader,
+                "GGX MIS must use the PDF matching visible-normal sampling.");
+
+            int scatterStart = shader.IndexOf("ScatterResult CreateScatteredRay", StringComparison.Ordinal);
+            int waterStart = shader.IndexOf("if (IsWaterMaterial(hit))", scatterStart, StringComparison.Ordinal);
+            Assert.That(scatterStart, Is.GreaterThanOrEqualTo(0));
+            Assert.That(waterStart, Is.GreaterThan(scatterStart));
+            string commonScatterSetup = shader.Substring(scatterStart, waterStart - scatterStart);
+            StringAssert.DoesNotContain("GetAlbedo(hit)", commonScatterSetup,
+                "Scattering should not fetch an unused albedo before selecting the material path.");
+            StringAssert.DoesNotContain("GetRandomizedNormalBasedOnAmount", commonScatterSetup,
+                "Opaque and glass paths should not pay for the water-only randomized normal.");
+
+            int lightStart = shader.IndexOf("float3 SampleSingleLight", StringComparison.Ordinal);
+            int lightLoop = shader.IndexOf("for (sampleIndex = 0; sampleIndex < sampleCount; sampleIndex++)", lightStart, StringComparison.Ordinal);
+            Assert.That(lightStart, Is.GreaterThanOrEqualTo(0));
+            Assert.That(lightLoop, Is.GreaterThan(lightStart));
+            string lightSetup = shader.Substring(lightStart, lightLoop - lightStart);
+            StringAssert.Contains("if (!useRisCandidate && !isDirectional", lightSetup,
+                "Only ordinary sphere-light samples should build the disk tangent frame.");
+            Assert.That(CountOccurrences(lightSetup, "CreateBasisFromNormal"), Is.EqualTo(1),
+                "The sphere-light tangent frame should be built once outside the soft-shadow sample loop.");
         }
 
         [Test]

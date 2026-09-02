@@ -2999,19 +2999,23 @@ int SelectMeshLightTriangle(Light light, inout RngState rngState, out float tria
     }
 
     float target = rand(rngState);
-    int lastIndex = light.triangleStart + light.triangleCount - 1;
-    int triangleIndex = lastIndex;
-    int i;
+    int low = light.triangleStart;
+    int high = light.triangleStart + light.triangleCount - 1;
     [loop]
-    for (i = light.triangleStart; i <= lastIndex; i++)
+    while (low < high)
     {
-        if (target <= _MeshLightTriangleCdf[i])
+        int middle = low + ((high - low) >> 1);
+        if (target <= _MeshLightTriangleCdf[middle])
         {
-            triangleIndex = i;
-            break;
+            high = middle;
+        }
+        else
+        {
+            low = middle + 1;
         }
     }
 
+    int triangleIndex = low;
     MeshTriangle meshTriangle = _Triangles[triangleIndex];
     triangleProbability = GetTriangleArea(meshTriangle) / light.totalArea;
     return triangleProbability > 0.0f ? triangleIndex : -1;
@@ -3052,7 +3056,9 @@ float3 EvaluateMaterialBrdf(Ray ray, RayHit hit, float3 lightDirection, out floa
         diffuse = (1.0f - fresnel) * albedo * (1.0f - metallic) * (1.0f / PI);
     }
 
-    float specularPdf = distribution * normalDotHalf / max(4.0f * viewDotHalf, 1e-6f);
+    float visibleNormalPdf = distribution * GgxSmithG1(normalDotView, alpha) * viewDotHalf
+        / max(normalDotView, 1e-6f);
+    float specularPdf = visibleNormalPdf / max(4.0f * saturate(dot(lightDirection, halfDirection)), 1e-6f);
     float diffusePdf = normalDotLight * (1.0f / PI);
     float specularProbability = GetBrdfSpecularProbability(hit);
     pdf = lerp(diffusePdf, specularPdf, specularProbability);
@@ -3479,8 +3485,8 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
     bool isDirectional = false;
     float3 lightPos = 0.0f;
     float3 ptToLight = 0.0f;
-    float3 tangent = 0.0f;
-    float3 bitangent = 0.0f;
+    float3 sphereTangent = 0.0f;
+    float3 sphereBitangent = 0.0f;
     if (!isEnvironment)
     {
         isDirectional = light.type == LightTypeDirectional;
@@ -3488,7 +3494,11 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
             ? light.position + (light.u + light.v) / 3.0f
             : light.position;
         ptToLight = isDirectional ? -normalize(light.position) : normalize(lightPos - hit.position);
-        CreateBasisFromNormal(ptToLight, tangent, bitangent);
+        if (!useRisCandidate && !isDirectional
+            && light.type != LightTypeTriangle && light.type != LightTypeSunTriangle)
+        {
+            CreateBasisFromNormal(ptToLight, sphereTangent, sphereBitangent);
+        }
     }
 
     int sampleIndex;
@@ -3553,7 +3563,7 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
             else
             {
                 float2 diskSample = SampleDisk(rngState) * light.radius * max(0.0f, _ShadowRandomness);
-                offsetPt = lightPos + tangent * diskSample.x + bitangent * diskSample.y;
+                offsetPt = lightPos + sphereTangent * diskSample.x + sphereBitangent * diskSample.y;
             }
 
             ptToOffset = isDirectional ? normalize(offsetPt - hit.position) : offsetPt - hit.position;
@@ -4471,6 +4481,40 @@ float3 SampleGgxHalfDirection(float3 normal, float alpha, inout RngState rngStat
     return normalize(tangent * (cos(phi) * sinTheta) + bitangent * (sin(phi) * sinTheta) + normal * cosTheta);
 }
 
+float3 SampleGgxVisibleNormal(float3 normal, float3 viewDirection, float alpha, inout RngState rngState)
+{
+    float3 tangent;
+    float3 bitangent;
+    CreateBasisFromNormal(normal, tangent, bitangent);
+
+    float3 localView = float3(
+        dot(viewDirection, tangent),
+        dot(viewDirection, bitangent),
+        dot(viewDirection, normal));
+    float3 stretchedView = normalize(float3(alpha * localView.x, alpha * localView.y, localView.z));
+
+    float projectedLengthSquared = dot(stretchedView.xy, stretchedView.xy);
+    float3 basisX = projectedLengthSquared > 1e-8f
+        ? float3(-stretchedView.y, stretchedView.x, 0.0f) * rsqrt(projectedLengthSquared)
+        : float3(1.0f, 0.0f, 0.0f);
+    float3 basisY = cross(stretchedView, basisX);
+
+    float radius = sqrt(rand(rngState));
+    float phi = 2.0f * PI * rand(rngState);
+    float diskX = radius * cos(phi);
+    float diskY = radius * sin(phi);
+    float blend = 0.5f * (1.0f + stretchedView.z);
+    diskY = lerp(sqrt(max(0.0f, 1.0f - diskX * diskX)), diskY, blend);
+
+    float diskZ = sqrt(max(0.0f, 1.0f - diskX * diskX - diskY * diskY));
+    float3 stretchedNormal = diskX * basisX + diskY * basisY + diskZ * stretchedView;
+    float3 localNormal = normalize(float3(
+        alpha * stretchedNormal.x,
+        alpha * stretchedNormal.y,
+        max(0.0f, stretchedNormal.z)));
+    return normalize(tangent * localNormal.x + bitangent * localNormal.y + normal * localNormal.z);
+}
+
 float3 SampleDielectricBoundaryNormal(float3 opticalNormal, float3 geometricNormal, float3 incidentDirection, float smoothness, float sourceRefraction, float targetRefraction, inout RngState rngState)
 {
     float3 geometricBoundaryNormal = dot(incidentDirection, geometricNormal) < 0.0f ? geometricNormal : -geometricNormal;
@@ -4516,7 +4560,7 @@ BrdfSample SampleMaterialBrdf(Ray ray, RayHit hit, inout RngState rngState)
     if (rand(rngState) < specularProbability)
     {
         float3 viewDirection = normalize(-ray.direction);
-        float3 halfDirection = SampleGgxHalfDirection(hit.normal, GetGgxAlpha(hit), rngState);
+        float3 halfDirection = SampleGgxVisibleNormal(hit.normal, viewDirection, GetGgxAlpha(hit), rngState);
         if (dot(viewDirection, halfDirection) <= 0.0f)
         {
             return sample;
@@ -4718,9 +4762,7 @@ int ApplyWaterTransmission(inout Ray ray, Ray sourceRay, RayHit hit, bool enteri
 
 ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, int remainingBounces, in MediumStack mediumStack, inout RngState rngState)
 {
-    float3 albedo = GetAlbedo(hit);
-    float3 roughNormal = GetRandomizedNormalBasedOnAmount(hit.normal, hit.smoothness, rngState);
-    Ray scatteredRay = CreateRay(hit.position + (hit.geometricNormal * 0.001f), reflect(sourceRay.direction, roughNormal));
+    Ray scatteredRay = CreateRay(hit.position + (hit.geometricNormal * 0.001f), hit.normal);
 
 #if defined(WATER_ENABLED)
     if (IsWaterMaterial(hit))
@@ -4731,6 +4773,7 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
         float transmissionProbability = GetTransmissionAmount(hit) * (1.0f - fresnelReflectance);
         if (rand(rngState) >= transmissionProbability)
         {
+            float3 roughNormal = GetRandomizedNormalBasedOnAmount(hit.normal, hit.smoothness, rngState);
             scatteredRay.direction = reflect(sourceRay.direction, roughNormal);
             scatteredRay.origin = hit.position + scatteredRay.direction * 0.01f;
             return CreateScatterResult(scatteredRay, float3(1.0f, 1.0f, 1.0f), 1, MediumTransitionNone);

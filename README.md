@@ -109,13 +109,14 @@ Useful next scenes include:
 | `ManySpheres.unity`, `ManyMeshes.unity`, `ManyLights.unity` | Stress and benchmark workloads |
 
 ### Special Thanks
-Thanks to these projects and blogs which have been great reference and learning material:
+Thanks to these projects and blogs which have been learning material:
 
 * https://github.com/gkjohnson/three-gpu-pathtracer
 * https://github.com/knightcrawler25/GLSL-PathTracer/
 * https://raytracing.github.io/
-* https://schuttejoe.github.io/post/ggximportancesamplingpart2/
+* https://schuttejoe.github.io/post/ (GGX Sampling, Caustic radius decay)
 * https://github.com/tylertms/vkrt
-* https://blog.yiningkarlli.com/2015/03/adaptive-sampling.html
-* https://jo.dreggn.org/home/2009_stopping.pdf
+* https://blog.yiningkarlli.com/2015/03/adaptive-sampling.html (Adaptive Sampling)
+* https://jo.dreggn.org/home/2009_stopping.pdf (Adaptive Sampling)
 * https://github.com/TomClabault/HIPRT-Path-Tracer
+* https://psychopath.io/post/2022_07_24_owen_scrambling_based_dithered_blue_noise_sampling (Owen-Sobol scrambling)

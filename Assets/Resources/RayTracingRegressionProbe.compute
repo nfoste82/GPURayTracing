@@ -145,10 +145,34 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     float3 metalBrdf = EvaluateMaterialBrdf(normalIncidenceRay, metalBrdfHit, normal, metalPdf);
     RegressionResults[27] = float4(metalBrdf, metalPdf);
 
-    uint brdfRngState = 12345u;
+    RngState brdfRngState = CreateRngState(uint2(12u, 34u), 12345u);
     BrdfSample brdfSample = SampleMaterialBrdf(normalIncidenceRay, diffuseBrdfHit, brdfRngState);
     RegressionResults[28] = float4(brdfSample.direction, brdfSample.pdf);
     RegressionResults[29] = float4(brdfSample.weight, dot(brdfSample.direction, normal));
+
+    float3 obliqueView = normalize(float3(0.8f, 0.6f, 0.0f));
+    float3 obliqueLight = normalize(float3(-0.3f, 0.9539392f, 0.0f));
+    Ray obliqueRay = CreateRay(float3(0.0f, 0.0f, 0.0f), -obliqueView);
+    float obliquePdf;
+    EvaluateMaterialBrdf(obliqueRay, metalBrdfHit, obliqueLight, obliquePdf);
+    float3 obliqueHalf = normalize(obliqueView + obliqueLight);
+    float obliqueNormalDotView = dot(normal, obliqueView);
+    float obliqueNormalDotHalf = dot(normal, obliqueHalf);
+    float obliqueViewDotHalf = dot(obliqueView, obliqueHalf);
+    float obliqueAlpha = GetGgxAlpha(metalBrdfHit);
+    float obliqueDistribution = GgxDistribution(obliqueNormalDotHalf, obliqueAlpha);
+    float expectedVisiblePdf = obliqueDistribution * GgxSmithG1(obliqueNormalDotView, obliqueAlpha)
+        * obliqueViewDotHalf / obliqueNormalDotView
+        / (4.0f * dot(obliqueLight, obliqueHalf));
+    float oldNdfPdf = obliqueDistribution * obliqueNormalDotHalf / (4.0f * obliqueViewDotHalf);
+    RegressionResults[44] = float4(obliquePdf, expectedVisiblePdf, oldNdfPdf, abs(obliquePdf - oldNdfPdf));
+
+    RngState visibleNormalRngState = CreateRngState(uint2(81u, 72u), 81723u);
+    BrdfSample visibleNormalSample = SampleMaterialBrdf(obliqueRay, metalBrdfHit, visibleNormalRngState);
+    float reevaluatedVisiblePdf;
+    EvaluateMaterialBrdf(obliqueRay, metalBrdfHit, visibleNormalSample.direction, reevaluatedVisiblePdf);
+    RegressionResults[45] = float4(visibleNormalSample.direction, visibleNormalSample.pdf);
+    RegressionResults[46] = float4(visibleNormalSample.weight, reevaluatedVisiblePdf);
 
     MeshTriangle smoothTriangle;
     smoothTriangle.vertex0 = float3(-1.0f, -1.0f, 0.0f);
@@ -193,8 +217,8 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
         ? GetFresnelReflectance(CreateRay(float3(0.0f, 0.0f, 1.0f), float3(0.0f, 0.0f, -1.0f)), smoothHit, 1.0f, smoothHit.refraction)
         : -1.0f);
 
-    uint smoothGlassRngState = 9182u;
-    uint roughGlassRngState = 9182u;
+    RngState smoothGlassRngState = CreateRngState(uint2(9u, 18u), 2u);
+    RngState roughGlassRngState = smoothGlassRngState;
     float3 smoothGlassNormal = SampleDielectricBoundaryNormal(normal, normal, incident45, 1.0f, 1.0f, 1.5f, smoothGlassRngState);
     float3 roughGlassNormal = SampleDielectricBoundaryNormal(normal, normal, incident45, 0.0f, 1.0f, 1.5f, roughGlassRngState);
     float3 smoothGlassDirection;

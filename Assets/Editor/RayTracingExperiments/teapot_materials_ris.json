@@ -1,27 +1,25 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "label": "teapot_materials_ris",
   "scenes": ["Assets/Scenes/Generated/TeapotMaterials.unity"],
   "width": 1024,
   "height": 1024,
-  "durationSeconds": 360.0,
-  "cooldownSeconds": 30.0,
+  "durationSeconds": 120.0,
+  "cooldownSeconds": 18.0,
   "referenceRoot": "Assets/Editor/RayTracingSceneReferences",
   "variants": [
     {
       "name": "ris_4_candidates_standard",
       "overrides": [
         { "path": "Lighting.InitialRisCandidateCount", "value": "4" },
-        { "path": "enableAdaptiveSampling", "value": "false" },
-        { "path": "Lighting.TemporalRisEnabled", "value": "true" }
+        { "path": "enableAdaptiveSampling", "value": "false" }
       ]
     },
     {
       "name": "ris_4_candidates_adaptive",
       "overrides": [
         { "path": "Lighting.InitialRisCandidateCount", "value": "4" },
-        { "path": "enableAdaptiveSampling", "value": "true" },
-        { "path": "Lighting.TemporalRisEnabled", "value": "true" }
+        { "path": "enableAdaptiveSampling", "value": "true" }
       ]
     }
   ]
