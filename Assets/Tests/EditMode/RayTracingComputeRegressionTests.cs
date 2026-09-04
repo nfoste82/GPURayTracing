@@ -494,9 +494,16 @@ namespace GPURayTracing.Tests
         public void AdaptiveBootstrapPreview_RemainsVisibleUntilEachFinePixelReceivesItsFirstPath()
         {
             string utilitySource = System.IO.File.ReadAllText("Assets/Resources/RayTracingUtility.compute");
+            string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
 
             Assert.That(utilitySource, Does.Contain("void ComposeAdaptiveBootstrap"));
-            Assert.That(utilitySource, Does.Contain("AdaptiveSamplingState[id.xy].x > 0.0f"));
+            Assert.That(utilitySource, Does.Contain("int _AdaptiveSamplingMinSamples"));
+            Assert.That(utilitySource, Does.Contain("AdaptiveSamplingState[id.xy].x >= (float)_AdaptiveSamplingMinSamples"));
+            Assert.That(managerSource, Does.Contain("private bool _adaptiveBootstrapPreviewActive"));
+            Assert.That(managerSource, Does.Contain("private int _adaptiveBootstrapPreviewFramesRemaining"));
+            Assert.That(managerSource, Does.Contain("_adaptiveBootstrapPreviewActive = adaptiveGuidanceHistoryFrames <= 0 && _adaptiveBootstrapPreviewFramesRemaining > 0"));
+            Assert.That(managerSource, Does.Contain("utilityShader.SetInt(AdaptiveSamplingMinSamples, Mathf.Clamp(adaptiveSamplingMinSamples, 1, 64))"));
+            Assert.That(managerSource, Does.Contain("if (_adaptiveBootstrapPreviewActive)"));
         }
 
         [Test]
@@ -1053,8 +1060,20 @@ namespace GPURayTracing.Tests
         public void SceneCapture_ExperimentsPreserveVariantAdaptiveSamplingAndAllowTimedRuns()
         {
             string source = System.IO.File.ReadAllText("Assets/Editor/RayTracingSceneCapture.cs");
+            string sponzaManifest = System.IO.File.ReadAllText("Assets/Editor/RayTracingExperiments/sponza_adaptive_sampling_comparison.json");
 
             Assert.That(source, Does.Contain("DebugRenderMode.FinalColor, manager.enableAdaptiveSampling, manager.adaptivePriorityMode"));
+            Assert.That(source, Does.Contain("true, manager.enableAdaptiveSampling, false, referencePath, true"));
+            Assert.That(source, Does.Contain("WriteGroupDiagnostics(sceneRoot, variantName, result, manager.adaptivePriorityMode, referencePath)"));
+            Assert.That(source, Does.Contain("cumulativeFinePaths"));
+            Assert.That(source, Does.Contain("servedGroupFraction"));
+            Assert.That(source, Does.Contain("assignedPathErrorSpearman"));
+            Assert.That(source, Does.Contain("cumulativeFinePathErrorSpearman"));
+            Assert.That(source, Does.Contain("current_assigned_paths,cumulative_fine_paths"));
+            Assert.That(source, Does.Contain("Final schedule is uniform"));
+            Assert.That(source, Does.Contain("historical bootstrap-cohort count offsets"));
+            Assert.That(sponzaManifest, Does.Contain("adaptive_welford_history_0_h1"));
+            Assert.That(sponzaManifest, Does.Contain("\"adaptiveHighestBucketSampleRate\", \"value\": \"1.0\""));
             Assert.That(source, Does.Contain("experiment.samples < 0"));
             Assert.That(source, Does.Contain("experiment.samples <= 0 && experiment.durationSeconds <= 0.0"));
         }

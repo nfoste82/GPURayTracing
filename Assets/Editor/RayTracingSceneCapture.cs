@@ -563,8 +563,10 @@ public static class RayTracingSceneCapture
                     CaptureResult result = CaptureVariant(manager, sceneName, sceneRoot, variantName,
                         experiment.samples, experiment.width, experiment.height, experiment.durationSeconds,
                         DebugRenderMode.FinalColor, manager.enableAdaptiveSampling, manager.adaptivePriorityMode,
-                        true, false, false, referencePath, true);
+                        true, manager.enableAdaptiveSampling, false, referencePath, true);
                     WriteReferenceMetrics(sceneRoot, variantName, result, referencePath, reference);
+                    if (manager.enableAdaptiveSampling)
+                        WriteGroupDiagnostics(sceneRoot, variantName, result, manager.adaptivePriorityMode, referencePath);
                     results.Add(new ExperimentVariantResult(variantName, result));
                 }
 
@@ -1481,6 +1483,13 @@ public static class RayTracingSceneCapture
     {
         int width = diagnostics.width;
         int height = diagnostics.height;
+        bool finalScheduleUniform = diagnostics.workItemPixels.Length == width * height
+            && diagnostics.workItemPathCounts.Length == width * height
+            && diagnostics.workItemPathCounts.Length > 0;
+        uint uniformPaths = finalScheduleUniform ? diagnostics.workItemPathCounts[0] : 0u;
+        if (uniformPaths == 0u) finalScheduleUniform = false;
+        for (int index = 1; finalScheduleUniform && index < diagnostics.workItemPathCounts.Length; index++)
+            finalScheduleUniform = diagnostics.workItemPathCounts[index] == uniformPaths;
         var cumulativePaths = new uint[width * height];
         var nonZeroPaths = new List<uint>(cumulativePaths.Length);
         uint maxPaths = 0;
@@ -1513,7 +1522,9 @@ public static class RayTracingSceneCapture
             {
                 uint paths = cumulativePaths[x + y * width];
                 float quantile = paths == 0u ? 0.0f : quantileByPathCount[paths];
-                pixels[x + y * width] = HeatmapColor(paths, quantile);
+                // A uniform final schedule can retain harmless bootstrap-cohort count offsets.
+                // Show its actual current state instead of presenting those historical offsets as allocation bias.
+                pixels[x + y * width] = finalScheduleUniform ? Color.green : HeatmapColor(paths, quantile);
             }
         }
         texture.SetPixels(pixels);
@@ -1525,6 +1536,9 @@ public static class RayTracingSceneCapture
             "Adaptive allocation heatmap\n" +
             "Black pixels have no full-resolution path. Other colors show cumulative full-resolution paths ranked among selected pixels.\n" +
             $"Maximum cumulative paths per pixel: {maxPaths}\n" +
+            (finalScheduleUniform
+                ? $"Final schedule is uniform ({uniformPaths} path per pixel); green suppresses historical bootstrap-cohort count offsets.\n"
+                : "Final schedule is non-uniform; colors show cumulative allocation differences.\n") +
             "Bands: >80th percentile red, >60th yellow, >40th cyan, >20th cyan-blue, >10th blue, >5th dark-blue, otherwise navy.\n");
     }
 
@@ -1647,8 +1661,58 @@ public static class RayTracingSceneCapture
         public float welfordScore;
         public float dammertzScore;
         public float assignedPaths;
+        public float cumulativeFinePaths;
         public float referenceError;
         public float meanLuminance;
+    }
+
+    private readonly struct GroupDiagnosticSummary
+    {
+        public readonly int servedGroups;
+        public readonly int totalGroups;
+        public readonly double scoreErrorSpearman;
+        public readonly double assignedErrorSpearman;
+        public readonly double cumulativeFinePathErrorSpearman;
+        public readonly double servedMeanLuminance;
+        public readonly double unservedMeanLuminance;
+        public readonly double servedMeanReferenceError;
+        public readonly double unservedMeanReferenceError;
+
+        public GroupDiagnosticSummary(int servedGroups, int totalGroups, double scoreErrorSpearman,
+            double assignedErrorSpearman, double cumulativeFinePathErrorSpearman, double servedMeanLuminance,
+            double unservedMeanLuminance, double servedMeanReferenceError, double unservedMeanReferenceError)
+        {
+            this.servedGroups = servedGroups;
+            this.totalGroups = totalGroups;
+            this.scoreErrorSpearman = scoreErrorSpearman;
+            this.assignedErrorSpearman = assignedErrorSpearman;
+            this.cumulativeFinePathErrorSpearman = cumulativeFinePathErrorSpearman;
+            this.servedMeanLuminance = servedMeanLuminance;
+            this.unservedMeanLuminance = unservedMeanLuminance;
+            this.servedMeanReferenceError = servedMeanReferenceError;
+            this.unservedMeanReferenceError = unservedMeanReferenceError;
+        }
+    }
+
+    private static void WriteGroupDiagnostics(string outputRoot, string variantName, CaptureResult result,
+        GameManager.AdaptivePriorityMode priorityMode, string referenceImagePath)
+    {
+        if (result.adaptiveDiagnostics == null) return;
+        var reference = new Texture2D(2, 2, TextureFormat.RGB24, false);
+        try
+        {
+            if (!reference.LoadImage(File.ReadAllBytes(referenceImagePath), false))
+                throw new InvalidOperationException($"Could not read reference image '{referenceImagePath}'.");
+            GroupDiagnostic[] groups = BuildGroupDiagnostics(result, LoadImagePixels(result.imagePath), reference.GetPixels());
+            WriteGroupDiagnosticReport(Path.Combine(outputRoot, $"{variantName}_group_diagnostics.json"), groups,
+                priorityMode == GameManager.AdaptivePriorityMode.WelfordStandardError ? "welfordScore" : "dammertzScore");
+            WriteGroupDiagnosticCsv(Path.Combine(outputRoot, $"{variantName}_group_diagnostics.csv"), variantName,
+                groups, result.adaptiveDiagnostics.width, result.adaptiveDiagnostics.height);
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(reference);
+        }
     }
 
     private static void WriteGroupDiagnostics(string outputRoot, CaptureResult welford, CaptureResult dammertz,
@@ -1690,7 +1754,7 @@ public static class RayTracingSceneCapture
         for (int groupX = 0; groupX < groupWidth; groupX++)
         {
             int groupIndex = groupX + groupY * groupWidth;
-            double welford = 0.0, dammertz = 0.0, errorSquared = 0.0, paths = 0.0, luminance = 0.0;
+            double welford = 0.0, dammertz = 0.0, errorSquared = 0.0, paths = 0.0, cumulativeFinePaths = 0.0, luminance = 0.0;
             int count = 0;
             for (int y = groupY * 8; y < Math.Min(data.height, groupY * 8 + 8); y++)
             for (int x = groupX * 8; x < Math.Min(data.width, groupX * 8 + 8); x++)
@@ -1715,6 +1779,7 @@ public static class RayTracingSceneCapture
                 float er = candidate.r - expected.r, eg = candidate.g - expected.g, eb = candidate.b - expected.b;
                 errorSquared += (er * er + eg * eg + eb * eb) / 3.0;
                 paths += assigned[pixel];
+                cumulativeFinePaths += Math.Max(0.0f, state.x);
                 count++;
             }
             groups[groupIndex] = new GroupDiagnostic
@@ -1722,6 +1787,7 @@ public static class RayTracingSceneCapture
                 welfordScore = (float)(welford / Math.Max(1, count)),
                 dammertzScore = (float)(dammertz / Math.Max(1, count)),
                 assignedPaths = (float)paths,
+                cumulativeFinePaths = (float)(cumulativeFinePaths / Math.Max(1, count)),
                 referenceError = (float)Math.Sqrt(errorSquared / Math.Max(1, count)),
                 meanLuminance = (float)(luminance / Math.Max(1, count))
             };
@@ -1749,12 +1815,15 @@ public static class RayTracingSceneCapture
         var score = new float[groups.Length];
         var error = new float[groups.Length];
         var paths = new float[groups.Length];
+        var cumulativeFinePaths = new float[groups.Length];
         for (int i = 0; i < groups.Length; i++)
         {
             score[i] = scoreName == "welfordScore" ? groups[i].welfordScore : groups[i].dammertzScore;
             error[i] = groups[i].referenceError;
             paths[i] = groups[i].assignedPaths;
+            cumulativeFinePaths[i] = groups[i].cumulativeFinePaths;
         }
+        GroupDiagnosticSummary summary = SummarizeGroupDiagnostics(groups, score, error, paths, cumulativeFinePaths);
         Array.Sort(score); Array.Sort(error); Array.Sort(paths);
         File.WriteAllText(path, "{\n" +
             $"  \"score\": \"{scoreName}\",\n" +
@@ -1764,7 +1833,42 @@ public static class RayTracingSceneCapture
             $"  \"errorP95\": {Percentile(error, 0.95f):R},\n" +
             $"  \"assignedPathsP50\": {Percentile(paths, 0.50f):R},\n" +
             $"  \"assignedPathsP95\": {Percentile(paths, 0.95f):R},\n" +
-            $"  \"scoreErrorSpearman\": {Spearman(groups, scoreName):R}\n" + "}\n");
+            $"  \"servedGroups\": {summary.servedGroups},\n" +
+            $"  \"totalGroups\": {summary.totalGroups},\n" +
+            $"  \"servedGroupFraction\": {(summary.totalGroups > 0 ? (double)summary.servedGroups / summary.totalGroups : 0.0):R},\n" +
+            $"  \"scoreErrorSpearman\": {summary.scoreErrorSpearman:R},\n" +
+            $"  \"assignedPathErrorSpearman\": {summary.assignedErrorSpearman:R},\n" +
+            $"  \"cumulativeFinePathErrorSpearman\": {summary.cumulativeFinePathErrorSpearman:R},\n" +
+            $"  \"servedMeanLuminance\": {summary.servedMeanLuminance:R},\n" +
+            $"  \"unservedMeanLuminance\": {summary.unservedMeanLuminance:R},\n" +
+            $"  \"servedMeanReferenceError\": {summary.servedMeanReferenceError:R},\n" +
+            $"  \"unservedMeanReferenceError\": {summary.unservedMeanReferenceError:R}\n" + "}\n");
+    }
+
+    private static GroupDiagnosticSummary SummarizeGroupDiagnostics(GroupDiagnostic[] groups, float[] score, float[] error,
+        float[] paths, float[] cumulativeFinePaths)
+    {
+        int servedGroups = 0, unservedGroups = 0;
+        double servedLuminance = 0.0, unservedLuminance = 0.0, servedError = 0.0, unservedError = 0.0;
+        for (int i = 0; i < groups.Length; i++)
+        {
+            if (paths[i] > 0.0f)
+            {
+                servedGroups++;
+                servedLuminance += groups[i].meanLuminance;
+                servedError += error[i];
+            }
+            else
+            {
+                unservedGroups++;
+                unservedLuminance += groups[i].meanLuminance;
+                unservedError += error[i];
+            }
+        }
+        return new GroupDiagnosticSummary(servedGroups, groups.Length, Spearman(score, error), Spearman(paths, error),
+            Spearman(cumulativeFinePaths, error), servedLuminance / Math.Max(1, servedGroups),
+            unservedLuminance / Math.Max(1, unservedGroups), servedError / Math.Max(1, servedGroups),
+            unservedError / Math.Max(1, unservedGroups));
     }
 
     private static void WriteGroupDiagnosticCsv(string path, GroupDiagnostic[] welfordGroups,
@@ -1776,7 +1880,7 @@ public static class RayTracingSceneCapture
         int groupWidth = Mathf.CeilToInt(width / 8.0f);
         var lines = new List<string>(welfordGroups.Length * 2 + 1)
         {
-            "variant,group_x,group_y,valid_pixel_count,welford_score,dammertz_score,assigned_paths,mean_linear_luminance,reference_rgb_rmse"
+            "variant,group_x,group_y,valid_pixel_count,welford_score,dammertz_score,current_assigned_paths,cumulative_fine_paths,mean_linear_luminance,reference_rgb_rmse"
         };
         for (int groupIndex = 0; groupIndex < welfordGroups.Length; groupIndex++)
         {
@@ -1785,6 +1889,23 @@ public static class RayTracingSceneCapture
             int validPixels = Math.Min(8, width - groupX * 8) * Math.Min(8, height - groupY * 8);
             AppendGroupDiagnosticCsvRow(lines, "adaptive_welford", groupX, groupY, validPixels, welfordGroups[groupIndex]);
             AppendGroupDiagnosticCsvRow(lines, "adaptive_dammertz", groupX, groupY, validPixels, dammertzGroups[groupIndex]);
+        }
+        File.WriteAllLines(path, lines);
+    }
+
+    private static void WriteGroupDiagnosticCsv(string path, string variantName, GroupDiagnostic[] groups, int width, int height)
+    {
+        int groupWidth = Mathf.CeilToInt(width / 8.0f);
+        var lines = new List<string>(groups.Length + 1)
+        {
+            "variant,group_x,group_y,valid_pixel_count,welford_score,dammertz_score,current_assigned_paths,cumulative_fine_paths,mean_linear_luminance,reference_rgb_rmse"
+        };
+        for (int groupIndex = 0; groupIndex < groups.Length; groupIndex++)
+        {
+            int groupX = groupIndex % groupWidth;
+            int groupY = groupIndex / groupWidth;
+            int validPixels = Math.Min(8, width - groupX * 8) * Math.Min(8, height - groupY * 8);
+            AppendGroupDiagnosticCsvRow(lines, variantName, groupX, groupY, validPixels, groups[groupIndex]);
         }
         File.WriteAllLines(path, lines);
     }
@@ -1801,6 +1922,7 @@ public static class RayTracingSceneCapture
             group.welfordScore.ToString("R", CultureInfo.InvariantCulture),
             group.dammertzScore.ToString("R", CultureInfo.InvariantCulture),
             group.assignedPaths.ToString("R", CultureInfo.InvariantCulture),
+            group.cumulativeFinePaths.ToString("R", CultureInfo.InvariantCulture),
             group.meanLuminance.ToString("R", CultureInfo.InvariantCulture),
             group.referenceError.ToString("R", CultureInfo.InvariantCulture)
         }));
@@ -1816,6 +1938,22 @@ public static class RayTracingSceneCapture
         double meanScore = Mean(scoreRanks), meanError = Mean(errorRanks), numerator = 0.0, scoreVariance = 0.0, errorVariance = 0.0;
         for (int i = 0; i < count; i++) { double a = scoreRanks[i] - meanScore, b = errorRanks[i] - meanError; numerator += a * b; scoreVariance += a * a; errorVariance += b * b; }
         return scoreVariance > 0.0 && errorVariance > 0.0 ? numerator / Math.Sqrt(scoreVariance * errorVariance) : 0.0;
+    }
+
+    private static double Spearman(float[] first, float[] second)
+    {
+        if (first.Length != second.Length || first.Length < 2) return 0.0;
+        float[] firstRanks = Ranks(first);
+        float[] secondRanks = Ranks(second);
+        double firstMean = Mean(firstRanks), secondMean = Mean(secondRanks), numerator = 0.0, firstVariance = 0.0, secondVariance = 0.0;
+        for (int i = 0; i < first.Length; i++)
+        {
+            double a = firstRanks[i] - firstMean, b = secondRanks[i] - secondMean;
+            numerator += a * b;
+            firstVariance += a * a;
+            secondVariance += b * b;
+        }
+        return firstVariance > 0.0 && secondVariance > 0.0 ? numerator / Math.Sqrt(firstVariance * secondVariance) : 0.0;
     }
 
     private static float[] Ranks(float[] values)

@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "label": "sponza_adaptive_sampling_comparison_120s",
+  "label": "sponza_welford_stability_sweep_fast_bootstrap_180f",
   "scenes": ["Assets/Scenes/Sponza.unity"],
   "width": 1066,
   "height": 600,
-  "durationSeconds": 120.0,
+  "samples": 180,
   "cooldownSeconds": 20.0,
   "referenceRoot": "Assets/Editor/RayTracingSceneReferences",
   "variants": [
@@ -19,58 +19,78 @@
       ]
     },
     {
-      "name": "adaptive_welford_history_8",
-      "overrides": [
-        { "path": "enableAdaptiveSampling", "value": "true" },
-        { "path": "adaptiveBootstrapFrames", "value": "24" },
-        { "path": "adaptiveBootstrapResolutionScale", "value": "0.5" },
-        { "path": "adaptiveGuidanceHistoryFrames", "value": "8" },
-        { "path": "adaptiveSamplingMinSamples", "value": "2" },
-        { "path": "adaptiveBootstrapGroupDivisor", "value": "16" },
-        { "path": "adaptivePriorityMode", "value": "WelfordStandardError" },
-        { "path": "adaptiveNormalizePriorityByLuminance", "value": "0" },
-        { "path": "adaptiveReclassificationInterval", "value": "4" },
-        { "path": "adaptiveHighestBucketSampleRate", "value": "1.7" },
-        { "path": "adaptiveMaxPathsPerPixel", "value": "3" },
-        { "path": "useOwenScrambledSobol", "value": "true" },
-        { "path": "sobolDimensionLimit", "value": "328" },
-        { "path": "samplingSeed", "value": "1" },
-        { "path": "randomNoise", "value": "false" }
-      ]
-    },
-    {
-      "name": "adaptive_welford_history_0_preview",
+      "name": "welford_min2_h1_control",
       "overrides": [
         { "path": "enableAdaptiveSampling", "value": "true" },
         { "path": "adaptiveBootstrapFrames", "value": "24" },
         { "path": "adaptiveBootstrapResolutionScale", "value": "0.5" },
         { "path": "adaptiveGuidanceHistoryFrames", "value": "0" },
         { "path": "adaptiveSamplingMinSamples", "value": "2" },
-        { "path": "adaptiveBootstrapGroupDivisor", "value": "16" },
-        { "path": "adaptivePriorityMode", "value": "WelfordStandardError" },
-        { "path": "adaptiveNormalizePriorityByLuminance", "value": "0" },
-        { "path": "adaptiveReclassificationInterval", "value": "4" },
-        { "path": "adaptiveHighestBucketSampleRate", "value": "1.7" },
-        { "path": "adaptiveMaxPathsPerPixel", "value": "3" },
-        { "path": "useOwenScrambledSobol", "value": "true" },
-        { "path": "sobolDimensionLimit", "value": "328" },
-        { "path": "samplingSeed", "value": "1" },
-        { "path": "randomNoise", "value": "false" }
-      ]
-    },
-    {
-      "name": "adaptive_welford_history_0_h1",
-      "overrides": [
-        { "path": "enableAdaptiveSampling", "value": "true" },
-        { "path": "adaptiveBootstrapFrames", "value": "24" },
-        { "path": "adaptiveBootstrapResolutionScale", "value": "0.5" },
-        { "path": "adaptiveGuidanceHistoryFrames", "value": "0" },
-        { "path": "adaptiveSamplingMinSamples", "value": "2" },
-        { "path": "adaptiveBootstrapGroupDivisor", "value": "16" },
+        { "path": "adaptiveBootstrapGroupDivisor", "value": "1" },
         { "path": "adaptivePriorityMode", "value": "WelfordStandardError" },
         { "path": "adaptiveNormalizePriorityByLuminance", "value": "0" },
         { "path": "adaptiveReclassificationInterval", "value": "4" },
         { "path": "adaptiveHighestBucketSampleRate", "value": "1.0" },
+        { "path": "adaptiveMaxPathsPerPixel", "value": "3" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "samplingSeed", "value": "1" },
+        { "path": "randomNoise", "value": "false" }
+      ]
+    },
+    {
+      "name": "welford_min8_h1",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "adaptiveBootstrapFrames", "value": "24" },
+        { "path": "adaptiveBootstrapResolutionScale", "value": "0.5" },
+        { "path": "adaptiveGuidanceHistoryFrames", "value": "0" },
+        { "path": "adaptiveSamplingMinSamples", "value": "8" },
+        { "path": "adaptiveBootstrapGroupDivisor", "value": "1" },
+        { "path": "adaptivePriorityMode", "value": "WelfordStandardError" },
+        { "path": "adaptiveNormalizePriorityByLuminance", "value": "0" },
+        { "path": "adaptiveReclassificationInterval", "value": "4" },
+        { "path": "adaptiveHighestBucketSampleRate", "value": "1.0" },
+        { "path": "adaptiveMaxPathsPerPixel", "value": "3" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "samplingSeed", "value": "1" },
+        { "path": "randomNoise", "value": "false" }
+      ]
+    },
+    {
+      "name": "welford_min8_h1_2",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "adaptiveBootstrapFrames", "value": "24" },
+        { "path": "adaptiveBootstrapResolutionScale", "value": "0.5" },
+        { "path": "adaptiveGuidanceHistoryFrames", "value": "0" },
+        { "path": "adaptiveSamplingMinSamples", "value": "8" },
+        { "path": "adaptiveBootstrapGroupDivisor", "value": "1" },
+        { "path": "adaptivePriorityMode", "value": "WelfordStandardError" },
+        { "path": "adaptiveNormalizePriorityByLuminance", "value": "0" },
+        { "path": "adaptiveReclassificationInterval", "value": "4" },
+        { "path": "adaptiveHighestBucketSampleRate", "value": "1.2" },
+        { "path": "adaptiveMaxPathsPerPixel", "value": "3" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "samplingSeed", "value": "1" },
+        { "path": "randomNoise", "value": "false" }
+      ]
+    },
+    {
+      "name": "welford_min8_h1_35",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "adaptiveBootstrapFrames", "value": "24" },
+        { "path": "adaptiveBootstrapResolutionScale", "value": "0.5" },
+        { "path": "adaptiveGuidanceHistoryFrames", "value": "0" },
+        { "path": "adaptiveSamplingMinSamples", "value": "8" },
+        { "path": "adaptiveBootstrapGroupDivisor", "value": "1" },
+        { "path": "adaptivePriorityMode", "value": "WelfordStandardError" },
+        { "path": "adaptiveNormalizePriorityByLuminance", "value": "0" },
+        { "path": "adaptiveReclassificationInterval", "value": "4" },
+        { "path": "adaptiveHighestBucketSampleRate", "value": "1.35" },
         { "path": "adaptiveMaxPathsPerPixel", "value": "3" },
         { "path": "useOwenScrambledSobol", "value": "true" },
         { "path": "sobolDimensionLimit", "value": "328" },

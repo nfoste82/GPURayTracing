@@ -393,6 +393,8 @@ public class GameManager : MonoBehaviour
     private int _adaptiveBootstrapFrameCount;
     private bool _adaptiveBootstrapSeeded;
     private bool _adaptiveBootstrapPriorityActive;
+    private bool _adaptiveBootstrapPreviewActive;
+    private int _adaptiveBootstrapPreviewFramesRemaining;
     private bool _adaptiveCaptureDiagnostics;
     private bool _renderingPaused;
     private double _liveFrameDurationSeconds;
@@ -1530,13 +1532,15 @@ public class GameManager : MonoBehaviour
         }
         _adaptiveResolveMilliseconds = 0.0;
 
-        if (_adaptiveBootstrapPriorityActive)
+        if (_adaptiveBootstrapPreviewActive)
         {
             var composeBootstrapKernel = utilityShader.FindKernel("ComposeAdaptiveBootstrap");
             BindAdaptiveBootstrapUtilityResources(composeBootstrapKernel);
             ComputeDispatch.Dispatch(utilityShader, composeBootstrapKernel,
                 Mathf.CeilToInt(_textureSize.x / (float)RenderThreadCountX),
                 Mathf.CeilToInt(_textureSize.y / (float)RenderThreadCountY), 1);
+            _adaptiveBootstrapPreviewFramesRemaining--;
+            _adaptiveBootstrapPreviewActive = _adaptiveBootstrapPreviewFramesRemaining > 0;
         }
 
         _adaptiveScheduleInitialized = true;
@@ -1573,6 +1577,12 @@ public class GameManager : MonoBehaviour
         utilityShader.SetInt("_AdaptiveBootstrapHistorySamples", Mathf.Clamp(adaptiveGuidanceHistoryFrames, 0, 8));
         ComputeDispatch.Dispatch(utilityShader, seedKernel, Mathf.CeilToInt(_textureSize.x / (float)RenderThreadCountX),
             Mathf.CeilToInt(_textureSize.y / (float)RenderThreadCountY), 1);
+        // With no seeded fine history, keep the coarse preview until every rotating bootstrap
+        // cohort reaches the configured fine-sample floor. This never enters accumulation state.
+        int pathsPerAdmission = Mathf.Max(1, numberOfPasses);
+        int bootstrapRounds = Mathf.CeilToInt(Mathf.Max(1, adaptiveSamplingMinSamples) / (float)pathsPerAdmission);
+        _adaptiveBootstrapPreviewFramesRemaining = bootstrapRounds * Mathf.Clamp(adaptiveBootstrapGroupDivisor, 1, 16);
+        _adaptiveBootstrapPreviewActive = adaptiveGuidanceHistoryFrames <= 0 && _adaptiveBootstrapPreviewFramesRemaining > 0;
         // Real full-resolution bootstrap samples remain mandatory. The coarse gradient only
         // ranks groups after that floor has been established.
         _adaptiveBootstrapPriorityActive = false;
@@ -1587,6 +1597,7 @@ public class GameManager : MonoBehaviour
         utilityShader.SetTexture(kernel, AdaptiveSamplingState, _adaptiveSamplingStateTexture);
         utilityShader.SetTexture(kernel, AdaptiveSamplingM2, _adaptiveSamplingM2Texture);
         utilityShader.SetTexture(kernel, "AdaptiveBootstrapPriority", _adaptiveBootstrapPriorityTexture);
+        utilityShader.SetInt(AdaptiveSamplingMinSamples, Mathf.Clamp(adaptiveSamplingMinSamples, 1, 64));
     }
 
     // Capture diagnostics fence each submitted phase through an existing tiny buffer. This makes
@@ -1884,6 +1895,8 @@ public class GameManager : MonoBehaviour
         _adaptiveBootstrapFrameCount = 0;
         _adaptiveBootstrapSeeded = false;
         _adaptiveBootstrapPriorityActive = false;
+        _adaptiveBootstrapPreviewActive = false;
+        _adaptiveBootstrapPreviewFramesRemaining = 0;
     }
 
     public void SetAdaptiveCaptureDiagnostics(bool enabled)

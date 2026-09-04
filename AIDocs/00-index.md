@@ -27,6 +27,7 @@ Use this folder as focused context for LLM-assisted work on the Unity GPU ray tr
 - `21-adaptive-sampling-performance-plan.md`: Capture-only phase timing, root-list cost model, and the ordered adaptive runtime optimization plan.
 - `22-shader-compile-splitting-handoff.md`: Split-compute-asset compile-time work, measured Metal timings, the debug-kernel timeout, and a one-asset-at-a-time continuation workflow.
 - `23-initial-ris-direct-lighting-plan.md`: Initial local direct-light RIS design record, current implementation status, correctness constraints, and remaining follow-up work.
+- `24-welford-scheduler-recovery-plan.md`: Welford allocation recovery phases, Sponza evidence, diagnostics, controls, acceptance gates, and session-resume state.
 
 ## Fast Context Selection
 
@@ -48,4 +49,5 @@ Use this folder as focused context for LLM-assisted work on the Unity GPU ray tr
 - To continue reducing the public project's barrier to entry, read `16-accessibility-and-onboarding.md`.
 - To continue adaptive-sampling work, read `17-adaptive-sampling-continuation.md`, then `03-compute-shader-renderer.md`, `08-shader-debugging-and-randomness.md`, and `10-benchmarking-and-performance.md`.
 - To measure or reduce adaptive runtime overhead, read `21-adaptive-sampling-performance-plan.md` after `17-adaptive-sampling-continuation.md`.
+- To continue Welford scheduler recovery, read `24-welford-scheduler-recovery-plan.md` after `17-adaptive-sampling-continuation.md`.
 - To change direct-light RIS or temporal RIS, read `23-initial-ris-direct-lighting-plan.md`, then `07-shader-lighting-and-materials.md`, `03-compute-shader-renderer.md`, `10-benchmarking-and-performance.md`, and `11-regression-testing.md`.

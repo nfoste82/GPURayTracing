@@ -11,6 +11,7 @@ RWTexture2D<float4> AdaptiveSamplingState;
 RWTexture2D<float4> AdaptiveSamplingM2;
 RWTexture2D<float4> AdaptiveBootstrapPriority;
 int _AdaptiveBootstrapHistorySamples;
+int _AdaptiveSamplingMinSamples;
 
 float3 SampleAdaptiveBootstrap(float2 uv)
 {
@@ -88,7 +89,9 @@ void ComposeAdaptiveBootstrap(uint3 id : SV_DispatchThreadID)
 {
     uint width, height;
     Beauty.GetDimensions(width, height);
-    if (id.x >= width || id.y >= height || AdaptiveSamplingState[id.xy].x > 0.0f) return;
+    // Fine bootstrap groups are admitted in rotating cohorts. Retain the converged coarse preview
+    // until this pixel has enough genuine fine samples for the scheduler to leave bootstrap.
+    if (id.x >= width || id.y >= height || AdaptiveSamplingState[id.xy].x >= (float)_AdaptiveSamplingMinSamples) return;
     float2 uv = (float2(id.xy) + 0.5f) / float2(width, height);
     float3 color = SampleAdaptiveBootstrap(uv);
     Beauty[id.xy] = float4(color, 1.0f);
