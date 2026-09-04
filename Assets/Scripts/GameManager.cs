@@ -657,7 +657,7 @@ public class GameManager : MonoBehaviour
     private static readonly int Rotation = Shader.PropertyToID("_Rotation");
 
     private const int SphereStride = 92;
-    private const int TriangleStride = 260;
+    private const int TriangleStride = 268;
     private const int MeshInfoStride = 48;
     private const int BvhNodeStride = 48;
     private const int AdaptiveWorkItemStride = sizeof(uint) * 2;
@@ -2716,7 +2716,7 @@ public class GameManager : MonoBehaviour
             var localToWorld = meshObject.transform.localToWorldMatrix;
             var snapshot = RayMaterialSnapshot.Create(meshObject.material, meshObject.light);
 
-            if (snapshot.opacity < ShadowBlockerOpaqueThreshold)
+            if (snapshot.opacity < ShadowBlockerOpaqueThreshold || snapshot.alphaMasked)
             {
                 _lightingManager.SetTransparentMeshBlockers(true);
             }

@@ -20,6 +20,8 @@ namespace PathTracing.PathTracedTypes
         public float previousTransmission;
         public int previousMaterialType;
         public Texture2D previousAlbedoTexture;
+        public bool previousAlphaMasked;
+        public float previousAlphaCutoff;
         public Texture2D previousMetallicRoughnessTexture;
         public Texture2D previousNormalTexture;
         public float previousNormalStrength;
@@ -43,6 +45,8 @@ namespace PathTracing.PathTracedTypes
             hash = GameManager.AddHash(hash, previousTransmission);
             hash = GameManager.AddHash(hash, previousMaterialType);
             hash = GameManager.AddHash(hash, previousAlbedoTexture != null ? previousAlbedoTexture.GetInstanceID() : 0);
+            hash = GameManager.AddHash(hash, previousAlphaMasked ? 1 : 0);
+            hash = GameManager.AddHash(hash, previousAlphaCutoff);
             hash = GameManager.AddHash(hash, previousMetallicRoughnessTexture != null ? previousMetallicRoughnessTexture.GetInstanceID() : 0);
         hash = GameManager.AddHash(hash, previousNormalTexture != null ? previousNormalTexture.GetInstanceID() : 0);
         hash = GameManager.AddHash(hash, previousNormalStrength);

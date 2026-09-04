@@ -15,6 +15,8 @@ internal readonly struct RayMaterialSnapshot
     public readonly float transmission;
     public readonly int materialType;
     public readonly Texture2D albedoTexture;
+    public readonly bool alphaMasked;
+    public readonly float alphaCutoff;
     public readonly Texture2D metallicRoughnessTexture;
     public readonly Texture2D normalTexture;
     public readonly float normalStrength;
@@ -37,6 +39,8 @@ internal readonly struct RayMaterialSnapshot
         transmission = material != null ? Mathf.Clamp01(material.Transmission) : 1.0f;
         materialType = light != null ? 3 : (int)material.Type;
         albedoTexture = material != null ? material.AlbedoTexture : null;
+        alphaMasked = material != null && material.AlphaMasked;
+        alphaCutoff = material != null ? Mathf.Clamp01(material.AlphaCutoff) : 0.5f;
         metallicRoughnessTexture = material != null ? material.MetallicRoughnessTexture : null;
         normalTexture = material != null ? material.NormalTexture : null;
         normalStrength = material != null ? material.NormalStrength : 1.0f;
@@ -62,6 +66,8 @@ internal readonly struct RayMaterialSnapshot
             || !Mathf.Approximately(mesh.previousTransmission, transmission)
             || mesh.previousMaterialType != materialType
             || mesh.previousAlbedoTexture != albedoTexture
+            || mesh.previousAlphaMasked != alphaMasked
+            || !Mathf.Approximately(mesh.previousAlphaCutoff, alphaCutoff)
             || mesh.previousMetallicRoughnessTexture != metallicRoughnessTexture
             || mesh.previousNormalTexture != normalTexture
             || !Mathf.Approximately(mesh.previousNormalStrength, normalStrength)
@@ -84,6 +90,8 @@ internal readonly struct RayMaterialSnapshot
         mesh.previousTransmission = transmission;
         mesh.previousMaterialType = materialType;
         mesh.previousAlbedoTexture = albedoTexture;
+        mesh.previousAlphaMasked = alphaMasked;
+        mesh.previousAlphaCutoff = alphaCutoff;
         mesh.previousMetallicRoughnessTexture = metallicRoughnessTexture;
         mesh.previousNormalTexture = normalTexture;
         mesh.previousNormalStrength = normalStrength;
@@ -108,6 +116,8 @@ internal readonly struct RayMaterialSnapshot
         triangle.normalStrength = normalStrength;
         triangle.materialType = materialType;
         triangle.textureUvScale = textureUvScale;
+        triangle.alphaMasked = alphaMasked ? 1 : 0;
+        triangle.alphaCutoff = alphaCutoff;
         triangle.textureUvRotation = textureUvRotation;
         triangle.parallaxStrength = parallaxStrength;
         triangle.minimumParallaxStrength = minimumParallaxStrength;

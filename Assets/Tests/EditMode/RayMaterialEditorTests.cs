@@ -27,6 +27,15 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void RayMaterialInspector_SupportsMultiObjectEditing()
+        {
+            string source = System.IO.File.ReadAllText("Assets/Editor/RayMaterialEditor.cs");
+            Assert.That(source, Does.Contain("[CanEditMultipleObjects]"));
+            Assert.That(source, Does.Contain("DrawMultiObjectControls"));
+            Assert.That(source, Does.Contain("foreach (RayMaterial material in targets)"));
+        }
+
+        [Test]
         public void RayLight_ReclassifiesTheRegisteredPathTracingObject()
         {
             string source = System.IO.File.ReadAllText("Assets/Scripts/RayLight.cs");

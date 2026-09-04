@@ -501,6 +501,8 @@ struct MeshTriangle
     int materialType;
     int meshIndex;
     int textureIndex;
+    int alphaMasked;
+    float alphaCutoff;
     int metallicRoughnessTextureIndex;
     int normalTextureIndex;
     float normalStrength;
@@ -2040,6 +2042,11 @@ RayHit IntersectTriangle(Ray ray, RayHit currentHit, MeshTriangle meshTriangle, 
         sincos(meshTriangle.textureUvRotation, sine, cosine);
         uv = float2(cosine * uv.x - sine * uv.y, sine * uv.x + cosine * uv.y);
         uv = ApplySimpleParallax(meshTriangle, geometricNormal, barycentric, uv, viewDirection);
+        if (meshTriangle.alphaMasked != 0 && meshTriangle.textureIndex >= 0
+            && _MeshAlbedoTextures.SampleLevel(sampler_MeshAlbedoTextures, float3(frac(uv), meshTriangle.textureIndex), 0).a < meshTriangle.alphaCutoff)
+        {
+            return bestHit;
+        }
         normal = GetTriangleOpticalNormal(meshTriangle, geometricNormal, barycentric, uv);
 
         if (dot(normal, ray.direction) > 0.0f)
@@ -2240,11 +2247,8 @@ bool MeshBvhOccludes(Ray ray, float maxDistance, MeshInfo meshInfo)
             [loop]
             for (int i = 0; i < node.triangleCount; i++)
             {
-                float hitDistance;
-                float3 hitNormal;
-                float2 hitBarycentric;
-                if (IntersectTriangleRaw(ray, _Triangles[node.triangleStart + i], hitDistance, hitNormal, hitBarycentric)
-                    && hitDistance > 0.001f && hitDistance < maxDistance)
+                RayHit hit = IntersectTriangle(ray, CreateRayHit(), _Triangles[node.triangleStart + i], node.triangleStart + i);
+                if (hit.distance < maxDistance)
                 {
                     return true;
                 }

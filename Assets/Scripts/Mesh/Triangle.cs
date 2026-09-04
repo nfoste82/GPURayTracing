@@ -28,6 +28,8 @@ namespace PathTracing.Shapes
         public int materialType;
         public int meshIndex;
         public int textureIndex;
+        public int alphaMasked;
+        public float alphaCutoff;
         public int metallicRoughnessTextureIndex;
         public int normalTextureIndex;
         public float normalStrength;

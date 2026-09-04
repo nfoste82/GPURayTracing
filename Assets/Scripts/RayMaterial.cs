@@ -17,6 +17,13 @@ public class RayMaterial : MonoBehaviour
     [Tooltip("Optional albedo texture for mesh objects. Sphere materials still use Color only.")]
     public Texture2D AlbedoTexture;
 
+    [Tooltip("Discard mesh intersections where the albedo texture alpha is below Alpha Cutoff. Used for glTF MASK materials such as foliage and chains.")]
+    public bool AlphaMasked;
+
+    [Range(0f, 1f)]
+    [Tooltip("Albedo alpha threshold used when Alpha Masked is enabled.")]
+    public float AlphaCutoff = 0.5f;
+
     [Range(0f, 1f)]
     [Tooltip("Continuous mesh metallic response. Existing Metal materials remain fully metallic when this is left at zero.")]
     public float Metallic;

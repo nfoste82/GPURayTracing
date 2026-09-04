@@ -3,11 +3,62 @@ using UnityEditor.SceneManagement;
 using UnityEngine;
 
 [CustomEditor(typeof(RayMaterial))]
+[CanEditMultipleObjects]
 public sealed class RayMaterialEditor : Editor
 {
     public override void OnInspectorGUI()
     {
+        if (targets.Length > 1)
+        {
+            DrawMultiObjectControls();
+            return;
+        }
+
         DrawControls((RayMaterial)target);
+    }
+
+    private void DrawMultiObjectControls()
+    {
+        serializedObject.Update();
+
+        SerializedProperty type = serializedObject.FindProperty("Type");
+        SerializedProperty color = serializedObject.FindProperty("Color");
+        EditorGUI.BeginChangeCheck();
+        EditorGUILayout.PropertyField(type);
+        bool typeChanged = EditorGUI.EndChangeCheck();
+
+        EditorGUI.BeginChangeCheck();
+        EditorGUILayout.PropertyField(color);
+        bool colorChanged = EditorGUI.EndChangeCheck();
+
+        bool emissive = !type.hasMultipleDifferentValues
+            && type.enumValueIndex == (int)RayMaterial.MaterialType.Emissive;
+        if (emissive)
+        {
+            EditorGUILayout.HelpBox("Edit emission intensity from an individual RayLight component.", MessageType.Info);
+        }
+        else
+        {
+            DrawMaterialProperties(serializedObject);
+        }
+
+        serializedObject.ApplyModifiedProperties();
+        if (!typeChanged && !colorChanged)
+        {
+            return;
+        }
+
+        foreach (RayMaterial material in targets)
+        {
+            if (material.Type == RayMaterial.MaterialType.Emissive)
+            {
+                EnsureEmissionComponents(material);
+            }
+            else if (typeChanged)
+            {
+                RemoveEmissionComponents(material);
+            }
+        }
     }
 
     public static void DrawControls(RayMaterial material)
@@ -37,7 +88,19 @@ public sealed class RayMaterialEditor : Editor
             return;
         }
 
+        DrawMaterialProperties(serializedMaterial);
+        serializedMaterial.ApplyModifiedProperties();
+    }
+
+    private static void DrawMaterialProperties(SerializedObject serializedMaterial)
+    {
         EditorGUILayout.PropertyField(serializedMaterial.FindProperty("AlbedoTexture"));
+        EditorGUILayout.PropertyField(serializedMaterial.FindProperty("AlphaMasked"));
+        SerializedProperty alphaMasked = serializedMaterial.FindProperty("AlphaMasked");
+        if (alphaMasked.boolValue || alphaMasked.hasMultipleDifferentValues)
+        {
+            EditorGUILayout.PropertyField(serializedMaterial.FindProperty("AlphaCutoff"));
+        }
         EditorGUILayout.PropertyField(serializedMaterial.FindProperty("Metallic"));
         EditorGUILayout.PropertyField(serializedMaterial.FindProperty("MetallicRoughnessTexture"));
         EditorGUILayout.PropertyField(serializedMaterial.FindProperty("NormalTexture"));
@@ -53,7 +116,6 @@ public sealed class RayMaterialEditor : Editor
         EditorGUILayout.PropertyField(serializedMaterial.FindProperty("Specular"));
         EditorGUILayout.PropertyField(serializedMaterial.FindProperty("Transmission"));
         EditorGUILayout.PropertyField(serializedMaterial.FindProperty("RefractionIndex"));
-        serializedMaterial.ApplyModifiedProperties();
     }
 
     private static RayLight EnsureEmissionComponents(RayMaterial material)

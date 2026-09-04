@@ -1734,7 +1734,7 @@ namespace GPURayTracing.Tests
             var metadata = new ComputeBuffer(64, sizeof(uint));
             var dummySphere = new ComputeBuffer(1, 92);
             var dummyLight = new ComputeBuffer(1, 88);
-            var dummyTriangle = new ComputeBuffer(1, 260);
+            var dummyTriangle = new ComputeBuffer(1, 268);
             var dummyMesh = new ComputeBuffer(1, 48);
             var dummyBvh = new ComputeBuffer(1, 48);
             var dummyTopLevelBvh = new ComputeBuffer(1, 48);

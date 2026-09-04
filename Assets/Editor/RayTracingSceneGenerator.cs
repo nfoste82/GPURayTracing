@@ -93,6 +93,49 @@ public static class RayTracingSceneGenerator
         GenerateScenes(new[] { GetScenePath("Terrain") }, true);
     }
 
+    [MenuItem("Tools/Ray Tracing/Generate Empty Scene")]
+    public static void GenerateEmptyScene()
+    {
+        string absolutePath = EditorUtility.SaveFilePanel(
+            "Save Empty Ray Tracing Scene",
+            "Assets/Scenes",
+            "EmptyScene",
+            "unity");
+
+        if (string.IsNullOrEmpty(absolutePath))
+        {
+            return;
+        }
+
+        // Convert the absolute path to a project-relative path for EditorSceneManager.
+        string projectRoot = System.IO.Path.GetFullPath(Application.dataPath + "/..");
+        if (!absolutePath.StartsWith(projectRoot))
+        {
+            EditorUtility.DisplayDialog(
+                "Invalid Location",
+                "The scene must be saved inside this Unity project.",
+                "OK");
+            return;
+        }
+
+        string relativePath = absolutePath.Substring(projectRoot.Length + 1);
+        string sceneName = System.IO.Path.GetFileNameWithoutExtension(relativePath);
+
+        var context = CreateBaseScene(new SceneSettings
+        {
+            SceneName = sceneName,
+            CameraPosition = new Vector3(0.0f, 1.0f, -10.0f),
+            CameraEuler = Vector3.zero,
+            CameraBehavior = CameraBehavior.Free,
+            FieldOfView = 60.0f,
+            NumBounces = 6,
+            DirectionalLightIntensity = 1.0f,
+        });
+
+        EditorSceneManager.SaveScene(context.Scene, relativePath);
+        Debug.Log($"Created empty ray tracing scene at {relativePath}.");
+    }
+
     public static void GenerateScenes(IReadOnlyList<string> scenePaths, bool overwriteExistingScenes)
     {
         Directory.CreateDirectory(GeneratedSceneFolder);

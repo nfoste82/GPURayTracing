@@ -323,7 +323,7 @@ public static class RayTracingShaderPrecompiler
         public readonly ComputeBuffer FloatBuffer = new ComputeBuffer(1, 4);
         private readonly ComputeBuffer sphereBuffer = new ComputeBuffer(1, 92);
         private readonly ComputeBuffer lightBuffer = new ComputeBuffer(1, 88);
-        private readonly ComputeBuffer triangleBuffer = new ComputeBuffer(1, 260);
+        private readonly ComputeBuffer triangleBuffer = new ComputeBuffer(1, 268);
         private readonly ComputeBuffer meshAndBvhBuffer = new ComputeBuffer(1, 48);
         private readonly ComputeBuffer causticPhotonBuffer = new ComputeBuffer(1, 36);
         private readonly ComputeBuffer terrainCellBuffer = new ComputeBuffer(1, 8);

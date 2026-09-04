@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "label": "sponza_adaptive_sampling_comparison_120s",
+  "scenes": ["Assets/Scenes/Sponza.unity"],
+  "width": 1066,
+  "height": 600,
+  "durationSeconds": 120.0,
+  "cooldownSeconds": 20.0,
+  "referenceRoot": "Assets/Editor/RayTracingSceneReferences",
+  "variants": [
+    {
+      "name": "adaptive_welford",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "adaptiveBootstrapFrames", "value": "24" },
+        { "path": "adaptiveBootstrapResolutionScale", "value": "0.5" },
+        { "path": "adaptiveGuidanceHistoryFrames", "value": "0" },
+        { "path": "adaptiveSamplingMinSamples", "value": "2" },
+        { "path": "adaptiveBootstrapGroupDivisor", "value": "16" },
+        { "path": "adaptivePriorityMode", "value": "WelfordStandardError" },
+        { "path": "adaptiveNormalizePriorityByLuminance", "value": "0" },
+        { "path": "adaptiveReclassificationInterval", "value": "4" },
+        { "path": "adaptiveHighestBucketSampleRate", "value": "1.7" },
+        { "path": "adaptiveMaxPathsPerPixel", "value": "3" },
+        { "path": "sobolDimensionLimit", "value": "328" }
+      ]
+    },
+    {
+      "name": "adaptive_welford_2568_sobol_dimensions",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "adaptiveBootstrapFrames", "value": "24" },
+        { "path": "adaptiveBootstrapResolutionScale", "value": "0.5" },
+        { "path": "adaptiveGuidanceHistoryFrames", "value": "0" },
+        { "path": "adaptiveSamplingMinSamples", "value": "2" },
+        { "path": "adaptiveBootstrapGroupDivisor", "value": "16" },
+        { "path": "adaptivePriorityMode", "value": "WelfordStandardError" },
+        { "path": "adaptiveNormalizePriorityByLuminance", "value": "0" },
+        { "path": "adaptiveReclassificationInterval", "value": "4" },
+        { "path": "adaptiveHighestBucketSampleRate", "value": "1.7" },
+        { "path": "adaptiveMaxPathsPerPixel", "value": "3" },
+        { "path": "sobolDimensionLimit", "value": "2568" }
+      ]
+    }
+  ]
+}

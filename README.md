@@ -117,6 +117,7 @@ Thanks to these projects and blogs which have been learning material:
 * https://github.com/gkjohnson/three-gpu-pathtracer
 * https://github.com/knightcrawler25/GLSL-PathTracer/
 * https://raytracing.github.io/
+* https://www.youtube.com/playlist?list=PLujxSBD-JXgnGmsn7gEyN28P1DnRZG7qi (Entire course on rendering)
 * https://schuttejoe.github.io/post/ (GGX Sampling, Caustic radius decay)
 * https://github.com/tylertms/vkrt
 * https://blog.yiningkarlli.com/2015/03/adaptive-sampling.html (Adaptive Sampling)

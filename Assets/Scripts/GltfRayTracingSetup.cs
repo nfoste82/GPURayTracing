@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Rendering;
 using GLTFast;
 using GltfMaterial = GLTFast.Schema.Material;
 
@@ -37,10 +39,16 @@ public static class GltfRayTracingSetup
         rayMaterial.Type = RayMaterial.MaterialType.Diffuse;
         rayMaterial.Color = GetColor(unityMaterial, Color.white, "_BaseColor", "_Color", "baseColorFactor");
         rayMaterial.AlbedoTexture = GetTexture(unityMaterial, "_BaseMap", "_MainTex", "baseColorTexture");
-        rayMaterial.Metallic = GetFloat(unityMaterial, 0.0f, "_Metallic", "_MetallicFactor");
-        rayMaterial.MetallicRoughnessTexture = GetTexture(unityMaterial, "_MetallicRoughnessMap", "_MetallicGlossMap");
-        rayMaterial.NormalTexture = GetTexture(unityMaterial, "_BumpMap", "_NormalMap");
-        rayMaterial.Smoothness = Mathf.Clamp01(1.0f - GetFloat(unityMaterial, 0.5f, "_Roughness", "_RoughnessFactor", "_Smoothness", "_Glossiness"));
+        rayMaterial.AlphaMasked = unityMaterial != null && unityMaterial.IsKeywordEnabled("_ALPHATEST_ON");
+        rayMaterial.AlphaCutoff = Mathf.Clamp01(GetFloat(unityMaterial, 0.5f, "alphaCutoff", "_Cutoff", "_AlphaClipThreshold"));
+        rayMaterial.MetallicRoughnessTexture = GetTexture(unityMaterial, "_MetallicRoughnessMap", "_MetallicGlossMap", "metallicRoughnessTexture");
+        rayMaterial.NormalTexture = GetTexture(unityMaterial, "_BumpMap", "_NormalMap", "normalTexture");
+        rayMaterial.Metallic = rayMaterial.MetallicRoughnessTexture != null ? 1.0f : 0.0f;
+        rayMaterial.Smoothness = Mathf.Clamp01(1.0f - GetFloat(unityMaterial, 0.5f, "_Roughness", "_RoughnessFactor", "roughnessFactor", "_Smoothness", "_Glossiness"));
+        if (rayMaterial.AlbedoTexture != null)
+        {
+            rayMaterial.Color = Color.white;
+        }
         rayMaterial.Opacity = 1.0f;
         rayMaterial.Transmission = 1.0f;
         rayMaterial.RefractionIndex = 1.5f;
@@ -74,16 +82,65 @@ public static class GltfRayTracingSetup
 
     private static Mesh CreateSubmesh(Mesh sourceMesh, int submeshIndex)
     {
+        int[] sourceIndices = sourceMesh.GetTriangles(submeshIndex);
+        Vector3[] sourceVertices = sourceMesh.vertices;
+        Vector3[] sourceNormals = sourceMesh.normals;
+        Vector4[] sourceTangents = sourceMesh.tangents;
+        Vector2[] sourceUv = sourceMesh.uv;
+        bool copyNormals = sourceNormals.Length == sourceVertices.Length;
+        bool copyTangents = sourceTangents.Length == sourceVertices.Length;
+        bool copyUv = sourceUv.Length == sourceVertices.Length;
+        var vertexMap = new Dictionary<int, int>();
+        var vertices = new List<Vector3>();
+        var normals = copyNormals ? new List<Vector3>() : null;
+        var tangents = copyTangents ? new List<Vector4>() : null;
+        var uv = copyUv ? new List<Vector2>() : null;
+        var indices = new int[sourceIndices.Length];
+
+        for (int index = 0; index < sourceIndices.Length; index++)
+        {
+            int sourceIndex = sourceIndices[index];
+            if (!vertexMap.TryGetValue(sourceIndex, out int compactIndex))
+            {
+                compactIndex = vertices.Count;
+                vertexMap.Add(sourceIndex, compactIndex);
+                vertices.Add(sourceVertices[sourceIndex]);
+                if (copyNormals)
+                {
+                    normals.Add(sourceNormals[sourceIndex]);
+                }
+                if (copyTangents)
+                {
+                    tangents.Add(sourceTangents[sourceIndex]);
+                }
+                if (copyUv)
+                {
+                    uv.Add(sourceUv[sourceIndex]);
+                }
+            }
+
+            indices[index] = compactIndex;
+        }
+
         var mesh = new Mesh
         {
-            name = $"{sourceMesh.name} Ray Tracing Submesh {submeshIndex}",
-            indexFormat = sourceMesh.indexFormat
+            name = $"{sourceMesh.name} Ray Tracing Submesh {submeshIndex}"
         };
-        mesh.vertices = sourceMesh.vertices;
-        mesh.normals = sourceMesh.normals;
-        mesh.tangents = sourceMesh.tangents;
-        mesh.uv = sourceMesh.uv;
-        mesh.SetTriangles(sourceMesh.GetTriangles(submeshIndex), 0);
+        mesh.SetVertices(vertices);
+        if (copyNormals)
+        {
+            mesh.SetNormals(normals);
+        }
+        if (copyTangents)
+        {
+            mesh.SetTangents(tangents);
+        }
+        if (copyUv)
+        {
+            mesh.SetUVs(0, uv);
+        }
+        mesh.indexFormat = vertices.Count > ushort.MaxValue ? IndexFormat.UInt32 : IndexFormat.UInt16;
+        mesh.SetTriangles(indices, 0);
         mesh.RecalculateBounds();
         return mesh;
     }
@@ -191,13 +248,15 @@ public static class GltfRayTracingSetup
         }
 
         var pbr = gltfMaterial.pbrMetallicRoughness;
-        rayMaterial.Color = pbr.BaseColor;
-        rayMaterial.Metallic = Mathf.Clamp01(pbr.metallicFactor);
+        rayMaterial.Color = pbr.baseColorTexture != null ? Color.white : pbr.BaseColor;
+        rayMaterial.Metallic = pbr.metallicRoughnessTexture != null ? 1.0f : 0.0f;
         rayMaterial.Smoothness = Mathf.Clamp01(1.0f - pbr.roughnessFactor);
         rayMaterial.AlbedoTexture = GetGltfTexture(gltfImport, pbr.baseColorTexture?.index ?? -1);
         rayMaterial.MetallicRoughnessTexture = GetGltfTexture(gltfImport, pbr.metallicRoughnessTexture?.index ?? -1);
         rayMaterial.NormalTexture = GetGltfTexture(gltfImport, gltfMaterial.normalTexture?.index ?? -1);
         rayMaterial.NormalStrength = Mathf.Clamp(gltfMaterial.normalTexture?.scale ?? 1.0f, 0.0f, 2.0f);
+        rayMaterial.AlphaMasked = gltfMaterial.GetAlphaMode() == GLTFast.Schema.MaterialBase.AlphaMode.Mask;
+        rayMaterial.AlphaCutoff = Mathf.Clamp01(gltfMaterial.alphaCutoff);
         ApplyTextureScale(rayMaterial, gltfMaterial.normalTexture);
     }
 
@@ -231,7 +290,9 @@ public static class GltfRayTracingSetup
 
         for (int index = 0; index < gltfMaterials.Length; index++)
         {
-            if (unityMaterial == gltfImport.GetMaterial(index))
+            Material sourceMaterial = gltfImport.GetMaterial(index);
+            if (unityMaterial == sourceMaterial
+                || (sourceMaterial != null && unityMaterial.name == sourceMaterial.name))
             {
                 return gltfMaterials[index];
             }

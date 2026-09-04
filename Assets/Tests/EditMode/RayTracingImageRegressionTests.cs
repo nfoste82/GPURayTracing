@@ -991,7 +991,7 @@ namespace GPURayTracing.Tests
             var meshParallaxTextures = CreateParallaxTextureArray();
             ComputeBuffer sphereBuffer = CreateBuffer(spheres, 92);
             ComputeBuffer lightBuffer = CreateBuffer(lights, 88);
-            ComputeBuffer triangleBuffer = CreateBuffer(triangles, 260);
+            ComputeBuffer triangleBuffer = CreateBuffer(triangles, 268);
             ComputeBuffer meshBuffer = CreateBuffer(meshes, 48);
             ComputeBuffer bvhBuffer = CreateBuffer(bvhNodes, 48);
             ComputeBuffer topLevelBuffer = CreateDummyBuffer(48);
@@ -1247,7 +1247,7 @@ namespace GPURayTracing.Tests
 
             ComputeBuffer sphereBuffer = CreateBuffer(spheres, 92);
             ComputeBuffer lightBuffer = CreateBuffer(lights, 88);
-            ComputeBuffer triangleBuffer = CreateBuffer(triangles, 260);
+            ComputeBuffer triangleBuffer = CreateBuffer(triangles, 268);
             ComputeBuffer meshBuffer = CreateBuffer(meshes, 48);
             ComputeBuffer bvhBuffer = CreateBuffer(bvhNodes, 48);
             ComputeBuffer topLevelBuffer = CreateDummyBuffer(48);
