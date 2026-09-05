@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "label": "teapotmaterials_fused_adaptive_baseline_1024_120f_bootstrap12_cooldown30",
+  "scenes": ["Assets/Scenes/Generated/TeapotMaterials.unity"],
+  "width": 1024,
+  "height": 1024,
+  "samples": 120,
+  "cooldownSeconds": 30.0,
+  "referenceRoot": "Assets/Editor/RayTracingSceneReferences",
+  "variants": [
+    {
+      "name": "adaptive_off_seed1",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "false" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "samplingSeed", "value": "1" },
+        { "path": "randomNoise", "value": "false" }
+      ]
+    },
+    {
+      "name": "welford_normalized_h1_7_seed1",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "adaptiveBootstrapFrames", "value": "12" },
+        { "path": "adaptiveBootstrapResolutionScale", "value": "0.5" },
+        { "path": "adaptiveGuidanceHistoryFrames", "value": "0" },
+        { "path": "adaptiveSamplingMinSamples", "value": "8" },
+        { "path": "adaptiveBootstrapGroupDivisor", "value": "1" },
+        { "path": "adaptivePriorityMode", "value": "WelfordStandardError" },
+        { "path": "adaptiveNormalizePriorityByLuminance", "value": "1" },
+        { "path": "adaptiveReclassificationInterval", "value": "4" },
+        { "path": "adaptiveHighestBucketSampleRate", "value": "1.7" },
+        { "path": "adaptiveMaxPathsPerPixel", "value": "3" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "samplingSeed", "value": "1" },
+        { "path": "randomNoise", "value": "false" }
+      ]
+    }
+  ]
+}

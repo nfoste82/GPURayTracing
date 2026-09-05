@@ -1,12 +1,10 @@
 #pragma kernel CSAdaptiveClassifyGroups
 #pragma kernel CSAdaptiveApplyBucketRemap
-#pragma kernel CSAdaptiveCompactGroupWorkList
 #pragma kernel CSAdaptiveDiagnostics
-#pragma kernel CSBuildAdaptiveDispatchArgs
 #pragma kernel ClearAdaptiveSamplingState
 #pragma kernel ClearAdaptiveFrameMetadata
 #pragma kernel RecordAdaptiveRetiredPaths
-#pragma kernel ClearAdaptiveWorkList
+#pragma kernel ClearAdaptiveAllocationMetadata
 #pragma kernel ClearAdaptiveGroupState
 #pragma kernel ClearAdaptiveScheduler
 #include "../Scripts/RayTracingAdaptiveSchedulerShared.hlsl"
@@ -49,7 +47,7 @@ groupshared uint AdaptiveGroupSeedHistory;
 
 // Map each physical threadgroup to one unique logical group for this scheduler epoch. The bounded
 // coprime-stride search keeps the mapping bijective for partial test dimensions too. It changes
-// atomic arrival order without changing any image-space group ownership or compact-list order.
+// atomic arrival order without changing any image-space group ownership.
 uint GreatestCommonDivisor(uint left, uint right)
 {
     [loop]
@@ -176,21 +174,9 @@ void CSAdaptiveClassifyGroups(uint3 id : SV_DispatchThreadID, uint groupIndex : 
     {
         float count = AdaptiveSamplingState[pixel].x;
         float bootstrapPriority = AdaptiveBootstrapPriority[pixel].x;
-        float4 alternating = float4(AdaptiveSamplingState[pixel].yzw, AdaptiveSamplingM2[pixel].a);
-        if (_AdaptivePriorityMode == 1u)
-        {
-            // Dammertz's split estimator compares all samples with a deterministic alternating
-            // subset. Use absolute linear RGB RMS so this score targets the capture RMSE space.
-            float3 disagreement = AccumulationResult[pixel].rgb - alternating.rgb;
-            score = sqrt(max(0.0f, dot(disagreement, disagreement) / 3.0f));
-            bootstrap = count < (float)max(2, _AdaptiveSamplingMinSamples) || alternating.a < 2.0f;
-        }
-        else
-        {
-            float3 m2 = max(0.0f, AdaptiveSamplingM2[pixel].rgb);
-            score = count > 1.0f ? sqrt(max(0.0f, (m2.x + m2.y + m2.z) / (count * (count - 1.0f)))) : 1.0f;
-            bootstrap = count < (float)max(1, _AdaptiveSamplingMinSamples);
-        }
+        float3 m2 = max(0.0f, AdaptiveSamplingM2[pixel].rgb);
+        score = count > 1.0f ? sqrt(max(0.0f, (m2.x + m2.y + m2.z) / (count * (count - 1.0f)))) : 1.0f;
+        bootstrap = count < (float)max(1, _AdaptiveSamplingMinSamples);
         // Blend between absolute-RGB priority and the existing luminance-normalized correction.
         // The floor prevents dark-noise spikes when the correction is enabled.
         float luminance = dot(max(0.0f, AccumulationResult[pixel].rgb), float3(0.2126f, 0.7152f, 0.0722f));
@@ -276,45 +262,23 @@ void CSAdaptiveApplyBucketRemap(uint3 id : SV_DispatchThreadID, uint groupIndex 
     AdaptiveGroupBucket[flatGroup] = bucket;
     AdaptiveGroupExtraDemand[flatGroup] = paths;
     InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataBucketPopulationStart + bucket], validPixels);
-    uint workBase = 0u;
     if (paths != 0u)
     {
         InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataAssignedPaths], paths);
         InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataFullResolutionPaths], paths);
-        InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataWorkItemCount], validPixels, workBase);
+        InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataWorkItemCount], validPixels);
         InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataBucketAdmittedPathsStart + bucket], paths);
         InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataBucketBudgetStart + bucket], paths);
     }
-    AdaptiveGroupInfo[flatGroup] = uint4(workBase, 0u, validPixels,
+    AdaptiveGroupInfo[flatGroup] = uint4(0u, 0u, validPixels,
         validPixels != 0u ? paths / validPixels : 0u);
-}
-
-[numthreads(256,1,1)]
-void CSAdaptiveCompactGroupWorkList(uint3 id : SV_DispatchThreadID)
-{
-    uint width, height;
-    Result.GetDimensions(width, height);
-    uint flatPixel = id.x;
-    if (flatPixel >= width * height) return;
-
-    uint2 pixel = uint2(flatPixel % width, flatPixel / width);
-    uint2 groupPixel = pixel / 8u;
-    uint flatGroup = groupPixel.x + groupPixel.y * _AdaptiveGroupWidth;
-    uint4 info = AdaptiveGroupInfo[flatGroup];
-    uint samples = info.w;
-    if (samples == 0u) return;
-
-    uint validWidth = min(8u, width - groupPixel.x * 8u);
-    uint localIndex = (pixel.y % 8u) * validWidth + pixel.x % 8u;
-    uint workIndex = info.x + localIndex;
-    AdaptiveWorkList[workIndex] = uint2(flatPixel, samples);
 }
 
 [numthreads(1,1,1)]
 void ClearAdaptiveFrameMetadata(uint3 id : SV_DispatchThreadID)
 {
-    // The compact work list persists between reclassification passes. Only this counter is
-    // per-dispatch, so capture diagnostics continue to validate one frame of retired root work.
+    // Group allocations persist between reclassification passes. Only this counter is per-dispatch,
+    // so capture diagnostics continue to validate one frame of retired work.
     AdaptiveWorkListMetadata[AdaptiveMetadataRetiredPaths] = 0u;
     uint fullResolutionPaths = AdaptiveWorkListMetadata[AdaptiveMetadataFullResolutionPaths];
     AdaptiveWorkListMetadata[AdaptiveMetadataRequestedPaths] = fullResolutionPaths;
@@ -330,7 +294,7 @@ void RecordAdaptiveRetiredPaths(uint3 id : SV_DispatchThreadID)
 }
 
 [numthreads(1,1,1)]
-void ClearAdaptiveWorkList(uint3 id : SV_DispatchThreadID)
+void ClearAdaptiveAllocationMetadata(uint3 id : SV_DispatchThreadID)
 {
     uint index = id.x;
     if (index < 64u)
@@ -339,18 +303,6 @@ void ClearAdaptiveWorkList(uint3 id : SV_DispatchThreadID)
     }
 }
 
-[numthreads(1,1,1)]
-void CSBuildAdaptiveDispatchArgs(uint3 id : SV_DispatchThreadID)
-{
-    uint assigned = AdaptiveWorkListMetadata[AdaptiveMetadataAssignedPaths];
-    // Requested and assigned describe only compact full-resolution roots. Guidance is tracked as
-    // a separate additional cost, so publish the rebuilt schedule's actual root count here.
-    AdaptiveWorkListMetadata[AdaptiveMetadataRequestedPaths] = assigned;
-    AdaptiveWorkListMetadata[AdaptiveMetadataFullResolutionPaths] = assigned;
-    AdaptiveDispatchArgs[0] = (min(AdaptiveWorkListMetadata[AdaptiveMetadataWorkItemCount], _AdaptiveWorkListCapacity) + 15u) / 16u;
-    AdaptiveDispatchArgs[1] = 1u;
-    AdaptiveDispatchArgs[2] = 1u;
-}
 
 [numthreads(4,4,1)]
 void CSAdaptiveDiagnostics(uint3 id : SV_DispatchThreadID)

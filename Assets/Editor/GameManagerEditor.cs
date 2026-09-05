@@ -65,12 +65,16 @@ public sealed class GameManagerEditor : Editor
             DrawProperty("recordEditorRun", "Record Editor Run");
             if (manager.enableAdaptiveSampling)
             {
-                DrawProperty("adaptiveBootstrapFrames", "Low-Resolution Bootstrap Frames");
-                DrawProperty("adaptiveBootstrapResolutionScale", "Bootstrap Resolution Scale");
-                DrawProperty("adaptiveGuidanceHistoryFrames", "Coarse History Passed to Fine");
+                DrawProperty("enableAdaptiveBootstrap", "Enable Low-Resolution Bootstrap");
+                if (manager.enableAdaptiveBootstrap)
+                {
+                    DrawProperty("adaptiveBootstrapFrames", "Low-Resolution Bootstrap Frames");
+                    DrawProperty("adaptiveBootstrapResolutionScale", "Bootstrap Resolution Scale");
+                    DrawProperty("adaptiveGuidanceHistoryFrames", "Coarse History Passed to Fine");
+                }
                 DrawProperty("adaptiveSamplingMinSamples", "Minimum Fine Samples");
-                DrawProperty("adaptiveBootstrapGroupDivisor", "Fine Bootstrap Group Batches");
-                DrawProperty("adaptivePriorityMode", "Priority Mode");
+                if (manager.enableAdaptiveBootstrap)
+                    DrawProperty("adaptiveBootstrapGroupDivisor", "Fine Bootstrap Group Batches");
                 DrawProperty("adaptiveNormalizePriorityByLuminance", "Luminance Priority Normalization Strength");
                 DrawProperty("adaptiveReclassificationInterval", "Reclassification Interval");
                 DrawProperty("adaptiveHighestBucketSampleRate", "Highest Bucket Sample Rate");

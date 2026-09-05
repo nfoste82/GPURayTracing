@@ -235,14 +235,14 @@ MonoBehaviour:
   useOwenScrambledSobol: 1
   sobolDimensionLimit: 328
   samplingSeed: 1
-  enableAdaptiveSampling: 0
+  enableAdaptiveSampling: 1
   recordEditorRun: 0
   adaptiveSamplingMinSamples: 2
-  adaptivePriorityMode: 0
   adaptiveNormalizePriorityByLuminance: 0
   adaptiveReclassificationInterval: 4
   adaptiveHighestBucketSampleRate: 1.7
   adaptiveMaxPathsPerPixel: 3
+  enableAdaptiveBootstrap: 0
   adaptiveBootstrapGroupDivisor: 16
   adaptiveBootstrapFrames: 24
   adaptiveBootstrapResolutionScale: 0.5
@@ -519,6 +519,31 @@ PrefabInstance:
       propertyPath: m_Name
       value: Sponza.RayTracing
       objectReference: {fileID: 0}
+    - target: {fileID: 802847037437478832, guid: 8ddca31243df445f4b72aa5a61e7d82a,
+        type: 3}
+      propertyPath: NormalStrength
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 1041768907305043577, guid: 8ddca31243df445f4b72aa5a61e7d82a,
+        type: 3}
+      propertyPath: NormalStrength
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 1278388132463040712, guid: 8ddca31243df445f4b72aa5a61e7d82a,
+        type: 3}
+      propertyPath: NormalStrength
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 1580490439679237480, guid: 8ddca31243df445f4b72aa5a61e7d82a,
+        type: 3}
+      propertyPath: NormalStrength
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 1879473929862265171, guid: 8ddca31243df445f4b72aa5a61e7d82a,
+        type: 3}
+      propertyPath: NormalStrength
+      value: 1
+      objectReference: {fileID: 0}
     - target: {fileID: 2444769260427999960, guid: 8ddca31243df445f4b72aa5a61e7d82a,
         type: 3}
       propertyPath: NormalStrength
@@ -584,6 +609,16 @@ PrefabInstance:
       propertyPath: NormalStrength
       value: 1.5
       objectReference: {fileID: 0}
+    - target: {fileID: 3879084937553385472, guid: 8ddca31243df445f4b72aa5a61e7d82a,
+        type: 3}
+      propertyPath: NormalStrength
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 4155725132022065648, guid: 8ddca31243df445f4b72aa5a61e7d82a,
+        type: 3}
+      propertyPath: NormalStrength
+      value: 1
+      objectReference: {fileID: 0}
     - target: {fileID: 4282654259642424302, guid: 8ddca31243df445f4b72aa5a61e7d82a,
         type: 3}
       propertyPath: NormalStrength
@@ -603,6 +638,16 @@ PrefabInstance:
         type: 3}
       propertyPath: NormalStrength
       value: 1.5
+      objectReference: {fileID: 0}
+    - target: {fileID: 7325382097270799193, guid: 8ddca31243df445f4b72aa5a61e7d82a,
+        type: 3}
+      propertyPath: NormalStrength
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 7670781155024576756, guid: 8ddca31243df445f4b72aa5a61e7d82a,
+        type: 3}
+      propertyPath: NormalStrength
+      value: 1
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []

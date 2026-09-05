@@ -25,11 +25,6 @@ using Light = PathTracing.Lighting.Light;
 [RequireComponent(typeof(WaterManager))]
 public class GameManager : MonoBehaviour
 {
-    public enum AdaptivePriorityMode
-    {
-        WelfordStandardError,
-        DammertzSplitEstimator
-    }
     [SerializeField, HideInInspector] private CameraManager _cameraManager;
 
     [SerializeField, HideInInspector]
@@ -139,9 +134,6 @@ public class GameManager : MonoBehaviour
     [Range(1, 64), Tooltip("Full-resolution paths per pixel before variance-driven adaptive allocation begins.")]
     public int adaptiveSamplingMinSamples = 8;
 
-    [Tooltip("Scheduling score used after uniform bootstrap. Welford is retained as the A/B baseline; Dammertz compares all samples against a deterministic alternating subset.")]
-    public AdaptivePriorityMode adaptivePriorityMode = AdaptivePriorityMode.WelfordStandardError;
-
     [Range(0.0f, 1.0f), Tooltip("Experimental: blend adaptive uncertainty toward luminance-normalized priority. 0 preserves the absolute-RGB baseline; 1 applies the full correction.")]
     public float adaptiveNormalizePriorityByLuminance = 0.0f;
 
@@ -151,6 +143,8 @@ public class GameManager : MonoBehaviour
     public float adaptiveHighestBucketSampleRate = 2.0f;
     [Range(1, 16), Tooltip("Maximum full-resolution paths assigned to one pixel in a scheduling cycle.")]
     public int adaptiveMaxPathsPerPixel = 4;
+    [Tooltip("Use a low-resolution preview before full-resolution adaptive tracing. Disabled by default so adaptive sampling starts with a full-resolution path on its first rendered frame.")]
+    public bool enableAdaptiveBootstrap;
     [Range(1, 16), Tooltip("Number of rotating whole-group batches used while full-resolution adaptive bootstrap samples are still required. Higher values avoid a single expensive all-pixel handoff.")]
     public int adaptiveBootstrapGroupDivisor = 16;
 
@@ -321,7 +315,6 @@ public class GameManager : MonoBehaviour
     private RenderTexture _adaptiveBootstrapAccumulationTexture;
     private RenderTexture _adaptiveBootstrapBeautyTexture;
     private RenderTexture _adaptiveBootstrapPriorityTexture;
-    private ComputeBuffer _adaptiveWorkListBuffer;
     private ComputeBuffer _adaptiveGroupStateBuffer;
     private ComputeBuffer _adaptiveGroupInfoBuffer;
     private ComputeBuffer _adaptiveGroupBucketBuffer;
@@ -344,7 +337,6 @@ public class GameManager : MonoBehaviour
         public float[] uncertainties;
         public Vector4[] samplingState;
         public Vector4[] samplingM2;
-        public Vector4[] alternatingState;
         public Vector4[] accumulation;
         public int width;
         public int height;
@@ -387,7 +379,6 @@ public class GameManager : MonoBehaviour
             this.resolveMilliseconds = resolveMilliseconds;
         }
     }
-    private ComputeBuffer _adaptiveDispatchArgumentsBuffer;
     private int _adaptiveScheduleFrame = -1;
     private bool _adaptiveScheduleInitialized;
     private int _adaptiveBootstrapFrameCount;
@@ -633,10 +624,8 @@ public class GameManager : MonoBehaviour
     private static readonly int AdaptiveSamplingState = Shader.PropertyToID("AdaptiveSamplingState");
     private static readonly int AdaptiveSamplingM2 = Shader.PropertyToID("AdaptiveSamplingM2");
     private static readonly int AdaptiveSamplingMinSamples = Shader.PropertyToID("_AdaptiveSamplingMinSamples");
-    private static readonly int AdaptivePriorityModeProperty = Shader.PropertyToID("_AdaptivePriorityMode");
+    private static readonly int AdaptiveSampleLayer = Shader.PropertyToID("_AdaptiveSampleLayer");
     private static readonly int AdaptiveNormalizePriorityByLuminance = Shader.PropertyToID("_AdaptiveNormalizePriorityByLuminance");
-    private static readonly int AdaptiveWorkList = Shader.PropertyToID("AdaptiveWorkList");
-    private static readonly int AdaptiveTraceWorkList = Shader.PropertyToID("AdaptiveTraceWorkList");
     private static readonly int AdaptiveGroupState = Shader.PropertyToID("AdaptiveGroupState");
     private static readonly int AdaptiveGroupInfo = Shader.PropertyToID("AdaptiveGroupInfo");
     private static readonly int AdaptiveGroupBucket = Shader.PropertyToID("AdaptiveGroupBucket");
@@ -652,8 +641,6 @@ public class GameManager : MonoBehaviour
     private static readonly int UseAdaptiveBootstrapPriority = Shader.PropertyToID("_UseAdaptiveBootstrapPriority");
     private static readonly int AdaptiveBootstrapGroupDivisor = Shader.PropertyToID("_AdaptiveBootstrapGroupDivisor");
     private static readonly int AdaptiveWorkListMetadata = Shader.PropertyToID("AdaptiveWorkListMetadata");
-    private static readonly int AdaptiveWorkListCapacity = Shader.PropertyToID("_AdaptiveWorkListCapacity");
-    private static readonly int AdaptiveDispatchArgs = Shader.PropertyToID("AdaptiveDispatchArgs");
     private static readonly int MainTex = Shader.PropertyToID("_MainTex");
     private static readonly int Tint = Shader.PropertyToID("_Tint");
     private static readonly int Rotation = Shader.PropertyToID("_Rotation");
@@ -662,7 +649,6 @@ public class GameManager : MonoBehaviour
     private const int TriangleStride = 268;
     private const int MeshInfoStride = 48;
     private const int BvhNodeStride = 48;
-    private const int AdaptiveWorkItemStride = sizeof(uint) * 2;
     private const int AdaptiveMetadataCount = 64;
     // Metadata has three fixed bucket sections of this size. The active count is currently 16,
     // but the scheduler treats it as a bounded power-of-two value for future 8/32 variants.
@@ -715,11 +701,11 @@ public class GameManager : MonoBehaviour
         samplingSeed = settings.SamplingSeed;
         enableAdaptiveSampling = settings.EnableAdaptiveSampling;
         adaptiveSamplingMinSamples = settings.AdaptiveSamplingMinSamples;
+        enableAdaptiveBootstrap = settings.EnableAdaptiveBootstrap;
         adaptiveBootstrapFrames = settings.AdaptiveBootstrapFrames;
         adaptiveBootstrapResolutionScale = settings.AdaptiveBootstrapResolutionScale;
         adaptiveGuidanceMaxUpdates = settings.AdaptiveGuidanceMaxUpdates;
         adaptiveGuidanceHistoryFrames = settings.AdaptiveGuidanceHistoryFrames;
-        adaptivePriorityMode = settings.AdaptivePriorityMode;
         adaptiveNormalizePriorityByLuminance = settings.AdaptiveNormalizePriorityByLuminance;
         adaptiveReclassificationInterval = settings.AdaptiveReclassificationInterval;
         adaptiveHighestBucketSampleRate = settings.AdaptiveHighestBucketSampleRate;
@@ -967,14 +953,12 @@ public class GameManager : MonoBehaviour
         _adaptiveBootstrapAccumulationTexture?.Release();
         _adaptiveBootstrapBeautyTexture?.Release();
         _adaptiveBootstrapPriorityTexture?.Release();
-        _adaptiveWorkListBuffer?.Release();
         _adaptiveGroupStateBuffer?.Release();
         _adaptiveGroupInfoBuffer?.Release();
         _adaptiveGroupBucketBuffer?.Release();
         _adaptiveGroupExtraDemandBuffer?.Release();
         _adaptiveRawBucketDemandBuffer?.Release();
         _adaptiveWorkListMetadataBuffer?.Release();
-        _adaptiveDispatchArgumentsBuffer?.Release();
         _spatialDenoisingManager.ReleaseResources();
         _glareManager.ReleaseResources();
         ReleaseTemporalDenoiserResources();
@@ -1015,8 +999,6 @@ public class GameManager : MonoBehaviour
         _adaptiveBootstrapPriorityTexture = CreateAdaptiveBootstrapTexture(_textureSize);
         var adaptiveGroupWidth = Mathf.CeilToInt(_textureSize.x / 8.0f);
         var adaptiveGroupHeight = Mathf.CeilToInt(_textureSize.y / 8.0f);
-        var adaptiveWorkCapacity = Mathf.Max(1, _textureSize.x * _textureSize.y);
-        _adaptiveWorkListBuffer = new ComputeBuffer(adaptiveWorkCapacity, AdaptiveWorkItemStride);
         var adaptiveGroupCount = adaptiveGroupWidth * adaptiveGroupHeight;
         _adaptiveGroupStateBuffer = new ComputeBuffer(adaptiveGroupCount, sizeof(uint) * 4);
         _adaptiveGroupInfoBuffer = new ComputeBuffer(adaptiveGroupCount, sizeof(uint) * 4);
@@ -1024,7 +1006,6 @@ public class GameManager : MonoBehaviour
         _adaptiveGroupExtraDemandBuffer = new ComputeBuffer(adaptiveGroupCount, sizeof(uint));
         _adaptiveRawBucketDemandBuffer = new ComputeBuffer(AdaptiveBucketCountMaximum, sizeof(uint));
         _adaptiveWorkListMetadataBuffer = new ComputeBuffer(AdaptiveMetadataCount, sizeof(uint));
-        _adaptiveDispatchArgumentsBuffer = new ComputeBuffer(3, sizeof(uint), ComputeBufferType.IndirectArguments);
         ResetFrameAccumulation();
         _temporalDenoisingManager.ResetHistory();
         _temporalRisManager.ReleaseResources();
@@ -1251,14 +1232,12 @@ public class GameManager : MonoBehaviour
         _adaptiveBootstrapAccumulationTexture?.Release();
         _adaptiveBootstrapBeautyTexture?.Release();
         _adaptiveBootstrapPriorityTexture?.Release();
-        _adaptiveWorkListBuffer?.Release();
         _adaptiveGroupStateBuffer?.Release();
         _adaptiveGroupInfoBuffer?.Release();
         _adaptiveGroupBucketBuffer?.Release();
         _adaptiveGroupExtraDemandBuffer?.Release();
         _adaptiveRawBucketDemandBuffer?.Release();
         _adaptiveWorkListMetadataBuffer?.Release();
-        _adaptiveDispatchArgumentsBuffer?.Release();
         
         _spatialDenoisingManager.ReleaseResources();
         _glareManager.ReleaseResources();
@@ -1452,13 +1431,13 @@ public class GameManager : MonoBehaviour
 
     private void DispatchAdaptiveSampling()
     {
-        if (_adaptiveBootstrapFrameCount < Mathf.Clamp(adaptiveBootstrapFrames, 1, 512))
+        if (enableAdaptiveBootstrap && _adaptiveBootstrapFrameCount < Mathf.Clamp(adaptiveBootstrapFrames, 1, 512))
         {
             DispatchAdaptiveBootstrap();
             return;
         }
 
-        if (!_adaptiveBootstrapSeeded)
+        if (enableAdaptiveBootstrap && !_adaptiveBootstrapSeeded)
         {
             SeedAdaptiveBootstrap();
             _adaptiveBootstrapSeeded = true;
@@ -1467,29 +1446,20 @@ public class GameManager : MonoBehaviour
         var activeAdaptiveTraceShader = ActiveAdaptiveTraceShader;
         var classifyKernel = adaptiveSchedulerShader.FindKernel("CSAdaptiveClassifyGroups");
         var applyBucketRemapKernel = adaptiveSchedulerShader.FindKernel("CSAdaptiveApplyBucketRemap");
-        var compactWorkListKernel = adaptiveSchedulerShader.FindKernel("CSAdaptiveCompactGroupWorkList");
         var clearSchedulerKernel = adaptiveSchedulerShader.FindKernel("ClearAdaptiveScheduler");
+        var clearAllocationMetadataKernel = adaptiveSchedulerShader.FindKernel("ClearAdaptiveAllocationMetadata");
         var traceKernel = activeAdaptiveTraceShader.FindKernel("CSAdaptiveTrace");
-        var buildDispatchArgsKernel = adaptiveSchedulerShader.FindKernel("CSBuildAdaptiveDispatchArgs");
-        var clearWorkListKernel = adaptiveSchedulerShader.FindKernel("ClearAdaptiveWorkList");
         var clearFrameMetadataKernel = adaptiveSchedulerShader.FindKernel("ClearAdaptiveFrameMetadata");
         var recordRetiredPathsKernel = adaptiveSchedulerShader.FindKernel("RecordAdaptiveRetiredPaths");
-        var workCapacity = _textureSize.x * _textureSize.y;
         var groupWidth = Mathf.CeilToInt(_textureSize.x / 8.0f);
         var groupHeight = Mathf.CeilToInt(_textureSize.y / 8.0f);
 
         bool reclassify = !_adaptiveScheduleInitialized
             || _adaptiveScheduleFrame >= Mathf.Clamp(adaptiveReclassificationInterval, 1, 8);
         LastAdaptiveSamplingReclassified = reclassify;
-        if (_adaptiveCaptureDiagnostics)
-        {
-            adaptiveSchedulerShader.SetBuffer(clearFrameMetadataKernel, AdaptiveWorkListMetadata, _adaptiveWorkListMetadataBuffer);
-            ComputeDispatch.Dispatch(adaptiveSchedulerShader, clearFrameMetadataKernel, 1, 1, 1);
-        }
-
         var schedulerStopwatch = _adaptiveCaptureDiagnostics ? Stopwatch.StartNew() : null;
-        adaptiveSchedulerShader.SetBuffer(clearWorkListKernel, AdaptiveWorkListMetadata, _adaptiveWorkListMetadataBuffer);
-        ComputeDispatch.Dispatch(adaptiveSchedulerShader, clearWorkListKernel, AdaptiveMetadataCount, 1, 1);
+        adaptiveSchedulerShader.SetBuffer(clearAllocationMetadataKernel, AdaptiveWorkListMetadata, _adaptiveWorkListMetadataBuffer);
+        ComputeDispatch.Dispatch(adaptiveSchedulerShader, clearAllocationMetadataKernel, AdaptiveMetadataCount, 1, 1);
         if (reclassify)
         {
             BindAdaptiveSchedulerResources(clearSchedulerKernel);
@@ -1508,22 +1478,25 @@ public class GameManager : MonoBehaviour
         SetAdaptiveGroupDimensions(groupWidth, groupHeight);
         adaptiveSchedulerShader.SetInt("_AdaptiveScheduleRotation", _accumulatedFrameCount);
         ComputeDispatch.Dispatch(adaptiveSchedulerShader, applyBucketRemapKernel, groupWidth, groupHeight, 1);
+        if (_adaptiveCaptureDiagnostics)
+        {
+            adaptiveSchedulerShader.SetBuffer(clearFrameMetadataKernel, AdaptiveWorkListMetadata, _adaptiveWorkListMetadataBuffer);
+            ComputeDispatch.Dispatch(adaptiveSchedulerShader, clearFrameMetadataKernel, 1, 1, 1);
+        }
 
-        BindAdaptiveSchedulerResources(compactWorkListKernel);
-        SetAdaptiveGroupDimensions(groupWidth, groupHeight);
-        ComputeDispatch.Dispatch(adaptiveSchedulerShader, compactWorkListKernel, Mathf.CeilToInt(workCapacity / 256.0f), 1, 1);
-
-        BindAdaptiveSchedulerResources(buildDispatchArgsKernel);
-        adaptiveSchedulerShader.SetInt(AdaptiveWorkListCapacity, workCapacity);
-        adaptiveSchedulerShader.SetBuffer(buildDispatchArgsKernel, AdaptiveDispatchArgs, _adaptiveDispatchArgumentsBuffer);
-        ComputeDispatch.Dispatch(adaptiveSchedulerShader, buildDispatchArgsKernel, 1, 1, 1);
         CompleteAdaptivePhaseTiming(schedulerStopwatch, out _adaptiveSchedulerMilliseconds);
 
+        SetAdaptiveGroupDimensions(groupWidth, groupHeight);
         SetShaderParameters(activeAdaptiveTraceShader, traceKernel);
         BindAdaptiveTraceResources(traceKernel);
-        activeAdaptiveTraceShader.SetInt(AdaptiveWorkListCapacity, workCapacity);
         var traceStopwatch = _adaptiveCaptureDiagnostics ? Stopwatch.StartNew() : null;
-        ComputeDispatch.DispatchIndirect(activeAdaptiveTraceShader, traceKernel, _adaptiveDispatchArgumentsBuffer);
+        int maxLayers = Mathf.Clamp(Mathf.CeilToInt(Mathf.Min(adaptiveHighestBucketSampleRate, adaptiveMaxPathsPerPixel)), 1, 16);
+        for (int sampleLayer = 0; sampleLayer < maxLayers; sampleLayer++)
+        {
+            activeAdaptiveTraceShader.SetInt(AdaptiveSampleLayer, sampleLayer);
+            ComputeDispatch.Dispatch(activeAdaptiveTraceShader, traceKernel,
+                Mathf.CeilToInt(_textureSize.x / 4.0f), Mathf.CeilToInt(_textureSize.y / 4.0f), 1);
+        }
         CompleteAdaptivePhaseTiming(traceStopwatch, out _adaptiveTraceMilliseconds);
         if (_adaptiveCaptureDiagnostics)
         {
@@ -1627,7 +1600,6 @@ public class GameManager : MonoBehaviour
         var groupsX = Mathf.CeilToInt(_textureSize.x / (float)RenderThreadCountX);
         var groupsY = Mathf.CeilToInt(_textureSize.y / (float)RenderThreadCountY);
         BindAdaptiveSchedulerResources(diagnosticsKernel);
-        adaptiveSchedulerShader.SetInt(AdaptiveWorkListCapacity, _textureSize.x * _textureSize.y);
         ComputeDispatch.Dispatch(adaptiveSchedulerShader, diagnosticsKernel, groupsX, groupsY, 1);
     }
 
@@ -1675,23 +1647,23 @@ public class GameManager : MonoBehaviour
     {
         DispatchAdaptiveDiagnostics();
         var metadataRequest = AsyncGPUReadback.Request(_adaptiveWorkListMetadataBuffer);
-        var workListRequest = AsyncGPUReadback.Request(_adaptiveWorkListBuffer);
+        var groupInfoRequest = AsyncGPUReadback.Request(_adaptiveGroupInfoBuffer);
         var stateRequest = AsyncGPUReadback.Request(_adaptiveSamplingStateTexture);
         var m2Request = AsyncGPUReadback.Request(_adaptiveSamplingM2Texture);
         var accumulationRequest = AsyncGPUReadback.Request(_accumulationTexture);
         metadataRequest.WaitForCompletion();
-        workListRequest.WaitForCompletion();
+        groupInfoRequest.WaitForCompletion();
         stateRequest.WaitForCompletion();
         m2Request.WaitForCompletion();
         accumulationRequest.WaitForCompletion();
-        if (metadataRequest.hasError || workListRequest.hasError || stateRequest.hasError || m2Request.hasError
+        if (metadataRequest.hasError || groupInfoRequest.hasError || stateRequest.hasError || m2Request.hasError
             || accumulationRequest.hasError)
         {
             throw new InvalidOperationException("Adaptive diagnostics GPU readback failed.");
         }
 
         var metadata = metadataRequest.GetData<uint>();
-        var workItems = workListRequest.GetData<Vector2Int>();
+        var groupInfo = groupInfoRequest.GetData<uint>();
         var state = stateRequest.GetData<Vector4>();
         var m2 = m2Request.GetData<Vector4>();
         var accumulation = accumulationRequest.GetData<Vector4>();
@@ -1706,24 +1678,27 @@ public class GameManager : MonoBehaviour
         }
         var metadataCopy = new uint[metadata.Length];
         metadata.CopyTo(metadataCopy);
-        int workItemCount = Mathf.Min((int)metadataCopy[AdaptiveMetadataWorkItemCount], workItems.Length);
-        var workItemPixels = new uint[workItemCount];
-        var workItemPathCounts = new uint[workItemCount];
-        for (int i = 0; i < workItemCount; i++)
+        var workItemPixels = new List<uint>();
+        var workItemPathCounts = new List<uint>();
+        int groupWidth = Mathf.CeilToInt(_textureSize.x / 8.0f);
+        for (int pixel = 0; pixel < state.Length; pixel++)
         {
-            workItemPixels[i] = (uint)workItems[i].x;
-            workItemPathCounts[i] = (uint)workItems[i].y;
+            int x = pixel % _textureSize.x;
+            int y = pixel / _textureSize.x;
+            uint samples = groupInfo[(x / 8 + y / 8 * groupWidth) * 4 + 3];
+            if (samples == 0u) continue;
+            workItemPixels.Add((uint)pixel);
+            workItemPathCounts.Add(samples);
         }
         return new AdaptiveDiagnosticsData
         {
             metadata = metadataCopy,
-            workItemPixels = workItemPixels,
-            workItemPathCounts = workItemPathCounts,
+            workItemPixels = workItemPixels.ToArray(),
+            workItemPathCounts = workItemPathCounts.ToArray(),
             pathCounts = pathCounts,
             uncertainties = uncertainties,
             samplingState = CopyReadback(state),
             samplingM2 = CopyReadback(m2),
-            alternatingState = BuildAlternatingState(state, m2),
             accumulation = CopyReadback(accumulation),
             width = _textureSize.x,
             height = _textureSize.y
@@ -1735,16 +1710,6 @@ public class GameManager : MonoBehaviour
         var copy = new Vector4[source.Length];
         source.CopyTo(copy);
         return copy;
-    }
-
-    private static Vector4[] BuildAlternatingState(NativeArray<Vector4> state, NativeArray<Vector4> m2)
-    {
-        var alternating = new Vector4[state.Length];
-        for (int i = 0; i < alternating.Length; i++)
-        {
-            alternating[i] = new Vector4(state[i].y, state[i].z, state[i].w, m2[i].w);
-        }
-        return alternating;
     }
 
     // Capture-only synchronous readback. Interactive rendering never calls this path.
@@ -1784,8 +1749,6 @@ public class GameManager : MonoBehaviour
         targetShader.SetTexture(kernelHandle, AdaptiveSamplingState, _adaptiveSamplingStateTexture);
         targetShader.SetTexture(kernelHandle, AdaptiveSamplingM2, _adaptiveSamplingM2Texture);
         targetShader.SetTexture(kernelHandle, "AdaptiveBootstrapPriority", _adaptiveBootstrapPriorityTexture);
-        targetShader.SetBuffer(kernelHandle, AdaptiveWorkList, _adaptiveWorkListBuffer);
-        targetShader.SetBuffer(kernelHandle, AdaptiveTraceWorkList, _adaptiveWorkListBuffer);
         targetShader.SetBuffer(kernelHandle, AdaptiveGroupState, _adaptiveGroupStateBuffer);
         targetShader.SetBuffer(kernelHandle, AdaptiveGroupInfo, _adaptiveGroupInfoBuffer);
         targetShader.SetBuffer(kernelHandle, AdaptiveGroupBucket, _adaptiveGroupBucketBuffer);
@@ -1794,7 +1757,6 @@ public class GameManager : MonoBehaviour
         targetShader.SetBuffer(kernelHandle, AdaptiveWorkListMetadata, _adaptiveWorkListMetadataBuffer);
         targetShader.SetInt(NumberOfPasses, numberOfPasses);
         targetShader.SetInt(AdaptiveSamplingMinSamples, Mathf.Clamp(adaptiveSamplingMinSamples, 1, 64));
-        targetShader.SetInt(AdaptivePriorityModeProperty, (int)adaptivePriorityMode);
         targetShader.SetFloat(AdaptiveNormalizePriorityByLuminance, Mathf.Clamp01(adaptiveNormalizePriorityByLuminance));
         targetShader.SetInt(AdaptiveCaptureDiagnostics, _adaptiveCaptureDiagnostics ? 1 : 0);
         targetShader.SetFloat(AdaptiveHighestBucketSampleRate, Mathf.Clamp(adaptiveHighestBucketSampleRate, 1.0f, 8.0f));
@@ -1924,28 +1886,25 @@ public class GameManager : MonoBehaviour
     public AdaptiveAllocationFrameData ReadAdaptiveAllocationForCapture()
     {
         var metadataRequest = AsyncGPUReadback.Request(_adaptiveWorkListMetadataBuffer);
-        var workListRequest = AsyncGPUReadback.Request(_adaptiveWorkListBuffer);
+        var groupInfoRequest = AsyncGPUReadback.Request(_adaptiveGroupInfoBuffer);
         var bucketRequest = AsyncGPUReadback.Request(_adaptiveGroupBucketBuffer);
         metadataRequest.WaitForCompletion();
-        workListRequest.WaitForCompletion();
+        groupInfoRequest.WaitForCompletion();
         bucketRequest.WaitForCompletion();
-        if (metadataRequest.hasError || workListRequest.hasError || bucketRequest.hasError)
+        if (metadataRequest.hasError || groupInfoRequest.hasError || bucketRequest.hasError)
         {
             throw new InvalidOperationException("Adaptive allocation GPU readback failed.");
         }
 
         var metadata = metadataRequest.GetData<uint>();
-        var workItems = workListRequest.GetData<Vector2Int>();
         var pixels = new uint[_textureSize.x * _textureSize.y];
-        int workItemCount = Mathf.Min((int)metadata[AdaptiveMetadataWorkItemCount], workItems.Length);
-        for (int i = 0; i < workItemCount; i++)
+        var groupInfo = groupInfoRequest.GetData<uint>();
+        int groupWidth = Mathf.CeilToInt(_textureSize.x / 8.0f);
+        for (int pixel = 0; pixel < pixels.Length; pixel++)
         {
-            Vector2Int workItem = workItems[i];
-            if (workItem.x < 0 || workItem.x >= pixels.Length || workItem.y < 0)
-            {
-                throw new InvalidOperationException("Adaptive allocation readback returned an invalid work item.");
-            }
-            pixels[workItem.x] = (uint)workItem.y;
+            int x = pixel % _textureSize.x;
+            int y = pixel / _textureSize.x;
+            pixels[pixel] = groupInfo[(x / 8 + y / 8 * groupWidth) * 4 + 3];
         }
         uint[] bucketGroupCounts = ReadAdaptiveBucketGroupCounts(bucketRequest.GetData<uint>());
 
@@ -2296,7 +2255,7 @@ public class GameManager : MonoBehaviour
         // adaptive trace asset as warmed until the bootstrap has actually reached its handoff.
         // Otherwise the first real trace compiles synchronously without the warning frame.
         bool useAdaptiveTraceShader = ShouldUseAdaptiveSampling()
-            && _adaptiveBootstrapFrameCount >= Mathf.Clamp(adaptiveBootstrapFrames, 1, 512);
+            && (!enableAdaptiveBootstrap || _adaptiveBootstrapFrameCount >= Mathf.Clamp(adaptiveBootstrapFrames, 1, 512));
         frame.requestedVariant = GetShaderVariantKey(frame.useDedicatedCausticsDebugKernel ? 2
                 : frame.useGeometryDebugShader ? 1 : useAdaptiveTraceShader ? 4 : HasWaterVolume ? 3 : 0, frame.fogEnabled,
             _terrainManager != null && _terrainManager.Terrain != null);
@@ -3768,7 +3727,6 @@ public class GameManager : MonoBehaviour
         targetShader.SetInt(FrameCount, _accumulatedFrameCount);
         targetShader.SetInt(SampleOffset, CalculateSampleOffset());
         targetShader.SetInt(AdaptiveSamplingMinSamples, Mathf.Clamp(adaptiveSamplingMinSamples, 1, 64));
-        targetShader.SetInt(AdaptivePriorityModeProperty, (int)adaptivePriorityMode);
         targetShader.SetFloat(AdaptiveNormalizePriorityByLuminance, Mathf.Clamp01(adaptiveNormalizePriorityByLuminance));
         targetShader.SetInt(AdaptiveCaptureDiagnostics, _adaptiveCaptureDiagnostics ? 1 : 0);
         targetShader.SetFloat(AdaptiveHighestBucketSampleRate, Mathf.Clamp(adaptiveHighestBucketSampleRate, 1.0f, 8.0f));
@@ -3887,12 +3845,12 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, samplingSeed);
             hash = AddHash(hash, enableAdaptiveSampling ? 1 : 0);
             hash = AddHash(hash, adaptiveSamplingMinSamples);
+            hash = AddHash(hash, enableAdaptiveBootstrap ? 1 : 0);
             hash = AddHash(hash, adaptiveBootstrapFrames);
             hash = AddHash(hash, adaptiveBootstrapResolutionScale);
             hash = AddHash(hash, adaptiveGuidanceChangeThreshold);
             hash = AddHash(hash, adaptiveGuidanceMaxUpdates);
             hash = AddHash(hash, adaptiveGuidanceHistoryFrames);
-            hash = AddHash(hash, (int)adaptivePriorityMode);
             hash = AddHash(hash, adaptiveNormalizePriorityByLuminance);
             hash = AddHash(hash, adaptiveReclassificationInterval);
             hash = AddHash(hash, adaptiveHighestBucketSampleRate);

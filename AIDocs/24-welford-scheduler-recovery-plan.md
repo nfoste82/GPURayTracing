@@ -352,15 +352,54 @@ RMSE. Do not claim a win from extra unaccounted bootstrap work.
   luminance ratios were 1.34x, 1.35x, and 1.37x; score/error Spearman was 0.2272 to 0.2286; and
   service breadth was 85.35% to 85.94%. Do not change the score or scheduler mapping based on the
   thermal rerun.
+- Audited the requested compact-pixel fused runtime optimization. It was already the production
+  path: `CSAdaptiveTrace` indirectly dispatches one thread per compact work item, loops over that
+  pixel's `workItem.y` local samples, then writes accumulation and Welford state once. There is no
+  root-list expansion, root-radiance buffer, root offset, or resolver dispatch in the current
+  runtime. Removed the redundant `AdaptiveTraceWorkList` shader-buffer alias and its duplicate
+  binding so the trace reads `AdaptiveWorkList` directly. The controlled GPU parity fixture still
+  passes, confirming identical sample-indexed accumulation/state behavior. This cleanup does not
+  itself establish a runtime improvement; use the performance plan's next compact-versus-guarded
+  dispatch comparison only after a fresh same-build timing baseline.
+- Captured `teapotmaterials_fused_adaptive_baseline_1024_60f_cooldown30` and
+  `teapotmaterials_fused_adaptive_baseline_1024_120f_bootstrap12_cooldown30` to isolate startup
+  cost on the current fused route. The 60-frame capture is warm-up dominated: after its 24
+  half-resolution preview frames and eight genuine full-resolution samples needed for the Welford
+  floor, only about 28 frames remain for established allocation. The 120-frame capture reduces
+  preview bootstrap to 12 frames and leaves about 100 frames after the full-resolution floor. It
+  still retires 112.14M paths versus uniform's 125.83M (89.1%), yet takes 182.61 seconds versus
+  104.20 seconds (75.2% longer): 1.522 seconds/frame adaptive versus 0.868 seconds/frame uniform.
+  Capture-only fences attribute 45.7 ms/frame to the scheduler and 1195.6 ms/frame to fused trace;
+  therefore scheduler classification alone cannot explain the deficit. Final accounting remains
+  exact (`requested = assigned = compact work-item paths = retired = 1,050,816`), and the final
+  120-frame quality gap is small (RGB RMSE `0.007925` adaptive versus `0.007473` uniform) despite
+  the lower adaptive work. Treat the fused per-active-pixel trace implementation as the primary
+  runtime target. The next experiment should compare it directly with a full-screen guarded
+  per-pixel trace at identical schedules and path counts before changing the validated allocator.
+
+- Captured `teapotmaterials_adaptive_compact_vs_guarded_1024_120f_2` and the rotated-order
+  `teapotmaterials_adaptive_compact_vs_guarded_1024_120f_3`. The guarded full-screen route was
+  faster in both orderings at equivalent scheduler settings and near-equivalent retired work:
+  `1020.4` versus `1147.3` ms/frame when compact ran first, and `954.2` versus `1212.2` ms/frame
+  when guarded ran first. The two-run means are `987.3` versus `1179.7` ms/frame, a 16.3% guarded
+  improvement. The compact path was removed rather than retaining an occupancy switch.
 
 ## Next Action
 
-Preserve `adaptiveNormalizePriorityByLuminance = 1` as the validated score calibration and begin
-the runtime optimization order in `AIDocs/21-adaptive-sampling-performance-plan.md`. The first
-implementation candidate is a compact-pixel fused adaptive kernel: one indirect thread per active
-pixel traces its assigned local samples and updates HDR accumulation, RGB Welford state, and any
-scheduler-only state once. This removes root-list expansion, root offsets, root-radiance traffic,
-and the separate resolve dispatch. Preserve `sampleIndex = oldPixelPathCount + localSample`, exact
-requested/assigned/compact/retired accounting, finite-radiance handling, and the unchanged
-adaptive-off `CSMain` path. Validate focused tests, a 512x512 accounting smoke, equal-fine-path
-quality, then repeat the three-seed 120-second capture.
+Preserve `adaptiveNormalizePriorityByLuminance = 1` as the validated score calibration and use the
+guarded full-screen adaptive trace as the sole production route. The 1024x1024 TeapotMaterials
+compact-versus-guarded experiments used identical scheduler settings and rotated variant order:
+
+```text
+run order       guarded ms/frame    compact ms/frame    guarded improvement
+compact first       1020.4             1147.3                11.1%
+guarded first        954.2             1212.2                21.3%
+mean                 987.3             1179.7                16.3%
+```
+
+The routes retired near-equivalent work (112.14M and 113.18M paths, depending on scheduler
+rotation) and produced equivalent final images. Compact list construction and indirect routing
+were therefore removed. `CSAdaptiveTrace` now dispatches a regular full-screen 4x4 grid, reads
+its 8x8 group's assigned sample count, returns on zero, and otherwise preserves
+`sampleIndex = oldPixelPathCount + localSample`, finite-radiance handling, HDR accumulation,
+Welford state, and exact requested/assigned/retired accounting. Adaptive-off `CSMain` is unchanged.

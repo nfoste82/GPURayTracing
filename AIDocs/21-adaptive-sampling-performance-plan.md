@@ -14,14 +14,12 @@ This plan is intentionally separate from the fixed-8x8 quality-policy experiment
 The adaptive route performs these steps on a reclassification frame:
 
 ```text
-clear scheduler -> classify groups -> remap buckets -> compact pixels and expand roots
--> indirect root trace -> indirect pixel resolve
+clear scheduler -> classify groups -> remap buckets -> guarded full-screen trace
 ```
 
-On reused schedules it still performs the indirect root trace and pixel resolve. In contrast,
-uniform `CSMain` traces and accumulates each pixel's samples in one kernel invocation. Adaptive
-currently adds image-sized work-list/root-list traffic, root-radiance writes, a second radiance
-read, and an additional indirect dispatch.
+The production adaptive route dispatches a regular 4x4 full-screen grid. Each thread reads its
+8x8 group's assigned sample count and returns immediately when it is zero. This avoids compact
+list construction, indirect dispatch, and list indirection while preserving the scheduler policy.
 
 ## Phase Instrumentation Milestone
 
@@ -31,9 +29,9 @@ The first implementation milestone is capture-only phase instrumentation, not a 
 enabled:
 
 ```text
-schedulerMilliseconds: clear/classify/remap/compact/dispatch-argument construction
-traceMilliseconds:     indirect CSAdaptiveTraceRoot
-resolveMilliseconds:   indirect CSAdaptiveResolveRoot
+schedulerMilliseconds: clear/classify/remap
+traceMilliseconds:     guarded full-screen CSAdaptiveTrace
+resolveMilliseconds:   zero; retained for CSV schema compatibility
 ```
 
 Each measurement fences the submitted GPU phase with an `AsyncGPUReadback` request on the existing
@@ -48,26 +46,14 @@ instrumentation capture as a production frame-rate measurement.
 ## Optimization Order
 
 1. Establish the scheduler, trace, and resolve costs using the capture-only telemetry.
-2. If trace plus resolve dominates, implement a compact-pixel fused kernel:
-
-```text
-one indirect thread per active pixel
--> read its compact work item
--> trace its assigned samples in a local loop
--> update HDR accumulation, Welford RGB M2, and alternating state once
-```
-
-This removes the root work list, root offsets, root radiance buffer, root expansion loop, and
-separate resolve dispatch from the hot route. Preserve `sampleIndex = oldPixelPathCount +
-localSample`, exact accounting, finite-radiance handling, and `CSMain` as the uniform baseline.
-
+2. The guarded full-screen kernel is the production path. Each pixel reads its 8x8 group's
+   assignment, returns when it is zero, otherwise loops over assigned samples and updates
+   HDR/Welford state once. It uses `sampleIndex = oldPixelPathCount + localSample`, retains
+   finite-radiance handling and exact accounting, and leaves adaptive-off `CSMain` unchanged.
 3. If reclassification is material, split expensive score classification from cheap fractional
 rate rotation. The current `adaptiveHighestBucketSampleRate > 1` condition forces reclassification
 every frame; cached source scores may be reusable while tier admission rotates.
-4. If compaction is material while most pixels are active, compare the compact route with a
-full-screen guarded per-pixel dispatch. Do not replace the compact route without a same-scene,
-same-path benchmark.
-5. Only after those measurements, replace lane-zero 8x8 classification reduction with a parallel
+4. Only after those measurements, replace lane-zero 8x8 classification reduction with a parallel
 reduction if it remains significant.
 
 ## Required Validation
@@ -75,8 +61,7 @@ reduction if it remains significant.
 For every optimization, retain:
 
 ```text
-requested == assigned == compact work-item paths == root paths == retired
-no zero-path compact work item
+requested == assigned == active-pixel paths == retired
 deterministic per-pixel sample index sequence
 unchanged CSMain behavior when adaptive sampling is disabled
 ```

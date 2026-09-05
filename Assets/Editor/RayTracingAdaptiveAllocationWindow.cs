@@ -334,19 +334,25 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
             new GUIContent("Record Editor Run"));
         if (enabled.boolValue)
         {
-            EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveBootstrapFrames"),
-                new GUIContent("Low-Resolution Bootstrap Frames"));
-            EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveBootstrapResolutionScale"),
-                new GUIContent("Bootstrap Resolution Scale"));
-            EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveGuidanceHistoryFrames"),
-                new GUIContent("Coarse History Passed to Fine",
-                    "Approximate fine accumulation samples initialized from the upscaled bootstrap image."));
+            SerializedProperty bootstrapEnabled = serializedManager.FindProperty("enableAdaptiveBootstrap");
+            EditorGUILayout.PropertyField(bootstrapEnabled, new GUIContent("Enable Low-Resolution Bootstrap"));
+            if (bootstrapEnabled.boolValue)
+            {
+                EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveBootstrapFrames"),
+                    new GUIContent("Low-Resolution Bootstrap Frames"));
+                EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveBootstrapResolutionScale"),
+                    new GUIContent("Bootstrap Resolution Scale"));
+                EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveGuidanceHistoryFrames"),
+                    new GUIContent("Coarse History Passed to Fine",
+                        "Approximate fine accumulation samples initialized from the upscaled bootstrap image."));
+            }
             EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveSamplingMinSamples"),
                 new GUIContent("Minimum Fine Samples"));
-            EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveBootstrapGroupDivisor"),
-                new GUIContent("Fine Bootstrap Group Batches"));
-            EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptivePriorityMode"),
-                new GUIContent("Priority Mode"));
+            if (bootstrapEnabled.boolValue)
+            {
+                EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveBootstrapGroupDivisor"),
+                    new GUIContent("Fine Bootstrap Group Batches"));
+            }
             EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveNormalizePriorityByLuminance"),
                 new GUIContent("Luminance Priority Normalization Strength"));
             EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveReclassificationInterval"),
@@ -554,11 +560,11 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
             $"displayWidth={manager.DisplayTextureSize.x}\n" +
             $"displayHeight={manager.DisplayTextureSize.y}\n" +
             $"adaptiveSamplingMinSamples={manager.adaptiveSamplingMinSamples}\n" +
-            $"adaptivePriorityMode={manager.adaptivePriorityMode}\n" +
             $"adaptiveNormalizePriorityByLuminance={manager.adaptiveNormalizePriorityByLuminance:R}\n" +
             $"adaptiveReclassificationInterval={manager.adaptiveReclassificationInterval}\n" +
             $"adaptiveHighestBucketSampleRate={manager.adaptiveHighestBucketSampleRate:R}\n" +
             $"adaptiveMaxPathsPerPixel={manager.adaptiveMaxPathsPerPixel}\n" +
+            $"enableAdaptiveBootstrap={manager.enableAdaptiveBootstrap}\n" +
             $"adaptiveBootstrapGroupDivisor={manager.adaptiveBootstrapGroupDivisor}\n" +
             $"adaptiveBootstrapFrames={manager.adaptiveBootstrapFrames}\n" +
             $"adaptiveBootstrapResolutionScale={manager.adaptiveBootstrapResolutionScale:R}\n" +

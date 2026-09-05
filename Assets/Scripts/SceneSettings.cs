@@ -23,11 +23,11 @@ public sealed class SceneSettings
 
     public bool EnableAdaptiveSampling = false;
     public int AdaptiveSamplingMinSamples = 2;
+    public bool EnableAdaptiveBootstrap = false;
     public int AdaptiveBootstrapFrames = 96;
     public float AdaptiveBootstrapResolutionScale = 0.5f;
     public int AdaptiveGuidanceMaxUpdates = 2;
     public int AdaptiveGuidanceHistoryFrames = 2;
-    public GameManager.AdaptivePriorityMode AdaptivePriorityMode = GameManager.AdaptivePriorityMode.WelfordStandardError;
     public float AdaptiveNormalizePriorityByLuminance = 0.0f;
     public int AdaptiveReclassificationInterval = 4;
     public float AdaptiveHighestBucketSampleRate = 2.0f;

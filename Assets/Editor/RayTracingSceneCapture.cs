@@ -28,6 +28,7 @@ public static class RayTracingSceneCapture
     private const double MaximumTimedCaptureSeconds = 600.0;
     private const string GenerateReferenceArgument = "-rayTracingGenerateReference";
     private const string ExperimentArgument = "-rayTracingExperiment";
+    private const string PostProcessExperimentReferencesArgument = "-rayTracingPostProcessExperimentReferences";
     private const string RecordEditorRunArgument = "-rayTracingRecordEditorRun";
     private const double DefaultCooldownSeconds = 10.0;
     private const float DifferenceHeatmapRedPercentile = 0.99f;
@@ -41,7 +42,6 @@ public static class RayTracingSceneCapture
         public readonly int? minSamples;
         public readonly float? guidanceChangeThreshold;
         public readonly int? guidanceMaxUpdates;
-        public readonly GameManager.AdaptivePriorityMode? priorityMode;
         public readonly float? normalizePriorityByLuminance;
         public readonly int? reclassificationInterval;
         public readonly float? highestBucketSampleRate;
@@ -50,18 +50,17 @@ public static class RayTracingSceneCapture
         public readonly float? bootstrapResolutionScale;
         public readonly int? guidanceHistoryFrames;
         public readonly int? bootstrapGroupDivisor;
+        public readonly bool? enableBootstrap;
 
         public AdaptiveSamplingOverrides(int? minSamples, float? guidanceChangeThreshold, int? guidanceMaxUpdates,
-            GameManager.AdaptivePriorityMode? priorityMode,
             float? normalizePriorityByLuminance,
             int? reclassificationInterval, float? highestBucketSampleRate,
             int? maxPathsPerPixel, int? bootstrapFrames, float? bootstrapResolutionScale,
-            int? guidanceHistoryFrames, int? bootstrapGroupDivisor)
+            int? guidanceHistoryFrames, int? bootstrapGroupDivisor, bool? enableBootstrap)
         {
             this.minSamples = minSamples;
             this.guidanceChangeThreshold = guidanceChangeThreshold;
             this.guidanceMaxUpdates = guidanceMaxUpdates;
-            this.priorityMode = priorityMode;
             this.normalizePriorityByLuminance = normalizePriorityByLuminance;
             this.reclassificationInterval = reclassificationInterval;
             this.highestBucketSampleRate = highestBucketSampleRate;
@@ -70,6 +69,7 @@ public static class RayTracingSceneCapture
             this.bootstrapResolutionScale = bootstrapResolutionScale;
             this.guidanceHistoryFrames = guidanceHistoryFrames;
             this.bootstrapGroupDivisor = bootstrapGroupDivisor;
+            this.enableBootstrap = enableBootstrap;
         }
     }
 
@@ -84,6 +84,8 @@ public static class RayTracingSceneCapture
         public int samples = DefaultSamplesPerScene;
         public double durationSeconds;
         public double cooldownSeconds = DefaultCooldownSeconds;
+        public bool disableAdaptiveInstrumentation;
+        public bool requireReference = true;
         public string referenceRoot = DefaultReferenceRoot;
         public int[] temporalRisWarmupFrames;
         public int temporalRisTrialsPerWarmup;
@@ -232,6 +234,13 @@ public static class RayTracingSceneCapture
     // Invoke with -executeMethod RayTracingSceneCapture.CaptureFromCommandLine.
     public static void CaptureFromCommandLine()
     {
+        var postProcessExperimentRoot = GetCommandLineArgument(PostProcessExperimentReferencesArgument);
+        if (!string.IsNullOrWhiteSpace(postProcessExperimentRoot))
+        {
+            PostProcessExperimentReferences(postProcessExperimentRoot);
+            return;
+        }
+
         var differenceImageA = GetCommandLineArgument("-rayTracingDifferenceImageA");
         var differenceImageB = GetCommandLineArgument("-rayTracingDifferenceImageB");
         var differenceOutput = GetCommandLineArgument("-rayTracingDifferenceOutput");
@@ -274,11 +283,6 @@ public static class RayTracingSceneCapture
         var recordEditorRun = HasCommandLineArgument(RecordEditorRunArgument);
         var disableAdaptiveInstrumentation = HasCommandLineArgument("-rayTracingDisableAdaptiveInstrumentation");
         var skipAdaptiveOff = HasCommandLineArgument("-rayTracingSkipAdaptiveOff");
-        if (!TryGetAdaptiveComparisonType(out GameManager.AdaptivePriorityMode? adaptiveComparisonType))
-        {
-            ExitBatchMode(1);
-            return;
-        }
         var referenceMetrics = HasCommandLineArgument("-rayTracingReferenceMetrics");
         var refreshReferences = HasCommandLineArgument("-rayTracingRefreshReferences");
         var requireExistingReferences = HasCommandLineArgument("-rayTracingRequireExistingReferences");
@@ -380,7 +384,7 @@ public static class RayTracingSceneCapture
             CaptureInBatchMode(label, scenes, outputRoot, samplesPerScene, captureWidth, captureHeight,
                 durationSeconds, debugRenderMode, generateReference, compareAdaptiveSampling, skipAdaptiveOff, referenceMetrics,
                 refreshReferences, requireExistingReferences, referenceRoot, brightnessPriority, directLightPriority, roughnessPriority,
-                adaptiveSamplingOverrides, adaptiveSampling, adaptiveComparisonType, cooldownSeconds, disableAdaptiveInstrumentation,
+                adaptiveSamplingOverrides, adaptiveSampling, cooldownSeconds, disableAdaptiveInstrumentation,
                 recordEditorRun);
             return;
         }
@@ -437,7 +441,6 @@ public static class RayTracingSceneCapture
         float? roughnessPriority,
         AdaptiveSamplingOverrides adaptiveSamplingOverrides,
         bool adaptiveSampling,
-        GameManager.AdaptivePriorityMode? adaptiveComparisonType,
         double cooldownSeconds,
         bool disableAdaptiveInstrumentation,
         bool recordEditorRun)
@@ -482,14 +485,14 @@ public static class RayTracingSceneCapture
                 {
                     CaptureAdaptiveComparison(manager, sceneName, outputRoot, label, samplesPerScene,
                         captureWidth, captureHeight, durationSeconds, debugRenderMode, trimmedPath, skipAdaptiveOff, referenceMetrics,
-                        refreshReferences, requireExistingReferences, referenceRoot, adaptiveSamplingOverrides, adaptiveComparisonType,
+                        refreshReferences, requireExistingReferences, referenceRoot, adaptiveSamplingOverrides,
                         cooldownSeconds, !disableAdaptiveInstrumentation, recordEditorRun);
                 }
                 else
                 {
                     CaptureVariant(manager, sceneName, Path.Combine(outputRoot, SanitizePathSegment(label)), sceneName, samplesPerScene,
                         captureWidth, captureHeight, durationSeconds, debugRenderMode, adaptiveSampling,
-                        adaptiveSamplingOverrides.priorityMode ?? manager.adaptivePriorityMode, false, false, recordEditorRun, null);
+                        false, false, recordEditorRun, null);
                 }
             }
 
@@ -535,13 +538,18 @@ public static class RayTracingSceneCapture
                 }
 
                 string sceneName = Path.GetFileNameWithoutExtension(trimmedPath);
-                string referencePath = FindLongestReference(trimmedPath, experiment.referenceRoot,
-                    experiment.width, experiment.height, out ReferenceMetadata reference);
-                if (referencePath == null)
+                string referencePath = null;
+                ReferenceMetadata reference = default;
+                if (experiment.requireReference)
                 {
-                    throw new InvalidOperationException(
-                        $"Experiment reference is missing for '{trimmedPath}' at {experiment.width}x{experiment.height}. " +
-                        "Generate it separately with -rayTracingGenerateReference; experiments never generate references automatically.");
+                    referencePath = FindLongestReference(trimmedPath, experiment.referenceRoot,
+                        experiment.width, experiment.height, out reference);
+                    if (referencePath == null)
+                    {
+                        throw new InvalidOperationException(
+                            $"Experiment reference is missing for '{trimmedPath}' at {experiment.width}x{experiment.height}. " +
+                            "Generate it separately with -rayTracingGenerateReference; experiments never generate references automatically.");
+                    }
                 }
 
                 string sceneRoot = Path.Combine(experimentRoot, SanitizePathSegment(sceneName));
@@ -562,11 +570,13 @@ public static class RayTracingSceneCapture
                     string variantName = SanitizePathSegment(variant.name);
                     CaptureResult result = CaptureVariant(manager, sceneName, sceneRoot, variantName,
                         experiment.samples, experiment.width, experiment.height, experiment.durationSeconds,
-                        DebugRenderMode.FinalColor, manager.enableAdaptiveSampling, manager.adaptivePriorityMode,
-                        true, manager.enableAdaptiveSampling, false, referencePath, true);
-                    WriteReferenceMetrics(sceneRoot, variantName, result, referencePath, reference);
-                    if (manager.enableAdaptiveSampling)
-                        WriteGroupDiagnostics(sceneRoot, variantName, result, manager.adaptivePriorityMode, referencePath);
+                        DebugRenderMode.FinalColor, manager.enableAdaptiveSampling,
+                        true, manager.enableAdaptiveSampling && !experiment.disableAdaptiveInstrumentation,
+                        false, referencePath, true);
+                    if (experiment.requireReference)
+                        WriteReferenceMetrics(sceneRoot, variantName, result, referencePath, reference);
+                    if (manager.enableAdaptiveSampling && !experiment.disableAdaptiveInstrumentation)
+                        WriteGroupDiagnostics(sceneRoot, variantName, result, referencePath);
                     results.Add(new ExperimentVariantResult(variantName, result));
                 }
 
@@ -579,8 +589,11 @@ public static class RayTracingSceneCapture
                         GenerateDifferenceImage(results[first].result.imagePath, results[second].result.imagePath,
                             Path.Combine(sceneRoot, $"{results[first].name}_vs_{results[second].name}_difference.png"));
                     }
-                    GenerateDifferenceImage(results[first].result.imagePath, referencePath,
-                        Path.Combine(sceneRoot, $"{results[first].name}_vs_reference_difference.png"));
+                    if (experiment.requireReference)
+                    {
+                        GenerateDifferenceImage(results[first].result.imagePath, referencePath,
+                            Path.Combine(sceneRoot, $"{results[first].name}_vs_reference_difference.png"));
+                    }
                 }
                 WriteCaptureLog(sceneRoot, label);
             }
@@ -595,6 +608,76 @@ public static class RayTracingSceneCapture
                 (failureLogPath == null ? $"Unity console log: '{Application.consoleLogPath}'." :
                     $"Unity console log: '{Application.consoleLogPath}'. Experiment log: '{failureLogPath}'."), exception);
             ReleaseCaptureTarget(null);
+            ExitBatchMode(1);
+        }
+    }
+
+    private static void PostProcessExperimentReferences(string experimentRoot)
+    {
+        try
+        {
+            string absoluteRoot = Path.GetFullPath(experimentRoot);
+            if (!Directory.Exists(absoluteRoot))
+                throw new DirectoryNotFoundException($"Experiment output folder does not exist: '{absoluteRoot}'.");
+
+            int comparisons = 0;
+            foreach (string sceneRoot in Directory.GetDirectories(absoluteRoot))
+            {
+                string experimentPath = Path.Combine(sceneRoot, "experiment.json");
+                if (!File.Exists(experimentPath)) continue;
+
+                CaptureExperiment experiment = JsonUtility.FromJson<CaptureExperiment>(File.ReadAllText(experimentPath));
+                ValidateExperiment(experiment, experimentPath);
+                string sceneName = Path.GetFileName(sceneRoot);
+                string scenePath = null;
+                foreach (string candidate in experiment.scenes)
+                {
+                    if (string.Equals(Path.GetFileNameWithoutExtension(candidate.Trim()), sceneName, StringComparison.Ordinal))
+                    {
+                        scenePath = candidate.Trim();
+                        break;
+                    }
+                }
+                if (scenePath == null)
+                    throw new InvalidOperationException($"Could not match output scene '{sceneName}' to '{experimentPath}'.");
+
+                string referencePath = FindLongestReference(scenePath, experiment.referenceRoot,
+                    experiment.width, experiment.height, out ReferenceMetadata reference);
+                if (referencePath == null)
+                    throw new InvalidOperationException($"No valid {experiment.width}x{experiment.height} reference exists for '{scenePath}'.");
+
+                var lines = new List<string>
+                {
+                    "variant,reference_image,rgb_mae,rgb_rmse,rgb_psnr_db,luminance_mae,luminance_rmse,luminance_relative_absolute_error,luminance_fraction_above_0_01"
+                };
+                foreach (ExperimentVariant variant in experiment.variants)
+                {
+                    string variantName = SanitizePathSegment(variant.name);
+                    string imagePath = Path.Combine(sceneRoot, variantName + ".png");
+                    if (!File.Exists(imagePath))
+                        throw new FileNotFoundException($"Experiment variant image is missing: '{imagePath}'.", imagePath);
+
+                    VariantComparisonMetrics metrics = CalculateReferenceMetrics(imagePath, referencePath);
+                    WritePostProcessedReferenceMetrics(sceneRoot, variantName, referencePath, reference, metrics);
+                    GenerateDifferenceImage(imagePath, referencePath,
+                        Path.Combine(sceneRoot, variantName + "_vs_reference_difference.png"));
+                    lines.Add(string.Join(",", variantName, referencePath,
+                        CsvNumber(metrics.rgbMeanAbsoluteError), CsvNumber(metrics.rgbRootMeanSquaredError), CsvNumber(metrics.rgbPsnrDb),
+                        CsvNumber(metrics.luminanceMeanAbsoluteError), CsvNumber(metrics.luminanceRootMeanSquaredError),
+                        CsvNumber(metrics.luminanceMeanRelativeAbsoluteError), CsvNumber(metrics.luminanceFractionAbove0_01)));
+                    comparisons++;
+                }
+                File.WriteAllLines(Path.Combine(sceneRoot, "reference_comparison.csv"), lines);
+            }
+            if (comparisons == 0)
+                throw new InvalidOperationException($"No scene output folders containing experiment.json were found below '{absoluteRoot}'.");
+
+            Debug.Log($"Post-processed {comparisons} experiment variants against their references in '{absoluteRoot}'.");
+            ExitBatchMode(0);
+        }
+        catch (Exception exception)
+        {
+            ReportCommandLineError("Experiment reference post-processing failed.", exception);
             ExitBatchMode(1);
         }
     }
@@ -647,6 +730,8 @@ public static class RayTracingSceneCapture
         {
             if (item == null || string.IsNullOrWhiteSpace(item.path))
                 throw new InvalidOperationException("Experiment overrides require a property path.");
+            // Existing Welford manifests retain this removed selector; no other estimator remains.
+            if (item.path == "adaptivePriorityMode" && item.value == "WelfordStandardError") continue;
             object target = manager;
             string[] segments = item.path.Split('.');
             for (int index = 0; index < segments.Length - 1; index++)
@@ -679,7 +764,9 @@ public static class RayTracingSceneCapture
         foreach (ExperimentVariantResult item in results)
         {
             double average = item.result.totalMilliseconds / Math.Max(1, item.result.measuredFrames);
-            VariantComparisonMetrics metrics = CalculateReferenceMetrics(item.result.imagePath, referencePath);
+            VariantComparisonMetrics metrics = string.IsNullOrEmpty(referencePath)
+                ? default
+                : CalculateReferenceMetrics(item.result.imagePath, referencePath);
             lines.Add(string.Join(",", item.name, item.result.measuredFrames.ToString(CultureInfo.InvariantCulture),
                 item.result.totalMilliseconds.ToString("R", CultureInfo.InvariantCulture), average.ToString("R", CultureInfo.InvariantCulture),
                 (average > 0.0 ? 1000.0 / average : 0.0).ToString("R", CultureInfo.InvariantCulture), item.result.retiredPaths,
@@ -738,7 +825,7 @@ public static class RayTracingSceneCapture
                         for (int frame = 0; frame < warmupFrames; frame++)
                         {
                             manager.RenderImage(_captureSource, _captureTarget);
-                            SynchronizeDurationCaptureGpu();
+                            SynchronizeCaptureGpu();
                         }
 
                         manager.enableFrameAccumulation = false;
@@ -748,7 +835,7 @@ public static class RayTracingSceneCapture
                         }
                         var stopwatch = Stopwatch.StartNew();
                         manager.RenderImage(_captureSource, _captureTarget);
-                        SynchronizeDurationCaptureGpu();
+                        SynchronizeCaptureGpu();
                         stopwatch.Stop();
                         Color[] pixels = manager.ReadCurrentFinalColorPixels();
                         VariantComparisonMetrics metrics = CalculateReferenceMetrics(pixels, referencePixels, true);
@@ -868,7 +955,7 @@ public static class RayTracingSceneCapture
         string sceneName = Path.GetFileNameWithoutExtension(scenePath);
         CaptureResult result = CaptureVariant(manager, sceneName, directory, Path.GetFileNameWithoutExtension(imagePath),
             0, width, height, durationSeconds, DebugRenderMode.FinalColor, false,
-            GameManager.AdaptivePriorityMode.WelfordStandardError, false, false);
+            false, false);
         if (result.imagePath != imagePath)
         {
             if (File.Exists(imagePath)) File.Delete(imagePath);
@@ -896,7 +983,6 @@ public static class RayTracingSceneCapture
         bool requireExistingReferences,
         string referenceRoot,
         AdaptiveSamplingOverrides adaptiveSamplingOverrides,
-        GameManager.AdaptivePriorityMode? adaptiveComparisonType,
         double cooldownSeconds,
         bool adaptiveInstrumentation,
         bool recordEditorRun)
@@ -912,31 +998,14 @@ public static class RayTracingSceneCapture
 
         ApplyAdaptiveSamplingOverrides(manager, adaptiveSamplingOverrides);
 
-        bool runWelford = !adaptiveComparisonType.HasValue
-            || adaptiveComparisonType.Value == GameManager.AdaptivePriorityMode.WelfordStandardError;
-        bool runDammertz = !adaptiveComparisonType.HasValue
-            || adaptiveComparisonType.Value == GameManager.AdaptivePriorityMode.DammertzSplitEstimator;
         CaptureResult adaptiveOff = default;
-        CaptureResult adaptiveWelford = default;
-        CaptureResult adaptiveDammertz = default;
-        if (runWelford)
-        {
-            adaptiveWelford = CaptureVariant(manager, sceneName, comparisonRoot, "adaptive_welford", samplesPerScene, captureWidth,
-                captureHeight, durationSeconds, debugRenderMode, true, GameManager.AdaptivePriorityMode.WelfordStandardError, true,
-                adaptiveInstrumentation, recordEditorRun, referenceImagePath);
-        }
-        if (runDammertz)
-        {
-            if (runWelford) CoolDownBetweenTimedCaptures(durationSeconds, cooldownSeconds);
-            adaptiveDammertz = CaptureVariant(manager, sceneName, comparisonRoot, "adaptive_dammertz", samplesPerScene, captureWidth,
-                captureHeight, durationSeconds, debugRenderMode, true, GameManager.AdaptivePriorityMode.DammertzSplitEstimator, true,
-                adaptiveInstrumentation, recordEditorRun, referenceImagePath);
-        }
+        CaptureResult adaptiveWelford = CaptureVariant(manager, sceneName, comparisonRoot, "adaptive_welford", samplesPerScene, captureWidth,
+            captureHeight, durationSeconds, debugRenderMode, true, true, adaptiveInstrumentation, recordEditorRun, referenceImagePath);
         if (!skipAdaptiveOff)
         {
             CoolDownBetweenTimedCaptures(durationSeconds, cooldownSeconds);
             adaptiveOff = CaptureVariant(manager, sceneName, comparisonRoot, "adaptive_off", samplesPerScene, captureWidth,
-                captureHeight, durationSeconds, debugRenderMode, false, GameManager.AdaptivePriorityMode.WelfordStandardError, true,
+                captureHeight, durationSeconds, debugRenderMode, false, true,
                 false, recordEditorRun, referenceImagePath);
         }
         if (referenceMetrics)
@@ -945,39 +1014,29 @@ public static class RayTracingSceneCapture
             {
                 WriteReferenceMetrics(comparisonRoot, "adaptive_off", adaptiveOff, referenceImagePath, reference);
             }
-            if (runWelford) WriteReferenceMetrics(comparisonRoot, "adaptive_welford", adaptiveWelford, referenceImagePath, reference);
-            if (runDammertz) WriteReferenceMetrics(comparisonRoot, "adaptive_dammertz", adaptiveDammertz, referenceImagePath, reference);
+            WriteReferenceMetrics(comparisonRoot, "adaptive_welford", adaptiveWelford, referenceImagePath, reference);
         }
         if (!skipAdaptiveOff)
         {
-            if (runWelford) GenerateDifferenceImage(adaptiveOff.imagePath, adaptiveWelford.imagePath,
+            GenerateDifferenceImage(adaptiveOff.imagePath, adaptiveWelford.imagePath,
                 Path.Combine(comparisonRoot, "adaptive_off_vs_welford_difference.png"));
-            if (runDammertz) GenerateDifferenceImage(adaptiveOff.imagePath, adaptiveDammertz.imagePath,
-                Path.Combine(comparisonRoot, "adaptive_off_vs_dammertz_difference.png"));
         }
-        if (runWelford && runDammertz) GenerateDifferenceImage(adaptiveWelford.imagePath, adaptiveDammertz.imagePath,
-            Path.Combine(comparisonRoot, "adaptive_welford_vs_dammertz_difference.png"));
         if (referenceMetrics)
         {
-            if (runWelford) GenerateDifferenceImage(adaptiveWelford.imagePath, referenceImagePath,
+            GenerateDifferenceImage(adaptiveWelford.imagePath, referenceImagePath,
                 Path.Combine(comparisonRoot, "adaptive_welford_vs_reference_difference.png"));
-            if (runDammertz) GenerateDifferenceImage(adaptiveDammertz.imagePath, referenceImagePath,
-                Path.Combine(comparisonRoot, "adaptive_dammertz_vs_reference_difference.png"));
             if (!skipAdaptiveOff)
             {
                 GenerateDifferenceImage(adaptiveOff.imagePath, referenceImagePath,
                     Path.Combine(comparisonRoot, "adaptive_off_vs_reference_difference.png"));
-                if (runWelford) GenerateReferenceComparisonImage(adaptiveOff.imagePath, adaptiveWelford.imagePath, referenceImagePath,
+                GenerateReferenceComparisonImage(adaptiveOff.imagePath, adaptiveWelford.imagePath, referenceImagePath,
                     Path.Combine(comparisonRoot, "adaptive_welford_red_off_green_vs_reference.png"));
-                if (runDammertz) GenerateReferenceComparisonImage(adaptiveOff.imagePath, adaptiveDammertz.imagePath, referenceImagePath,
-                    Path.Combine(comparisonRoot, "adaptive_dammertz_red_off_green_vs_reference.png"));
             }
-            if (runWelford && runDammertz) WriteGroupDiagnostics(comparisonRoot, adaptiveWelford, adaptiveDammertz, referenceImagePath);
+            WriteGroupDiagnostics(comparisonRoot, "adaptive_welford", adaptiveWelford, referenceImagePath);
         }
-        WriteThreeWayComparisonSummary(comparisonRoot, adaptiveOff, adaptiveWelford, adaptiveDammertz, skipAdaptiveOff, runWelford, runDammertz);
-        WriteVariantComparisonCsv(comparisonRoot, adaptiveOff, adaptiveWelford, adaptiveDammertz,
-            runWelford, runDammertz,
-            skipAdaptiveOff, referenceMetrics ? referenceImagePath : null, reference);
+        WriteAdaptiveComparisonSummary(comparisonRoot, adaptiveOff, adaptiveWelford, skipAdaptiveOff);
+        WriteVariantComparisonCsv(comparisonRoot, adaptiveOff, adaptiveWelford, skipAdaptiveOff,
+            referenceMetrics ? referenceImagePath : null, reference);
         WriteCaptureLog(comparisonRoot, label);
     }
 
@@ -1037,7 +1096,6 @@ public static class RayTracingSceneCapture
         double durationSeconds,
         DebugRenderMode debugRenderMode,
         bool adaptiveSampling,
-        GameManager.AdaptivePriorityMode adaptivePriorityMode,
         bool writeTimingReport,
         bool adaptiveInstrumentation,
         bool recordEditorRun = false,
@@ -1046,7 +1104,6 @@ public static class RayTracingSceneCapture
     {
         manager.enableFrameAccumulation = true;
         manager.enableAdaptiveSampling = adaptiveSampling;
-        manager.adaptivePriorityMode = adaptivePriorityMode;
         manager.SetAdaptiveCaptureDiagnostics(adaptiveSampling && adaptiveInstrumentation);
         // Capture both variants with the same fixed path budget: one path per pixel per frame.
         manager.adaptiveSamplingMinSamples = Mathf.Max(1, manager.adaptiveSamplingMinSamples);
@@ -1110,13 +1167,10 @@ public static class RayTracingSceneCapture
             var frameStopwatch = Stopwatch.StartNew();
             manager.RenderImage(_captureSource, _captureTarget);
             measuredFrames++;
-            if (durationSeconds > 0.0 || adaptiveSampling)
-            {
-                // RenderImage can submit work faster than Metal retires it. Synchronizing each
-                // duration frame makes the wall-clock budget measure completed rendering rather
-                // than CPU submission followed by an unreported queue drain at the end.
-                SynchronizeDurationCaptureGpu();
-            }
+            // RenderImage can submit work faster than Metal retires it. Synchronizing every
+            // measured frame makes fixed-frame and duration captures report completed rendering
+            // for both adaptive and adaptive-off variants.
+            SynchronizeCaptureGpu();
             frameStopwatch.Stop();
             if (editorRunWriter != null)
             {
@@ -1141,7 +1195,7 @@ public static class RayTracingSceneCapture
             }
         }
         stopwatch.Stop();
-        SynchronizeDurationCaptureGpu();
+        SynchronizeCaptureGpu();
         var adaptiveDiagnostics = adaptiveInstrumentation ? manager.ReadAdaptiveDiagnosticsForCapture() : null;
         uint[] temporalRisDiagnostics = manager.ReadTemporalRisDiagnosticsForCapture();
         ulong retiredPaths = adaptiveInstrumentation
@@ -1473,7 +1527,7 @@ public static class RayTracingSceneCapture
             $"Reuse frames: {reuseFrames}, average {reuseMilliseconds / Math.Max(1, reuseFrames):0.000} ms\n" +
             "Phase fence timing (capture-only; includes GPU synchronization/readback overhead):\n" +
             $"Scheduler average: {schedulerMilliseconds / frames.Count:0.000} ms\n" +
-            $"Root trace average: {traceMilliseconds / frames.Count:0.000} ms\n" +
+            $"Full-screen adaptive trace average: {traceMilliseconds / frames.Count:0.000} ms\n" +
             $"Resolve average: {resolveMilliseconds / frames.Count:0.000} ms\n" +
             "See adaptive_frame_telemetry.csv for the synchronized per-frame sequence.\n";
         File.WriteAllText(Path.Combine(outputRoot, "adaptive_frame_telemetry.txt"), summary);
@@ -1607,7 +1661,7 @@ public static class RayTracingSceneCapture
         return new Color(0.0f, 0.0f, 0.25f);
     }
 
-    private static void SynchronizeDurationCaptureGpu()
+    private static void SynchronizeCaptureGpu()
     {
         // A synchronous RenderImage call can still leave Metal command buffers queued. A
         // readback request establishes a dependency on the presented capture target, and waiting
@@ -1616,7 +1670,7 @@ public static class RayTracingSceneCapture
         request.WaitForCompletion();
         if (request.hasError)
         {
-            throw new InvalidOperationException("GPU readback failed while synchronizing a duration capture.");
+            throw new InvalidOperationException("GPU readback failed while synchronizing a capture.");
         }
     }
 
@@ -1659,7 +1713,6 @@ public static class RayTracingSceneCapture
     private sealed class GroupDiagnostic
     {
         public float welfordScore;
-        public float dammertzScore;
         public float assignedPaths;
         public float cumulativeFinePaths;
         public float referenceError;
@@ -1695,7 +1748,7 @@ public static class RayTracingSceneCapture
     }
 
     private static void WriteGroupDiagnostics(string outputRoot, string variantName, CaptureResult result,
-        GameManager.AdaptivePriorityMode priorityMode, string referenceImagePath)
+        string referenceImagePath)
     {
         if (result.adaptiveDiagnostics == null) return;
         var reference = new Texture2D(2, 2, TextureFormat.RGB24, false);
@@ -1704,37 +1757,9 @@ public static class RayTracingSceneCapture
             if (!reference.LoadImage(File.ReadAllBytes(referenceImagePath), false))
                 throw new InvalidOperationException($"Could not read reference image '{referenceImagePath}'.");
             GroupDiagnostic[] groups = BuildGroupDiagnostics(result, LoadImagePixels(result.imagePath), reference.GetPixels());
-            WriteGroupDiagnosticReport(Path.Combine(outputRoot, $"{variantName}_group_diagnostics.json"), groups,
-                priorityMode == GameManager.AdaptivePriorityMode.WelfordStandardError ? "welfordScore" : "dammertzScore");
+            WriteGroupDiagnosticReport(Path.Combine(outputRoot, $"{variantName}_group_diagnostics.json"), groups, "welfordScore");
             WriteGroupDiagnosticCsv(Path.Combine(outputRoot, $"{variantName}_group_diagnostics.csv"), variantName,
                 groups, result.adaptiveDiagnostics.width, result.adaptiveDiagnostics.height);
-        }
-        finally
-        {
-            UnityEngine.Object.DestroyImmediate(reference);
-        }
-    }
-
-    private static void WriteGroupDiagnostics(string outputRoot, CaptureResult welford, CaptureResult dammertz,
-        string referenceImagePath)
-    {
-        if (welford.adaptiveDiagnostics == null || dammertz.adaptiveDiagnostics == null) return;
-        var reference = new Texture2D(2, 2, TextureFormat.RGB24, false);
-        try
-        {
-            if (!reference.LoadImage(File.ReadAllBytes(referenceImagePath), false))
-                throw new InvalidOperationException($"Could not read reference image '{referenceImagePath}'.");
-            Color[] referencePixels = reference.GetPixels();
-            Color[] welfordPixels = LoadImagePixels(welford.imagePath);
-            Color[] dammertzPixels = LoadImagePixels(dammertz.imagePath);
-            GroupDiagnostic[] welfordGroups = BuildGroupDiagnostics(welford, welfordPixels, referencePixels);
-            GroupDiagnostic[] dammertzGroups = BuildGroupDiagnostics(dammertz, dammertzPixels, referencePixels);
-            WriteGroupDiagnosticReport(Path.Combine(outputRoot, "adaptive_welford_group_diagnostics.json"), welfordGroups,
-                "welfordScore");
-            WriteGroupDiagnosticReport(Path.Combine(outputRoot, "adaptive_dammertz_group_diagnostics.json"), dammertzGroups,
-                "dammertzScore");
-            WriteGroupDiagnosticCsv(Path.Combine(outputRoot, "adaptive_group_diagnostics.csv"), welfordGroups,
-                dammertzGroups, welford.adaptiveDiagnostics.width, welford.adaptiveDiagnostics.height);
         }
         finally
         {
@@ -1754,7 +1779,7 @@ public static class RayTracingSceneCapture
         for (int groupX = 0; groupX < groupWidth; groupX++)
         {
             int groupIndex = groupX + groupY * groupWidth;
-            double welford = 0.0, dammertz = 0.0, errorSquared = 0.0, paths = 0.0, cumulativeFinePaths = 0.0, luminance = 0.0;
+            double welford = 0.0, errorSquared = 0.0, paths = 0.0, cumulativeFinePaths = 0.0, luminance = 0.0;
             int count = 0;
             for (int y = groupY * 8; y < Math.Min(data.height, groupY * 8 + 8); y++)
             for (int x = groupX * 8; x < Math.Min(data.width, groupX * 8 + 8); x++)
@@ -1762,18 +1787,11 @@ public static class RayTracingSceneCapture
                 int pixel = x + y * data.width;
                 Vector4 state = data.samplingState[pixel];
                 Vector4 m2 = data.samplingM2[pixel];
-                Vector4 alternating = data.alternatingState[pixel];
                 Vector4 accumulation = data.accumulation[pixel];
                 if (IsFinite(accumulation.x) && IsFinite(accumulation.y) && IsFinite(accumulation.z))
                     luminance += 0.2126 * accumulation.x + 0.7152 * accumulation.y + 0.0722 * accumulation.z;
                 if (IsFinite(state.x) && state.x > 1.0f && IsFinite(m2.x) && IsFinite(m2.y) && IsFinite(m2.z))
                     welford += Math.Sqrt(Math.Max(0.0, (m2.x + m2.y + m2.z) / (state.x * (state.x - 1.0f))));
-                if (alternating.w >= 2.0f && IsFinite(accumulation.x) && IsFinite(accumulation.y) && IsFinite(accumulation.z)
-                    && IsFinite(alternating.x) && IsFinite(alternating.y) && IsFinite(alternating.z))
-                {
-                    double dr = accumulation.x - alternating.x, dg = accumulation.y - alternating.y, db = accumulation.z - alternating.z;
-                    dammertz += Math.Sqrt((dr * dr + dg * dg + db * db) / 3.0);
-                }
                 Color candidate = candidatePixels[pixel].linear;
                 Color expected = referencePixels[pixel].linear;
                 float er = candidate.r - expected.r, eg = candidate.g - expected.g, eb = candidate.b - expected.b;
@@ -1785,7 +1803,6 @@ public static class RayTracingSceneCapture
             groups[groupIndex] = new GroupDiagnostic
             {
                 welfordScore = (float)(welford / Math.Max(1, count)),
-                dammertzScore = (float)(dammertz / Math.Max(1, count)),
                 assignedPaths = (float)paths,
                 cumulativeFinePaths = (float)(cumulativeFinePaths / Math.Max(1, count)),
                 referenceError = (float)Math.Sqrt(errorSquared / Math.Max(1, count)),
@@ -1818,7 +1835,7 @@ public static class RayTracingSceneCapture
         var cumulativeFinePaths = new float[groups.Length];
         for (int i = 0; i < groups.Length; i++)
         {
-            score[i] = scoreName == "welfordScore" ? groups[i].welfordScore : groups[i].dammertzScore;
+            score[i] = groups[i].welfordScore;
             error[i] = groups[i].referenceError;
             paths[i] = groups[i].assignedPaths;
             cumulativeFinePaths[i] = groups[i].cumulativeFinePaths;
@@ -1871,34 +1888,12 @@ public static class RayTracingSceneCapture
             unservedError / Math.Max(1, unservedGroups));
     }
 
-    private static void WriteGroupDiagnosticCsv(string path, GroupDiagnostic[] welfordGroups,
-        GroupDiagnostic[] dammertzGroups, int width, int height)
-    {
-        if (welfordGroups.Length != dammertzGroups.Length)
-            throw new InvalidOperationException("Adaptive group diagnostics have mismatched group counts.");
-
-        int groupWidth = Mathf.CeilToInt(width / 8.0f);
-        var lines = new List<string>(welfordGroups.Length * 2 + 1)
-        {
-            "variant,group_x,group_y,valid_pixel_count,welford_score,dammertz_score,current_assigned_paths,cumulative_fine_paths,mean_linear_luminance,reference_rgb_rmse"
-        };
-        for (int groupIndex = 0; groupIndex < welfordGroups.Length; groupIndex++)
-        {
-            int groupX = groupIndex % groupWidth;
-            int groupY = groupIndex / groupWidth;
-            int validPixels = Math.Min(8, width - groupX * 8) * Math.Min(8, height - groupY * 8);
-            AppendGroupDiagnosticCsvRow(lines, "adaptive_welford", groupX, groupY, validPixels, welfordGroups[groupIndex]);
-            AppendGroupDiagnosticCsvRow(lines, "adaptive_dammertz", groupX, groupY, validPixels, dammertzGroups[groupIndex]);
-        }
-        File.WriteAllLines(path, lines);
-    }
-
     private static void WriteGroupDiagnosticCsv(string path, string variantName, GroupDiagnostic[] groups, int width, int height)
     {
         int groupWidth = Mathf.CeilToInt(width / 8.0f);
         var lines = new List<string>(groups.Length + 1)
         {
-            "variant,group_x,group_y,valid_pixel_count,welford_score,dammertz_score,current_assigned_paths,cumulative_fine_paths,mean_linear_luminance,reference_rgb_rmse"
+            "variant,group_x,group_y,valid_pixel_count,welford_score,current_assigned_paths,cumulative_fine_paths,mean_linear_luminance,reference_rgb_rmse"
         };
         for (int groupIndex = 0; groupIndex < groups.Length; groupIndex++)
         {
@@ -1920,24 +1915,11 @@ public static class RayTracingSceneCapture
             groupY.ToString(CultureInfo.InvariantCulture),
             validPixels.ToString(CultureInfo.InvariantCulture),
             group.welfordScore.ToString("R", CultureInfo.InvariantCulture),
-            group.dammertzScore.ToString("R", CultureInfo.InvariantCulture),
             group.assignedPaths.ToString("R", CultureInfo.InvariantCulture),
             group.cumulativeFinePaths.ToString("R", CultureInfo.InvariantCulture),
             group.meanLuminance.ToString("R", CultureInfo.InvariantCulture),
             group.referenceError.ToString("R", CultureInfo.InvariantCulture)
         }));
-    }
-
-    private static double Spearman(GroupDiagnostic[] groups, string scoreName)
-    {
-        int count = groups.Length;
-        if (count < 2) return 0.0;
-        var score = new float[count]; var error = new float[count];
-        for (int i = 0; i < count; i++) { score[i] = scoreName == "welfordScore" ? groups[i].welfordScore : groups[i].dammertzScore; error[i] = groups[i].referenceError; }
-        float[] scoreRanks = Ranks(score); float[] errorRanks = Ranks(error);
-        double meanScore = Mean(scoreRanks), meanError = Mean(errorRanks), numerator = 0.0, scoreVariance = 0.0, errorVariance = 0.0;
-        for (int i = 0; i < count; i++) { double a = scoreRanks[i] - meanScore, b = errorRanks[i] - meanError; numerator += a * b; scoreVariance += a * a; errorVariance += b * b; }
-        return scoreVariance > 0.0 && errorVariance > 0.0 ? numerator / Math.Sqrt(scoreVariance * errorVariance) : 0.0;
     }
 
     private static double Spearman(float[] first, float[] second)
@@ -1969,16 +1951,14 @@ public static class RayTracingSceneCapture
         return ranks;
     }
 
-    private static void WriteThreeWayComparisonSummary(string outputRoot, CaptureResult off, CaptureResult welford,
-        CaptureResult dammertz, bool skippedOff, bool runWelford, bool runDammertz)
+    private static void WriteAdaptiveComparisonSummary(string outputRoot, CaptureResult off, CaptureResult welford,
+        bool skippedOff)
     {
-        File.WriteAllText(Path.Combine(outputRoot, "adaptive_three_way_comparison.json"), "{\n" +
+        File.WriteAllText(Path.Combine(outputRoot, "adaptive_comparison.json"), "{\n" +
             $"  \"adaptiveOffRetiredPaths\": {(skippedOff ? "null" : off.retiredPaths.ToString())},\n" +
-            $"  \"adaptiveWelfordRetiredPaths\": {(runWelford ? welford.retiredPaths.ToString() : "null")},\n" +
-            $"  \"adaptiveDammertzRetiredPaths\": {(runDammertz ? dammertz.retiredPaths.ToString() : "null")},\n" +
+            $"  \"adaptiveWelfordRetiredPaths\": {welford.retiredPaths},\n" +
             $"  \"adaptiveOffMilliseconds\": {(skippedOff ? "null" : off.totalMilliseconds.ToString("R"))},\n" +
-            $"  \"adaptiveWelfordMilliseconds\": {(runWelford ? welford.totalMilliseconds.ToString("R", CultureInfo.InvariantCulture) : "null")},\n" +
-            $"  \"adaptiveDammertzMilliseconds\": {(runDammertz ? dammertz.totalMilliseconds.ToString("R", CultureInfo.InvariantCulture) : "null")}\n" + "}\n");
+            $"  \"adaptiveWelfordMilliseconds\": {welford.totalMilliseconds.ToString("R", CultureInfo.InvariantCulture)}\n" + "}\n");
     }
 
     private readonly struct VariantComparisonMetrics
@@ -2008,8 +1988,7 @@ public static class RayTracingSceneCapture
     }
 
     private static void WriteVariantComparisonCsv(string outputRoot, CaptureResult adaptiveOff,
-        CaptureResult adaptiveWelford, CaptureResult adaptiveDammertz, bool runWelford, bool runDammertz,
-        bool skippedOff, string referencePath,
+        CaptureResult adaptiveWelford, bool skippedOff, string referencePath,
         ReferenceMetadata reference)
     {
         Directory.CreateDirectory(outputRoot);
@@ -2025,9 +2004,7 @@ public static class RayTracingSceneCapture
         {
             lines.Add(BuildVariantComparisonCsvRow("adaptive_off", "off", adaptiveOff, referencePath, reference));
         }
-        if (runWelford) lines.Add(BuildVariantComparisonCsvRow("adaptive_welford", "WelfordStandardError", adaptiveWelford,
-            referencePath, reference));
-        if (runDammertz) lines.Add(BuildVariantComparisonCsvRow("adaptive_dammertz", "DammertzSplitEstimator", adaptiveDammertz,
+        lines.Add(BuildVariantComparisonCsvRow("adaptive_welford", "WelfordStandardError", adaptiveWelford,
             referencePath, reference));
         File.WriteAllLines(Path.Combine(outputRoot, "adaptive_variant_comparison.csv"), lines);
     }
@@ -2086,7 +2063,7 @@ public static class RayTracingSceneCapture
         imagePath = GetReferenceImagePath(scenePath, referenceRoot, ReferenceWidth, ReferenceHeight, ReferenceDurationSeconds);
         CaptureResult result = CaptureVariant(manager, sceneName, Path.GetDirectoryName(imagePath), Path.GetFileNameWithoutExtension(imagePath),
             0, ReferenceWidth, ReferenceHeight, ReferenceDurationSeconds, DebugRenderMode.FinalColor,
-            false, GameManager.AdaptivePriorityMode.WelfordStandardError, false, false);
+            false, false, false);
         if (result.imagePath != imagePath)
         {
             if (File.Exists(imagePath))
@@ -2280,6 +2257,20 @@ public static class RayTracingSceneCapture
         ReferenceMetadata reference)
     {
         VariantComparisonMetrics metrics = CalculateReferenceMetrics(result.imagePath, referencePath);
+        WriteReferenceMetrics(outputRoot, label, referencePath, reference, metrics,
+            result.measuredFrames, result.retiredPaths, result.totalMilliseconds);
+    }
+
+    private static void WritePostProcessedReferenceMetrics(string outputRoot, string label, string referencePath,
+        ReferenceMetadata reference, VariantComparisonMetrics metrics)
+    {
+        WriteReferenceMetrics(outputRoot, label, referencePath, reference, metrics, 0, 0u, 0.0);
+    }
+
+    private static void WriteReferenceMetrics(string outputRoot, string label, string referencePath,
+        ReferenceMetadata reference, VariantComparisonMetrics metrics, int measuredFrames, ulong retiredPaths,
+        double totalMilliseconds)
+    {
         string report = "{\n" +
             $"  \"referenceImage\": \"{referencePath}\",\n" +
             $"  \"referenceSha256\": \"{reference.imageSha256}\",\n" +
@@ -2291,9 +2282,9 @@ public static class RayTracingSceneCapture
             $"  \"luminanceRootMeanSquaredError\": {metrics.luminanceRootMeanSquaredError:R},\n" +
             $"  \"luminanceMeanRelativeAbsoluteError\": {metrics.luminanceMeanRelativeAbsoluteError:R},\n" +
             $"  \"luminanceFractionAbove0_01\": {metrics.luminanceFractionAbove0_01:R},\n" +
-            $"  \"measuredFrames\": {result.measuredFrames},\n" +
-            $"  \"cumulativeRetiredPaths\": {result.retiredPaths},\n" +
-            $"  \"totalMeasuredRenderMilliseconds\": {result.totalMilliseconds:R}\n" +
+            $"  \"measuredFrames\": {measuredFrames},\n" +
+            $"  \"cumulativeRetiredPaths\": {retiredPaths},\n" +
+            $"  \"totalMeasuredRenderMilliseconds\": {totalMilliseconds:R}\n" +
             "}\n";
         File.WriteAllText(Path.Combine(outputRoot, label + ".metrics.json"), report);
     }
@@ -3121,7 +3112,6 @@ public static class RayTracingSceneCapture
                 out float? guidanceChangeThreshold)
             || !TryGetOptionalIntegerArgument("-rayTracingAdaptiveGuidanceMaxUpdates", 1, 8,
                 out int? guidanceMaxUpdates)
-            || !TryGetAdaptivePriorityModeArgument(out GameManager.AdaptivePriorityMode? priorityMode)
             || !TryGetOptionalFloatArgument("-rayTracingAdaptiveNormalizePriorityByLuminance", 0.0f, 1.0f, out float? normalizePriorityByLuminance)
             || !TryGetOptionalIntegerArgument("-rayTracingAdaptiveReclassificationInterval", 1, 8, out int? reclassificationInterval)
             || !TryGetOptionalFloatArgument("-rayTracingAdaptiveHighestBucketSampleRate", 1.0f, 8.0f, out float? highestBucketSampleRate)
@@ -3129,65 +3119,19 @@ public static class RayTracingSceneCapture
             || !TryGetOptionalIntegerArgument("-rayTracingAdaptiveBootstrapFrames", 1, 512, out int? bootstrapFrames)
             || !TryGetOptionalFloatArgument("-rayTracingAdaptiveBootstrapResolutionScale", 0.10f, 0.75f, out float? bootstrapResolutionScale)
             || !TryGetOptionalIntegerArgument("-rayTracingAdaptiveGuidanceHistoryFrames", 0, 64, out int? guidanceHistoryFrames)
-            || !TryGetOptionalIntegerArgument("-rayTracingAdaptiveBootstrapGroupDivisor", 4, 16, out int? bootstrapGroupDivisor))
+            || !TryGetOptionalIntegerArgument("-rayTracingAdaptiveBootstrapGroupDivisor", 1, 16, out int? bootstrapGroupDivisor)
+            || !TryGetOptionalBooleanArgument("-rayTracingEnableAdaptiveBootstrap", out bool? enableBootstrap))
         {
             return false;
         }
 
         overrides = new AdaptiveSamplingOverrides(minSamples, guidanceChangeThreshold, guidanceMaxUpdates,
-            priorityMode, normalizePriorityByLuminance, reclassificationInterval, highestBucketSampleRate,
+            normalizePriorityByLuminance, reclassificationInterval, highestBucketSampleRate,
             maxPathsPerPixel, bootstrapFrames, bootstrapResolutionScale, guidanceHistoryFrames,
-            bootstrapGroupDivisor);
+            bootstrapGroupDivisor, enableBootstrap);
         return true;
     }
 
-    private static bool TryGetAdaptivePriorityModeArgument(out GameManager.AdaptivePriorityMode? value)
-    {
-        const string argumentName = "-rayTracingAdaptivePriorityMode";
-        string argument = GetCommandLineArgument(argumentName);
-        value = null;
-        if (argument == null)
-        {
-            return true;
-        }
-
-        if (Enum.TryParse(argument, true, out GameManager.AdaptivePriorityMode parsedValue)
-            && Enum.IsDefined(typeof(GameManager.AdaptivePriorityMode), parsedValue))
-        {
-            value = parsedValue;
-            return true;
-        }
-
-        ReportCommandLineError($"Scene capture argument {argumentName} must be WelfordStandardError or DammertzSplitEstimator; received '{argument}'.");
-        return false;
-    }
-
-    private static bool TryGetAdaptiveComparisonType(out GameManager.AdaptivePriorityMode? value)
-    {
-        const string argumentName = "-rayTracingAdaptiveType";
-        string argument = GetCommandLineArgument(argumentName);
-        value = null;
-        if (argument == null)
-        {
-            return true;
-        }
-
-        if (string.Equals(argument, "welford", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(argument, "WelfordStandardError", StringComparison.OrdinalIgnoreCase))
-        {
-            value = GameManager.AdaptivePriorityMode.WelfordStandardError;
-            return true;
-        }
-        if (string.Equals(argument, "dammertz", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(argument, "DammertzSplitEstimator", StringComparison.OrdinalIgnoreCase))
-        {
-            value = GameManager.AdaptivePriorityMode.DammertzSplitEstimator;
-            return true;
-        }
-
-        ReportCommandLineError($"Scene capture argument {argumentName} must be welford or dammertz; received '{argument}'.");
-        return false;
-    }
 
     private static bool TryGetOptionalIntegerArgument(string name, int minimum, int maximum, out int? value)
     {
@@ -3252,7 +3196,6 @@ public static class RayTracingSceneCapture
             manager.adaptiveGuidanceChangeThreshold = overrides.guidanceChangeThreshold.Value;
         if (overrides.guidanceMaxUpdates.HasValue)
             manager.adaptiveGuidanceMaxUpdates = overrides.guidanceMaxUpdates.Value;
-        if (overrides.priorityMode.HasValue) manager.adaptivePriorityMode = overrides.priorityMode.Value;
         if (overrides.normalizePriorityByLuminance.HasValue)
             manager.adaptiveNormalizePriorityByLuminance = overrides.normalizePriorityByLuminance.Value;
         if (overrides.reclassificationInterval.HasValue) manager.adaptiveReclassificationInterval = overrides.reclassificationInterval.Value;
@@ -3265,6 +3208,8 @@ public static class RayTracingSceneCapture
             manager.adaptiveGuidanceHistoryFrames = overrides.guidanceHistoryFrames.Value;
         if (overrides.bootstrapGroupDivisor.HasValue)
             manager.adaptiveBootstrapGroupDivisor = overrides.bootstrapGroupDivisor.Value;
+        if (overrides.enableBootstrap.HasValue)
+            manager.enableAdaptiveBootstrap = overrides.enableBootstrap.Value;
     }
 
     private static void ExitBatchMode(int exitCode)

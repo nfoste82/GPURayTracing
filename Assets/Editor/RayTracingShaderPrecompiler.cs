@@ -59,9 +59,9 @@ public static class RayTracingShaderPrecompiler
     private static readonly ShaderAsset AdaptiveTrace = new ShaderAsset("Adaptive Trace", AdaptiveTraceShaderPath, VariantSet.FogTerrain,
         "CSAdaptiveTrace", "CSAdaptiveTraceReference");
     private static readonly ShaderAsset AdaptiveScheduler = new ShaderAsset("Adaptive Scheduler", AdaptiveSchedulerShaderPath, VariantSet.None,
-         "ClearAdaptiveSamplingState", "ClearAdaptiveGroupState", "ClearAdaptiveScheduler", "ClearAdaptiveWorkList",
-         "ClearAdaptiveFrameMetadata", "RecordAdaptiveRetiredPaths", "CSAdaptiveClassifyGroups", "CSAdaptiveApplyBucketRemap",
-        "CSAdaptiveCompactGroupWorkList", "CSBuildAdaptiveDispatchArgs", "CSAdaptiveDiagnostics");
+          "ClearAdaptiveSamplingState", "ClearAdaptiveGroupState", "ClearAdaptiveScheduler", "ClearAdaptiveAllocationMetadata",
+          "ClearAdaptiveFrameMetadata", "RecordAdaptiveRetiredPaths", "CSAdaptiveClassifyGroups", "CSAdaptiveApplyBucketRemap",
+         "CSAdaptiveDiagnostics");
     private static readonly ShaderAsset Utility = new ShaderAsset("Utility", UtilityShaderPath, VariantSet.None,
         "ClearAccumulation", "UpscaleAdaptiveBootstrap", "SeedAdaptiveBootstrap", "ComposeAdaptiveBootstrap");
     private static readonly ShaderAsset Features = new ShaderAsset("Features", FeaturesShaderPath, VariantSet.FogTerrain, "CSFeatures");
@@ -297,8 +297,9 @@ public static class RayTracingShaderPrecompiler
         shader.SetInt("_CausticsEnabled", 0); shader.SetInt("_EnvironmentLightEnabled", 0); shader.SetInt("_NumLights", 0);
         shader.SetInt("_NumberOfPasses", 1); shader.SetInt("_NumBounces", 1); shader.SetInt("_AccumulatedFrameCount", 1);
         shader.SetInt("_SampleOffset", 0); shader.SetInt("_AdaptiveBucketCount", 16); shader.SetInt("_AdaptiveGroupWidth", 1);
-        shader.SetInt("_AdaptiveGroupHeight", 1); shader.SetInt("_AdaptiveGroupCount", 1); shader.SetInt("_AdaptiveWorkListCapacity", 1);
-            shader.SetInt("_AdaptiveSamplingMinSamples", 1); shader.SetInt("_AdaptiveMaxPathsPerPixel", 1);
+        shader.SetInt("_AdaptiveGroupHeight", 1); shader.SetInt("_AdaptiveGroupCount", 1);
+        shader.SetInt("_AdaptiveSamplingMinSamples", 1); shader.SetInt("_AdaptiveMaxPathsPerPixel", 1);
+        shader.SetInt("_AdaptiveSampleLayer", 0);
         shader.SetVector("_FogBoundsMin", Vector3.zero); shader.SetVector("_FogBoundsMax", Vector3.one); shader.SetVector("_TerrainSize", Vector3.one);
         shader.SetTexture(kernel, "Result", r.Color); shader.SetTexture(kernel, "AccumulationResult", r.Color); shader.SetTexture(kernel, "Beauty", r.Color);
         shader.SetTexture(kernel, "FeatureNormal", r.Color); shader.SetTexture(kernel, "FeatureAlbedo", r.Color); shader.SetTexture(kernel, "FeatureDepth", r.Scalar);
@@ -328,11 +329,10 @@ public static class RayTracingShaderPrecompiler
         private readonly ComputeBuffer causticPhotonBuffer = new ComputeBuffer(1, 36);
         private readonly ComputeBuffer terrainCellBuffer = new ComputeBuffer(1, 8);
         private readonly ComputeBuffer float4Buffer = new ComputeBuffer(64, 16);
-        private readonly ComputeBuffer uint2Buffer = new ComputeBuffer(64, 8);
         private readonly ComputeBuffer uintBuffer = new ComputeBuffer(64, 4);
         public readonly string[] FloatBufferNames = { "_EnvironmentConditionalCdf", "_EnvironmentMarginalCdf", "_MeshLightTriangleCdf", "_CausticPhotonMetadata", "_CausticGridCellHeads", "_CausticPhotonNext", "_TerrainHeights" };
         public readonly string[] StructuredBufferNames = { "_Spheres", "_Lights", "_Triangles", "_Meshes", "_BvhNodes", "_TopLevelBvhNodes", "_ShadowBvhNodes", "_CausticPhotons", "_TerrainCells", "_SobolDirectionNumbers", "RegressionResults", "_FocusQueryResult" };
-        public readonly string[] AdaptiveBufferNames = { "AdaptiveWorkList", "AdaptiveTraceWorkList", "AdaptiveGroupState", "AdaptiveGroupInfo", "AdaptiveProbeGroups", "AdaptiveGroupBucket", "AdaptiveGroupExtraDemand", "AdaptiveRawBucketDemand", "AdaptiveWorkListMetadata", "AdaptiveDispatchArgs" };
+        public readonly string[] AdaptiveBufferNames = { "AdaptiveGroupState", "AdaptiveGroupInfo", "AdaptiveProbeGroups", "AdaptiveGroupBucket", "AdaptiveGroupExtraDemand", "AdaptiveRawBucketDemand", "AdaptiveWorkListMetadata" };
 
         public DummyResources()
         {
@@ -362,8 +362,6 @@ public static class RayTracingShaderPrecompiler
         {
             switch (name)
             {
-                case "AdaptiveWorkList":
-                case "AdaptiveTraceWorkList": return uint2Buffer;
                 case "AdaptiveGroupState":
                 case "AdaptiveGroupInfo":
                 case "AdaptiveProbeGroups": return float4Buffer;
@@ -385,7 +383,7 @@ public static class RayTracingShaderPrecompiler
         {
             FloatBuffer.Release(); sphereBuffer.Release(); lightBuffer.Release(); triangleBuffer.Release();
             meshAndBvhBuffer.Release(); causticPhotonBuffer.Release(); terrainCellBuffer.Release();
-            float4Buffer.Release(); uint2Buffer.Release(); uintBuffer.Release(); Color.Release(); Scalar.Release();
+            float4Buffer.Release(); uintBuffer.Release(); Color.Release(); Scalar.Release();
             Object.DestroyImmediate(TextureArray); Object.DestroyImmediate(Color); Object.DestroyImmediate(Scalar);
         }
 
