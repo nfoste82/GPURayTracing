@@ -1,6 +1,6 @@
 # Path Tracing using Compute Shaders
 3D path-tracer running in a GPU compute shader in Unity, it does **not** require RT hardware (DXR/RT cores) or CUDA.
-Full disclosure that LLMs were used to assist during the later work on this project.
+Full disclosure that LLMs were used to assist during the later work on this project. This is a solo hobby project, not really intended for commericial use as there are better alternatives out there, like LuxRender.
 
 ## Features:
 * GPU compute-shader path tracing for spheres and triangle meshes
@@ -13,7 +13,6 @@ Full disclosure that LLMs were used to assist during the later work on this proj
 * Animated procedural water with reflection, refraction, caustics, and underwater RGB absorption
 * Depth of field, variable camera aperture, different aperture types, ability to focus on a point in the scene even while camera is in motion
 * Frame accumulation, debug views, and example scenes
-* Volumetric fog (homogeneous fog)
 * Spatial denoising (basic hand-rolled, not machine-learned denoising)
 * ACES filmic tone mapping with configurable exposure and optional firefly luminance clamping
 * Normal and parallax mapping
@@ -21,9 +20,11 @@ Full disclosure that LLMs were used to assist during the later work on this proj
 * Support for Unity terrains with multi-texture splatting
 
 ## Experimental/Incomplete features:
-* Temporal denoising (experimental)
-* Adaptive sampling (experimental)
-* Spatial and temporal RIS (experimental)
+* Temporal denoising
+* Adaptive sampling
+* Spatial and temporal RIS
+* Homogenious fog
+* Terrain
 
 ## Missing, future considerations:
 * Spectral refractions (different wavelengths of light refract differently), current lighting system does not handle wavelengths
@@ -35,6 +36,9 @@ Full disclosure that LLMs were used to assist during the later work on this proj
 Depending on the scene and quality, and your hardware, your frame rate may vary by quite a bit. Real-time can look decent on the right hardware with the right scene and settings. Some features like water, caustics, or large polygonal meshes are too expensive to look good in real-time currently.
 
 Project has only been tested for MacOS, but all code should be OS-agnostic, so if it works in Unity then you should be able to run it.
+
+### High poly scenes with various materials
+[![Sponza](ExampleImages/sponza.png)](ExampleImages/sponza.png)
 
 ### Caustics
 [![Caustics](ExampleImages/caustics.png)](ExampleImages/caustics.png)
