@@ -75,7 +75,8 @@ public sealed class GameManagerEditor : Editor
                 DrawProperty("adaptiveSamplingMinSamples", "Minimum Fine Samples");
                 if (manager.enableAdaptiveBootstrap)
                     DrawProperty("adaptiveBootstrapGroupDivisor", "Fine Bootstrap Group Batches");
-                DrawProperty("adaptiveNormalizePriorityByLuminance", "Luminance Priority Normalization Strength");
+                DrawProperty("adaptiveLuminanceErrorWeight", "Luminance Error Weight");
+                DrawProperty("adaptiveSpatialDisagreementPriority", "Early Spatial Disagreement Priority");
                 DrawProperty("adaptiveReclassificationInterval", "Reclassification Interval");
                 DrawProperty("adaptiveHighestBucketSampleRate", "Highest Bucket Sample Rate");
                 DrawProperty("adaptiveMaxPathsPerPixel", "Max Paths Per Pixel");

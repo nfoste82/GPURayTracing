@@ -300,6 +300,7 @@ public static class RayTracingShaderPrecompiler
         shader.SetInt("_AdaptiveGroupHeight", 1); shader.SetInt("_AdaptiveGroupCount", 1);
         shader.SetInt("_AdaptiveSamplingMinSamples", 1); shader.SetInt("_AdaptiveMaxPathsPerPixel", 1);
         shader.SetInt("_AdaptiveSampleLayer", 0);
+        shader.SetFloat("_AdaptiveSpatialDisagreementPriority", 0.0f);
         shader.SetVector("_FogBoundsMin", Vector3.zero); shader.SetVector("_FogBoundsMax", Vector3.one); shader.SetVector("_TerrainSize", Vector3.one);
         shader.SetTexture(kernel, "Result", r.Color); shader.SetTexture(kernel, "AccumulationResult", r.Color); shader.SetTexture(kernel, "Beauty", r.Color);
         shader.SetTexture(kernel, "FeatureNormal", r.Color); shader.SetTexture(kernel, "FeatureAlbedo", r.Color); shader.SetTexture(kernel, "FeatureDepth", r.Scalar);

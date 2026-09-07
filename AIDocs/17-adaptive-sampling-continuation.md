@@ -239,7 +239,7 @@ enableAdaptiveSampling                 default false
 adaptiveSamplingMinSamples             default 8; also the coarse-guide minimum path history
 adaptiveGuidanceChangeThreshold        default 0.02; relative coarse-mean stability required for handoff
 adaptiveGuidanceHistoryFrames           default 0; retained 64-ray coarse-guide updates seeded into each fine pixel
-adaptiveNormalizePriorityByLuminance   default 0.0
+adaptiveLuminanceErrorWeight            default 0.0
 ```
 
 When a group promotes, the scheduler grants it at least one normal full-resolution update before

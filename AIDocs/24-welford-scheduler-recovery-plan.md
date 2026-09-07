@@ -386,7 +386,7 @@ RMSE. Do not claim a win from extra unaccounted bootstrap work.
 
 ## Next Action
 
-Preserve `adaptiveNormalizePriorityByLuminance = 1` as the validated score calibration and use the
+Preserve `adaptiveLuminanceErrorWeight = -1` as the validated score calibration and use the
 guarded full-screen adaptive trace as the sole production route. The 1024x1024 TeapotMaterials
 compact-versus-guarded experiments used identical scheduler settings and rotated variant order:
 

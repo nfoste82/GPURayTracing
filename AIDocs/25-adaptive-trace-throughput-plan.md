@@ -20,7 +20,7 @@ adaptive overhead to approximately 20 percent while preserving the validated all
 ## Retained Policy
 
 ```text
-adaptiveNormalizePriorityByLuminance = 1
+adaptiveLuminanceErrorWeight = -1
 Welford standard-error group score
 8x8 allocation groups
 sampleIndex = oldPixelPathCount + localSample
@@ -34,6 +34,52 @@ state kept unnecessary values live through adaptive tracing. Capture comparison 
 single Welford adaptive candidate against adaptive-off.
 
 ## Current Implementation
+
+### Early Spatial-Disagreement Priority Experiment
+
+The scheduler now exposes `adaptiveSpatialDisagreementPriority`, defaulting to zero. When enabled,
+an established 8x8 group receives an additive early-priority bonus from the RGB RMS disagreement of
+its accumulated pixel means around their group mean. This is deliberately not a noise estimate:
+edges, textures, and material boundaries can also raise it. The bonus is luminance-normalized with
+the established score policy and decays as `min(1, minSamples / averageGroupSpp)`, so persistent
+scene contrast becomes negligible as the group accumulates samples. Bootstrap groups remain under
+the existing count-driven path and strength zero retains the prior Welford-only score.
+
+`Assets/Editor/RayTracingExperiments/teapotmaterials_spatial_disagreement_priority_1024_120f.json`
+provides adaptive-off context, a zero-strength adaptive control, and `0.25`/`0.5` candidates. It
+uses the normalized Welford policy, fixed 8x8 groups, `H=1.7`, and no low-resolution bootstrap.
+Its timed pass disables per-frame adaptive instrumentation to avoid capture timing distortion while
+retaining final images, reference metrics, and difference comparisons. Run a separate instrumented
+accounting/diagnostic smoke before treating a candidate's timing or image result as valid. Accept a
+candidate only after exact accounting and equal-path RGB RMSE improve over the zero-strength control;
+then repeat the selected strength across rotated three-seed captures.
+
+### Macrotile Dispatch Experiment Rejected
+
+A same-frame macrotile trace experiment was implemented temporarily to preserve the full scheduler
+and estimator while submitting contiguous regions in tile-outer/layer-inner order. It passed focused
+GPU parity: full-screen and tiled routes had matching RGB accumulation, Welford state, beauty, and
+exact retired paths. It was then removed because two fixed-frame `1024x1024` TeapotMaterials runs,
+with reversed variant order and 30-second cooldowns, rejected it decisively:
+
+```text
+candidate                 run 1 ms/frame   run 2 ms/frame   mean     versus fullscreen
+fullscreen layered              1556.0           1469.4     1512.7        baseline
+4x4 macrotiles                  1733.4           2023.1     1878.2        24.2% slower
+8x8 macrotiles                  2793.4           2842.4     2817.9        86.3% slower
+```
+
+All adaptive candidates retired `125,777,152` paths and produced the same reported final RGB RMSE
+(`~0.007278523`), so this is a throughput rejection rather than an allocation or correctness
+failure. Scheduler fences remained broadly comparable while trace time increased sharply. With the
+validated `H=1.7` policy, fullscreen uses two trace dispatches per frame; the candidates submitted
+32 (`4x4`) or 128 (`8x8`) rectangles. The CPU/driver submission and smaller-dispatch cost outweighs
+any locality benefit on this backend.
+
+Do not reintroduce CPU-submitted full-coverage macrotiles. Keep the fullscreen layered trace as the
+production route. Revisit spatial work compaction only if service breadth becomes much lower than
+the current roughly 86%, and only as a separate GPU-generated active-tile/indirect-dispatch
+experiment with its own accounting and parity gates.
 
 Low-resolution bootstrap is now opt-in (`enableAdaptiveBootstrap = false` by default). The default
 adaptive path begins with the same full-resolution first frame as `CSMain`; enable bootstrap only

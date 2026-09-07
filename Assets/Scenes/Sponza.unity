@@ -238,9 +238,10 @@ MonoBehaviour:
   enableAdaptiveSampling: 1
   recordEditorRun: 0
   adaptiveSamplingMinSamples: 2
-  adaptiveNormalizePriorityByLuminance: 0
+  adaptiveLuminanceErrorWeight: -2
+  adaptiveSpatialDisagreementPriority: 4
   adaptiveReclassificationInterval: 4
-  adaptiveHighestBucketSampleRate: 1.7
+  adaptiveHighestBucketSampleRate: 3
   adaptiveMaxPathsPerPixel: 3
   enableAdaptiveBootstrap: 0
   adaptiveBootstrapGroupDivisor: 16

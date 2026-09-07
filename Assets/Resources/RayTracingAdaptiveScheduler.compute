@@ -41,6 +41,8 @@ void ClearAdaptiveScheduler(uint3 id : SV_DispatchThreadID)
 }
 
 groupshared float AdaptiveGroupScore[64];
+groupshared float3 AdaptiveGroupAccumulation[64];
+groupshared float AdaptiveGroupPathCount[64];
 groupshared uint AdaptiveGroupSamples[64];
 groupshared uint AdaptiveGroupBootstrap[64];
 groupshared uint AdaptiveGroupSeedHistory;
@@ -177,13 +179,21 @@ void CSAdaptiveClassifyGroups(uint3 id : SV_DispatchThreadID, uint groupIndex : 
         float3 m2 = max(0.0f, AdaptiveSamplingM2[pixel].rgb);
         score = count > 1.0f ? sqrt(max(0.0f, (m2.x + m2.y + m2.z) / (count * (count - 1.0f)))) : 1.0f;
         bootstrap = count < (float)max(1, _AdaptiveSamplingMinSamples);
-        // Blend between absolute-RGB priority and the existing luminance-normalized correction.
-        // The floor prevents dark-noise spikes when the correction is enabled.
+        // A signed exponent controls the error objective without allowing near-black pixels to
+        // dominate: negative values weight relative error, positive values weight bright areas.
         float luminance = dot(max(0.0f, AccumulationResult[pixel].rgb), float3(0.2126f, 0.7152f, 0.0722f));
-        float normalizedScore = score * (0.2f + 0.8f / max(0.25f, luminance));
-        score = lerp(score, normalizedScore, saturate(_AdaptiveNormalizePriorityByLuminance));
+        float luminanceWeight = pow(max(0.25f, luminance), _AdaptiveLuminanceErrorWeight);
+        score *= luminanceWeight;
         if (_UseAdaptiveBootstrapPriority != 0 && !bootstrap) score = max(score, bootstrapPriority);
         score = isfinite(score) ? score : 0.0f;
+        AdaptiveGroupAccumulation[groupIndex] = all(isfinite(AccumulationResult[pixel].rgb))
+            ? AccumulationResult[pixel].rgb : 0.0f;
+        AdaptiveGroupPathCount[groupIndex] = isfinite(count) ? max(0.0f, count) : 0.0f;
+    }
+    else
+    {
+        AdaptiveGroupAccumulation[groupIndex] = 0.0f;
+        AdaptiveGroupPathCount[groupIndex] = 0.0f;
     }
     AdaptiveGroupScore[groupIndex] = score;
     AdaptiveGroupSamples[groupIndex] = valid ? 1u : 0u;
@@ -194,11 +204,15 @@ void CSAdaptiveClassifyGroups(uint3 id : SV_DispatchThreadID, uint groupIndex : 
 
     uint validPixels = 0u;
     float scoreSum = 0.0f;
+    float3 accumulationSum = 0.0f;
+    float pathCountSum = 0.0f;
     bool groupBootstrap = false;
     [unroll] for (uint reductionLane = 0u; reductionLane < 64u; reductionLane++)
     {
         validPixels += AdaptiveGroupSamples[reductionLane];
         scoreSum += AdaptiveGroupScore[reductionLane];
+        accumulationSum += AdaptiveGroupAccumulation[reductionLane];
+        pathCountSum += AdaptiveGroupPathCount[reductionLane];
         groupBootstrap = groupBootstrap || AdaptiveGroupBootstrap[reductionLane] != 0u;
     }
 
@@ -208,6 +222,29 @@ void CSAdaptiveClassifyGroups(uint3 id : SV_DispatchThreadID, uint groupIndex : 
     if (!groupBootstrap)
     {
         float meanScore = scoreSum / max(1u, validPixels);
+        // Spatial disagreement is a short-lived priority prior, not a noise estimate. It gives
+        // early attention to uncertain groups but decays even when persistent scene contrast remains.
+        if (_AdaptiveSpatialDisagreementPriority > 0.0f)
+        {
+            float3 meanAccumulation = accumulationSum / max(1u, validPixels);
+            float disagreementSquaredSum = 0.0f;
+            [unroll] for (uint reductionLane = 0u; reductionLane < 64u; reductionLane++)
+            {
+                if (AdaptiveGroupSamples[reductionLane] == 0u) continue;
+                float3 difference = AdaptiveGroupAccumulation[reductionLane] - meanAccumulation;
+                disagreementSquaredSum += dot(difference, difference);
+            }
+            float spatialDisagreement = sqrt(max(0.0f,
+                disagreementSquaredSum / (3.0f * max(1u, validPixels))));
+            float meanLuminance = dot(max(0.0f, meanAccumulation), float3(0.2126f, 0.7152f, 0.0722f));
+            float luminanceWeight = pow(max(0.25f, meanLuminance), _AdaptiveLuminanceErrorWeight);
+            float normalizedDisagreement = spatialDisagreement * luminanceWeight;
+            float averageSpp = pathCountSum / max(1u, validPixels);
+            float decay = min(1.0f, (float)max(1, _AdaptiveSamplingMinSamples) / max(1.0f, averageSpp));
+            float spatialBonus = _AdaptiveSpatialDisagreementPriority * normalizedDisagreement * decay;
+            meanScore += isfinite(spatialBonus) ? spatialBonus : 0.0f;
+        }
+        meanScore = isfinite(meanScore) ? meanScore : 0.0f;
         uint priorityBucketCount = max(1u, _AdaptiveBucketCount - 1u);
         bucket = min(priorityBucketCount - 1u,
             (uint)floor(log2(1.0f + meanScore * 4096.0f) * priorityBucketCount / 15.0f));

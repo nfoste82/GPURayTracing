@@ -126,7 +126,7 @@ public class GameManager : MonoBehaviour
     public int samplingSeed = 1;
 
     [Tooltip("Redistributes a fixed image-wide full-resolution path budget using group uncertainty. It never automatically stops rendering.")]
-    public bool enableAdaptiveSampling = false;
+    public bool enableAdaptiveSampling = true;
 
     [Tooltip("Records per-frame reference PSNR/RMSE and the final render to TestCaptures/EditorRuns when Play mode ends. The Adaptive Allocation Monitor must be open.")]
     public bool recordEditorRun = false;
@@ -134,13 +134,16 @@ public class GameManager : MonoBehaviour
     [Range(1, 64), Tooltip("Full-resolution paths per pixel before variance-driven adaptive allocation begins.")]
     public int adaptiveSamplingMinSamples = 8;
 
-    [Range(0.0f, 1.0f), Tooltip("Experimental: blend adaptive uncertainty toward luminance-normalized priority. 0 preserves the absolute-RGB baseline; 1 applies the full correction.")]
-    public float adaptiveNormalizePriorityByLuminance = 0.0f;
+    [Range(-3.0f, 3.0f), Tooltip("Weights adaptive uncertainty by luminance. 0 preserves absolute linear-RGB error; negative values prioritize relative error in darker areas, while positive values prioritize brighter areas.")]
+    public float adaptiveLuminanceErrorWeight = -2.0f;
+
+    [Range(0.0f, 4.0f), Tooltip("Experimental: early-priority bonus from RGB disagreement within an 8x8 group. This is not a noise estimate; its weight decays as the group accumulates samples. 0 preserves the Welford-only scheduler.")]
+    public float adaptiveSpatialDisagreementPriority = 4.0f;
 
     [Range(1, 8), Tooltip("Frames a compact adaptive schedule is reused before reprioritizing groups. Lower values react sooner but add scheduler overhead.")]
     public int adaptiveReclassificationInterval = 4;
     [Range(1.0f, 8.0f), Tooltip("Literal average rate for the highest-priority bucket, capped by Max Paths Per Pixel. Lower buckets span down to its reciprocal; tier populations are inversely weighted to keep total work near uniform sampling.")]
-    public float adaptiveHighestBucketSampleRate = 2.0f;
+    public float adaptiveHighestBucketSampleRate = 3.0f;
     [Range(1, 16), Tooltip("Maximum full-resolution paths assigned to one pixel in a scheduling cycle.")]
     public int adaptiveMaxPathsPerPixel = 4;
     [Tooltip("Use a low-resolution preview before full-resolution adaptive tracing. Disabled by default so adaptive sampling starts with a full-resolution path on its first rendered frame.")]
@@ -625,7 +628,8 @@ public class GameManager : MonoBehaviour
     private static readonly int AdaptiveSamplingM2 = Shader.PropertyToID("AdaptiveSamplingM2");
     private static readonly int AdaptiveSamplingMinSamples = Shader.PropertyToID("_AdaptiveSamplingMinSamples");
     private static readonly int AdaptiveSampleLayer = Shader.PropertyToID("_AdaptiveSampleLayer");
-    private static readonly int AdaptiveNormalizePriorityByLuminance = Shader.PropertyToID("_AdaptiveNormalizePriorityByLuminance");
+    private static readonly int AdaptiveLuminanceErrorWeight = Shader.PropertyToID("_AdaptiveLuminanceErrorWeight");
+    private static readonly int AdaptiveSpatialDisagreementPriority = Shader.PropertyToID("_AdaptiveSpatialDisagreementPriority");
     private static readonly int AdaptiveGroupState = Shader.PropertyToID("AdaptiveGroupState");
     private static readonly int AdaptiveGroupInfo = Shader.PropertyToID("AdaptiveGroupInfo");
     private static readonly int AdaptiveGroupBucket = Shader.PropertyToID("AdaptiveGroupBucket");
@@ -706,7 +710,8 @@ public class GameManager : MonoBehaviour
         adaptiveBootstrapResolutionScale = settings.AdaptiveBootstrapResolutionScale;
         adaptiveGuidanceMaxUpdates = settings.AdaptiveGuidanceMaxUpdates;
         adaptiveGuidanceHistoryFrames = settings.AdaptiveGuidanceHistoryFrames;
-        adaptiveNormalizePriorityByLuminance = settings.AdaptiveNormalizePriorityByLuminance;
+        adaptiveLuminanceErrorWeight = settings.AdaptiveLuminanceErrorWeight;
+        adaptiveSpatialDisagreementPriority = settings.AdaptiveSpatialDisagreementPriority;
         adaptiveReclassificationInterval = settings.AdaptiveReclassificationInterval;
         adaptiveHighestBucketSampleRate = settings.AdaptiveHighestBucketSampleRate;
         adaptiveMaxPathsPerPixel = settings.AdaptiveMaxPathsPerPixel;
@@ -1757,7 +1762,8 @@ public class GameManager : MonoBehaviour
         targetShader.SetBuffer(kernelHandle, AdaptiveWorkListMetadata, _adaptiveWorkListMetadataBuffer);
         targetShader.SetInt(NumberOfPasses, numberOfPasses);
         targetShader.SetInt(AdaptiveSamplingMinSamples, Mathf.Clamp(adaptiveSamplingMinSamples, 1, 64));
-        targetShader.SetFloat(AdaptiveNormalizePriorityByLuminance, Mathf.Clamp01(adaptiveNormalizePriorityByLuminance));
+        targetShader.SetFloat(AdaptiveLuminanceErrorWeight, Mathf.Clamp(adaptiveLuminanceErrorWeight, -3.0f, 3.0f));
+        targetShader.SetFloat(AdaptiveSpatialDisagreementPriority, Mathf.Clamp(adaptiveSpatialDisagreementPriority, 0.0f, 4.0f));
         targetShader.SetInt(AdaptiveCaptureDiagnostics, _adaptiveCaptureDiagnostics ? 1 : 0);
         targetShader.SetFloat(AdaptiveHighestBucketSampleRate, Mathf.Clamp(adaptiveHighestBucketSampleRate, 1.0f, 8.0f));
         targetShader.SetInt(AdaptiveBucketCount, AdaptiveBucketCountMaximum);
@@ -3727,7 +3733,7 @@ public class GameManager : MonoBehaviour
         targetShader.SetInt(FrameCount, _accumulatedFrameCount);
         targetShader.SetInt(SampleOffset, CalculateSampleOffset());
         targetShader.SetInt(AdaptiveSamplingMinSamples, Mathf.Clamp(adaptiveSamplingMinSamples, 1, 64));
-        targetShader.SetFloat(AdaptiveNormalizePriorityByLuminance, Mathf.Clamp01(adaptiveNormalizePriorityByLuminance));
+        targetShader.SetFloat(AdaptiveLuminanceErrorWeight, Mathf.Clamp(adaptiveLuminanceErrorWeight, -3.0f, 3.0f));
         targetShader.SetInt(AdaptiveCaptureDiagnostics, _adaptiveCaptureDiagnostics ? 1 : 0);
         targetShader.SetFloat(AdaptiveHighestBucketSampleRate, Mathf.Clamp(adaptiveHighestBucketSampleRate, 1.0f, 8.0f));
         targetShader.SetInt(AdaptiveBucketCount, AdaptiveBucketCountMaximum);
@@ -3851,7 +3857,8 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, adaptiveGuidanceChangeThreshold);
             hash = AddHash(hash, adaptiveGuidanceMaxUpdates);
             hash = AddHash(hash, adaptiveGuidanceHistoryFrames);
-            hash = AddHash(hash, adaptiveNormalizePriorityByLuminance);
+            hash = AddHash(hash, adaptiveLuminanceErrorWeight);
+            hash = AddHash(hash, adaptiveSpatialDisagreementPriority);
             hash = AddHash(hash, adaptiveReclassificationInterval);
             hash = AddHash(hash, adaptiveHighestBucketSampleRate);
             hash = AddHash(hash, adaptiveMaxPathsPerPixel);

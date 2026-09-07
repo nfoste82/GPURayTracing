@@ -21,16 +21,17 @@ public sealed class SceneSettings
     public int SobolDimensionLimit = 328;
     public int SamplingSeed = 1;
 
-    public bool EnableAdaptiveSampling = false;
+    public bool EnableAdaptiveSampling = true;
     public int AdaptiveSamplingMinSamples = 2;
     public bool EnableAdaptiveBootstrap = false;
     public int AdaptiveBootstrapFrames = 96;
     public float AdaptiveBootstrapResolutionScale = 0.5f;
     public int AdaptiveGuidanceMaxUpdates = 2;
     public int AdaptiveGuidanceHistoryFrames = 2;
-    public float AdaptiveNormalizePriorityByLuminance = 0.0f;
+    public float AdaptiveLuminanceErrorWeight = -2.0f;
+    public float AdaptiveSpatialDisagreementPriority = 4.0f;
     public int AdaptiveReclassificationInterval = 4;
-    public float AdaptiveHighestBucketSampleRate = 2.0f;
+    public float AdaptiveHighestBucketSampleRate = 3.0f;
     public int AdaptiveMaxPathsPerPixel = 4;
     public int AdaptiveBootstrapGroupDivisor = 16;
 

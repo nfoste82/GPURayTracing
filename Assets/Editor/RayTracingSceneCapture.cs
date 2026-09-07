@@ -42,7 +42,7 @@ public static class RayTracingSceneCapture
         public readonly int? minSamples;
         public readonly float? guidanceChangeThreshold;
         public readonly int? guidanceMaxUpdates;
-        public readonly float? normalizePriorityByLuminance;
+        public readonly float? luminanceErrorWeight;
         public readonly int? reclassificationInterval;
         public readonly float? highestBucketSampleRate;
         public readonly int? maxPathsPerPixel;
@@ -53,7 +53,7 @@ public static class RayTracingSceneCapture
         public readonly bool? enableBootstrap;
 
         public AdaptiveSamplingOverrides(int? minSamples, float? guidanceChangeThreshold, int? guidanceMaxUpdates,
-            float? normalizePriorityByLuminance,
+            float? luminanceErrorWeight,
             int? reclassificationInterval, float? highestBucketSampleRate,
             int? maxPathsPerPixel, int? bootstrapFrames, float? bootstrapResolutionScale,
             int? guidanceHistoryFrames, int? bootstrapGroupDivisor, bool? enableBootstrap)
@@ -61,7 +61,7 @@ public static class RayTracingSceneCapture
             this.minSamples = minSamples;
             this.guidanceChangeThreshold = guidanceChangeThreshold;
             this.guidanceMaxUpdates = guidanceMaxUpdates;
-            this.normalizePriorityByLuminance = normalizePriorityByLuminance;
+            this.luminanceErrorWeight = luminanceErrorWeight;
             this.reclassificationInterval = reclassificationInterval;
             this.highestBucketSampleRate = highestBucketSampleRate;
             this.maxPathsPerPixel = maxPathsPerPixel;
@@ -85,6 +85,7 @@ public static class RayTracingSceneCapture
         public double durationSeconds;
         public double cooldownSeconds = DefaultCooldownSeconds;
         public bool disableAdaptiveInstrumentation;
+        public bool generateVariantComparisonImages = true;
         public bool requireReference = true;
         public string referenceRoot = DefaultReferenceRoot;
         public int[] temporalRisWarmupFrames;
@@ -584,10 +585,13 @@ public static class RayTracingSceneCapture
                 File.WriteAllText(Path.Combine(sceneRoot, "experiment.json"), JsonUtility.ToJson(experiment, true));
                 for (int first = 0; first < results.Count; first++)
                 {
-                    for (int second = first + 1; second < results.Count; second++)
+                    if (experiment.generateVariantComparisonImages)
                     {
-                        GenerateDifferenceImage(results[first].result.imagePath, results[second].result.imagePath,
-                            Path.Combine(sceneRoot, $"{results[first].name}_vs_{results[second].name}_difference.png"));
+                        for (int second = first + 1; second < results.Count; second++)
+                        {
+                            GenerateDifferenceImage(results[first].result.imagePath, results[second].result.imagePath,
+                                Path.Combine(sceneRoot, $"{results[first].name}_vs_{results[second].name}_difference.png"));
+                        }
                     }
                     if (experiment.requireReference)
                     {
@@ -1713,6 +1717,7 @@ public static class RayTracingSceneCapture
     private sealed class GroupDiagnostic
     {
         public float welfordScore;
+        public float spatialDisagreement;
         public float assignedPaths;
         public float cumulativeFinePaths;
         public float referenceError;
@@ -1780,6 +1785,7 @@ public static class RayTracingSceneCapture
         {
             int groupIndex = groupX + groupY * groupWidth;
             double welford = 0.0, errorSquared = 0.0, paths = 0.0, cumulativeFinePaths = 0.0, luminance = 0.0;
+            Vector3 accumulationSum = Vector3.zero;
             int count = 0;
             for (int y = groupY * 8; y < Math.Min(data.height, groupY * 8 + 8); y++)
             for (int x = groupX * 8; x < Math.Min(data.width, groupX * 8 + 8); x++)
@@ -1789,7 +1795,10 @@ public static class RayTracingSceneCapture
                 Vector4 m2 = data.samplingM2[pixel];
                 Vector4 accumulation = data.accumulation[pixel];
                 if (IsFinite(accumulation.x) && IsFinite(accumulation.y) && IsFinite(accumulation.z))
+                {
                     luminance += 0.2126 * accumulation.x + 0.7152 * accumulation.y + 0.0722 * accumulation.z;
+                    accumulationSum += new Vector3(accumulation.x, accumulation.y, accumulation.z);
+                }
                 if (IsFinite(state.x) && state.x > 1.0f && IsFinite(m2.x) && IsFinite(m2.y) && IsFinite(m2.z))
                     welford += Math.Sqrt(Math.Max(0.0, (m2.x + m2.y + m2.z) / (state.x * (state.x - 1.0f))));
                 Color candidate = candidatePixels[pixel].linear;
@@ -1800,9 +1809,20 @@ public static class RayTracingSceneCapture
                 cumulativeFinePaths += Math.Max(0.0f, state.x);
                 count++;
             }
+            Vector3 meanAccumulation = accumulationSum / Math.Max(1, count);
+            double disagreementSquared = 0.0;
+            for (int y = groupY * 8; y < Math.Min(data.height, groupY * 8 + 8); y++)
+            for (int x = groupX * 8; x < Math.Min(data.width, groupX * 8 + 8); x++)
+            {
+                Vector4 accumulation = data.accumulation[x + y * data.width];
+                if (!IsFinite(accumulation.x) || !IsFinite(accumulation.y) || !IsFinite(accumulation.z)) continue;
+                Vector3 difference = new Vector3(accumulation.x, accumulation.y, accumulation.z) - meanAccumulation;
+                disagreementSquared += Vector3.Dot(difference, difference);
+            }
             groups[groupIndex] = new GroupDiagnostic
             {
                 welfordScore = (float)(welford / Math.Max(1, count)),
+                spatialDisagreement = (float)Math.Sqrt(disagreementSquared / (3.0 * Math.Max(1, count))),
                 assignedPaths = (float)paths,
                 cumulativeFinePaths = (float)(cumulativeFinePaths / Math.Max(1, count)),
                 referenceError = (float)Math.Sqrt(errorSquared / Math.Max(1, count)),
@@ -1831,21 +1851,25 @@ public static class RayTracingSceneCapture
     {
         var score = new float[groups.Length];
         var error = new float[groups.Length];
+        var spatialDisagreement = new float[groups.Length];
         var paths = new float[groups.Length];
         var cumulativeFinePaths = new float[groups.Length];
         for (int i = 0; i < groups.Length; i++)
         {
             score[i] = groups[i].welfordScore;
             error[i] = groups[i].referenceError;
+            spatialDisagreement[i] = groups[i].spatialDisagreement;
             paths[i] = groups[i].assignedPaths;
             cumulativeFinePaths[i] = groups[i].cumulativeFinePaths;
         }
         GroupDiagnosticSummary summary = SummarizeGroupDiagnostics(groups, score, error, paths, cumulativeFinePaths);
-        Array.Sort(score); Array.Sort(error); Array.Sort(paths);
+        Array.Sort(score); Array.Sort(error); Array.Sort(paths); Array.Sort(spatialDisagreement);
         File.WriteAllText(path, "{\n" +
             $"  \"score\": \"{scoreName}\",\n" +
             $"  \"scoreP50\": {Percentile(score, 0.50f):R},\n" +
             $"  \"scoreP95\": {Percentile(score, 0.95f):R},\n" +
+            $"  \"spatialDisagreementP50\": {Percentile(spatialDisagreement, 0.50f):R},\n" +
+            $"  \"spatialDisagreementP95\": {Percentile(spatialDisagreement, 0.95f):R},\n" +
             $"  \"errorP50\": {Percentile(error, 0.50f):R},\n" +
             $"  \"errorP95\": {Percentile(error, 0.95f):R},\n" +
             $"  \"assignedPathsP50\": {Percentile(paths, 0.50f):R},\n" +
@@ -1893,7 +1917,7 @@ public static class RayTracingSceneCapture
         int groupWidth = Mathf.CeilToInt(width / 8.0f);
         var lines = new List<string>(groups.Length + 1)
         {
-            "variant,group_x,group_y,valid_pixel_count,welford_score,current_assigned_paths,cumulative_fine_paths,mean_linear_luminance,reference_rgb_rmse"
+            "variant,group_x,group_y,valid_pixel_count,welford_score,spatial_disagreement,current_assigned_paths,cumulative_fine_paths,mean_linear_luminance,reference_rgb_rmse"
         };
         for (int groupIndex = 0; groupIndex < groups.Length; groupIndex++)
         {
@@ -1915,6 +1939,7 @@ public static class RayTracingSceneCapture
             groupY.ToString(CultureInfo.InvariantCulture),
             validPixels.ToString(CultureInfo.InvariantCulture),
             group.welfordScore.ToString("R", CultureInfo.InvariantCulture),
+            group.spatialDisagreement.ToString("R", CultureInfo.InvariantCulture),
             group.assignedPaths.ToString("R", CultureInfo.InvariantCulture),
             group.cumulativeFinePaths.ToString("R", CultureInfo.InvariantCulture),
             group.meanLuminance.ToString("R", CultureInfo.InvariantCulture),
@@ -3112,7 +3137,7 @@ public static class RayTracingSceneCapture
                 out float? guidanceChangeThreshold)
             || !TryGetOptionalIntegerArgument("-rayTracingAdaptiveGuidanceMaxUpdates", 1, 8,
                 out int? guidanceMaxUpdates)
-            || !TryGetOptionalFloatArgument("-rayTracingAdaptiveNormalizePriorityByLuminance", 0.0f, 1.0f, out float? normalizePriorityByLuminance)
+            || !TryGetOptionalFloatArgument("-rayTracingAdaptiveLuminanceErrorWeight", -3.0f, 3.0f, out float? luminanceErrorWeight)
             || !TryGetOptionalIntegerArgument("-rayTracingAdaptiveReclassificationInterval", 1, 8, out int? reclassificationInterval)
             || !TryGetOptionalFloatArgument("-rayTracingAdaptiveHighestBucketSampleRate", 1.0f, 8.0f, out float? highestBucketSampleRate)
             || !TryGetOptionalIntegerArgument("-rayTracingAdaptiveMaxPathsPerPixel", 1, 16, out int? maxPathsPerPixel)
@@ -3126,7 +3151,7 @@ public static class RayTracingSceneCapture
         }
 
         overrides = new AdaptiveSamplingOverrides(minSamples, guidanceChangeThreshold, guidanceMaxUpdates,
-            normalizePriorityByLuminance, reclassificationInterval, highestBucketSampleRate,
+            luminanceErrorWeight, reclassificationInterval, highestBucketSampleRate,
             maxPathsPerPixel, bootstrapFrames, bootstrapResolutionScale, guidanceHistoryFrames,
             bootstrapGroupDivisor, enableBootstrap);
         return true;
@@ -3196,8 +3221,8 @@ public static class RayTracingSceneCapture
             manager.adaptiveGuidanceChangeThreshold = overrides.guidanceChangeThreshold.Value;
         if (overrides.guidanceMaxUpdates.HasValue)
             manager.adaptiveGuidanceMaxUpdates = overrides.guidanceMaxUpdates.Value;
-        if (overrides.normalizePriorityByLuminance.HasValue)
-            manager.adaptiveNormalizePriorityByLuminance = overrides.normalizePriorityByLuminance.Value;
+        if (overrides.luminanceErrorWeight.HasValue)
+            manager.adaptiveLuminanceErrorWeight = overrides.luminanceErrorWeight.Value;
         if (overrides.reclassificationInterval.HasValue) manager.adaptiveReclassificationInterval = overrides.reclassificationInterval.Value;
         if (overrides.highestBucketSampleRate.HasValue) manager.adaptiveHighestBucketSampleRate = overrides.highestBucketSampleRate.Value;
         if (overrides.maxPathsPerPixel.HasValue) manager.adaptiveMaxPathsPerPixel = overrides.maxPathsPerPixel.Value;

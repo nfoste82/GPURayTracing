@@ -52,7 +52,8 @@ float _AdaptiveHighestBucketSampleRate;
 uint _AdaptiveBucketCount;
 uint _AdaptiveMaxPathsPerPixel;
 uint _AdaptiveSampleLayer;
-float _AdaptiveNormalizePriorityByLuminance;
+float _AdaptiveLuminanceErrorWeight;
+float _AdaptiveSpatialDisagreementPriority;
 int _UseAdaptiveBootstrapPriority;
 uint _AdaptiveBootstrapGroupDivisor;
 

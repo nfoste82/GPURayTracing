@@ -341,10 +341,15 @@ namespace GPURayTracing.Tests
             Assert.That(allocation, Does.Contain("AdaptiveSamplingM2[pixel].rgb"));
             Assert.That(allocation, Does.Contain("count * (count - 1.0f)"));
             Assert.That(allocation, Does.Not.Contain("AdaptiveSamplingState[pixel].yzw"));
-            Assert.That(allocation, Does.Contain("_AdaptiveNormalizePriorityByLuminance"));
-            Assert.That(allocation, Does.Contain("0.8f / max(0.25f, luminance)"));
-            Assert.That(allocation, Does.Contain("lerp(score, normalizedScore"));
-            Assert.That(allocation, Does.Contain("saturate(_AdaptiveNormalizePriorityByLuminance)"));
+            Assert.That(allocation, Does.Contain("_AdaptiveLuminanceErrorWeight"));
+            Assert.That(allocation, Does.Contain("pow(max(0.25f, luminance), _AdaptiveLuminanceErrorWeight)"));
+            Assert.That(allocation, Does.Contain("pow(max(0.25f, meanLuminance), _AdaptiveLuminanceErrorWeight)"));
+            Assert.That(allocation, Does.Not.Contain("_AdaptiveNormalizePriorityByLuminance"));
+            Assert.That(allocation, Does.Contain("_AdaptiveSpatialDisagreementPriority"));
+            Assert.That(allocation, Does.Contain("disagreementSquaredSum"));
+            Assert.That(allocation, Does.Contain("float averageSpp = pathCountSum / max(1u, validPixels)"));
+            Assert.That(allocation, Does.Contain("float decay = min(1.0f"));
+            Assert.That(allocation, Does.Contain("if (!groupBootstrap)"));
         }
 
         [Test]
@@ -859,6 +864,8 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("PostProcessExperimentReferences"));
             Assert.That(source, Does.Contain("reference_comparison.csv"));
             Assert.That(source, Does.Contain("_vs_reference_difference.png"));
+            Assert.That(source, Does.Contain("generateVariantComparisonImages = true"));
+            Assert.That(source, Does.Contain("if (experiment.generateVariantComparisonImages)"));
         }
 
         [Test]
@@ -938,7 +945,7 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("DrawAdaptiveSamplingControls"));
             Assert.That(source, Does.Contain("adaptiveSamplingMinSamples"));
             Assert.That(source, Does.Not.Contain("adaptivePriorityMode"));
-            Assert.That(source, Does.Contain("adaptiveNormalizePriorityByLuminance"));
+            Assert.That(source, Does.Contain("adaptiveLuminanceErrorWeight"));
             Assert.That(source, Does.Contain("adaptiveGuidanceChangeThreshold"));
             Assert.That(source, Does.Contain("adaptiveReclassificationInterval"));
             Assert.That(source, Does.Contain("adaptiveHighestBucketSampleRate"));
@@ -1067,7 +1074,8 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("metrics.rgbRootMeanSquaredError"));
             Assert.That(source, Does.Not.Contain("metrics.rgbRmse"));
             Assert.That(source, Does.Contain("-rayTracingAdaptiveSamplingMinSamples"));
-            Assert.That(source, Does.Contain("-rayTracingAdaptiveNormalizePriorityByLuminance"));
+            Assert.That(source, Does.Contain("-rayTracingAdaptiveLuminanceErrorWeight"));
+            Assert.That(source, Does.Contain("TryGetOptionalFloatArgument(\"-rayTracingAdaptiveLuminanceErrorWeight\", -3.0f, 3.0f"));
             Assert.That(source, Does.Contain("-rayTracingAdaptiveReclassificationInterval"));
             Assert.That(source, Does.Contain("-rayTracingAdaptiveHighestBucketSampleRate"));
             Assert.That(source, Does.Contain("-rayTracingAdaptiveMaxPathsPerPixel"));
@@ -1679,8 +1687,10 @@ namespace GPURayTracing.Tests
                 int changedCoarseUpdateLimitHash = (int)hashMethod.Invoke(manager, null);
                 managerType.GetField("adaptiveReclassificationInterval").SetValue(manager, 2);
                 int changedIntervalHash = (int)hashMethod.Invoke(manager, null);
-                managerType.GetField("adaptiveNormalizePriorityByLuminance").SetValue(manager, 0.5f);
-                int changedLuminanceNormalizationHash = (int)hashMethod.Invoke(manager, null);
+                managerType.GetField("adaptiveLuminanceErrorWeight").SetValue(manager, -0.5f);
+                int changedLuminanceErrorWeightHash = (int)hashMethod.Invoke(manager, null);
+                managerType.GetField("adaptiveSpatialDisagreementPriority").SetValue(manager, 0.5f);
+                int changedSpatialDisagreementHash = (int)hashMethod.Invoke(manager, null);
                 managerType.GetField("adaptiveHighestBucketSampleRate").SetValue(manager, 4.0f);
                 int changedHighestRateHash = (int)hashMethod.Invoke(manager, null);
 
@@ -1689,8 +1699,9 @@ namespace GPURayTracing.Tests
                 Assert.That(changedCoarseThresholdHash, Is.Not.EqualTo(changedPolicyHash));
                 Assert.That(changedCoarseUpdateLimitHash, Is.Not.EqualTo(changedCoarseThresholdHash));
                 Assert.That(changedIntervalHash, Is.Not.EqualTo(changedCoarseUpdateLimitHash));
-                Assert.That(changedLuminanceNormalizationHash, Is.Not.EqualTo(changedIntervalHash));
-                Assert.That(changedHighestRateHash, Is.Not.EqualTo(changedLuminanceNormalizationHash));
+                Assert.That(changedLuminanceErrorWeightHash, Is.Not.EqualTo(changedIntervalHash));
+                Assert.That(changedSpatialDisagreementHash, Is.Not.EqualTo(changedLuminanceErrorWeightHash));
+                Assert.That(changedHighestRateHash, Is.Not.EqualTo(changedSpatialDisagreementHash));
             }
             finally
             {
