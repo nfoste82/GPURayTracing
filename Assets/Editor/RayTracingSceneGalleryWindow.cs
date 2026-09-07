@@ -6,20 +6,22 @@ public sealed class RayTracingSceneGalleryWindow : EditorWindow
 {
     private const string WindowTitle = "Ray Tracing Gallery";
     private const string GeneratedSceneFolder = "Assets/Scenes/Generated/";
+    private const string SceneFolder = "Assets/Scenes/";
     private const string ThumbnailFolder = "Assets/Editor/RayTracingSceneGalleryThumbnails/Current/";
 
     private static readonly GalleryEntry[] ShowcaseScenes =
     {
-        new ("Getting Started", "GettingStarted", "A compact room for evaluating diffuse, metal, and glass materials.", "Low", null),
-        new ("Glass", "Glass", "Reflection, refraction, and transparent-material absorption.", "Medium", null),
-        new ("Cornell Box", "CornellBox", "Enclosed indirect lighting and recursive reflections.", "Medium", null),
+        new ("Getting Started", "GettingStarted", "A compact room for evaluating diffuse, metal, and glass materials.", "Moderate", null),
+        new ("Sponza", "Sponza", "A large textured architectural scene mostly lit indirectly.", "Extremely High", null, SceneFolder),
+        new ("Glass", "Glass", "Reflection, refraction, and transparent-material absorption.", "Moderate", null),
+        new ("Cornell Box", "CornellBox", "Enclosed indirect lighting and recursive reflections.", "Moderate", null),
         new ("Caustics", "Caustics", "Photon-mapped caustics through refractive objects.", "High", null),
         new ("Parallax Mapping", "ParallaxMapping", "Material parallax, normal maps, and textured surfaces.", "High", null),
-        new ("Teapot Materials", "TeapotMaterials", "A ray-traced mesh with a range of material responses.", "High", null),
+        new ("Teapot Materials", "TeapotMaterials", "High polycount meshes with a range of material responses.", "High", null),
         new ("Water", "Water", "Animated water reflection, refraction (with caustics), and absorption.", "High", null),
-        new ("Volumetric Fog", "VolumetricFog", "Homogeneous volumetric fog.", "High", null),
         new ("Khronos glTF Browser", "KhronosGltfBrowser", "Imports and browses Khronos glTF assets.", "Variable", "Requires network access."),
-        new ("Terrain", "Terrain", "Path-traced Unity terrain with layered materials.", "High", null)
+        new ("Volumetric Fog", "VolumetricFog", "Experimental: Homogeneous volumetric fog.", "High", null),
+        new ("Terrain", "Terrain", "Experimental: Path-traced Unity terrain with layered materials.", "High", null),
     };
 
     private static readonly GalleryEntry[] StressScenes =
@@ -27,7 +29,7 @@ public sealed class RayTracingSceneGalleryWindow : EditorWindow
         new ("Many Spheres", "ManySpheres", "Sphere-count stress and benchmark workload.", "Stress test", null),
         new ("Many Meshes", "ManyMeshes", "Mesh-count stress and benchmark workload.", "Stress test", null),
         new ("Many Lights", "ManyLights", "Light-count stress and benchmark workload.", "Stress test", null),
-        new ("Environment Mapping", "Environment_Mapping", "69k-triangle Stanford bunny lit only by environment mapping.", "Low", null),
+        new ("Environment Mapping", "Environment_Mapping", "Stanford bunny lit only by environment mapping.", "Low", null),
     };
 
     private static readonly GalleryEntry[] TestScenes =
@@ -57,16 +59,16 @@ public sealed class RayTracingSceneGalleryWindow : EditorWindow
     public static string[] GetThumbnailScenePaths()
     {
         var paths = new string[ShowcaseScenes.Length + TestScenes.Length + StressScenes.Length];
-        int index = 0;
-        foreach (GalleryEntry entry in ShowcaseScenes)
+        var index = 0;
+        foreach (var entry in ShowcaseScenes)
         {
             paths[index++] = entry.Path;
         }
-        foreach (GalleryEntry entry in TestScenes)
+        foreach (var entry in TestScenes)
         {
             paths[index++] = entry.Path;
         }
-        foreach (GalleryEntry entry in StressScenes)
+        foreach (var entry in StressScenes)
         {
             paths[index++] = entry.Path;
         }
@@ -79,7 +81,7 @@ public sealed class RayTracingSceneGalleryWindow : EditorWindow
         EditorGUILayout.HelpBox("Choose a showcase scene to explore the renderer, or use the separate stress section for performance workloads.", MessageType.Info);
 
         _scrollPosition = EditorGUILayout.BeginScrollView(_scrollPosition);
-        DrawSection("Start Here And Showcases", ShowcaseScenes);
+        DrawSection("Showcases", ShowcaseScenes);
         EditorGUILayout.Space(10.0f);
         DrawSection("Test Scenes", TestScenes);
         EditorGUILayout.Space(10.0f);
@@ -98,7 +100,7 @@ public sealed class RayTracingSceneGalleryWindow : EditorWindow
 
     private static void DrawEntry(GalleryEntry entry)
     {
-        SceneAsset scene = AssetDatabase.LoadAssetAtPath<SceneAsset>(entry.Path);
+        var scene = AssetDatabase.LoadAssetAtPath<SceneAsset>(entry.Path);
         using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
         {
             using (new EditorGUILayout.HorizontalScope())
@@ -149,7 +151,7 @@ public sealed class RayTracingSceneGalleryWindow : EditorWindow
                 EditorGUILayout.HelpBox("Scene asset is missing. Generate project scenes from Tools > Ray Tracing > Generate Scenes.", MessageType.Warning);
             }
         }
-        }
+    }
 
     private static void Schedule(System.Action action)
     {
@@ -167,7 +169,7 @@ public sealed class RayTracingSceneGalleryWindow : EditorWindow
         {
             preview = AssetPreview.GetMiniThumbnail(scene);
         }
-        GUIContent content = preview == null ? EditorGUIUtility.IconContent("SceneAsset Icon") : new GUIContent(preview);
+        var content = preview == null ? EditorGUIUtility.IconContent("SceneAsset Icon") : new GUIContent(preview);
         GUILayout.Label(content, GUILayout.Width(72.0f), GUILayout.Height(54.0f));
     }
 
@@ -217,14 +219,14 @@ public sealed class RayTracingSceneGalleryWindow : EditorWindow
         public readonly string Path;
         public readonly string SceneName;
 
-        public GalleryEntry(string name, string sceneName, string description, string cost, string requirement)
+        public GalleryEntry(string name, string sceneName, string description, string cost, string requirement, string sceneFolder = GeneratedSceneFolder)
         {
             Name = name;
             Description = description;
             Cost = cost;
             Requirement = requirement;
             SceneName = sceneName;
-            Path = GeneratedSceneFolder + sceneName + ".unity";
+            Path = sceneFolder + sceneName + ".unity";
         }
     }
 }
