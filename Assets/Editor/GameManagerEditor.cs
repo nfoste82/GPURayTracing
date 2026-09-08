@@ -60,6 +60,12 @@ public sealed class GameManagerEditor : Editor
         DrawSection(manager, "Sampling and Accumulation", true, () =>
         {
             DrawSamplerSettings(manager);
+            DrawProperty("enablePathGuiding", "Path Guiding (Experimental)");
+            if (manager.enablePathGuiding)
+            {
+                DrawProperty("pathGuidingMixtureWeight", "Path Guide Mixture Weight");
+                DrawProperty("pathGuidingMinimumSamples", "Path Guide Minimum Samples");
+            }
             DrawProperty("shadowRandomness", "Local Light Shadow Randomness");
             DrawProperty("enableAdaptiveSampling", "Adaptive Sampling (Experimental)");
             DrawProperty("recordEditorRun", "Record Editor Run");
@@ -412,11 +418,7 @@ public sealed class GameManagerEditor : Editor
     private void DrawSamplerSettings(GameManager manager)
     {
         EditorGUILayout.LabelField("Path Sampler", EditorStyles.boldLabel);
-        DrawProperty("useOwenScrambledSobol", "Owen-Scrambled Sobol");
-        if (serializedObject.FindProperty("useOwenScrambledSobol").boolValue)
-        {
-            DrawProperty("sobolDimensionLimit", "Low-Discrepancy Dimension Limit");
-        }
+        DrawProperty("sobolDimensionLimit", "Owen-Sobol Dimension Limit");
         DrawProperty("samplingSeed", "Scramble Seed");
         DrawProperty("randomNoise", "Randomize Seed Each Frame");
         EditorGUILayout.HelpBox(

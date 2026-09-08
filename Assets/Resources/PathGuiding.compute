@@ -1,0 +1,32 @@
+#pragma kernel RebuildPathGuide
+
+RWStructuredBuffer<uint> _PathGuideTraining;
+RWStructuredBuffer<float> _PathGuideCdf;
+int _PathGuideGridResolution;
+int _PathGuideDirectionBinCount;
+
+[numthreads(64, 1, 1)]
+void RebuildPathGuide(uint3 id : SV_DispatchThreadID)
+{
+    uint cell = id.x;
+    uint cellCount = (uint)(_PathGuideGridResolution * _PathGuideGridResolution * _PathGuideGridResolution);
+    if (cell >= cellCount) return;
+
+    uint binCount = (uint)_PathGuideDirectionBinCount;
+    uint baseIndex = cell * binCount;
+    float total = (float)binCount;
+    for (uint bin = 0u; bin < binCount; bin++)
+    {
+        total += (float)_PathGuideTraining[baseIndex + bin];
+    }
+    float cumulative = 0.0f;
+    float denominator = max(1.0f, total);
+    for (uint bin = 0u; bin < binCount; bin++)
+    {
+        // A zero-data cell remains a uniform proposal, preserving exploration.
+        float mass = (1.0f + _PathGuideTraining[baseIndex + bin]) / denominator;
+        cumulative += mass;
+        _PathGuideCdf[baseIndex + bin] = bin + 1u == binCount ? 1.0f : cumulative;
+        _PathGuideTraining[baseIndex + bin] = 0u;
+    }
+}

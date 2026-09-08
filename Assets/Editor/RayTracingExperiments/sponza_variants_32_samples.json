@@ -1,0 +1,249 @@
+{
+  "schemaVersion": 1,
+  "label": "sponza_variants_32_samples",
+  "scenes": ["Assets/Scenes/Sponza.unity"],
+  "width": 1066,
+  "height": 600,
+  "durationSeconds": 60.0,
+  "cooldownSeconds": 15.0,
+  "disableAdaptiveInstrumentation": false,
+  "requireReference": true,
+  "variants": [
+    {
+      "name": "mis_nonadaptive_nosobol",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "false" },
+        { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+        { "path": "useOwenScrambledSobol", "value": "false" },        
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "mis_nonadaptive_sobol328",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "false" },
+        { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "mis_nonadaptive_sobol328_pathguide",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "false" },
+        { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "enablePathGuiding", "value": "true" },
+        { "path": "pathGuidingMixtureWeight", "value": "0.5" },
+        { "path": "pathGuidingMinimumSamples", "value": "32" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "mis_nonadaptive_sobol328_pathguide25",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "false" },
+        { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "enablePathGuiding", "value": "true" },
+        { "path": "pathGuidingMixtureWeight", "value": "0.25" },
+        { "path": "pathGuidingMinimumSamples", "value": "32" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "mis_nonadaptive_sobol328_pathguide75",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "false" },
+        { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "enablePathGuiding", "value": "true" },
+        { "path": "pathGuidingMixtureWeight", "value": "0.75" },
+        { "path": "pathGuidingMinimumSamples", "value": "32" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "mis_adaptive_sobol328_pathguide25_luminance0",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "adaptiveLuminanceErrorWeight", "value": "0" },
+        { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "enablePathGuiding", "value": "true" },
+        { "path": "pathGuidingMixtureWeight", "value": "0.25" },
+        { "path": "pathGuidingMinimumSamples", "value": "32" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "mis_adaptive_sobol328_pathguide25_luminanceM1",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "adaptiveLuminanceErrorWeight", "value": "-1" },
+        { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "enablePathGuiding", "value": "true" },
+        { "path": "pathGuidingMixtureWeight", "value": "0.25" },
+        { "path": "pathGuidingMinimumSamples", "value": "32" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "mis_adaptive_sobol328_pathguide25_luminanceM2",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "adaptiveLuminanceErrorWeight", "value": "-2" },
+        { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "enablePathGuiding", "value": "true" },
+        { "path": "pathGuidingMixtureWeight", "value": "0.25" },
+        { "path": "pathGuidingMinimumSamples", "value": "32" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "mis_adaptive_sobol328_pathguide50_luminance0",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "adaptiveLuminanceErrorWeight", "value": "0" },
+        { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "enablePathGuiding", "value": "true" },
+        { "path": "pathGuidingMixtureWeight", "value": "0.5" },
+        { "path": "pathGuidingMinimumSamples", "value": "32" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "mis_adaptive_sobol328_pathguide50_luminanceM1",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "adaptiveLuminanceErrorWeight", "value": "-1" },
+        { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "enablePathGuiding", "value": "true" },
+        { "path": "pathGuidingMixtureWeight", "value": "0.5" },
+        { "path": "pathGuidingMinimumSamples", "value": "32" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "mis_adaptive_sobol328_pathguide50_luminanceM2",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "adaptiveLuminanceErrorWeight", "value": "-2" },
+        { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "enablePathGuiding", "value": "true" },
+        { "path": "pathGuidingMixtureWeight", "value": "0.5" },
+        { "path": "pathGuidingMinimumSamples", "value": "32" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "mis_adaptive_sobol328_pathguide75_luminance0",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "adaptiveLuminanceErrorWeight", "value": "0" },
+        { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "enablePathGuiding", "value": "true" },
+        { "path": "pathGuidingMixtureWeight", "value": "0.75" },
+        { "path": "pathGuidingMinimumSamples", "value": "32" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "mis_adaptive_sobol328_pathguide75_luminanceM1",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "adaptiveLuminanceErrorWeight", "value": "-1" },
+        { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "enablePathGuiding", "value": "true" },
+        { "path": "pathGuidingMixtureWeight", "value": "0.75" },
+        { "path": "pathGuidingMinimumSamples", "value": "32" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "mis_adaptive_sobol328_pathguide75_luminanceM2",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "adaptiveLuminanceErrorWeight", "value": "-2" },
+        { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "enablePathGuiding", "value": "true" },
+        { "path": "pathGuidingMixtureWeight", "value": "0.75" },
+        { "path": "pathGuidingMinimumSamples", "value": "32" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "ris4_nonadaptive_sobol328",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "false" },
+        { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+        { "path": "Lighting.InitialRisCandidateCount", "value": "4" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "ris4_nonadaptive_sobol328_pathguide",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "false" },
+        { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+        { "path": "Lighting.InitialRisCandidateCount", "value": "4" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "enablePathGuiding", "value": "true" },
+        { "path": "pathGuidingMixtureWeight", "value": "0.5" },
+        { "path": "pathGuidingMinimumSamples", "value": "32" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "temporalris4_nonadaptive_sobol328",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "false" },
+        { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+        { "path": "Lighting.InitialRisCandidateCount", "value": "4" },
+        { "path": "Lighting.TemporalRisEnabled", "value": "true" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "temporalris4_nonadaptive_sobol328_pathguide",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "false" },
+        { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+        { "path": "Lighting.InitialRisCandidateCount", "value": "4" },
+        { "path": "Lighting.TemporalRisEnabled", "value": "true" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "enablePathGuiding", "value": "true" },
+        { "path": "pathGuidingMixtureWeight", "value": "0.5" },
+        { "path": "pathGuidingMinimumSamples", "value": "32" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    }
+  ]
+}

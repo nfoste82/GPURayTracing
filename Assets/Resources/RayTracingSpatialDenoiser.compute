@@ -308,7 +308,6 @@ void CSAtrous(uint3 id : SV_DispatchThreadID)
     uint2 pixel = id.xy;
     float3 centerColor = InputBeauty[pixel].rgb;
     float centerValidity = FeatureValidity[pixel];
-    float centerIdentity = FeatureIdentity[pixel];
     float centerDepth = FeatureDepth[pixel];
     float3 centerNormal = FeatureNormal[pixel].xyz;
     float3 centerAlbedo = FeatureAlbedo[pixel].xyz;
@@ -346,11 +345,6 @@ void CSAtrous(uint3 id : SV_DispatchThreadID)
             }
             if (centerValidity > 0.5f)
             {
-                if (FeatureIdentity[sampleCoordinate] != centerIdentity)
-                {
-                    continue;
-                }
-
                 float depthDifference = abs(FeatureDepth[sampleCoordinate] - centerDepth)
                     / max(0.001f, min(FeatureDepth[sampleCoordinate], centerDepth));
                 weight *= exp(-depthDifference / _DepthSigma);

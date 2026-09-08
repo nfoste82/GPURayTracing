@@ -81,7 +81,7 @@ namespace GPURayTracing.Tests
             Assert.That(shared, Does.Contain("uint bitIndex = (uint)firstbitlow(sampleIndex)"));
             Assert.That(shared, Does.Contain("sampleIndex &= sampleIndex - 1u"));
             Assert.That(shared, Does.Contain("dimension < (uint)clamp(_SobolDimensionLimit, 1, 2568)"));
-            Assert.That(shared, Does.Contain("_UseOwenScrambledSobol != 0"));
+            Assert.That(shared, Does.Not.Contain("_UseOwenScrambledSobol"));
             Assert.That(shared, Does.Contain("_SobolDimensionLimit"));
             Assert.That(shared, Does.Contain("rngState.fallback = Hash(rngState.fallback ^ dimension)"));
             Assert.That(shared, Does.Contain("BounceSampleDimension((uint)bounce, SampleDimensionDirectLightOffset)"));
@@ -89,7 +89,7 @@ namespace GPURayTracing.Tests
             Assert.That(shared, Does.Contain("BounceSampleDimension((uint)bounce, SampleDimensionRouletteOffset)"));
             Assert.That(main, Does.Contain("SetRngDimension(rngState, SampleDimensionPixelFilter)"));
             Assert.That(main, Does.Contain("SetRngDimension(rngState, SampleDimensionLens)"));
-            Assert.That(adaptive, Does.Contain("RngState rngState = CreateRngState(pixel, (uint)previousState.x + localSample)"));
+            Assert.That(adaptive, Does.Contain("RngState rngState = CreateRngState(pixel, oldCount)"));
 
             int setDimensionStart = shared.IndexOf("void SetRngDimension(inout RngState rngState, uint dimension)", StringComparison.Ordinal);
             int causticSampleStart = shared.IndexOf("float CausticSequenceSample", setDimensionStart, StringComparison.Ordinal);
@@ -101,7 +101,44 @@ namespace GPURayTracing.Tests
 
             string inspector = System.IO.File.ReadAllText("Assets/Editor/GameManagerEditor.cs");
             Assert.That(inspector, Does.Contain("DrawSamplerSettings(manager)"));
-            Assert.That(inspector, Does.Contain("Owen-Scrambled Sobol"));
+            Assert.That(inspector, Does.Contain("Owen-Sobol Dimension Limit"));
+        }
+
+        [Test]
+        public void PathGuiding_IsDisabledByDefaultAndUsesMixturePdfHooks()
+        {
+            string shared = System.IO.File.ReadAllText(SharedShaderPath);
+            string manager = System.IO.File.ReadAllText("Assets/Scripts/PathGuidingManager.cs");
+            string settings = System.IO.File.ReadAllText("Assets/Scripts/SceneSettings.cs");
+            string rebuild = System.IO.File.ReadAllText("Assets/Resources/PathGuiding.compute");
+            string probe = System.IO.File.ReadAllText(RegressionProbeShaderPath);
+
+            Assert.That(shared, Does.Contain("int _PathGuideEnabled"));
+            Assert.That(shared, Does.Contain("float PathGuidePdf"));
+            Assert.That(shared, Does.Contain("RecordPathGuideObservation"));
+            Assert.That(shared, Does.Contain("cosBottom - cosTop"));
+            Assert.That(shared, Does.Contain("_PathGuideObservationCounts"));
+            Assert.That(shared, Does.Contain("log2(1.0f + luminance) * 8.0f"),
+                "Bright observations must be bounded before atomic guide accumulation.");
+            Assert.That(shared, Does.Contain("InterlockedMin(_PathGuideObservationCounts"),
+                "The guide activation counter must remain bounded during long progressive renders.");
+            Assert.That(shared, Does.Contain("_PathGuideCdf[baseIndex + (uint)_PathGuideDirectionBinCount - 1u] < 0.999f"),
+                "Guide sampling must fall back until the CDF is initialized by a completed rebuild.");
+            Assert.That(shared, Does.Contain("float GetMaterialContinuationPdf"));
+            Assert.That(shared, Does.Contain("GetMaterialContinuationPdf(ray, hit, ptToOffset, allowPathGuide)"));
+            Assert.That(manager, Does.Contain("public bool Enabled { get; set; }"));
+            Assert.That(manager, Does.Contain("_training ?? _inertTraining"),
+                "The disabled path must bind inert buffers because Unity validates shared structured buffers before runtime branches.");
+            Assert.That(manager, Does.Contain("public void ReleaseGuideResources()"));
+            Assert.That(manager, Does.Contain("_cdf.SetData(CreateUniformCdf())"),
+                "The guide CDF must be valid before observations can activate path-guide sampling.");
+            Assert.That(manager, Does.Contain("cdf[baseIndex + bin] = (bin + 1) / (float)DirectionBinCount"));
+            Assert.That(settings, Does.Contain("public bool EnablePathGuiding = false;"));
+            Assert.That(rebuild, Does.Contain("void RebuildPathGuide"));
+            Assert.That(rebuild, Does.Not.Contain("_PathGuideCellCounts"));
+            Assert.That(rebuild, Does.Contain("_PathGuideTraining[baseIndex + bin] = 0u"),
+                "CDF rebuilds must consume guide training so long-running renders cannot overflow it.");
+            Assert.That(probe, Does.Contain("SampleMaterialBrdf(normalIncidenceRay, diffuseBrdfHit, false, brdfRngState)"));
         }
 
         [Test]
@@ -672,11 +709,36 @@ namespace GPURayTracing.Tests
         {
             string traceSource = System.IO.File.ReadAllText(AdaptiveTraceShaderPath);
             string sharedSource = System.IO.File.ReadAllText("Assets/Scripts/RayTracingShared.hlsl");
+            string schedulerSharedSource = System.IO.File.ReadAllText("Assets/Scripts/RayTracingAdaptiveSchedulerShared.hlsl");
 
             Assert.That(sharedSource, Does.Contain("#if !defined(RAY_TRACING_ADAPTIVE_TRACE)\nRWTexture2D<float4> Result;"));
             Assert.That(sharedSource, Does.Contain("#if !defined(RAY_TRACING_ADAPTIVE_TRACE)\nRWTexture2D<float4> FeatureNormal;"));
+            Assert.That(sharedSource, Does.Contain("#if defined(RAY_TRACING_ADAPTIVE_TRACE)\n// Adaptive trace gathers completed photon data"));
+            Assert.That(sharedSource, Does.Contain("StructuredBuffer<CausticPhoton> _CausticPhotons;"));
+            Assert.That(schedulerSharedSource, Does.Contain("#else\n// The trace only reads group assignments"));
+            Assert.That(schedulerSharedSource, Does.Contain("#else\n// The trace only reads group assignments and updates its two adaptive per-pixel estimators."));
+            Assert.That(schedulerSharedSource, Does.Contain("StructuredBuffer<uint4> AdaptiveGroupInfo;\n#endif"));
             Assert.That(traceSource, Does.Not.Contain("_TemporalRisPrevious"));
             Assert.That(traceSource, Does.Not.Contain("_TemporalRisNext"));
+        }
+
+        [Test]
+        public void ProductionRenderer_ExcludesExperimentalPathGuidingAndRisReuse()
+        {
+            string main = System.IO.File.ReadAllText(ComputeShaderPath);
+            string shared = System.IO.File.ReadAllText(SharedShaderPath);
+            string manager = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+            string pathGuided = System.IO.File.ReadAllText("Assets/Resources/RayTracingExperimentalPathGuided.compute");
+            string ris = System.IO.File.ReadAllText("Assets/Resources/RayTracingExperimentalRis.compute");
+
+            Assert.That(main, Does.Not.Contain("#pragma multi_compile _ TEMPORAL_RIS_ENABLED\n#define FINAL_COLOR_KERNEL"));
+            Assert.That(main, Does.Contain("#if defined(EXPERIMENTAL_RIS_REUSE)\n#pragma multi_compile _ TEMPORAL_RIS_ENABLED"));
+            Assert.That(shared, Does.Contain("#if defined(PATH_GUIDING_ENABLED)\nRWStructuredBuffer<uint> _PathGuideTraining;"));
+            Assert.That(shared, Does.Contain("#if defined(EXPERIMENTAL_RIS_REUSE) && ((defined(FINAL_COLOR_KERNEL)"));
+            Assert.That(pathGuided, Does.Contain("#define PATH_GUIDING_ENABLED 1"));
+            Assert.That(ris, Does.Contain("#define EXPERIMENTAL_RIS_REUSE 1"));
+            Assert.That(manager, Does.Contain("ShouldUseExperimentalRisShader()"));
+            Assert.That(manager, Does.Contain("ShouldUseExperimentalPathGuidedShader()"));
         }
 
         [Test]
@@ -1252,7 +1314,6 @@ namespace GPURayTracing.Tests
                 shader.SetFloat("_WaterRefraction", 2.0f);
                 shader.SetFloat("_WaterWaveAmplitude", 0.0f);
                 shader.SetFloat("_FireflyClamp", 1.0f);
-                shader.SetInt("_UseOwenScrambledSobol", 0);
                 shader.SetInt("_Seed", 12345);
                 shader.SetBuffer(kernel, "_Spheres", sphereBuffer);
                 shader.SetBuffer(kernel, "_SobolDirectionNumbers", sobolBuffer);
@@ -1427,6 +1488,23 @@ namespace GPURayTracing.Tests
 
             ComputeShader features = AssetDatabase.LoadAssetAtPath<ComputeShader>(FeaturesShaderPath);
             Assert.That(features.HasKernel("CSFeatures"), Is.True);
+        }
+
+        [Test]
+        public void SpatialDenoiser_FeatureControlsAreNotMaskedByObjectIdentity()
+        {
+            string source = System.IO.File.ReadAllText(DenoiserShaderPath);
+            int kernelStart = source.IndexOf("void CSAtrous", StringComparison.Ordinal);
+            int nextKernel = source.IndexOf("void CSGeneratePreservationMask", kernelStart, StringComparison.Ordinal);
+
+            Assert.That(kernelStart, Is.GreaterThanOrEqualTo(0));
+            Assert.That(nextKernel, Is.GreaterThan(kernelStart));
+            string kernel = source.Substring(kernelStart, nextKernel - kernelStart);
+            Assert.That(kernel, Does.Contain("depthDifference / _DepthSigma"));
+            Assert.That(kernel, Does.Contain("_NormalPower"));
+            Assert.That(kernel, Does.Contain("_AlbedoSigma"));
+            Assert.That(kernel, Does.Not.Contain("FeatureIdentity"),
+                "An unconditional identity rejection prevents depth, normal, and albedo controls from affecting object boundaries.");
         }
 
         [Test]
@@ -1839,7 +1917,6 @@ namespace GPURayTracing.Tests
                     shader.SetBuffer(kernel, "_SobolDirectionNumbers", dummySobolDirections);
                     shader.SetInt("_AdaptiveGroupWidth", 1);
                     shader.SetInt("_Seed", 12345);
-                    shader.SetInt("_UseOwenScrambledSobol", 0);
                     shader.SetInt("_SobolDimensionLimit", 1);
                     shader.SetInt("_NumSpheres", 0);
                     shader.SetInt("_NumLights", 0);

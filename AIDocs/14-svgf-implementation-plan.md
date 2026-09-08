@@ -59,7 +59,7 @@ This is distinct from progressive still-image accumulation and from external den
 
 - `Assets/Resources/RayTracingSpatialDenoiser.compute` contains an edge-aware 5x5 A-trous kernel and a final HDR presentation kernel.
 - `SpatialDenoisingManager.enabled` runs between one and five iterations, defaulting to steps `1`, `2`, and `4`.
-- The filter uses primary-hit validity, identity, relative depth, normal alignment, albedo difference, and normalized HDR luminance difference to stop filtering across unrelated surfaces and sharp lighting changes.
+- The filter uses primary-hit validity, relative depth, normal alignment, albedo difference, and normalized HDR luminance difference to stop filtering across unrelated surfaces and sharp lighting changes. Identity remains a temporal validation constraint, but is not an unconditional spatial barrier so the depth, normal, and albedo controls can govern filtering at object boundaries.
 - `SpatialDenoised`, `AtrousIteration1`, `AtrousIteration2`, and `AtrousIteration3` debug modes run the spatial path and present the selected HDR iteration through the same exposure/ACES pass.
 - The disabled path allocates no A-trous ping-pong resources and keeps the prior presentation behavior.
 

@@ -38,6 +38,8 @@ public class GameManager : MonoBehaviour
     [SerializeField] private ComputeShader utilityShader;
     [SerializeField] private ComputeShader featuresShader;
     [SerializeField] private ComputeShader spatialRisPrepassShader;
+    [SerializeField] private ComputeShader experimentalPathGuidedShader;
+    [SerializeField] private ComputeShader experimentalRisShader;
     [SerializeField] private ComputeShader focusShader;
     [SerializeField] private ComputeShader adaptiveSchedulerShader;
     [SerializeField] private ComputeShader adaptiveTraceShader;
@@ -114,9 +116,6 @@ public class GameManager : MonoBehaviour
     public float shadowRandomness = 0.65f;
 
     [Header("Path Sampler")]
-    [Tooltip("Uses Owen-scrambled Sobol samples for camera and path dimensions. Disable only to compare against the hash-RNG baseline.")]
-    public bool useOwenScrambledSobol = true;
-
     [Tooltip("Number of camera and path dimensions using Burley-style shuffled, Owen-scrambled Sobol coordinates. The default covers camera plus the first two path bounces; higher dimensions use the faster unbiased hash fallback.")]
     [Range(1, SobolDirectionNumbers.MaximumDimensions)]
     public int sobolDimensionLimit = 328;
@@ -124,6 +123,16 @@ public class GameManager : MonoBehaviour
     [Tooltip("Deterministic seed for the per-pixel Owen scramble when Random Noise is disabled.")]
     [Min(1)]
     public int samplingSeed = 1;
+
+    [Header("Path Guiding (Experimental)")]
+    [Tooltip("Learns normal-relative indirect-light directions in a world-space grid. Disabled until validated.")]
+    public bool enablePathGuiding = false;
+    [Range(0.0f, 1.0f)]
+    [Tooltip("Fraction of eligible continuation samples drawn from the learned guide; the remainder use the existing BSDF sampler.")]
+    public float pathGuidingMixtureWeight = 0.5f;
+    [Range(1, 1024)]
+    [Tooltip("Minimum accumulated guide observations in a cell before guided sampling is allowed.")]
+    public int pathGuidingMinimumSamples = 32;
 
     [Tooltip("Redistributes a fixed image-wide full-resolution path budget using group uncertainty. It never automatically stops rendering.")]
     public bool enableAdaptiveSampling = true;
@@ -184,6 +193,8 @@ public class GameManager : MonoBehaviour
     public GlareManager Glare => _glareManager ??= new GlareManager();
     public TemporalDenoisingManager TemporalDenoising => _temporalDenoisingManager ??= new TemporalDenoisingManager();
     private readonly TemporalRisManager _temporalRisManager = new ();
+    private readonly PathGuidingManager _pathGuidingManager = new ();
+    private ComputeShader _pathGuidingShader;
 
     [Tooltip("Builds a photon map for sphere and triangle-light caustics through glass, closed meshes, and the registered water volume. Disabled by default.")]
     public bool enableCaustics = false;
@@ -544,6 +555,11 @@ public class GameManager : MonoBehaviour
         }
     }
     public bool HasWaterVolume => WaterManager.HasWaterVolume;
+    private bool IsExperimentalFinalColorShader(ComputeShader targetShader) => targetShader == experimentalPathGuidedShader || targetShader == experimentalRisShader;
+    private bool ShouldUseExperimentalRisShader() => experimentalRisShader != null && ShouldRunTemporalRis()
+        && !IsTemporalRisUnsupported() && !HasWaterVolume;
+    private bool ShouldUseExperimentalPathGuidedShader() => experimentalPathGuidedShader != null && enablePathGuiding
+        && !ShouldUseExperimentalRisShader() && !HasWaterVolume;
     private ComputeShader ActiveFeaturesShader => HasWaterVolume ? waterFeaturesShader : featuresShader;
     private ComputeShader ActiveFocusShader => HasWaterVolume ? waterFocusShader : focusShader;
     private ComputeShader ActiveAdaptiveTraceShader
@@ -587,7 +603,6 @@ public class GameManager : MonoBehaviour
     private static readonly int MeshNormalTextures = Shader.PropertyToID("_MeshNormalTextures");
     private static readonly int MeshParallaxTextures = Shader.PropertyToID("_MeshParallaxTextures");
     private static readonly int Seed = Shader.PropertyToID("_Seed");
-    private static readonly int UseOwenScrambledSobol = Shader.PropertyToID("_UseOwenScrambledSobol");
     private static readonly int SobolDimensionLimit = Shader.PropertyToID("_SobolDimensionLimit");
     private static readonly int SobolDirectionNumberBuffer = Shader.PropertyToID("_SobolDirectionNumbers");
     private static readonly int NumberOfPasses = Shader.PropertyToID("_NumberOfPasses");
@@ -700,9 +715,11 @@ public class GameManager : MonoBehaviour
         numberOfPasses = settings.NumberOfPasses;
         subpixelJitterScale = settings.SubpixelJitterScale;
         enableFrameAccumulation = settings.EnableFrameAccumulation;
-        useOwenScrambledSobol = settings.UseOwenScrambledSobol;
         sobolDimensionLimit = settings.SobolDimensionLimit;
         samplingSeed = settings.SamplingSeed;
+        enablePathGuiding = settings.EnablePathGuiding;
+        pathGuidingMixtureWeight = settings.PathGuidingMixtureWeight;
+        pathGuidingMinimumSamples = settings.PathGuidingMinimumSamples;
         enableAdaptiveSampling = settings.EnableAdaptiveSampling;
         adaptiveSamplingMinSamples = settings.AdaptiveSamplingMinSamples;
         enableAdaptiveBootstrap = settings.EnableAdaptiveBootstrap;
@@ -786,15 +803,11 @@ public class GameManager : MonoBehaviour
         {
             featuresShader = Resources.Load<ComputeShader>("RayTracingFeatures");
         }
-        if (spatialRisPrepassShader == null)
-        {
-            spatialRisPrepassShader = Resources.Load<ComputeShader>("RayTracingSpatialRisPrepass");
-        }
         if (focusShader == null)
         {
             focusShader = Resources.Load<ComputeShader>("RayTracingFocus");
         }
-        if (utilityShader == null || featuresShader == null || focusShader == null || spatialRisPrepassShader == null)
+        if (utilityShader == null || featuresShader == null || focusShader == null)
         {
             Debug.LogError("Split ray tracing compute shaders are missing from Resources.", this);
         }
@@ -820,6 +833,14 @@ public class GameManager : MonoBehaviour
         if (waterAdaptiveTraceShader == null)
         {
             waterAdaptiveTraceShader = Resources.Load<ComputeShader>("RayTracingWaterAdaptiveTrace");
+        }
+        if (experimentalPathGuidedShader == null)
+        {
+            experimentalPathGuidedShader = Resources.Load<ComputeShader>("RayTracingExperimentalPathGuided");
+        }
+        if (experimentalRisShader == null)
+        {
+            experimentalRisShader = Resources.Load<ComputeShader>("RayTracingExperimentalRis");
         }
         if (adaptiveSchedulerShader == null || adaptiveTraceShader == null)
         {
@@ -966,6 +987,7 @@ public class GameManager : MonoBehaviour
         _adaptiveWorkListMetadataBuffer?.Release();
         _spatialDenoisingManager.ReleaseResources();
         _glareManager.ReleaseResources();
+        _pathGuidingManager.ReleaseResources();
         ReleaseTemporalDenoiserResources();
         _textureSize = new Vector2Int(width, height);
         _outputTexture = new RenderTexture(_textureSize.x, _textureSize.y, 0, RenderTextureFormat.ARGBFloat)
@@ -1246,6 +1268,7 @@ public class GameManager : MonoBehaviour
         
         _spatialDenoisingManager.ReleaseResources();
         _glareManager.ReleaseResources();
+        _pathGuidingManager.ReleaseResources();
         
         ReleaseTemporalDenoiserResources();
         
@@ -1407,9 +1430,16 @@ public class GameManager : MonoBehaviour
             return;
         }
 
-        if (targetShader == shader && Lighting.SpatialRisEnabled && ShouldRunTemporalRis()
-            && !IsTemporalRisUnsupported() && spatialRisPrepassShader != null)
+        if (targetShader == experimentalRisShader && Lighting.SpatialRisEnabled && ShouldRunTemporalRis()
+            && !IsTemporalRisUnsupported())
         {
+            spatialRisPrepassShader ??= Resources.Load<ComputeShader>("RayTracingSpatialRisPrepass");
+            if (spatialRisPrepassShader == null)
+            {
+                Debug.LogError("Spatial RIS prepass shader is missing from Resources.", this);
+            }
+            else
+            {
             var prepassKernel = spatialRisPrepassShader.FindKernel("CSSpatialRisPrepass");
             SetShaderParameters(spatialRisPrepassShader, prepassKernel);
             spatialRisPrepassShader.SetTexture(prepassKernel, FeatureNormal, _featureNormalTexture);
@@ -1422,6 +1452,7 @@ public class GameManager : MonoBehaviour
             var spatialGroupsY = Mathf.CeilToInt(_textureSize.y / (float)RenderThreadCountY);
             ComputeDispatch.Dispatch(spatialRisPrepassShader, prepassKernel, spatialGroupsX, spatialGroupsY, 1);
             _temporalRisManager.BindSpatialResolve(targetShader, kernelHandle, this);
+            }
         }
 
         targetShader.SetTexture(kernelHandle, Result, _outputTexture);
@@ -1847,7 +1878,7 @@ public class GameManager : MonoBehaviour
         ResetFrameAccumulation(true);
     }
 
-    internal void ResetFrameAccumulation(bool invalidateTemporalRisHistory)
+    internal void ResetFrameAccumulation(bool invalidateTemporalRisHistory, bool invalidatePathGuide = true)
     {
         _causticsManager.ResetProgressiveRadius();
         if (invalidateTemporalRisHistory)
@@ -1865,6 +1896,10 @@ public class GameManager : MonoBehaviour
         _adaptiveBootstrapPriorityActive = false;
         _adaptiveBootstrapPreviewActive = false;
         _adaptiveBootstrapPreviewFramesRemaining = 0;
+        if (invalidatePathGuide)
+        {
+            _pathGuidingManager.Invalidate();
+        }
     }
 
     public void SetAdaptiveCaptureDiagnostics(bool enabled)
@@ -2262,8 +2297,10 @@ public class GameManager : MonoBehaviour
         // Otherwise the first real trace compiles synchronously without the warning frame.
         bool useAdaptiveTraceShader = ShouldUseAdaptiveSampling()
             && (!enableAdaptiveBootstrap || _adaptiveBootstrapFrameCount >= Mathf.Clamp(adaptiveBootstrapFrames, 1, 512));
-        frame.requestedVariant = GetShaderVariantKey(frame.useDedicatedCausticsDebugKernel ? 2
-                : frame.useGeometryDebugShader ? 1 : useAdaptiveTraceShader ? 4 : HasWaterVolume ? 3 : 0, frame.fogEnabled,
+        int rendererKind = frame.useDedicatedCausticsDebugKernel ? 2
+            : frame.useGeometryDebugShader ? 1 : useAdaptiveTraceShader ? 4 : HasWaterVolume ? 3
+            : ShouldUseExperimentalRisShader() ? 5 : ShouldUseExperimentalPathGuidedShader() ? 6 : 0;
+        frame.requestedVariant = GetShaderVariantKey(rendererKind, frame.fogEnabled,
             _terrainManager != null && _terrainManager.Terrain != null);
         
         var changed = frame.requestedVariant != _appliedShaderVariant;
@@ -2321,12 +2358,14 @@ public class GameManager : MonoBehaviour
         }
         else
         {
-            ResetFrameAccumulation(!_preserveTemporalRisHistoryForNextNonAccumulatedFrame);
+            ResetFrameAccumulation(!_preserveTemporalRisHistoryForNextNonAccumulatedFrame, false);
             _preserveTemporalRisHistoryForNextNonAccumulatedFrame = false;
         }
         
         frame.computeShader = frame.useDedicatedCausticsDebugKernel ? causticsShader
-            : ShouldUseAdaptiveSampling() ? ActiveAdaptiveTraceShader : HasWaterVolume ? waterShader : shader;
+            : ShouldUseAdaptiveSampling() ? ActiveAdaptiveTraceShader : HasWaterVolume ? waterShader
+            : ShouldUseExperimentalRisShader() ? experimentalRisShader
+            : ShouldUseExperimentalPathGuidedShader() ? experimentalPathGuidedShader : shader;
         frame.kernelHandle = frame.computeShader.FindKernel(frame.useDedicatedCausticsDebugKernel ? "CSCausticsDebug"
             : ShouldUseAdaptiveSampling() ? "CSAdaptiveTrace" : "CSMain");
     }
@@ -2348,17 +2387,18 @@ public class GameManager : MonoBehaviour
         
         var dispatchStart = _startupProfilePending ? Stopwatch.GetTimestamp() : 0;
         UpdateTextureFromCompute(frame.computeShader, frame.kernelHandle);
-        if (frame.computeShader == shader)
+        if (frame.computeShader == shader || IsExperimentalFinalColorShader(frame.computeShader))
         {
             Graphics.CopyTexture(_outputTexture, _beautyTexture);
         }
         _presentationSource = _beautyTexture;
         
-        if (!frame.useDedicatedCausticsDebugKernel && (ShouldRunSpatialDenoiser() || ShouldRunTemporalDenoiser() || ShouldRunTemporalRis() || IsFeatureDebugMode() || IsCausticPreservationDebugMode()))
+        bool usedExperimentalRis = frame.computeShader == experimentalRisShader;
+        if (!frame.useDedicatedCausticsDebugKernel && (ShouldRunSpatialDenoiser() || ShouldRunTemporalDenoiser() || usedExperimentalRis || IsFeatureDebugMode() || IsCausticPreservationDebugMode()))
         {
             UpdateFeaturesFromCompute();
         }
-        if (!frame.useDedicatedCausticsDebugKernel && ShouldRunTemporalRis()) _temporalRisManager.Commit(this);
+        if (!frame.useDedicatedCausticsDebugKernel && usedExperimentalRis) _temporalRisManager.Commit(this);
 
         if (!frame.useDedicatedCausticsDebugKernel && IsFeatureDebugMode())
         {
@@ -2393,6 +2433,10 @@ public class GameManager : MonoBehaviour
 
     private void FinalizeRenderFrame(ref RenderFrame frame)
     {
+        if (enablePathGuiding && _pathGuidingShader != null && (_renderedFrameCount & 3) == 3)
+        {
+            _pathGuidingManager.Rebuild(_pathGuidingShader);
+        }
         _renderedFrameCount++;
         if (frame.useFrameAccumulation && !frame.useDedicatedCausticsDebugKernel)
         {
@@ -3327,6 +3371,49 @@ public class GameManager : MonoBehaviour
         
         _lightingManager.EnsureBuffers();
         _lightingManager.UploadMeshLightTriangleCdf();
+        if (enablePathGuiding)
+        {
+            if (_pathGuidingShader == null)
+            {
+                _pathGuidingShader = Resources.Load<ComputeShader>("PathGuiding");
+            }
+            if (_pathGuidingShader != null)
+            {
+                var hasBounds = false;
+                var boundsMin = Vector3.zero;
+                var boundsMax = Vector3.zero;
+                for (var i = 0; i < _spheres.Count; i++)
+                {
+                    var extent = Vector3.one * _spheres[i].radius;
+                    CausticsLogic.EncapsulateCausticBounds(_spheres[i].position - extent, _spheres[i].position + extent,
+                        ref hasBounds, ref boundsMin, ref boundsMax);
+                }
+                for (var i = 0; i < Lighting.Lights.Count; i++)
+                {
+                    var extent = Vector3.one * Mathf.Max(0.01f, Lighting.Lights[i].radius);
+                    CausticsLogic.EncapsulateCausticBounds(Lighting.Lights[i].position - extent, Lighting.Lights[i].position + extent,
+                        ref hasBounds, ref boundsMin, ref boundsMax);
+                }
+                for (var i = 0; i < _meshInfos.Count; i++)
+                {
+                    CausticsLogic.EncapsulateCausticBounds(_meshInfos[i].boundsMin, _meshInfos[i].boundsMax,
+                        ref hasBounds, ref boundsMin, ref boundsMax);
+                }
+                if (WaterManager.TryGetCausticBounds(out Vector3 waterBoundsMin, out Vector3 waterBoundsMax))
+                {
+                    CausticsLogic.EncapsulateCausticBounds(waterBoundsMin, waterBoundsMax,
+                        ref hasBounds, ref boundsMin, ref boundsMax);
+                }
+                if (!hasBounds)
+                {
+                    boundsMin = new Vector3(-10.0f, -1.0f, -10.0f);
+                    boundsMax = new Vector3(10.0f, 10.0f, 10.0f);
+                }
+                _pathGuidingManager.ConfigureBounds(boundsMin, boundsMax);
+                _pathGuidingManager.Invalidate();
+                _pathGuidingManager.EnsureResources(_pathGuidingShader);
+            }
+        }
         
         if (startupProfile)
         {
@@ -3639,6 +3726,7 @@ public class GameManager : MonoBehaviour
 
     private void SetShaderParameters(ComputeShader targetShader, int kernelHandle)
     {
+        if (targetShader == experimentalPathGuidedShader) EnsurePathGuidingResources();
         BindShaderTextures(targetShader, kernelHandle);
         BindShaderCameraAndRendererSamplingParameters(targetShader, kernelHandle);
         BindShaderKeywordsAndLightingParameters(targetShader, kernelHandle);
@@ -3654,12 +3742,13 @@ public class GameManager : MonoBehaviour
         targetShader.SetTexture(kernelHandle, MeshMetallicRoughnessTextures, _meshMetallicRoughnessTextureArray);
         targetShader.SetTexture(kernelHandle, MeshNormalTextures, _meshNormalTextureArray);
         targetShader.SetTexture(kernelHandle, MeshParallaxTextures, _meshParallaxTextureArray);
-        if (targetShader == shader)
+        if (targetShader == experimentalRisShader)
         {
             if (ShouldRunTemporalRis()) targetShader.EnableKeyword("TEMPORAL_RIS_ENABLED");
             else targetShader.DisableKeyword("TEMPORAL_RIS_ENABLED");
             if (ShouldRunTemporalRis()) _temporalRisManager.Bind(targetShader, kernelHandle, this, true, IsTemporalRisUnsupported());
         }
+        if (targetShader == experimentalPathGuidedShader) _pathGuidingManager.Bind(targetShader, kernelHandle, _pathGuidingShader);
     }
 
     private void BindEnvironmentImportanceSampling(ComputeShader targetShader, int kernelHandle)
@@ -3719,7 +3808,6 @@ public class GameManager : MonoBehaviour
             targetShader.SetInt(Seed, Mathf.Max(1, CaptureRandomSeed > 0 ? CaptureRandomSeed : samplingSeed));
         }
 
-        targetShader.SetInt(UseOwenScrambledSobol, useOwenScrambledSobol ? 1 : 0);
         targetShader.SetInt(SobolDimensionLimit, Mathf.Clamp(sobolDimensionLimit, 1, SobolDirectionNumbers.MaximumDimensions));
         targetShader.SetBuffer(kernelHandle, SobolDirectionNumberBuffer, _sobolDirectionNumbers.Buffer);
         targetShader.SetInt(NumberOfPasses, numberOfPasses);
@@ -3740,6 +3828,29 @@ public class GameManager : MonoBehaviour
         targetShader.SetInt(AdaptiveMaxPathsPerPixel, Mathf.Clamp(adaptiveMaxPathsPerPixel, 1, 16));
         targetShader.SetInt(UseAdaptiveBootstrapPriority, _adaptiveBootstrapPriorityActive ? 1 : 0);
         targetShader.SetInt(AdaptiveBootstrapGroupDivisor, Mathf.Clamp(adaptiveBootstrapGroupDivisor, 1, 16));
+    }
+
+    private void EnsurePathGuidingResources()
+    {
+        if (!enablePathGuiding)
+        {
+            _pathGuidingManager.Enabled = false;
+            _pathGuidingManager.ReleaseGuideResources();
+            return;
+        }
+        if (_pathGuidingShader == null)
+        {
+            _pathGuidingShader = Resources.Load<ComputeShader>("PathGuiding");
+        }
+        if (_pathGuidingShader == null)
+        {
+            Debug.LogError("PathGuiding.compute could not be loaded from Resources.", this);
+            return;
+        }
+        _pathGuidingManager.Enabled = enablePathGuiding;
+        _pathGuidingManager.MixtureWeight = pathGuidingMixtureWeight;
+        _pathGuidingManager.MinimumSamples = pathGuidingMinimumSamples;
+        _pathGuidingManager.EnsureResources(_pathGuidingShader);
     }
 
     private void BindShaderKeywordsAndLightingParameters(ComputeShader targetShader, int kernelHandle)
@@ -3846,9 +3957,11 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, _textureSize.x);
             hash = AddHash(hash, _textureSize.y);
             hash = AddHash(hash, numberOfPasses);
-            hash = AddHash(hash, useOwenScrambledSobol ? 1 : 0);
             hash = AddHash(hash, sobolDimensionLimit);
             hash = AddHash(hash, samplingSeed);
+            hash = AddHash(hash, enablePathGuiding ? 1 : 0);
+            hash = AddHash(hash, pathGuidingMixtureWeight);
+            hash = AddHash(hash, pathGuidingMinimumSamples);
             hash = AddHash(hash, enableAdaptiveSampling ? 1 : 0);
             hash = AddHash(hash, adaptiveSamplingMinSamples);
             hash = AddHash(hash, enableAdaptiveBootstrap ? 1 : 0);

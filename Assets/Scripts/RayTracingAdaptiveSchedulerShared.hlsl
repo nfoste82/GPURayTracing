@@ -3,21 +3,23 @@
 RWTexture2D<float4> Result;
 RWTexture2D<float4> AccumulationResult;
 RWTexture2D<float4> Beauty;
-#endif
 RWTexture2D<float4> AdaptiveSamplingState;
 RWTexture2D<float4> AdaptiveSamplingM2;
 Texture2D<float4> AdaptiveBootstrapPriority;
 RWStructuredBuffer<uint4> AdaptiveGroupState;
-#ifdef RAY_TRACING_ADAPTIVE_TRACE
-StructuredBuffer<uint4> AdaptiveGroupInfo;
-#else
 RWStructuredBuffer<uint4> AdaptiveGroupInfo;
-#endif
 StructuredBuffer<uint4> AdaptiveProbeGroups;
 RWStructuredBuffer<uint> AdaptiveGroupBucket;
 RWStructuredBuffer<uint> AdaptiveGroupExtraDemand;
 RWStructuredBuffer<uint> AdaptiveRawBucketDemand;
 RWStructuredBuffer<uint> AdaptiveWorkListMetadata;
+#else
+// The trace only reads group assignments and updates its two adaptive per-pixel estimators.
+// Keeping scheduler-only UAV declarations out of this kernel avoids Metal's eight-UAV limit.
+RWTexture2D<float4> AdaptiveSamplingState;
+RWTexture2D<float4> AdaptiveSamplingM2;
+StructuredBuffer<uint4> AdaptiveGroupInfo;
+#endif
 
 #define AdaptiveMetadataWorkItemCount 0u
 #define AdaptiveMetadataPrioritySum 1u

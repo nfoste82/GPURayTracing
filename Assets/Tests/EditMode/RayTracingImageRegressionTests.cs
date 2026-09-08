@@ -79,6 +79,8 @@ namespace GPURayTracing.Tests
             public int materialType;
             public int meshIndex;
             public int textureIndex;
+            public int alphaMasked;
+            public float alphaCutoff;
             public int metallicRoughnessTextureIndex;
             public int normalTextureIndex;
             public float normalStrength;
@@ -998,6 +1000,9 @@ namespace GPURayTracing.Tests
             ComputeBuffer shadowBuffer = CreateDummyBuffer(48);
             ComputeBuffer meshLightCdfBuffer = CreateBuffer(CreateMeshLightTriangleCdf(triangles, lights), sizeof(float));
             ComputeBuffer sobolDirectionBuffer = CreateDummyBuffer(sizeof(uint));
+            ComputeBuffer pathGuideTrainingBuffer = CreateDummyBuffer(sizeof(uint));
+            ComputeBuffer pathGuideCdfBuffer = CreateDummyBuffer(sizeof(float));
+            ComputeBuffer pathGuideObservationCountBuffer = CreateDummyBuffer(sizeof(uint));
             const int environmentCdfWidth = 4;
             const int environmentCdfHeight = 4;
             CreateUniformEnvironmentCdf(environmentCdfWidth, environmentCdfHeight,
@@ -1061,6 +1066,16 @@ namespace GPURayTracing.Tests
                 shader.SetBuffer(kernel, "_ShadowBvhNodes", shadowBuffer);
                 shader.SetBuffer(kernel, "_MeshLightTriangleCdf", meshLightCdfBuffer);
                 shader.SetBuffer(kernel, "_SobolDirectionNumbers", sobolDirectionBuffer);
+                shader.SetBuffer(kernel, "_PathGuideTraining", pathGuideTrainingBuffer);
+                shader.SetBuffer(kernel, "_PathGuideCdf", pathGuideCdfBuffer);
+                shader.SetBuffer(kernel, "_PathGuideObservationCounts", pathGuideObservationCountBuffer);
+                shader.SetInt("_PathGuideEnabled", 0);
+                shader.SetFloat("_PathGuideMixtureWeight", 0.0f);
+                shader.SetInt("_PathGuideMinSamples", 1);
+                shader.SetVector("_PathGuideGridMin", Vector4.zero);
+                shader.SetVector("_PathGuideGridMax", Vector4.one);
+                shader.SetInt("_PathGuideGridResolution", 1);
+                shader.SetInt("_PathGuideDirectionBinCount", 1);
 
                 // Unity view-space camera rays point down -Z; cameraToWorld includes that handedness
                 // conversion, unlike Transform.localToWorldMatrix.
@@ -1074,7 +1089,6 @@ namespace GPURayTracing.Tests
                 shader.SetInt("_UseTemporalJitter", 0);
                 shader.SetVector("_SkyboxLight", Vector4.one);
                 shader.SetInt("_Seed", 1);
-                shader.SetInt("_UseOwenScrambledSobol", 0);
                 shader.SetInt("_SobolDimensionLimit", 1);
                 shader.SetInt("_SampleOffset", 0);
                 shader.SetInt("_NumberOfPasses", numberOfPasses);
@@ -1147,6 +1161,9 @@ namespace GPURayTracing.Tests
                 shadowBuffer.Release();
                 meshLightCdfBuffer.Release();
                 sobolDirectionBuffer.Release();
+                pathGuideTrainingBuffer.Release();
+                pathGuideCdfBuffer.Release();
+                pathGuideObservationCountBuffer.Release();
                 environmentConditionalCdfBuffer.Release();
                 environmentMarginalCdfBuffer.Release();
                 causticPhotonBuffer.Release();

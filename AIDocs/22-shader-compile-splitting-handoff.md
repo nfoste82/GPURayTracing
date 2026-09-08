@@ -20,6 +20,8 @@ The former monolithic `Assets/Scripts/RayTracingCompute.compute` was split as fo
 ```text
 RayTracingCompute.compute              CSMain final color only; FOG_ENABLED x TERRAIN_ENABLED
 RayTracingWater.compute                CSMain water-capable final color; FOG_ENABLED x TERRAIN_ENABLED
+RayTracingExperimentalPathGuided.compute Opt-in path-guided final color; FOG_ENABLED x TERRAIN_ENABLED
+RayTracingExperimentalRis.compute      Opt-in temporal/spatial RIS final color; FOG_ENABLED x TERRAIN_ENABLED x TEMPORAL_RIS_ENABLED
 RayTracingDebug.compute                CSDebugMain; FOG_ENABLED x TERRAIN_ENABLED
 RayTracingAdaptiveTrace.compute        guidance/root trace/resolve/reference; FOG_ENABLED x TERRAIN_ENABLED
 RayTracingAdaptiveScheduler.compute    clear/classify/remap/compact/diagnostics; no variants
@@ -44,6 +46,12 @@ The ordinary final-color asset compiles without water geometry, finite-volume, m
 or scatter code. `GameManager` selects `RayTracingWater.compute` and matching water-capable
 feature, focus, and adaptive-trace assets only while `HasWaterVolume` is true. This avoids adding
 a water keyword to the normal fog/terrain matrix.
+
+The ordinary final-color asset also excludes experimental path-guiding and temporal/spatial RIS
+source entirely. `GameManager` selects their dedicated assets only while the corresponding
+experimental mode is runnable; unsupported water and adaptive combinations retain the production
+renderer. Owen-scrambled Sobol is always used up to the configurable dimension limit, with the
+existing hash RNG handling later dimensions.
 
 ### August 25, 2026 Water-Free Default Attempt
 

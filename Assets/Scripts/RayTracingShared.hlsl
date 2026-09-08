@@ -4,9 +4,10 @@
 // with cs.SetTexture
 #if !defined(RAY_TRACING_ADAPTIVE_TRACE)
 RWTexture2D<float4> Result;
+#if defined(EXPERIMENTAL_RIS_REUSE)
 int _SpatialRisEnabled;
 int _SpatialRisNeighborCount;
-#if (defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)) || defined(SPATIAL_RIS_PREPASS)
+#if defined(EXPERIMENTAL_RIS_REUSE) && ((defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)) || defined(SPATIAL_RIS_PREPASS))
 struct TemporalRisReservoir
 {
     float4 data0;
@@ -40,6 +41,7 @@ Texture2D<float4> _SpatialRisReceiverNormal;
 Texture2D<float> _SpatialRisReceiverDepth;
 Texture2D<float> _SpatialRisReceiverIdentity;
 Texture2D<float> _SpatialRisReceiverValidity;
+#endif
 #endif
 #endif
 RWTexture2D<float4> AccumulationResult;
@@ -84,9 +86,20 @@ int _EnvironmentCdfWidth;
 int _EnvironmentCdfHeight;
 
 int _NumberOfPasses;
-int _UseOwenScrambledSobol;
 int _SobolDimensionLimit;
 StructuredBuffer<uint> _SobolDirectionNumbers;
+#if defined(PATH_GUIDING_ENABLED)
+RWStructuredBuffer<uint> _PathGuideTraining;
+StructuredBuffer<float> _PathGuideCdf;
+RWStructuredBuffer<uint> _PathGuideObservationCounts;
+int _PathGuideEnabled;
+float _PathGuideMixtureWeight;
+int _PathGuideMinSamples;
+float3 _PathGuideGridMin;
+float3 _PathGuideGridMax;
+int _PathGuideGridResolution;
+int _PathGuideDirectionBinCount;
+#endif
 float _SubpixelJitterScale;
 int _ShadowQuality;
 int _NumBounces;
@@ -408,7 +421,7 @@ float rand(inout RngState rngState)
     bool firstInRange = (rngState.dimension & 0x80000000u) != 0u;
     uint dimension = rngState.dimension & 0x7fffffffu;
     rngState.dimension = dimension + 1u;
-    if (_UseOwenScrambledSobol != 0 && dimension < (uint)clamp(_SobolDimensionLimit, 1, 2568))
+    if (dimension < (uint)clamp(_SobolDimensionLimit, 1, 2568))
     {
         if (firstInRange || (dimension & 3u) == 0u)
         {
@@ -566,10 +579,19 @@ struct CausticPhoton
     float3 power;
 };
 
+#if defined(RAY_TRACING_ADAPTIVE_TRACE)
+// Adaptive trace gathers completed photon data but never builds or mutates the caustic grid.
+// Read-only declarations keep this kernel below Metal's eight-UAV limit.
+StructuredBuffer<CausticPhoton> _CausticPhotons;
+StructuredBuffer<uint> _CausticPhotonMetadata;
+StructuredBuffer<int> _CausticGridCellHeads;
+StructuredBuffer<int> _CausticPhotonNext;
+#else
 RWStructuredBuffer<CausticPhoton> _CausticPhotons;
 RWStructuredBuffer<uint> _CausticPhotonMetadata;
 RWStructuredBuffer<int> _CausticGridCellHeads;
 RWStructuredBuffer<int> _CausticPhotonNext;
+#endif
 
 #if defined(CAUSTIC_PHOTON_TRACE)
 struct CausticTargetPair
@@ -3424,6 +3446,7 @@ void InitializeRisCandidate(out InitialRisCandidate candidate)
     candidate.risScale = 0.0f;
 }
 
+#if defined(EXPERIMENTAL_RIS_REUSE)
 float GetTemporalRisMergedWeight(float previousWeightSum, int previousM, int retainedPreviousM,
                                  float previousSelectedTarget, float currentTarget)
 {
@@ -3434,6 +3457,7 @@ float GetTemporalRisMergedWeight(float previousWeightSum, int previousM, int ret
     return previousWeightSum * ((float)retainedPreviousM / max(1, previousM)) * currentTarget
         / max(1e-8f, previousSelectedTarget);
 }
+#endif
 
 bool IsInitialRisEligible(RayHit hit)
 {
@@ -3442,9 +3466,11 @@ bool IsInitialRisEligible(RayHit hit)
         && !IsGlassMaterial(hit);
 }
 
+float GetMaterialContinuationPdf(Ray ray, RayHit hit, float3 direction, bool allowPathGuide);
+
 float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
-                           float lightSelectionPdf, int lightTechniqueSampleCount,
-                           bool volumeEvent, InitialRisCandidate risCandidate,
+                            float lightSelectionPdf, int lightTechniqueSampleCount,
+                            bool volumeEvent, bool allowPathGuide, InitialRisCandidate risCandidate,
                            inout RngState rngState)
 {
     float3 lightTotal = float3(0.0f, 0.0f, 0.0f);
@@ -3640,8 +3666,9 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
                 continue;
             }
 
-            float materialPdf;
-            float3 brdf = EvaluateMaterialBrdf(ray, hit, ptToOffset, materialPdf);
+            float ignoredBsdfPdf;
+            float3 brdf = EvaluateMaterialBrdf(ray, hit, ptToOffset, ignoredBsdfPdf);
+            float materialPdf = GetMaterialContinuationPdf(ray, hit, ptToOffset, allowPathGuide);
             float misWeight = useRisCandidate ? risCandidate.risScale * environmentPdf
                 * PowerHeuristic(risCandidate.proposalPdf, materialPdf)
                 : PowerHeuristic(environmentPdf, materialPdf);
@@ -3651,8 +3678,9 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
         }
 
         float lightShapePdf = GetLightShapePdf(light, hit.position, offsetPt);
-        float materialPdf;
-        float3 materialResponse = EvaluateMaterialBrdf(ray, hit, ptToOffset, materialPdf);
+        float ignoredBsdfPdf;
+        float3 materialResponse = EvaluateMaterialBrdf(ray, hit, ptToOffset, ignoredBsdfPdf);
+        float materialPdf = GetMaterialContinuationPdf(ray, hit, ptToOffset, allowPathGuide);
 #if defined(FOG_ENABLED)
         if (volumeEvent)
         {
@@ -3846,7 +3874,7 @@ int SelectLightForDraw(int iteration, int drawCount, int lightCount, float3 shad
 }
 
 float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
-                              bool volumeEvent, bool initialRis, out bool initialRisSelected,
+                               bool volumeEvent, bool allowPathGuide, bool initialRis, out bool initialRisSelected,
                                uint2 pixel, inout RngState rngState, bool reservoirOnly,
                               out InitialRisCandidate reservoirCandidate, out float reservoirWeightSum, out int reservoirM)
 {
@@ -3905,7 +3933,7 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
     // SINGLE inlined SampleSingleLight call site. Finite-light and environment samples both use
     // this visibility path so the Metal compiler sees only one shadow-BVH traversal body.
     bool useInitialRis = initialRis && !volumeEvent && IsInitialRisEligible(hit);
-#if defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
+#if defined(EXPERIMENTAL_RIS_REUSE) && defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
     bool useSpatialRis = useInitialRis && IsSpatialRisEligible(hit);
 #endif
     InitialRisCandidate selectedRisCandidate;
@@ -3920,7 +3948,7 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
         float selectedWeight = 0.0f;
         int candidateCount = max(1, _InitialRisCandidateCount);
         int candidateIndex;
-#if defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
+#if defined(EXPERIMENTAL_RIS_REUSE) && defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
         if (!useSpatialRis)
 #endif
         {
@@ -4051,11 +4079,11 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
             }
         }
         int effectiveCandidateCount =
-#if defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
+#if defined(EXPERIMENTAL_RIS_REUSE) && defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
             useSpatialRis ? 0 :
 #endif
             candidateCount;
-#if defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
+#if defined(EXPERIMENTAL_RIS_REUSE) && defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
         // Reweight a validated reservoir by the current receiver target before merging. This is
         // the temporal ReSTIR-DI cross-domain correction; visibility remains deferred.
         if (_SpatialRisEnabled == 0 && IsTemporalRisEligible(hit))
@@ -4105,7 +4133,7 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
             }
         }
 #endif
- #if defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
+ #if defined(EXPERIMENTAL_RIS_REUSE) && defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
         if (useSpatialRis)
         {
             // The prepass owns local generation. Restart from its post-candidate state so final
@@ -4170,7 +4198,7 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
             selectedRisCandidate.risScale = GetInitialRisReservoirScale(totalWeight, effectiveCandidateCount, selectedTarget);
             initialRisSelected = IsFiniteRisValue(selectedRisCandidate.risScale)
                 && selectedRisCandidate.risScale > 0.0f;
-#if defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
+#if defined(EXPERIMENTAL_RIS_REUSE) && defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
             if (!useSpatialRis && IsTemporalRisEligible(hit))
             {
                 InterlockedAdd(_TemporalRisDiagnostics[9], (uint)effectiveCandidateCount);
@@ -4240,6 +4268,7 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
         accumulated += SampleSingleLight(lightIndex, ray, hit, selectedSampleCount,
             selectionPdf, lightTechniqueSampleCount,
             volumeEvent,
+            allowPathGuide,
             selectedRisCandidate,
             rngState) * weight;
     }
@@ -4471,6 +4500,136 @@ float3 GetDiffuseScatterDirection(float3 normal, inout RngState rngState)
     return normalize(tangent * diskSample.x + bitangent * diskSample.y + normal * z);
 }
 
+#if defined(PATH_GUIDING_ENABLED)
+int PathGuideCellIndex(float3 position)
+{
+    float3 extent = max(_PathGuideGridMax - _PathGuideGridMin, 0.0001f);
+    float3 normalizedPosition = saturate((position - _PathGuideGridMin) / extent);
+    int3 cell = min((int3)(normalizedPosition * _PathGuideGridResolution), _PathGuideGridResolution - 1);
+    return cell.x + _PathGuideGridResolution * (cell.y + _PathGuideGridResolution * cell.z);
+}
+
+void PathGuideBasis(float3 normal, out float3 tangent, out float3 bitangent)
+{
+    CreateBasisFromNormal(normal, tangent, bitangent);
+}
+
+float PathGuideBinSolidAngle(uint elevationBin)
+{
+    const uint azimuthCount = 8u;
+    const uint elevationCount = 4u;
+    float cosTop = (float)elevationBin / elevationCount;
+    float cosBottom = (float)(elevationBin + 1u) / elevationCount;
+    return (2.0f * PI / azimuthCount) * (cosBottom - cosTop);
+}
+
+uint PathGuideDirectionBin(float3 normal, float3 direction)
+{
+    float3 tangent;
+    float3 bitangent;
+    PathGuideBasis(normal, tangent, bitangent);
+    float3 local = float3(dot(direction, tangent), dot(direction, bitangent), dot(direction, normal));
+    float azimuth = atan2(local.y, local.x);
+    if (azimuth < 0.0f) azimuth += 2.0f * PI;
+    uint azimuthBin = min((uint)(azimuth / (2.0f * PI) * 8.0f), 7u);
+    uint elevationBin = min((uint)(saturate(local.z) * 4.0f), 3u);
+    return elevationBin * 8u + azimuthBin;
+}
+
+void RecordPathGuideObservation(float3 position, float3 normal, float3 direction, float luminance)
+{
+    if (_PathGuideEnabled == 0 || luminance <= 0.0f || dot(normal, direction) <= 0.0f) return;
+    int cell = PathGuideCellIndex(position);
+    uint bin = PathGuideDirectionBin(normal, direction);
+    // Log-encode and bound each observation. Training is consumed and cleared at every CDF
+    // rebuild, so this keeps the atomic accumulators well below uint overflow in bright scenes.
+    uint encoded = min((uint)(log2(1.0f + luminance) * 8.0f), 64u);
+    InterlockedAdd(_PathGuideTraining[(uint)cell * (uint)_PathGuideDirectionBinCount + bin], max(1u, encoded));
+    // Counts only gate activation; cap them to prevent a long progressive render wrapping.
+    InterlockedAdd(_PathGuideObservationCounts[cell], 1u);
+    InterlockedMin(_PathGuideObservationCounts[cell], (uint)max(1, _PathGuideMinSamples));
+}
+
+bool IsPathGuideEligible(RayHit hit, bool allowPathGuide)
+{
+    return allowPathGuide && _PathGuideEnabled != 0 && !IsGlassMaterial(hit)
+        && GetBrdfSpecularProbability(hit) < 0.95f && GetGgxAlpha(hit) > 0.08f;
+}
+
+float PathGuidePdf(float3 position, float3 normal, float3 direction);
+
+float GetMaterialContinuationPdf(Ray ray, RayHit hit, float3 direction, bool allowPathGuide)
+{
+    float bsdfPdf;
+    EvaluateMaterialBrdf(ray, hit, direction, bsdfPdf);
+    if (!IsPathGuideEligible(hit, allowPathGuide)) return bsdfPdf;
+    return (1.0f - saturate(_PathGuideMixtureWeight)) * bsdfPdf
+        + saturate(_PathGuideMixtureWeight) * PathGuidePdf(hit.position, hit.normal, direction);
+}
+
+float PathGuidePdf(float3 position, float3 normal, float3 direction)
+{
+    if (_PathGuideEnabled == 0 || dot(normal, direction) <= 0.0f) return 0.0f;
+    int cell = PathGuideCellIndex(position);
+    uint bin = PathGuideDirectionBin(normal, direction);
+    uint baseIndex = (uint)cell * (uint)_PathGuideDirectionBinCount;
+    uint count = _PathGuideObservationCounts[cell];
+    if (count < (uint)max(1, _PathGuideMinSamples)
+        || _PathGuideCdf[baseIndex + (uint)_PathGuideDirectionBinCount - 1u] < 0.999f)
+    {
+        return saturate(dot(normal, direction)) / PI;
+    }
+    float previous = bin > 0u ? _PathGuideCdf[baseIndex + bin - 1u] : 0.0f;
+    float mass = max(0.0f, _PathGuideCdf[baseIndex + bin] - previous);
+    return mass / max(PathGuideBinSolidAngle(bin / 8u), 1e-5f);
+}
+
+float3 SamplePathGuide(float3 position, float3 normal, inout RngState rngState, out float pdf)
+{
+    int cell = PathGuideCellIndex(position);
+    uint baseIndex = (uint)cell * (uint)_PathGuideDirectionBinCount;
+    uint count = _PathGuideObservationCounts[cell];
+    if (count < (uint)max(1, _PathGuideMinSamples)
+        || _PathGuideCdf[baseIndex + (uint)_PathGuideDirectionBinCount - 1u] < 0.999f)
+    {
+        float3 direction = GetDiffuseScatterDirection(normal, rngState);
+        pdf = saturate(dot(normal, direction)) / PI;
+        return direction;
+    }
+
+    float target = rand(rngState);
+    uint bin = 0u;
+    [loop]
+    for (; bin + 1u < (uint)_PathGuideDirectionBinCount; bin++)
+    {
+        if (target <= _PathGuideCdf[baseIndex + bin]) break;
+    }
+    uint elevationBin = bin / 8u;
+    uint azimuthBin = bin % 8u;
+    float cosTop = (float)elevationBin / 4.0f;
+    float cosBottom = (float)(elevationBin + 1u) / 4.0f;
+    float cosTheta = lerp(cosTop, cosBottom, rand(rngState));
+    float phi = 2.0f * PI * ((float)azimuthBin + rand(rngState)) / 8.0f;
+    float sinTheta = sqrt(max(0.0f, 1.0f - cosTheta * cosTheta));
+    float3 tangent;
+    float3 bitangent;
+    PathGuideBasis(normal, tangent, bitangent);
+    float3 direction = normalize(tangent * (cos(phi) * sinTheta)
+        + bitangent * (sin(phi) * sinTheta) + normal * cosTheta);
+    pdf = PathGuidePdf(position, normal, direction);
+    return direction;
+}
+#else
+void RecordPathGuideObservation(float3 position, float3 normal, float3 direction, float luminance) {}
+
+float GetMaterialContinuationPdf(Ray ray, RayHit hit, float3 direction, bool allowPathGuide)
+{
+    float bsdfPdf;
+    EvaluateMaterialBrdf(ray, hit, direction, bsdfPdf);
+    return bsdfPdf;
+}
+#endif
+
 float3 SampleGgxHalfDirection(float3 normal, float alpha, inout RngState rngState)
 {
     float u1 = rand(rngState);
@@ -4553,7 +4712,7 @@ float3 SampleDielectricBoundaryNormal(float3 opticalNormal, float3 geometricNorm
     return geometricBoundaryNormal;
 }
 
-BrdfSample SampleMaterialBrdf(Ray ray, RayHit hit, inout RngState rngState)
+BrdfSample SampleMaterialBrdf(Ray ray, RayHit hit, bool allowPathGuide, inout RngState rngState)
 {
     BrdfSample sample;
     sample.direction = hit.normal;
@@ -4561,6 +4720,16 @@ BrdfSample SampleMaterialBrdf(Ray ray, RayHit hit, inout RngState rngState)
     sample.pdf = 0.0f;
 
     float specularProbability = GetBrdfSpecularProbability(hit);
+#if defined(PATH_GUIDING_ENABLED)
+    bool guideEligible = IsPathGuideEligible(hit, allowPathGuide);
+    float guideProbability = guideEligible ? saturate(_PathGuideMixtureWeight) : 0.0f;
+    if (guideProbability > 0.0f && rand(rngState) < guideProbability)
+    {
+        float guidePdf;
+        sample.direction = SamplePathGuide(hit.position, hit.normal, rngState, guidePdf);
+    }
+    else
+#endif
     if (rand(rngState) < specularProbability)
     {
         float3 viewDirection = normalize(-ray.direction);
@@ -4585,6 +4754,7 @@ BrdfSample SampleMaterialBrdf(Ray ray, RayHit hit, inout RngState rngState)
     float3 brdf = EvaluateMaterialBrdf(ray, hit, sample.direction, sample.pdf);
     if (sample.pdf > 1e-6f)
     {
+        sample.pdf = GetMaterialContinuationPdf(ray, hit, sample.direction, allowPathGuide);
         sample.weight = brdf * normalDotDirection / sample.pdf;
     }
     return sample;
@@ -4820,7 +4990,7 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
         return CreateScatterResult(scatteredRay, float3(1.0f, 1.0f, 1.0f), 1, MediumTransitionNone);
     }
 
-    BrdfSample brdfSample = SampleMaterialBrdf(sourceRay, hit, rngState);
+    BrdfSample brdfSample = SampleMaterialBrdf(sourceRay, hit, bounce > 0, rngState);
     scatteredRay.direction = brdfSample.direction;
     float offsetSign = dot(scatteredRay.direction, hit.geometricNormal) >= 0.0f ? 1.0f : -1.0f;
     scatteredRay.origin = hit.position + hit.geometricNormal * (0.001f * offsetSign);
@@ -4829,14 +4999,14 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
     return result;
 }
 
-float3 GetDirectLight(Ray ray, RayHit hit, bool softShadows, bool initialRis,
+float3 GetDirectLight(Ray ray, RayHit hit, bool softShadows, bool allowPathGuide, bool initialRis,
                        out bool initialRisSelected, uint2 pixel, inout RngState rngState)
 {
     int samplesPerLight = softShadows ? max(1, _ShadowQuality + 1) : 1;
     InitialRisCandidate ignoredCandidate;
     float ignoredWeightSum;
     int ignoredM;
-    return GetLightHittingPoint(ray, hit, samplesPerLight, false, initialRis, initialRisSelected, pixel, rngState,
+    return GetLightHittingPoint(ray, hit, samplesPerLight, false, allowPathGuide, initialRis, initialRisSelected, pixel, rngState,
         false, ignoredCandidate, ignoredWeightSum, ignoredM);
 }
 
@@ -4850,7 +5020,7 @@ float3 GetFogDirectLight(Ray ray, float3 position, bool softShadows, inout RngSt
     InitialRisCandidate ignoredCandidate;
     float ignoredWeightSum;
     int ignoredM;
-    return GetLightHittingPoint(ray, eventHit, samplesPerLight, true, false, ignoredInitialRisSelection, uint2(0, 0), rngState,
+    return GetLightHittingPoint(ray, eventHit, samplesPerLight, true, false, false, ignoredInitialRisSelection, uint2(0, 0), rngState,
         false, ignoredCandidate, ignoredWeightSum, ignoredM);
 }
 #endif
@@ -4979,6 +5149,12 @@ float3 TracePathWithDirectLight(Ray ray, uint2 pixel, inout RngState rngState, o
     bool previousInitialRisSampled = false;
     bool previousNearDeltaSpecular = false;
     bool previousSoftShadows = false;
+#if defined(PATH_GUIDING_ENABLED)
+    bool previousGuideSampled = false;
+    float3 previousGuidePosition = float3(0.0f, 0.0f, 0.0f);
+    float3 previousGuideNormal = float3(0.0f, 0.0f, 1.0f);
+    float3 previousGuideDirection = float3(0.0f, 0.0f, 1.0f);
+#endif
     bool canGatherCaustics = true;
 
     [loop]
@@ -5051,7 +5227,15 @@ float3 TracePathWithDirectLight(Ray ray, uint2 pixel, inout RngState rngState, o
                     misWeight = PowerHeuristic(previousMaterialPdf, directPdf);
                 }
             }
-            radiance += throughput * GetTerminalHitColor(ray, hit) * misWeight;
+            float3 terminalRadiance = GetTerminalHitColor(ray, hit) * misWeight;
+#if defined(PATH_GUIDING_ENABLED)
+            if (previousGuideSampled)
+            {
+                RecordPathGuideObservation(previousGuidePosition, previousGuideNormal, previousGuideDirection,
+                    dot(abs(terminalRadiance), float3(0.2126f, 0.7152f, 0.0722f)));
+            }
+#endif
+            radiance += throughput * terminalRadiance;
             break;
         }
 
@@ -5069,7 +5253,15 @@ float3 TracePathWithDirectLight(Ray ray, uint2 pixel, inout RngState rngState, o
                     misWeight = PowerHeuristic(previousMaterialPdf, lightSampleCount * lightPdf);
                 }
             }
-            radiance += throughput * emission * misWeight;
+            float3 terminalRadiance = emission * misWeight;
+#if defined(PATH_GUIDING_ENABLED)
+            if (previousGuideSampled)
+            {
+                RecordPathGuideObservation(previousGuidePosition, previousGuideNormal, previousGuideDirection,
+                    dot(abs(terminalRadiance), float3(0.2126f, 0.7152f, 0.0722f)));
+            }
+#endif
+            radiance += throughput * terminalRadiance;
             break;
         }
 
@@ -5085,6 +5277,7 @@ float3 TracePathWithDirectLight(Ray ray, uint2 pixel, inout RngState rngState, o
 
         bool sampledDirectLight = false;
         bool sampledInitialRis = false;
+        float3 directLightContribution = float3(0.0f, 0.0f, 0.0f);
         if (ShouldSampleDirectLight(throughput))
         {
             SetRngDimension(rngState, BounceSampleDimension((uint)bounce, SampleDimensionDirectLightOffset));
@@ -5092,11 +5285,19 @@ float3 TracePathWithDirectLight(Ray ray, uint2 pixel, inout RngState rngState, o
             bool hasInitialRisProposal = _NumLights > 0 || (_EnvironmentLightEnabled != 0
                 && _EnvironmentCdfWidth > 0 && _EnvironmentCdfHeight > 0);
             bool useInitialRis = bounce == 0 && hasInitialRisProposal && IsInitialRisEligible(hit);
-            float3 directLight = GetDirectLight(ray, hit, softShadows, useInitialRis,
+            float3 directLight = GetDirectLight(ray, hit, softShadows, bounce > 0, useInitialRis,
                 sampledInitialRis, pixel, rngState);
-            float3 directLightContribution = throughput * directLight;
+            directLightContribution = throughput * directLight;
             radiance += directLightContribution;
             directLightLuminance += dot(directLightContribution, float3(0.2126f, 0.7152f, 0.0722f));
+#if defined(PATH_GUIDING_ENABLED)
+            if (previousGuideSampled)
+            {
+                RecordPathGuideObservation(previousGuidePosition, previousGuideNormal,
+                    previousGuideDirection,
+                    dot(abs(directLight), float3(0.2126f, 0.7152f, 0.0722f)));
+            }
+#endif
             sampledDirectLight = true;
             previousSoftShadows = softShadows;
         }
@@ -5104,6 +5305,15 @@ float3 TracePathWithDirectLight(Ray ray, uint2 pixel, inout RngState rngState, o
         int remainingBounces = _NumBounces - bounce;
         SetRngDimension(rngState, BounceSampleDimension((uint)bounce, SampleDimensionScatterOffset));
         ScatterResult scatter = CreateScatteredRay(ray, hit, bounce, remainingBounces, mediumStack, rngState);
+#if defined(PATH_GUIDING_ENABLED)
+        previousGuideSampled = IsPathGuideEligible(hit, bounce > 0) && scatter.materialPdf > 1e-6f;
+        if (previousGuideSampled)
+        {
+            previousGuidePosition = hit.position;
+            previousGuideNormal = hit.normal;
+            previousGuideDirection = scatter.ray.direction;
+        }
+#endif
         ApplyMediumTransition(mediumStack, hit, scatter.mediumTransition);
         previousSurfacePosition = hit.position;
         previousMaterialPdf = scatter.materialPdf;
@@ -5222,7 +5432,7 @@ float3 GetDebugRenderColor(Ray ray, inout RngState rngState)
     if (_DebugRenderMode == DebugDirectLight)
     {
         bool ignoredInitialRisSelection;
-        return saturate(GetDirectLight(ray, hit, true, false, ignoredInitialRisSelection, uint2(0, 0), rngState));
+        return saturate(GetDirectLight(ray, hit, true, false, false, ignoredInitialRisSelection, uint2(0, 0), rngState));
     }
 
     if (_DebugRenderMode == DebugHitDistance)
@@ -5345,7 +5555,7 @@ float3 GetFeatureIdentityDebugColor(float identity)
 
 // Feature buffers use an unjittered pinhole primary ray. This makes their surface decisions
 // stable across stochastic path samples; beauty remains independently sampled and accumulated.
-#if defined(SPATIAL_RIS_PREPASS)
+#if defined(EXPERIMENTAL_RIS_REUSE) && defined(SPATIAL_RIS_PREPASS)
 // Spatial validation must describe the exact primary ray that generated the local reservoir.
 // The normal denoiser features remain unjittered and are refreshed after CSMain finishes.
 void WriteSpatialRisReceiverFeatures(uint2 pixel, RayHit hit)

@@ -43,16 +43,16 @@ namespace PathTracing.Denoising
         [Range(1, 5), Tooltip("A-trous passes use increasing pixel steps: 1, 2, 4, 8, and 16.")]
         public int iterations = 1;
         
-        [Range(0.01f, 4.0f)] 
+        [Range(0.01f, 4.0f), Tooltip("Controls spatial filtering across depth discontinuities. Lower values preserve depth edges; higher values permit more smoothing across them.")]
         public float depthSigma = 0.25f;
         
-        [Range(1.0f, 256.0f)] 
+        [Range(1.0f, 256.0f), Tooltip("Controls spatial filtering across normal changes. Higher values preserve normal edges more strongly.")]
         public float normalPower = 64.0f;
         
-        [Range(0.01f, 4.0f)] 
+        [Range(0.01f, 4.0f), Tooltip("Controls spatial filtering across albedo changes. Lower values preserve material and texture edges; higher values permit more smoothing across them.")]
         public float albedoSigma = 0.25f;
         
-        [Range(0.01f, 4.0f)] 
+        [Range(0.01f, 4.0f), Tooltip("Controls spatial filtering across radiance changes. Lower values preserve lighting detail; higher values remove more noise.")]
         public float luminanceSigma = 0.08f;
 
         private RenderTexture _ping;

@@ -1,7 +1,7 @@
 #pragma kernel CSSpatialRisPrepass
 #pragma multi_compile _ FOG_ENABLED
 #pragma multi_compile _ TERRAIN_ENABLED
-#pragma multi_compile _ TEMPORAL_RIS_ENABLED
+#define EXPERIMENTAL_RIS_REUSE 1
 #define SPATIAL_RIS_PREPASS
 #include "../Scripts/RayTracingShared.hlsl"
 
@@ -42,7 +42,7 @@ void CSSpatialRisPrepass(uint3 id : SV_DispatchThreadID)
         InitialRisCandidate candidate;
         float weightSum;
         int reservoirM;
-        GetLightHittingPoint(ray, hit, max(1, _ShadowQuality + 1), false, true, selected, pixel, rngState,
+        GetLightHittingPoint(ray, hit, max(1, _ShadowQuality + 1), false, false, true, selected, pixel, rngState,
             true, candidate, weightSum, reservoirM);
         if (selected)
         {

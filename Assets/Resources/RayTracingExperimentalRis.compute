@@ -1,0 +1,3 @@
+// Opt-in temporal/spatial RIS renderer. The production asset excludes reuse resources and logic.
+#define EXPERIMENTAL_RIS_REUSE 1
+#include_with_pragmas "../Scripts/RayTracingCompute.compute"

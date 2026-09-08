@@ -212,6 +212,8 @@ MonoBehaviour:
   utilityShader: {fileID: 0}
   featuresShader: {fileID: 0}
   spatialRisPrepassShader: {fileID: 0}
+  experimentalPathGuidedShader: {fileID: 0}
+  experimentalRisShader: {fileID: 0}
   focusShader: {fileID: 0}
   adaptiveSchedulerShader: {fileID: 0}
   adaptiveTraceShader: {fileID: 0}
@@ -221,7 +223,7 @@ MonoBehaviour:
   waterAdaptiveTraceShader: {fileID: 0}
   causticsShader: {fileID: 7200000, guid: 3f6f46a7edd34f308c1eac1557178d41, type: 3}
   causticPreservationThreshold: 4
-  renderResolutionPercent: 100
+  renderResolutionPercent: 50
   numberOfPasses: 1
   subpixelJitterScale: 1.1
   enableFrameAccumulation: 1
@@ -232,22 +234,24 @@ MonoBehaviour:
   topLevelBvhMinObjectCount: 64
   shadowBvhMinObjectCount: 64
   shadowRandomness: 0.65
-  useOwenScrambledSobol: 1
-  sobolDimensionLimit: 328
+  sobolDimensionLimit: 656
   samplingSeed: 1
+  enablePathGuiding: 0
+  pathGuidingMixtureWeight: 0.5
+  pathGuidingMinimumSamples: 8
   enableAdaptiveSampling: 1
   recordEditorRun: 0
   adaptiveSamplingMinSamples: 2
-  adaptiveLuminanceErrorWeight: -2
+  adaptiveLuminanceErrorWeight: -3
   adaptiveSpatialDisagreementPriority: 4
   adaptiveReclassificationInterval: 4
   adaptiveHighestBucketSampleRate: 3
   adaptiveMaxPathsPerPixel: 3
-  enableAdaptiveBootstrap: 0
+  enableAdaptiveBootstrap: 1
   adaptiveBootstrapGroupDivisor: 16
-  adaptiveBootstrapFrames: 24
-  adaptiveBootstrapResolutionScale: 0.5
-  adaptiveGuidanceHistoryFrames: 8
+  adaptiveBootstrapFrames: 128
+  adaptiveBootstrapResolutionScale: 0.25
+  adaptiveGuidanceHistoryFrames: 32
   adaptiveGuidanceChangeThreshold: 0.02
   adaptiveGuidanceMaxUpdates: 2
   adaptiveGuidanceBrightnessPriority: 0.5
@@ -303,8 +307,8 @@ MonoBehaviour:
     iterations: 1
     depthSigma: 0.25
     normalPower: 64
-    albedoSigma: 0.25
-    luminanceSigma: 0.05
+    albedoSigma: 0.137
+    luminanceSigma: 0.09
   _temporalDenoisingManager:
     enabled: 0
     temporalMaxHistoryLength: 16
@@ -540,6 +544,11 @@ PrefabInstance:
       propertyPath: NormalStrength
       value: 1
       objectReference: {fileID: 0}
+    - target: {fileID: 1222069296115569114, guid: 8ddca31243df445f4b72aa5a61e7d82a,
+        type: 3}
+      propertyPath: m_LocalPosition.y
+      value: -2
+      objectReference: {fileID: 0}
     - target: {fileID: 1278388132463040712, guid: 8ddca31243df445f4b72aa5a61e7d82a,
         type: 3}
       propertyPath: NormalStrength
@@ -564,6 +573,16 @@ PrefabInstance:
         type: 3}
       propertyPath: NormalStrength
       value: 1.5
+      objectReference: {fileID: 0}
+    - target: {fileID: 2971967063100379664, guid: 8ddca31243df445f4b72aa5a61e7d82a,
+        type: 3}
+      propertyPath: Metallic
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 2971967063100379664, guid: 8ddca31243df445f4b72aa5a61e7d82a,
+        type: 3}
+      propertyPath: Smoothness
+      value: 0.35
       objectReference: {fileID: 0}
     - target: {fileID: 2975147815424576458, guid: 8ddca31243df445f4b72aa5a61e7d82a,
         type: 3}
@@ -650,6 +669,11 @@ PrefabInstance:
       propertyPath: NormalStrength
       value: 1.5
       objectReference: {fileID: 0}
+    - target: {fileID: 6237959794574235272, guid: 8ddca31243df445f4b72aa5a61e7d82a,
+        type: 3}
+      propertyPath: m_LocalPosition.y
+      value: -2
+      objectReference: {fileID: 0}
     - target: {fileID: 6411649075111936649, guid: 8ddca31243df445f4b72aa5a61e7d82a,
         type: 3}
       propertyPath: NormalStrength
@@ -674,6 +698,16 @@ PrefabInstance:
         type: 3}
       propertyPath: NormalStrength
       value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 8911312946994033739, guid: 8ddca31243df445f4b72aa5a61e7d82a,
+        type: 3}
+      propertyPath: m_LocalPosition.y
+      value: -2
+      objectReference: {fileID: 0}
+    - target: {fileID: 9001664140278730045, guid: 8ddca31243df445f4b72aa5a61e7d82a,
+        type: 3}
+      propertyPath: m_LocalPosition.y
+      value: -2
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []

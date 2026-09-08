@@ -10,6 +10,8 @@ public static class RayTracingShaderPrecompiler
 {
     private const string MainShaderPath = "Assets/Scripts/RayTracingCompute.compute";
     private const string WaterShaderPath = "Assets/Resources/RayTracingWater.compute";
+    private const string ExperimentalPathGuidedShaderPath = "Assets/Resources/RayTracingExperimentalPathGuided.compute";
+    private const string ExperimentalRisShaderPath = "Assets/Resources/RayTracingExperimentalRis.compute";
     private const string AdaptiveTraceShaderPath = "Assets/Resources/RayTracingAdaptiveTrace.compute";
     private const string AdaptiveSchedulerShaderPath = "Assets/Resources/RayTracingAdaptiveScheduler.compute";
     private const string UtilityShaderPath = "Assets/Resources/RayTracingUtility.compute";
@@ -56,6 +58,8 @@ public static class RayTracingShaderPrecompiler
 
     private static readonly ShaderAsset Main = new ShaderAsset("Main Final Color", MainShaderPath, VariantSet.FogTerrain, "CSMain");
     private static readonly ShaderAsset Water = new ShaderAsset("Water Final Color", WaterShaderPath, VariantSet.FogTerrain, "CSMain");
+    private static readonly ShaderAsset ExperimentalPathGuided = new ShaderAsset("Experimental Path Guided", ExperimentalPathGuidedShaderPath, VariantSet.FogTerrain, "CSMain");
+    private static readonly ShaderAsset ExperimentalRis = new ShaderAsset("Experimental RIS", ExperimentalRisShaderPath, VariantSet.FogTerrain, "CSMain");
     private static readonly ShaderAsset AdaptiveTrace = new ShaderAsset("Adaptive Trace", AdaptiveTraceShaderPath, VariantSet.FogTerrain,
         "CSAdaptiveTrace", "CSAdaptiveTraceReference");
     private static readonly ShaderAsset AdaptiveScheduler = new ShaderAsset("Adaptive Scheduler", AdaptiveSchedulerShaderPath, VariantSet.None,
@@ -69,7 +73,7 @@ public static class RayTracingShaderPrecompiler
         "CSSpatialRisPrepass");
     private static readonly ShaderAsset Focus = new ShaderAsset("Focus", FocusShaderPath, VariantSet.Terrain, "CSFocusQuery");
     private static readonly ShaderAsset RegressionProbe = new ShaderAsset("Regression Probe", RegressionProbeShaderPath, VariantSet.None, "CSRegressionProbe");
-    private static readonly ShaderAsset[] RendererAssets = { Main, Water, AdaptiveTrace, AdaptiveScheduler, Utility, Features, SpatialRisPrepass, Focus, RegressionProbe };
+    private static readonly ShaderAsset[] RendererAssets = { Main, Water, ExperimentalPathGuided, ExperimentalRis, AdaptiveTrace, AdaptiveScheduler, Utility, Features, SpatialRisPrepass, Focus, RegressionProbe };
 
     [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Main Final Color/All Fog + Terrain Variants")]
     private static void PrecompileMainAllVariants() => Precompile(new[] { Main }, true);
@@ -88,6 +92,12 @@ public static class RayTracingShaderPrecompiler
 
     [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Water Final Color/Default (Fog Off, Terrain Off)")]
     private static void PrecompileWaterDefault() => Precompile(new[] { Water }, true, 0);
+
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Experimental Path Guided/Default (Fog Off, Terrain Off)")]
+    private static void PrecompileExperimentalPathGuidedDefault() => Precompile(new[] { ExperimentalPathGuided }, true, 0);
+
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Experimental RIS/Default (Fog Off, Terrain Off)")]
+    private static void PrecompileExperimentalRisDefault() => Precompile(new[] { ExperimentalRis }, true, 0);
 
     [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Adaptive Trace/All Kernels and Fog + Terrain Variants")]
     private static void PrecompileAdaptiveTrace() => Precompile(new[] { AdaptiveTrace }, true);

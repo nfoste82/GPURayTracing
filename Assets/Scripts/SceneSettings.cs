@@ -17,9 +17,12 @@ public sealed class SceneSettings
     public int NumberOfPasses = 1;
     public float SubpixelJitterScale = 1.4f;
     public bool EnableFrameAccumulation = true;
-    public bool UseOwenScrambledSobol = true;
     public int SobolDimensionLimit = 328;
     public int SamplingSeed = 1;
+
+    public bool EnablePathGuiding = false;
+    public float PathGuidingMixtureWeight = 0.5f;
+    public int PathGuidingMinimumSamples = 32;
 
     public bool EnableAdaptiveSampling = true;
     public int AdaptiveSamplingMinSamples = 2;

@@ -1,0 +1,107 @@
+{
+  "schemaVersion": 1,
+  "label": "sponza_variants_180s",
+  "scenes": ["Assets/Scenes/Sponza.unity"],
+  "width": 2560,
+  "height": 1440,
+  "durationSeconds": 180.0,
+  "cooldownSeconds": 25.0,
+  "disableAdaptiveInstrumentation": true,
+  "requireReference": true,
+  "variants": [
+    {
+      "name": "mis_nonadaptive_sobol328",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "false" },
+        { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "mis_adaptive_sobol328_pathguide25_luminanceM1",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "adaptiveLuminanceErrorWeight", "value": "-1" },
+        { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "enablePathGuiding", "value": "true" },
+        { "path": "pathGuidingMixtureWeight", "value": "0.25" },
+        { "path": "pathGuidingMinimumSamples", "value": "32" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "mis_adaptive_sobol328_pathguide25_luminanceM2",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "adaptiveLuminanceErrorWeight", "value": "-2" },
+        { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "enablePathGuiding", "value": "true" },
+        { "path": "pathGuidingMixtureWeight", "value": "0.25" },
+        { "path": "pathGuidingMinimumSamples", "value": "32" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "mis_adaptive_sobol328_pathguide50_luminanceM1",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "adaptiveLuminanceErrorWeight", "value": "-1" },
+        { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "enablePathGuiding", "value": "true" },
+        { "path": "pathGuidingMixtureWeight", "value": "0.5" },
+        { "path": "pathGuidingMinimumSamples", "value": "32" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "mis_adaptive_sobol328_pathguide50_luminanceM2",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "adaptiveLuminanceErrorWeight", "value": "-2" },
+        { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "enablePathGuiding", "value": "true" },
+        { "path": "pathGuidingMixtureWeight", "value": "0.5" },
+        { "path": "pathGuidingMinimumSamples", "value": "32" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "mis_adaptive_sobol328_pathguide75_luminanceM1",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "adaptiveLuminanceErrorWeight", "value": "-1" },
+        { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "enablePathGuiding", "value": "true" },
+        { "path": "pathGuidingMixtureWeight", "value": "0.75" },
+        { "path": "pathGuidingMinimumSamples", "value": "32" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "mis_adaptive_sobol328_pathguide75_luminanceM2",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "adaptiveLuminanceErrorWeight", "value": "-2" },
+        { "path": "Lighting.LightSamplingStrategy", "value": "ImportanceSampled" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "enablePathGuiding", "value": "true" },
+        { "path": "pathGuidingMixtureWeight", "value": "0.75" },
+        { "path": "pathGuidingMinimumSamples", "value": "32" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    }
+  ]
+}

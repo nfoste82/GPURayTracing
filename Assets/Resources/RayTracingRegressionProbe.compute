@@ -146,7 +146,7 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     RegressionResults[27] = float4(metalBrdf, metalPdf);
 
     RngState brdfRngState = CreateRngState(uint2(12u, 34u), 12345u);
-    BrdfSample brdfSample = SampleMaterialBrdf(normalIncidenceRay, diffuseBrdfHit, brdfRngState);
+    BrdfSample brdfSample = SampleMaterialBrdf(normalIncidenceRay, diffuseBrdfHit, false, brdfRngState);
     RegressionResults[28] = float4(brdfSample.direction, brdfSample.pdf);
     RegressionResults[29] = float4(brdfSample.weight, dot(brdfSample.direction, normal));
 
@@ -168,7 +168,7 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     RegressionResults[44] = float4(obliquePdf, expectedVisiblePdf, oldNdfPdf, abs(obliquePdf - oldNdfPdf));
 
     RngState visibleNormalRngState = CreateRngState(uint2(81u, 72u), 81723u);
-    BrdfSample visibleNormalSample = SampleMaterialBrdf(obliqueRay, metalBrdfHit, visibleNormalRngState);
+    BrdfSample visibleNormalSample = SampleMaterialBrdf(obliqueRay, metalBrdfHit, false, visibleNormalRngState);
     float reevaluatedVisiblePdf;
     EvaluateMaterialBrdf(obliqueRay, metalBrdfHit, visibleNormalSample.direction, reevaluatedVisiblePdf);
     RegressionResults[45] = float4(visibleNormalSample.direction, visibleNormalSample.pdf);
