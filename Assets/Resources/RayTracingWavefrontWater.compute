@@ -1,0 +1,4 @@
+// Water-capable queue-driven path tracer. Keep this separate from the common surface asset so
+// normal dry scenes do not compile procedural-water intersection and medium code.
+#define WATER_ENABLED 1
+#include_with_pragmas "RayTracingWavefront.compute"

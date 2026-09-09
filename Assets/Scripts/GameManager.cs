@@ -50,6 +50,7 @@ public class GameManager : MonoBehaviour
     [SerializeField] private ComputeShader waterFocusShader;
     [SerializeField] private ComputeShader waterAdaptiveTraceShader;
     private ComputeShader _wavefrontShader;
+    private ComputeShader _wavefrontWaterShader;
 
     [SerializeField]
     public ComputeShader causticsShader;
@@ -571,6 +572,19 @@ public class GameManager : MonoBehaviour
     {
         get
         {
+            if (HasWaterVolume)
+            {
+                if (_wavefrontWaterShader == null)
+                {
+                    _wavefrontWaterShader = Resources.Load<ComputeShader>("RayTracingWavefrontWater");
+                }
+                if (_wavefrontWaterShader == null)
+                {
+                    throw new InvalidOperationException("Missing Resources/RayTracingWavefrontWater.compute.");
+                }
+                return _wavefrontWaterShader;
+            }
+
             if (_wavefrontShader == null)
             {
                 _wavefrontShader = Resources.Load<ComputeShader>("RayTracingWavefront");
@@ -833,7 +847,12 @@ public class GameManager : MonoBehaviour
         {
             _wavefrontShader = Resources.Load<ComputeShader>("RayTracingWavefront");
         }
-        if (utilityShader == null || featuresShader == null || focusShader == null || _wavefrontShader == null)
+        if (_wavefrontWaterShader == null)
+        {
+            _wavefrontWaterShader = Resources.Load<ComputeShader>("RayTracingWavefrontWater");
+        }
+        if (utilityShader == null || featuresShader == null || focusShader == null || _wavefrontShader == null
+            || _wavefrontWaterShader == null)
         {
             Debug.LogError("Split ray tracing compute shaders are missing from Resources.", this);
         }
@@ -3950,7 +3969,7 @@ public class GameManager : MonoBehaviour
         targetShader.SetFloat(Exposure, exposure);
         targetShader.SetFloat(FireflyClamp, Mathf.Max(0.0f, fireflyClamp));
         
-        if (targetShader == waterShader || targetShader == waterFogShader || targetShader == waterFeaturesShader || targetShader == waterFocusShader
+        if (targetShader == _wavefrontWaterShader || targetShader == waterShader || targetShader == waterFogShader || targetShader == waterFeaturesShader || targetShader == waterFocusShader
             || targetShader == waterAdaptiveTraceShader || targetShader == causticsShader)
         {
             WaterManager.SetShaderParameters(targetShader, Application.isPlaying ? GetRenderTime() : 0.0f);
