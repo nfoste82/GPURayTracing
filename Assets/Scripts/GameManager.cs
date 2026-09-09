@@ -1549,6 +1549,8 @@ public class GameManager : MonoBehaviour
         if (targetShader == ActiveFinalColorShader)
         {
             _wavefrontPathTracingManager.Dispatch(targetShader, _textureSize, numberOfPasses, numBounces,
+                debugRenderMode == DebugRenderMode.DirectLight,
+                debugRenderMode == DebugRenderMode.Throughput || debugRenderMode == DebugRenderMode.BounceCount,
                 SetShaderParameters, _outputTexture, _accumulationTexture);
             return;
         }

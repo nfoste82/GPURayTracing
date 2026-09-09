@@ -5,8 +5,10 @@
 **Current phase: queue-driven surface, water, fog, and water+fog renderers are active for final
 color. Surface, water, fog, water+fog, and dry-terrain routes are compiled; the user manually
 smoke-tested water, fog, water+fog, and terrain. Fog and terrain image parity remain pending.
-Adaptive scheduling, path guiding, temporal/spatial RIS, and general debug modes have not yet been
-ported to the active wavefront route.**
+Adaptive scheduling, path guiding, temporal/spatial RIS, and advanced debug modes have not yet been
+ported to the active wavefront route. Basic first-hit normals, albedo, emission, hit-distance, BVH,
+and terrain-cell diagnostics are available from stored wavefront hits; throughput and bounce-count
+diagnostics are captured when paths complete.**
 
 The user explicitly chose not to preserve `CSMain` as a runtime fallback. Use Git history if old
 behavior must be consulted. Do not restore an old path merely as a fallback during this migration.
@@ -139,7 +141,12 @@ from the prior 44.142 s baseline. Log: `/tmp/raytracing-wavefront-shadow-queue-c
 
 - **Adaptive sampling:** the existing layered Welford scheduler remains in source but is bypassed.
 - **Path guiding and temporal/spatial RIS reuse:** bypassed. Local initial RIS remains active.
-- **General geometry debug modes:** still unavailable. Do not revive the monolithic debug tracer.
+- **Advanced geometry and path debug modes:** still unavailable. `Normals`, `Albedo`, `Emission`,
+  `HitDistance`, `AccelerationStructures`, and `TerrainCells` use the stored first `RayHit`.
+  `DirectLight` uses the stored first-bounce next-event estimate; `Throughput` and `BounceCount`
+  use state captured at path completion. The direct-light and path-diagnostic buffers are allocated
+  only while their modes are active; do not add diagnostic fields to `WavefrontPathState` or revive
+  the monolithic debug tracer.
 - **Per-candidate shadow queues:** the queue is currently one work item per path. Direct-light
   candidate generation and individual light samples remain materialized inside the shadow stage.
 

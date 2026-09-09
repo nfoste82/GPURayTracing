@@ -842,6 +842,44 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void WavefrontPresent_UsesStoredFirstHitForBasicGeometryDebugModes()
+        {
+            string wavefront = System.IO.File.ReadAllText("Assets/Resources/RayTracingWavefront.compute");
+            string manager = System.IO.File.ReadAllText("Assets/Scripts/WavefrontPathTracingManager.cs");
+            string precompiler = System.IO.File.ReadAllText("Assets/Editor/RayTracingShaderPrecompiler.cs");
+
+            Assert.That(wavefront, Does.Contain("_DebugRenderMode >= DebugNormals && _DebugRenderMode <= DebugThroughput"));
+            Assert.That(wavefront, Does.Contain("RayHit hit = _WavefrontHits[pathIndex];"));
+            Assert.That(wavefront, Does.Contain("color = hit.normal * 0.5f + 0.5f;"));
+            Assert.That(wavefront, Does.Contain("color = GetAlbedo(hit);"));
+            Assert.That(wavefront, Does.Contain("color = saturate(GetEmission(hit));"));
+            Assert.That(wavefront, Does.Contain("color = saturate(hit.distance / 25.0f).xxx;"));
+            Assert.That(wavefront, Does.Contain("_WavefrontFirstDirectLight[work.pathIndex] = directLight;"));
+            Assert.That(wavefront, Does.Contain("color = saturate(_WavefrontFirstDirectLight[pathIndex]);"));
+            Assert.That(wavefront, Does.Contain("_WavefrontFirstDirectLight[pathIndex] = 0.0f;"));
+            Assert.That(wavefront, Does.Contain("struct WavefrontPathDiagnostic"));
+            Assert.That(wavefront, Does.Contain("diagnostic.throughput = path.throughput;"));
+            Assert.That(wavefront, Does.Contain("diagnostic.bounceCount = (uint)path.bounce;"));
+            Assert.That(wavefront, Does.Contain("color = saturate(_WavefrontPathDiagnostics[pathIndex].throughput);"));
+            Assert.That(wavefront, Does.Contain("_WavefrontPathDiagnostics[pathIndex].bounceCount / (float)max(1, _NumBounces)"));
+            Assert.That(wavefront, Does.Contain("_DebugRenderMode == DebugAccelerationStructures"));
+            Assert.That(wavefront, Does.Contain("float topLevelActive = _NumTopLevelBvhNodes > 0 ? 1.0f : 0.0f;"));
+            Assert.That(wavefront, Does.Contain("float shadowActive = _NumShadowBvhNodes > 0 ? 1.0f : 0.0f;"));
+            Assert.That(wavefront, Does.Contain("_DebugRenderMode == DebugTerrainCells"));
+            Assert.That(wavefront, Does.Contain("hit.objectIndex != -2"));
+            Assert.That(wavefront, Does.Contain("float2 cellUv = frac(hit.uv * max(1.0f, (float)_TerrainCellResolution));"));
+            Assert.That(manager, Does.Contain("private const int PathStateStride = 352;"));
+            Assert.That(manager, Does.Contain("bool useDirectLightDebug"));
+            Assert.That(manager, Does.Contain("bool usePathDiagnostics"));
+            Assert.That(manager, Does.Contain("new ComputeBuffer(_capacity, sizeof(float) * 3)"));
+            Assert.That(manager, Does.Contain("new ComputeBuffer(_capacity, sizeof(float) * 4)"));
+            Assert.That(manager, Does.Contain("_firstDirectLight?.Release();"));
+            Assert.That(manager, Does.Contain("_pathDiagnostics?.Release();"));
+            Assert.That(precompiler, Does.Contain("_WavefrontFirstDirectLight"));
+            Assert.That(precompiler, Does.Contain("_WavefrontPathDiagnostics"));
+        }
+
+        [Test]
         public void BulkShaderPrecompile_ExcludesKnownTimedOutDebugKernel()
         {
             string source = System.IO.File.ReadAllText("Assets/Editor/RayTracingShaderPrecompiler.cs");

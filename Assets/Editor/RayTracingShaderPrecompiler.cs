@@ -354,30 +354,72 @@ public static class RayTracingShaderPrecompiler
 
     private static void BindResources(ComputeShader shader, int kernel, DummyResources r)
     {
-        shader.SetInt("_CausticsEnabled", 0); shader.SetInt("_EnvironmentLightEnabled", 0); shader.SetInt("_NumLights", 0);
-        shader.SetInt("_NumberOfPasses", 1); shader.SetInt("_NumBounces", 1); shader.SetInt("_AccumulatedFrameCount", 1);
-        shader.SetInt("_SampleOffset", 0); shader.SetInt("_AdaptiveBucketCount", 16); shader.SetInt("_AdaptiveGroupWidth", 1);
-        shader.SetInt("_AdaptiveGroupHeight", 1); shader.SetInt("_AdaptiveGroupCount", 1);
-        shader.SetInt("_AdaptiveSamplingMinSamples", 1); shader.SetInt("_AdaptiveMaxPathsPerPixel", 1);
+        shader.SetInt("_CausticsEnabled", 0); 
+        shader.SetInt("_EnvironmentLightEnabled", 0); 
+        shader.SetInt("_NumLights", 0);
+        shader.SetInt("_NumberOfPasses", 1); 
+        shader.SetInt("_NumBounces", 1); 
+        shader.SetInt("_AccumulatedFrameCount", 1);
+        shader.SetInt("_SampleOffset", 0); 
+        shader.SetInt("_AdaptiveBucketCount", 16); 
+        shader.SetInt("_AdaptiveGroupWidth", 1);
+        shader.SetInt("_AdaptiveGroupHeight", 1); 
+        shader.SetInt("_AdaptiveGroupCount", 1);
+        shader.SetInt("_AdaptiveSamplingMinSamples", 1); 
+        shader.SetInt("_AdaptiveMaxPathsPerPixel", 1);
         shader.SetInt("_AdaptiveSampleLayer", 0);
         shader.SetFloat("_AdaptiveSpatialDisagreementPriority", 0.0f);
-        shader.SetVector("_FogBoundsMin", Vector3.zero); shader.SetVector("_FogBoundsMax", Vector3.one); shader.SetVector("_TerrainSize", Vector3.one);
-        shader.SetTexture(kernel, "Result", r.Color); shader.SetTexture(kernel, "AccumulationResult", r.Color); shader.SetTexture(kernel, "Beauty", r.Color);
-        shader.SetTexture(kernel, "CausticResult", r.Color); shader.SetTexture(kernel, "CausticAccumulation", r.Color);
-        shader.SetTexture(kernel, "FeatureNormal", r.Color); shader.SetTexture(kernel, "FeatureAlbedo", r.Color); shader.SetTexture(kernel, "FeatureDepth", r.Scalar);
-        shader.SetTexture(kernel, "FeatureIdentity", r.Scalar); shader.SetTexture(kernel, "FeatureValidity", r.Scalar); shader.SetTexture(kernel, "_SkyboxTexture", Texture2D.blackTexture);
-        shader.SetTexture(kernel, "_MeshAlbedoTextures", r.TextureArray); shader.SetTexture(kernel, "_MeshMetallicRoughnessTextures", r.TextureArray);
-        shader.SetTexture(kernel, "_MeshNormalTextures", r.TextureArray); shader.SetTexture(kernel, "_MeshParallaxTextures", r.TextureArray);
-        shader.SetTexture(kernel, "_TerrainAlphamap", Texture2D.blackTexture); shader.SetTexture(kernel, "_TerrainLayer0", Texture2D.whiteTexture);
-        shader.SetTexture(kernel, "_TerrainLayer1", Texture2D.whiteTexture); shader.SetTexture(kernel, "_TerrainLayer2", Texture2D.whiteTexture); shader.SetTexture(kernel, "_TerrainLayer3", Texture2D.whiteTexture);
-        shader.SetTexture(kernel, "_TerrainNormal0", Texture2D.normalTexture); shader.SetTexture(kernel, "_TerrainNormal1", Texture2D.normalTexture); shader.SetTexture(kernel, "_TerrainNormal2", Texture2D.normalTexture); shader.SetTexture(kernel, "_TerrainNormal3", Texture2D.normalTexture);
-        shader.SetTexture(kernel, "_TerrainMask0", Texture2D.whiteTexture); shader.SetTexture(kernel, "_TerrainMask1", Texture2D.whiteTexture); shader.SetTexture(kernel, "_TerrainMask2", Texture2D.whiteTexture); shader.SetTexture(kernel, "_TerrainMask3", Texture2D.whiteTexture);
-        shader.SetTexture(kernel, "AdaptiveSamplingState", r.Color); shader.SetTexture(kernel, "AdaptiveSamplingM2", r.Color); shader.SetTexture(kernel, "AdaptiveBootstrapPriority", r.Color);
+        shader.SetVector("_FogBoundsMin", Vector3.zero); 
+        shader.SetVector("_FogBoundsMax", Vector3.one); 
+        shader.SetVector("_TerrainSize", Vector3.one);
+        shader.SetTexture(kernel, "Result", r.Color); 
+        shader.SetTexture(kernel, "AccumulationResult", r.Color);
+        shader.SetTexture(kernel, "Beauty", r.Color);
+        shader.SetTexture(kernel, "CausticResult", r.Color);
+        shader.SetTexture(kernel, "CausticAccumulation", r.Color);
+        shader.SetTexture(kernel, "FeatureNormal", r.Color);
+        shader.SetTexture(kernel, "FeatureAlbedo", r.Color); 
+        shader.SetTexture(kernel, "FeatureDepth", r.Scalar);
+        shader.SetTexture(kernel, "FeatureIdentity", r.Scalar); 
+        shader.SetTexture(kernel, "FeatureValidity", r.Scalar); 
+        shader.SetTexture(kernel, "_SkyboxTexture", Texture2D.blackTexture);
+        shader.SetTexture(kernel, "_MeshAlbedoTextures", r.TextureArray);
+        shader.SetTexture(kernel, "_MeshMetallicRoughnessTextures", r.TextureArray);
+        shader.SetTexture(kernel, "_MeshNormalTextures", r.TextureArray);
+        shader.SetTexture(kernel, "_MeshParallaxTextures", r.TextureArray);
+        shader.SetTexture(kernel, "_TerrainAlphamap", Texture2D.blackTexture); 
+        shader.SetTexture(kernel, "_TerrainLayer0", Texture2D.whiteTexture);
+        shader.SetTexture(kernel, "_TerrainLayer1", Texture2D.whiteTexture);
+        shader.SetTexture(kernel, "_TerrainLayer2", Texture2D.whiteTexture); 
+        shader.SetTexture(kernel, "_TerrainLayer3", Texture2D.whiteTexture);
+        shader.SetTexture(kernel, "_TerrainNormal0", Texture2D.normalTexture); 
+        shader.SetTexture(kernel, "_TerrainNormal1", Texture2D.normalTexture); 
+        shader.SetTexture(kernel, "_TerrainNormal2", Texture2D.normalTexture); 
+        shader.SetTexture(kernel, "_TerrainNormal3", Texture2D.normalTexture);
+        shader.SetTexture(kernel, "_TerrainMask0", Texture2D.whiteTexture);
+        shader.SetTexture(kernel, "_TerrainMask1", Texture2D.whiteTexture); 
+        shader.SetTexture(kernel, "_TerrainMask2", Texture2D.whiteTexture); 
+        shader.SetTexture(kernel, "_TerrainMask3", Texture2D.whiteTexture);
+        shader.SetTexture(kernel, "AdaptiveSamplingState", r.Color); 
+        shader.SetTexture(kernel, "AdaptiveSamplingM2", r.Color); 
+        shader.SetTexture(kernel, "AdaptiveBootstrapPriority", r.Color);
+        
         foreach (var name in r.WavefrontBufferNames) shader.SetBuffer(kernel, name, r.GetWavefrontBuffer(name));
-        shader.SetTexture(kernel, "_WavefrontFrameResult", r.Color);
-        foreach (var name in r.FloatBufferNames) shader.SetBuffer(kernel, name, r.FloatBuffer);
-        foreach (var name in r.StructuredBufferNames) shader.SetBuffer(kernel, name, r.GetStructuredBuffer(name));
-        foreach (var name in r.AdaptiveBufferNames) shader.SetBuffer(kernel, name, r.GetAdaptiveBuffer(name));
+        {
+            shader.SetTexture(kernel, "_WavefrontFrameResult", r.Color);
+        }
+        foreach (var name in r.FloatBufferNames)
+        {
+            shader.SetBuffer(kernel, name, r.FloatBuffer);
+        }
+        foreach (var name in r.StructuredBufferNames)
+        {
+            shader.SetBuffer(kernel, name, r.GetStructuredBuffer(name));
+        }
+        foreach (var name in r.AdaptiveBufferNames)
+        {
+            shader.SetBuffer(kernel, name, r.GetAdaptiveBuffer(name));
+        }
     }
 
     private sealed class DummyResources : System.IDisposable
@@ -393,13 +435,14 @@ public static class RayTracingShaderPrecompiler
         private readonly ComputeBuffer causticPhotonBuffer = new ComputeBuffer(1, 36);
         private readonly ComputeBuffer terrainCellBuffer = new ComputeBuffer(1, 8);
         private readonly ComputeBuffer float4Buffer = new ComputeBuffer(64, 16);
+        private readonly ComputeBuffer float3Buffer = new ComputeBuffer(64, 12);
         private readonly ComputeBuffer uintBuffer = new ComputeBuffer(64, 4);
         private readonly ComputeBuffer wavefrontPathBuffer = new ComputeBuffer(64, 352);
         private readonly ComputeBuffer wavefrontHitBuffer = new ComputeBuffer(64, 144);
         public readonly string[] FloatBufferNames = { "_EnvironmentConditionalCdf", "_EnvironmentMarginalCdf", "_MeshLightTriangleCdf", "_CausticPhotonMetadata", "_CausticGridCellHeads", "_CausticPhotonNext", "_TerrainHeights" };
         public readonly string[] StructuredBufferNames = { "_Spheres", "_Lights", "_Triangles", "_Meshes", "_BvhNodes", "_TopLevelBvhNodes", "_ShadowBvhNodes", "_CausticPhotons", "_TerrainCells", "_SobolDirectionNumbers", "RegressionResults", "_FocusQueryResult" };
         public readonly string[] AdaptiveBufferNames = { "AdaptiveGroupState", "AdaptiveGroupInfo", "AdaptiveProbeGroups", "AdaptiveGroupBucket", "AdaptiveGroupExtraDemand", "AdaptiveRawBucketDemand", "AdaptiveWorkListMetadata" };
-        public readonly string[] WavefrontBufferNames = { "_WavefrontPaths", "_WavefrontHits", "_WavefrontCurrentQueue", "_WavefrontNextQueue", "_WavefrontCompletedQueue", "_WavefrontShadowWork", "_WavefrontCounters", "_WavefrontDispatchArgs" };
+        public readonly string[] WavefrontBufferNames = { "_WavefrontPaths", "_WavefrontHits", "_WavefrontCurrentQueue", "_WavefrontNextQueue", "_WavefrontCompletedQueue", "_WavefrontShadowWork", "_WavefrontFirstDirectLight", "_WavefrontPathDiagnostics", "_WavefrontCounters", "_WavefrontDispatchArgs" };
 
         public DummyResources()
         {
@@ -440,6 +483,8 @@ public static class RayTracingShaderPrecompiler
         {
             if (name == "_WavefrontPaths") return wavefrontPathBuffer;
             if (name == "_WavefrontHits") return wavefrontHitBuffer;
+            if (name == "_WavefrontFirstDirectLight") return float3Buffer;
+            if (name == "_WavefrontPathDiagnostics") return float4Buffer;
             return uintBuffer;
         }
 
@@ -457,7 +502,7 @@ public static class RayTracingShaderPrecompiler
         {
             FloatBuffer.Release(); sphereBuffer.Release(); lightBuffer.Release(); triangleBuffer.Release();
             meshAndBvhBuffer.Release(); causticPhotonBuffer.Release(); terrainCellBuffer.Release();
-            float4Buffer.Release(); uintBuffer.Release(); wavefrontPathBuffer.Release(); wavefrontHitBuffer.Release(); Color.Release(); Scalar.Release();
+            float4Buffer.Release(); float3Buffer.Release(); uintBuffer.Release(); wavefrontPathBuffer.Release(); wavefrontHitBuffer.Release(); Color.Release(); Scalar.Release();
             Object.DestroyImmediate(TextureArray); Object.DestroyImmediate(Color); Object.DestroyImmediate(Scalar);
         }
 

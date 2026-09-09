@@ -17,6 +17,10 @@ namespace PathTracing
         private ComputeBuffer _nextQueue;
         private ComputeBuffer _completedQueue;
         private ComputeBuffer _shadowWork;
+        private ComputeBuffer _firstDirectLight;
+        private ComputeBuffer _emptyFirstDirectLight;
+        private ComputeBuffer _pathDiagnostics;
+        private ComputeBuffer _emptyPathDiagnostics;
         private ComputeBuffer _counters;
         private ComputeBuffer _dispatchArguments;
         private RenderTexture _frameResult;
@@ -34,6 +38,7 @@ namespace PathTracing
             _nextQueue = new ComputeBuffer(capacity, sizeof(uint));
             _completedQueue = new ComputeBuffer(capacity, sizeof(uint));
             _shadowWork = new ComputeBuffer(capacity, sizeof(uint) + sizeof(float) * 3);
+            _emptyFirstDirectLight = new ComputeBuffer(1, sizeof(float) * 3);
             _counters = new ComputeBuffer(4, sizeof(uint));
             _dispatchArguments = new ComputeBuffer(3, sizeof(uint), ComputeBufferType.IndirectArguments);
             _frameResult = new RenderTexture(size.x, size.y, 0, RenderTextureFormat.ARGBFloat)
@@ -45,9 +50,23 @@ namespace PathTracing
         }
 
         public void Dispatch(ComputeShader shader, Vector2Int size, int passes, int bounces,
-            Action<ComputeShader, int> bindShared, RenderTexture output, RenderTexture accumulation)
+            bool useDirectLightDebug, bool usePathDiagnostics, Action<ComputeShader, int> bindShared, RenderTexture output, RenderTexture accumulation)
         {
             EnsureResources(size);
+            if (useDirectLightDebug && _firstDirectLight == null)
+                _firstDirectLight = new ComputeBuffer(_capacity, sizeof(float) * 3);
+            if (!useDirectLightDebug && _firstDirectLight != null)
+            {
+                _firstDirectLight.Release();
+                _firstDirectLight = null;
+            }
+            if (usePathDiagnostics && _pathDiagnostics == null)
+                _pathDiagnostics = new ComputeBuffer(_capacity, sizeof(float) * 4);
+            if (!usePathDiagnostics && _pathDiagnostics != null)
+            {
+                _pathDiagnostics.Release();
+                _pathDiagnostics = null;
+            }
             int clearFrame = shader.FindKernel("CSWavefrontClearFrame");
             Bind(shader, clearFrame, output, accumulation);
             bindShared(shader, clearFrame);
@@ -141,6 +160,8 @@ namespace PathTracing
             shader.SetBuffer(kernel, "_WavefrontNextQueue", _nextQueue);
             shader.SetBuffer(kernel, "_WavefrontCompletedQueue", _completedQueue);
             shader.SetBuffer(kernel, "_WavefrontShadowWork", _shadowWork);
+            shader.SetBuffer(kernel, "_WavefrontFirstDirectLight", _firstDirectLight ?? _emptyFirstDirectLight);
+            shader.SetBuffer(kernel, "_WavefrontPathDiagnostics", _pathDiagnostics ?? (_emptyPathDiagnostics ??= new ComputeBuffer(1, sizeof(float) * 4)));
             shader.SetBuffer(kernel, "_WavefrontCounters", _counters);
             shader.SetBuffer(kernel, "_WavefrontDispatchArgs", _dispatchArguments);
             shader.SetTexture(kernel, "_WavefrontFrameResult", _frameResult);
@@ -156,10 +177,14 @@ namespace PathTracing
             _nextQueue?.Release();
             _completedQueue?.Release();
             _shadowWork?.Release();
+            _firstDirectLight?.Release();
+            _emptyFirstDirectLight?.Release();
+            _pathDiagnostics?.Release();
+            _emptyPathDiagnostics?.Release();
             _counters?.Release();
             _dispatchArguments?.Release();
             _frameResult?.Release();
-            _paths = _hits = _currentQueue = _nextQueue = _completedQueue = _shadowWork = _counters = _dispatchArguments = null;
+            _paths = _hits = _currentQueue = _nextQueue = _completedQueue = _shadowWork = _firstDirectLight = _emptyFirstDirectLight = _pathDiagnostics = _emptyPathDiagnostics = _counters = _dispatchArguments = null;
             _frameResult = null;
             _capacity = 0;
         }

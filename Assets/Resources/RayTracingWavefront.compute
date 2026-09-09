@@ -45,12 +45,20 @@ struct ShadowWorkItem
     float3 directLight;
 };
 
+struct WavefrontPathDiagnostic
+{
+    float3 throughput;
+    uint bounceCount;
+};
+
 RWStructuredBuffer<WavefrontPathState> _WavefrontPaths;
 RWStructuredBuffer<RayHit> _WavefrontHits;
 RWStructuredBuffer<uint> _WavefrontCurrentQueue;
 RWStructuredBuffer<uint> _WavefrontNextQueue;
 RWStructuredBuffer<uint> _WavefrontCompletedQueue;
 RWStructuredBuffer<ShadowWorkItem> _WavefrontShadowWork;
+RWStructuredBuffer<float3> _WavefrontFirstDirectLight;
+RWStructuredBuffer<WavefrontPathDiagnostic> _WavefrontPathDiagnostics;
 RWStructuredBuffer<uint> _WavefrontCounters;
 RWStructuredBuffer<uint> _WavefrontDispatchArgs;
 RWTexture2D<float4> _WavefrontFrameResult;
@@ -153,6 +161,7 @@ void CSWavefrontGenerate(uint3 id : SV_DispatchThreadID)
     path.previousSoftShadows = 0;
     path.volumeEvent = 0;
     _WavefrontPaths[pathIndex] = path;
+    if (_DebugRenderMode == DebugDirectLight) _WavefrontFirstDirectLight[pathIndex] = 0.0f;
     EnqueueCurrent(pathIndex);
 }
 
@@ -314,6 +323,8 @@ void CSWavefrontTraceShadows(uint3 id : SV_DispatchThreadID)
     if (volumeEvent) directLight *= _FogScatteringAlbedo * max(0.0f, _FogInScatteringIntensity);
 #endif
     work.directLight = directLight;
+    if (_DebugRenderMode == DebugDirectLight && path.bounce == 0)
+        _WavefrontFirstDirectLight[work.pathIndex] = directLight;
     path.previousDirectLightSampled = 1;
     path.previousInitialRisSampled = sampledInitialRis ? 1 : 0;
     path.previousSoftShadows = softShadows ? 1 : 0;
@@ -440,6 +451,13 @@ void CSWavefrontResolve(uint3 id : SV_DispatchThreadID)
     if (id.x >= _WavefrontCounters[2]) return;
     uint pathIndex = _WavefrontCompletedQueue[id.x];
     WavefrontPathState path = _WavefrontPaths[pathIndex];
+    if (_DebugRenderMode == DebugThroughput || _DebugRenderMode == DebugBounceCount)
+    {
+        WavefrontPathDiagnostic diagnostic;
+        diagnostic.throughput = path.throughput;
+        diagnostic.bounceCount = (uint)path.bounce;
+        _WavefrontPathDiagnostics[pathIndex] = diagnostic;
+    }
     _WavefrontFrameResult[path.pixel] += float4(ClampFirefly(path.radiance), 1.0f);
 }
 
@@ -451,6 +469,77 @@ void CSWavefrontPresent(uint3 id : SV_DispatchThreadID)
     if (id.x >= width || id.y >= height) return;
 
     float3 color = _WavefrontFrameResult[id.xy].rgb / max(1, _NumberOfPasses);
+    if ((_DebugRenderMode >= DebugNormals && _DebugRenderMode <= DebugThroughput)
+        || _DebugRenderMode == DebugBounceCount || _DebugRenderMode == DebugHitDistance
+        || _DebugRenderMode == DebugAccelerationStructures || _DebugRenderMode == DebugTerrainCells)
+    {
+        uint pathIndex = id.x + id.y * width;
+        RayHit hit = _WavefrontHits[pathIndex];
+        if (_DebugRenderMode == DebugAccelerationStructures)
+        {
+            float topLevelActive = _NumTopLevelBvhNodes > 0 ? 1.0f : 0.0f;
+            float shadowActive = _NumShadowBvhNodes > 0 ? 1.0f : 0.0f;
+            float shadowScale = saturate(_NumShadowBvhNodes / 255.0f);
+            float topLevelScale = saturate(_NumTopLevelBvhNodes / 255.0f);
+
+            if (DidHitSky(hit))
+                color = float3(topLevelScale, shadowScale, 0.0f);
+            else if (DidHitLight(hit))
+                color = float3(1.0f, shadowActive * 0.5f, 0.0f);
+            else if (IsGlassMaterial(hit))
+                color = float3(topLevelActive * 0.2f, 0.25f + shadowActive * 0.75f, 1.0f);
+            else if (hit.meshIndex >= 0)
+                color = float3(1.0f, 0.2f + shadowActive * 0.8f, topLevelActive * 0.2f);
+            else
+                color = float3(topLevelActive, shadowActive, 0.15f);
+        }
+        else if (_DebugRenderMode == DebugTerrainCells)
+        {
+            if (DidHitSky(hit) || hit.objectIndex != -2)
+            {
+                color = 0.0f;
+            }
+            else
+            {
+                float2 cellUv = frac(hit.uv * max(1.0f, (float)_TerrainCellResolution));
+                float2 distanceToBoundary = min(cellUv, 1.0f - cellUv);
+                float boundary = 1.0f - smoothstep(0.015f, 0.035f, min(distanceToBoundary.x, distanceToBoundary.y));
+                color = float3(cellUv, boundary);
+            }
+        }
+        else if (DidHitSky(hit))
+        {
+            color = _DebugRenderMode == DebugHitDistance ? 1.0f : 0.0f;
+        }
+        else if (_DebugRenderMode == DebugNormals)
+        {
+            color = hit.normal * 0.5f + 0.5f;
+        }
+        else if (_DebugRenderMode == DebugAlbedo)
+        {
+            color = GetAlbedo(hit);
+        }
+        else if (_DebugRenderMode == DebugEmission)
+        {
+            color = saturate(GetEmission(hit));
+        }
+        else if (_DebugRenderMode == DebugDirectLight)
+        {
+            color = saturate(_WavefrontFirstDirectLight[pathIndex]);
+        }
+        else if (_DebugRenderMode == DebugThroughput)
+        {
+            color = saturate(_WavefrontPathDiagnostics[pathIndex].throughput);
+        }
+        else if (_DebugRenderMode == DebugBounceCount)
+        {
+            color = (_WavefrontPathDiagnostics[pathIndex].bounceCount / (float)max(1, _NumBounces)).xxx;
+        }
+        else if (_DebugRenderMode == DebugHitDistance)
+        {
+            color = saturate(hit.distance / 25.0f).xxx;
+        }
+    }
     if (_UseFrameAccumulation != 0)
     {
         float previousSampleCount = max(0, _AccumulatedFrameCount);
