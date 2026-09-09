@@ -96,6 +96,8 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     RegressionResults[15] = float4(glassSegment, 1.0f);
     RegressionResults[16] = float4(waterSegment, 1.0f);
     RegressionResults[17] = float4(GetMediumSegmentTransmittance(air, 1000.0f), GetMediumSegmentDistance(CreateRay(float3(0.0f, 2.0f, 0.0f), float3(1.0f, 0.0f, 0.0f)), RayMaxDistance, air));
+    float3 paleWaterAbsorption = max(1.0f - float3(215.0f / 255.0f, 1.0f, 1.0f), WaterNeutralAbsorption.xxx) * 0.55f;
+    RegressionResults[47] = float4(exp(-paleWaterAbsorption * 5.0f), 1.0f);
 
     MediumStack waterStack = CreateMediumStack(float3(0.0f, 2.0f, 0.0f));
     ApplyMediumTransition(waterStack, waterHit, MediumTransitionEnter);

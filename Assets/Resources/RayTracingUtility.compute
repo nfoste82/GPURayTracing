@@ -2,9 +2,11 @@
 #pragma kernel UpscaleAdaptiveBootstrap
 #pragma kernel SeedAdaptiveBootstrap
 #pragma kernel ComposeAdaptiveBootstrap
+#pragma kernel CompositeCaustics
 
 RWTexture2D<float4> AccumulationResult;
 Texture2D<float4> AdaptiveBootstrapSource;
+Texture2D<float4> CausticResult;
 RWTexture2D<float4> Beauty;
 RWTexture2D<float4> Result;
 RWTexture2D<float4> AdaptiveSamplingState;
@@ -94,6 +96,17 @@ void ComposeAdaptiveBootstrap(uint3 id : SV_DispatchThreadID)
     if (id.x >= width || id.y >= height || AdaptiveSamplingState[id.xy].x >= (float)_AdaptiveSamplingMinSamples) return;
     float2 uv = (float2(id.xy) + 0.5f) / float2(width, height);
     float3 color = SampleAdaptiveBootstrap(uv);
+    Beauty[id.xy] = float4(color, 1.0f);
+    Result[id.xy] = float4(color, 1.0f);
+}
+
+[numthreads(4,4,1)]
+void CompositeCaustics(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    Beauty.GetDimensions(width, height);
+    if (id.x >= width || id.y >= height) return;
+    float3 color = Beauty[id.xy].rgb + CausticResult[id.xy].rgb;
     Beauty[id.xy] = float4(color, 1.0f);
     Result[id.xy] = float4(color, 1.0f);
 }

@@ -218,8 +218,6 @@ MonoBehaviour:
   adaptiveSchedulerShader: {fileID: 0}
   adaptiveTraceShader: {fileID: 0}
   waterShader: {fileID: 0}
-  fogShader: {fileID: 0}
-  waterFogShader: {fileID: 0}
   waterFeaturesShader: {fileID: 0}
   waterFocusShader: {fileID: 0}
   waterAdaptiveTraceShader: {fileID: 0}
@@ -249,7 +247,7 @@ MonoBehaviour:
   adaptiveReclassificationInterval: 4
   adaptiveHighestBucketSampleRate: 3
   adaptiveMaxPathsPerPixel: 3
-  enableAdaptiveBootstrap: 0
+  enableAdaptiveBootstrap: 1
   adaptiveBootstrapGroupDivisor: 16
   adaptiveBootstrapFrames: 128
   adaptiveBootstrapResolutionScale: 0.25
@@ -607,7 +605,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::Water
   Color:
     serializedVersion: 2
-    rgba: 4294963114
+    rgba: 4294963111
   Smoothness: 0.96
   Opacity: 0.18
   AbsorptionStrength: 0.22

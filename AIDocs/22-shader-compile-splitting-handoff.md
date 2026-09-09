@@ -18,8 +18,10 @@ than 30 minutes.
 The former monolithic `Assets/Scripts/RayTracingCompute.compute` was split as follows:
 
 ```text
-RayTracingCompute.compute              CSMain final color only; FOG_ENABLED x TERRAIN_ENABLED
-RayTracingWater.compute                CSMain water-capable final color; FOG_ENABLED x TERRAIN_ENABLED
+RayTracingCompute.compute              CSMain surface final color; TERRAIN_ENABLED
+RayTracingWater.compute                CSMain water-capable final color; TERRAIN_ENABLED
+RayTracingFog.compute                  CSMain fog-capable final color; TERRAIN_ENABLED
+RayTracingWaterFog.compute             CSMain water + fog final color; TERRAIN_ENABLED
 RayTracingExperimentalPathGuided.compute Opt-in path-guided final color; FOG_ENABLED x TERRAIN_ENABLED
 RayTracingExperimentalRis.compute      Opt-in temporal/spatial RIS final color; FOG_ENABLED x TERRAIN_ENABLED x TEMPORAL_RIS_ENABLED
 RayTracingDebug.compute                CSDebugMain; FOG_ENABLED x TERRAIN_ENABLED
@@ -46,6 +48,21 @@ The ordinary final-color asset compiles without water geometry, finite-volume, m
 or scatter code. `GameManager` selects `RayTracingWater.compute` and matching water-capable
 feature, focus, and adaptive-trace assets only while `HasWaterVolume` is true. This avoids adding
 a water keyword to the normal fog/terrain matrix.
+
+Fog final color is also isolated by asset rather than a keyword on the common megakernels.
+`GameManager` selects `RayTracingFog.compute` or `RayTracingWaterFog.compute` only while fog is
+active, so edits and cold compiles for the common surface and water paths do not include volumetric
+source. Companion feature and adaptive-trace assets retain their existing fog variants.
+
+The fog and surface branches in `TracePathWithDirectLight()` also converge before one production
+`GetLightHittingPoint()` call. Previously `GetFogDirectLight()` and `GetDirectLight()` called it
+with different compile-time constants, allowing Metal to specialize and inline two copies of the
+large light-selection and shadow-traversal graph inside the water + fog megakernel.
+
+Camera-side photon gathering is now isolated in `RayTracingCaustics.compute` as
+`CSCausticsFinalColor`, with a small utility composite pass. Final-color `CSMain` assets no longer
+compile `GatherCausticRadiance()` or its specular visibility loop. This preserves caustics for
+water/fog scenes without attaching the nested photon-grid traversal to the largest Metal kernel.
 
 The ordinary final-color asset also excludes experimental path-guiding and temporal/spatial RIS
 source entirely. `GameManager` selects their dedicated assets only while the corresponding

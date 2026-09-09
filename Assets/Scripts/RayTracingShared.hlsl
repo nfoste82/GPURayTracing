@@ -203,7 +203,6 @@ int _NumShadowBvhNodes;
 // the first opaque blocker and never does nearest-transparent-blocker bookkeeping.
 int _HasTransparentShadowBlockers;
 int _CausticsEnabled;
-
 int _CausticPhotonCapacity;
 int _CausticPhotonAttemptCount;
 int _CausticMaxBounces;
@@ -288,6 +287,7 @@ static const float WaterHitEpsilon = 0.001f;
 #endif
 static const float GlassAbsorptionColorFloor = 0.001f;
 static const float GlassNeutralAbsorption = 0.08f;
+static const float WaterNeutralAbsorption = 0.12f;
 static const float ThinTransparentSurfaceDistance = 0.25f;
 
 // Slab AABB test used by terrain and all BVH traversal paths. It must remain outside optional
@@ -1196,7 +1196,9 @@ float3 GetWaterAbsorptionTransmittance(float distanceInWater)
         return float3(1.0f, 1.0f, 1.0f);
     }
 
-    float3 absorption = (1.0f - saturate(_WaterColor)) * strength;
+    // A color channel of one is still water, not a lossless medium. Keep a neutral
+    // extinction floor so pale water darkens with depth while color shapes the tint.
+    float3 absorption = max(1.0f - saturate(_WaterColor), WaterNeutralAbsorption.xxx) * strength;
     return exp(-absorption * distanceInWater);
 }
 
@@ -3879,6 +3881,11 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
                               out InitialRisCandidate reservoirCandidate, out float reservoirWeightSum, out int reservoirM)
 {
     initialRisSelected = false;
+    // Fog can return before the RIS path is considered. Initialize all out values so Metal can
+    // validate that every return path writes the complete reservoir candidate.
+    InitializeRisCandidate(reservoirCandidate);
+    reservoirWeightSum = 0.0f;
+    reservoirM = 0;
     int sampleCount = max(1, samplesPerLight);
     // Preserve fog's established finite-emitter estimator; environment NEE is a surface path.
     bool sampleEnvironment = !volumeEvent && _EnvironmentLightEnabled != 0
@@ -3937,10 +3944,8 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
     bool useSpatialRis = useInitialRis && IsSpatialRisEligible(hit);
 #endif
     InitialRisCandidate selectedRisCandidate;
-    selectedRisCandidate.valid = 0;
+    InitializeRisCandidate(selectedRisCandidate);
     int risLightIndex = 0;
-    reservoirWeightSum = 0.0f;
-    reservoirM = 0;
     if (useInitialRis)
     {
         int proposalCount = (lightCount > 0 ? 1 : 0) + (sampleEnvironment ? 1 : 0);
@@ -5010,21 +5015,6 @@ float3 GetDirectLight(Ray ray, RayHit hit, bool softShadows, bool allowPathGuide
         false, ignoredCandidate, ignoredWeightSum, ignoredM);
 }
 
-#if defined(FOG_ENABLED)
-float3 GetFogDirectLight(Ray ray, float3 position, bool softShadows, inout RngState rngState)
-{
-    RayHit eventHit = CreateRayHit();
-    eventHit.position = position;
-    int samplesPerLight = softShadows ? max(1, _ShadowQuality + 1) : 1;
-    bool ignoredInitialRisSelection;
-    InitialRisCandidate ignoredCandidate;
-    float ignoredWeightSum;
-    int ignoredM;
-    return GetLightHittingPoint(ray, eventHit, samplesPerLight, true, false, false, ignoredInitialRisSelection, uint2(0, 0), rngState,
-        false, ignoredCandidate, ignoredWeightSum, ignoredM);
-}
-#endif
-
 bool ApplyRussianRoulette(inout float3 throughput, int bounce, inout RngState rngState)
 {
     if (bounce < 2)
@@ -5042,6 +5032,7 @@ bool ApplyRussianRoulette(inout float3 throughput, int bounce, inout RngState rn
     return true;
 }
 
+#if defined(CAUSTICS_KERNELS)
 bool IsCausticReceiver(RayHit hit)
 {
     return !DidHitSky(hit) && !DidHitLight(hit) && hit.materialType == MaterialDiffuse && hit.opacity >= 1.0f;
@@ -5107,6 +5098,12 @@ float3 TraceVisibleCausticRadiance(Ray ray, inout RngState rngState)
     {
         RayHit hit = GetNearestIntersection(ray);
         throughput *= GetActiveMediumSegmentTransmittance(ray, hit.distance, mediumStack);
+#if defined(FOG_ENABLED)
+        if (hit.distance < RayMaxDistance)
+        {
+            throughput *= GetFogTransmittanceAlongSegment(ray.origin, hit.position);
+        }
+#endif
         if (!HasPathEnergy(throughput) || DidHitSky(hit) || DidHitLight(hit))
         {
             return float3(0.0f, 0.0f, 0.0f);
@@ -5134,6 +5131,7 @@ float3 TraceVisibleCausticRadiance(Ray ray, inout RngState rngState)
 
     return float3(0.0f, 0.0f, 0.0f);
 }
+#endif
 
 float3 TracePathWithDirectLight(Ray ray, uint2 pixel, inout RngState rngState, out float directLightLuminance,
                                 out float firstSurfaceRoughness)
@@ -5155,12 +5153,12 @@ float3 TracePathWithDirectLight(Ray ray, uint2 pixel, inout RngState rngState, o
     float3 previousGuideNormal = float3(0.0f, 0.0f, 1.0f);
     float3 previousGuideDirection = float3(0.0f, 0.0f, 1.0f);
 #endif
-    bool canGatherCaustics = true;
-
     [loop]
     for (int bounce = 0; bounce < _NumBounces; bounce++)
     {
         RayHit hit = GetNearestIntersection(ray);
+        bool volumeEvent = false;
+        float3 volumeEventPosition = float3(0.0f, 0.0f, 0.0f);
 
 #if defined(FOG_ENABLED)
         SetRngDimension(rngState, BounceSampleDimension((uint)bounce, SampleDimensionFogOffset));
@@ -5173,106 +5171,79 @@ float3 TracePathWithDirectLight(Ray ray, uint2 pixel, inout RngState rngState, o
                 break;
             }
 
-            float3 eventPosition = ray.origin + ray.direction * fogEventDistance;
+            volumeEvent = true;
+            volumeEventPosition = ray.origin + ray.direction * fogEventDistance;
             RayHit fogSegmentHit = CreateRayHit();
             fogSegmentHit.distance = fogEventDistance;
             ApplyFiniteMediumExitAfterSegment(mediumStack, ray, fogSegmentHit);
-            if (ShouldSampleDirectLight(throughput))
-            {
-                SetRngDimension(rngState, BounceSampleDimension((uint)bounce, SampleDimensionDirectLightOffset));
-                float3 directLightContribution = throughput * _FogScatteringAlbedo * max(0.0f, _FogInScatteringIntensity)
-                    * GetFogDirectLight(ray, eventPosition, bounce == 0, rngState);
-                radiance += directLightContribution;
-                directLightLuminance += dot(directLightContribution, float3(0.2126f, 0.7152f, 0.0722f));
-            }
+        }
+#endif
 
-            if (_FogMultipleScattering == 0)
+        if (!volumeEvent)
+        {
+            throughput *= GetActiveMediumSegmentTransmittance(ray, hit.distance, mediumStack);
+            if (!HasPathEnergy(throughput))
             {
                 break;
             }
+            ApplyFiniteMediumExitAfterSegment(mediumStack, ray, hit);
 
-            throughput *= saturate(_FogScatteringAlbedo);
-            SetRngDimension(rngState, BounceSampleDimension((uint)bounce, SampleDimensionScatterOffset));
-            ray.direction = SampleUniformSphere(rngState);
-            ray.origin = eventPosition + ray.direction * 0.001f;
-            previousMaterialPdf = 0.0f;
-            previousDirectLightSampled = false;
-            previousInitialRisSampled = false;
-            SetRngDimension(rngState, BounceSampleDimension((uint)bounce, SampleDimensionRouletteOffset));
-            if (!HasPathEnergy(throughput) || !ApplyRussianRoulette(throughput, bounce, rngState))
+            if (DidHitSky(hit))
             {
+                float misWeight = 1.0f;
+                if (previousDirectLightSampled && previousMaterialPdf > 0.0f && _EnvironmentLightEnabled != 0)
+                {
+                    float environmentPdf = GetEnvironmentPdf(ray.direction);
+                    if (environmentPdf > 0.0f)
+                    {
+                        float directPdf = _EnvironmentLightSampleCount * environmentPdf;
+                        if (previousInitialRisSampled) directPdf *= GetInitialRisProposalBranchPdf();
+                        misWeight = PowerHeuristic(previousMaterialPdf, directPdf);
+                    }
+                }
+                float3 terminalRadiance = GetTerminalHitColor(ray, hit) * misWeight;
+#if defined(PATH_GUIDING_ENABLED)
+                if (previousGuideSampled)
+                {
+                    RecordPathGuideObservation(previousGuidePosition, previousGuideNormal, previousGuideDirection,
+                        dot(abs(terminalRadiance), float3(0.2126f, 0.7152f, 0.0722f)));
+                }
+#endif
+                radiance += throughput * terminalRadiance;
                 break;
             }
-            continue;
-        }
-#endif
 
-        throughput *= GetActiveMediumSegmentTransmittance(ray, hit.distance, mediumStack);
-        if (!HasPathEnergy(throughput))
-        {
-            break;
-        }
-        ApplyFiniteMediumExitAfterSegment(mediumStack, ray, hit);
-
-        if (DidHitSky(hit))
-        {
-            float misWeight = 1.0f;
-            if (previousDirectLightSampled && previousMaterialPdf > 0.0f && _EnvironmentLightEnabled != 0)
+            float3 emission = GetEmission(hit);
+            if (DidHitLight(hit))
             {
-                float environmentPdf = GetEnvironmentPdf(ray.direction);
-                if (environmentPdf > 0.0f)
+                float misWeight = 1.0f;
+                if (previousDirectLightSampled && !previousNearDeltaSpecular && previousMaterialPdf > 0.0f)
                 {
-                    float directPdf = _EnvironmentLightSampleCount * environmentPdf;
-                    if (previousInitialRisSampled) directPdf *= GetInitialRisProposalBranchPdf();
-                    misWeight = PowerHeuristic(previousMaterialPdf, directPdf);
+                    int lightSampleCount;
+                    float lightPdf = GetLightPdfForHit(previousSurfacePosition, hit, previousSoftShadows, lightSampleCount);
+                    if (lightPdf > 0.0f)
+                    {
+                        if (previousInitialRisSampled) lightPdf *= GetInitialRisProposalBranchPdf();
+                        misWeight = PowerHeuristic(previousMaterialPdf, lightSampleCount * lightPdf);
+                    }
                 }
-            }
-            float3 terminalRadiance = GetTerminalHitColor(ray, hit) * misWeight;
+                float3 terminalRadiance = emission * misWeight;
 #if defined(PATH_GUIDING_ENABLED)
-            if (previousGuideSampled)
-            {
-                RecordPathGuideObservation(previousGuidePosition, previousGuideNormal, previousGuideDirection,
-                    dot(abs(terminalRadiance), float3(0.2126f, 0.7152f, 0.0722f)));
-            }
-#endif
-            radiance += throughput * terminalRadiance;
-            break;
-        }
-
-        float3 emission = GetEmission(hit);
-        if (DidHitLight(hit))
-        {
-            float misWeight = 1.0f;
-            if (previousDirectLightSampled && !previousNearDeltaSpecular && previousMaterialPdf > 0.0f)
-            {
-                int lightSampleCount;
-                float lightPdf = GetLightPdfForHit(previousSurfacePosition, hit, previousSoftShadows, lightSampleCount);
-                if (lightPdf > 0.0f)
+                if (previousGuideSampled)
                 {
-                    if (previousInitialRisSampled) lightPdf *= GetInitialRisProposalBranchPdf();
-                    misWeight = PowerHeuristic(previousMaterialPdf, lightSampleCount * lightPdf);
+                    RecordPathGuideObservation(previousGuidePosition, previousGuideNormal, previousGuideDirection,
+                        dot(abs(terminalRadiance), float3(0.2126f, 0.7152f, 0.0722f)));
                 }
-            }
-            float3 terminalRadiance = emission * misWeight;
-#if defined(PATH_GUIDING_ENABLED)
-            if (previousGuideSampled)
-            {
-                RecordPathGuideObservation(previousGuidePosition, previousGuideNormal, previousGuideDirection,
-                    dot(abs(terminalRadiance), float3(0.2126f, 0.7152f, 0.0722f)));
-            }
 #endif
-            radiance += throughput * terminalRadiance;
-            break;
-        }
+                radiance += throughput * terminalRadiance;
+                break;
+            }
 
-        if (firstSurfaceRoughness < 0.0f)
-        {
-            firstSurfaceRoughness = GetMetallicRoughness(hit).y;
-        }
+            if (firstSurfaceRoughness < 0.0f)
+            {
+                firstSurfaceRoughness = GetMetallicRoughness(hit).y;
+            }
 
-        if (_CausticsEnabled != 0 && canGatherCaustics)
-        {
-            radiance += throughput * GatherCausticRadiance(hit);
         }
 
         bool sampledDirectLight = false;
@@ -5284,10 +5255,28 @@ float3 TracePathWithDirectLight(Ray ray, uint2 pixel, inout RngState rngState, o
             bool softShadows = bounce == 0;
             bool hasInitialRisProposal = _NumLights > 0 || (_EnvironmentLightEnabled != 0
                 && _EnvironmentCdfWidth > 0 && _EnvironmentCdfHeight > 0);
-            bool useInitialRis = bounce == 0 && hasInitialRisProposal && IsInitialRisEligible(hit);
-            float3 directLight = GetDirectLight(ray, hit, softShadows, bounce > 0, useInitialRis,
-                sampledInitialRis, pixel, rngState);
-            directLightContribution = throughput * directLight;
+            bool useInitialRis = !volumeEvent && bounce == 0 && hasInitialRisProposal && IsInitialRisEligible(hit);
+            RayHit lightingHit = hit;
+            if (volumeEvent)
+            {
+                lightingHit = CreateRayHit();
+                lightingHit.position = volumeEventPosition;
+            }
+            int samplesPerLight = softShadows ? max(1, _ShadowQuality + 1) : 1;
+            InitialRisCandidate ignoredCandidate;
+            float ignoredWeightSum;
+            int ignoredM;
+            float3 directLight = GetLightHittingPoint(ray, lightingHit, samplesPerLight, volumeEvent,
+                !volumeEvent && bounce > 0, useInitialRis, sampledInitialRis, pixel, rngState,
+                false, ignoredCandidate, ignoredWeightSum, ignoredM);
+            float3 eventMultiplier = float3(1.0f, 1.0f, 1.0f);
+#if defined(FOG_ENABLED)
+            if (volumeEvent)
+            {
+                eventMultiplier = _FogScatteringAlbedo * max(0.0f, _FogInScatteringIntensity);
+            }
+#endif
+            directLightContribution = throughput * eventMultiplier * directLight;
             radiance += directLightContribution;
             directLightLuminance += dot(directLightContribution, float3(0.2126f, 0.7152f, 0.0722f));
 #if defined(PATH_GUIDING_ENABLED)
@@ -5301,6 +5290,30 @@ float3 TracePathWithDirectLight(Ray ray, uint2 pixel, inout RngState rngState, o
             sampledDirectLight = true;
             previousSoftShadows = softShadows;
         }
+
+#if defined(FOG_ENABLED)
+        if (volumeEvent)
+        {
+            if (_FogMultipleScattering == 0)
+            {
+                break;
+            }
+
+            throughput *= saturate(_FogScatteringAlbedo);
+            SetRngDimension(rngState, BounceSampleDimension((uint)bounce, SampleDimensionScatterOffset));
+            ray.direction = SampleUniformSphere(rngState);
+            ray.origin = volumeEventPosition + ray.direction * 0.001f;
+            previousMaterialPdf = 0.0f;
+            previousDirectLightSampled = false;
+            previousInitialRisSampled = false;
+            SetRngDimension(rngState, BounceSampleDimension((uint)bounce, SampleDimensionRouletteOffset));
+            if (!HasPathEnergy(throughput) || !ApplyRussianRoulette(throughput, bounce, rngState))
+            {
+                break;
+            }
+            continue;
+        }
+#endif
 
         int remainingBounces = _NumBounces - bounce;
         SetRngDimension(rngState, BounceSampleDimension((uint)bounce, SampleDimensionScatterOffset));
@@ -5320,7 +5333,6 @@ float3 TracePathWithDirectLight(Ray ray, uint2 pixel, inout RngState rngState, o
         previousDirectLightSampled = sampledDirectLight;
         previousInitialRisSampled = sampledInitialRis;
         previousNearDeltaSpecular = IsNearDeltaSpecular(hit);
-        canGatherCaustics = canGatherCaustics && IsGlassMaterial(hit);
         ray = scatter.ray;
         throughput *= scatter.attenuation;
         bounce += scatter.bouncesConsumed - 1;

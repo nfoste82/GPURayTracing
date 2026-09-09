@@ -1,6 +1,5 @@
 // Final-color renderer kernel. Shared scene and material code lives in RayTracingShared.hlsl.
 #pragma kernel CSMain
-#pragma multi_compile _ FOG_ENABLED
 #pragma multi_compile _ TERRAIN_ENABLED
 #if defined(EXPERIMENTAL_RIS_REUSE)
 #pragma multi_compile _ TEMPORAL_RIS_ENABLED

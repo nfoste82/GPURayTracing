@@ -493,7 +493,66 @@ void CSCausticsDebug(uint3 id : SV_DispatchThreadID)
             pixelJitter = (pixelJitter - 0.5f) * _SubpixelJitterScale + 0.5f;
         }
         float2 uv = ((id.xy + pixelJitter) / float2(width, height)) * 2.0f - 1.0f;
-        result += TraceVisibleCausticRadiance(CreateCameraRay(uv), rngState);
+        Ray ray = CreateCameraRay(uv);
+        if (_ApertureRadius > 0.0f)
+        {
+            SetRngDimension(rngState, SampleDimensionLens);
+            float3 cameraForward = normalize(mul(_CameraToWorld, float4(0.0f, 0.0f, -1.0f, 0.0f)).xyz);
+            float focusRayDistance = _FocalDistance / max(0.0001f, dot(ray.direction, cameraForward));
+            float3 focalPoint = ray.origin + ray.direction * focusRayDistance;
+            float2 apertureSample = SampleAperture(rngState) * _ApertureRadius;
+            float3 cameraRight = normalize(mul(_CameraToWorld, float4(1.0f, 0.0f, 0.0f, 0.0f)).xyz);
+            float3 cameraUp = normalize(mul(_CameraToWorld, float4(0.0f, 1.0f, 0.0f, 0.0f)).xyz);
+            ray.origin += cameraRight * apertureSample.x + cameraUp * apertureSample.y;
+            ray.direction = normalize(focalPoint - ray.origin);
+        }
+        else
+        {
+            SetRngDimension(rngState, SampleDimensionLens);
+        }
+        result += TraceVisibleCausticRadiance(ray, rngState);
     }
     Result[id.xy] = float4(result / max(1, _NumberOfPasses), 1.0f);
+}
+
+RWTexture2D<float4> CausticAccumulation;
+int _UseCausticAccumulation;
+int _CausticAccumulatedFrameCount;
+
+[numthreads(8,4,1)]
+void CSCausticsFinalColor(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    Result.GetDimensions(width, height);
+    if (id.x >= width || id.y >= height)
+    {
+        return;
+    }
+
+    float3 result = 0.0f;
+    [loop]
+    for (int i = 0; i < _NumberOfPasses; i++)
+    {
+        RngState rngState = CreateRngState(id.xy, _SampleOffset + (uint)i);
+        SetRngDimension(rngState, SampleDimensionPixelFilter);
+        float2 pixelJitter = float2(rand(rngState), rand(rngState));
+        if (_SubpixelJitterScale != 1.0f)
+        {
+            pixelJitter = (pixelJitter - 0.5f) * _SubpixelJitterScale + 0.5f;
+        }
+        float2 uv = ((id.xy + pixelJitter) / float2(width, height)) * 2.0f - 1.0f;
+        result += TraceVisibleCausticRadiance(CreateCameraRay(uv), rngState);
+    }
+
+    float3 color = result / max(1, _NumberOfPasses);
+    if (_UseCausticAccumulation != 0)
+    {
+        float previousCount = max(0, _CausticAccumulatedFrameCount);
+        if (previousCount > 0.0f)
+        {
+            color = (CausticAccumulation[id.xy].rgb * previousCount + color) / (previousCount + 1.0f);
+        }
+        CausticAccumulation[id.xy] = float4(color, 1.0f);
+    }
+    Result[id.xy] = float4(color, 1.0f);
 }

@@ -8,8 +8,10 @@ using Debug = UnityEngine.Debug;
 // compute kernels lazily, so timing the dispatch is the useful signal rather than asset loading.
 public static class RayTracingShaderPrecompiler
 {
-    private const string MainShaderPath = "Assets/Scripts/RayTracingCompute.compute";
+    private const string MainShaderPath = "Assets/Resources/RayTracingWavefront.compute";
     private const string WaterShaderPath = "Assets/Resources/RayTracingWater.compute";
+    private const string FogShaderPath = "Assets/Resources/RayTracingFog.compute";
+    private const string WaterFogShaderPath = "Assets/Resources/RayTracingWaterFog.compute";
     private const string ExperimentalPathGuidedShaderPath = "Assets/Resources/RayTracingExperimentalPathGuided.compute";
     private const string ExperimentalRisShaderPath = "Assets/Resources/RayTracingExperimentalRis.compute";
     private const string AdaptiveTraceShaderPath = "Assets/Resources/RayTracingAdaptiveTrace.compute";
@@ -24,7 +26,7 @@ public static class RayTracingShaderPrecompiler
     private const string StatsPath = "Library/RayTracingShaderCompileStats.csv";
     private const string StatsHeader = "timestamp,unityVersion,buildTarget,graphicsDevice,shaderAsset,kernel,shaderHash,variant,coldDispatchMs,warmDispatchMs";
 
-    private enum VariantSet { None, FogTerrain, Terrain }
+    private enum VariantSet { None, FogTerrain, Terrain, FogTerrainOnly }
 
     private sealed class ShaderAsset
     {
@@ -56,8 +58,13 @@ public static class RayTracingShaderPrecompiler
         public string Label => $"fog={(Fog ? 1 : 0)};terrain={(Terrain ? 1 : 0)}";
     }
 
-    private static readonly ShaderAsset Main = new ShaderAsset("Main Final Color", MainShaderPath, VariantSet.FogTerrain, "CSMain");
-    private static readonly ShaderAsset Water = new ShaderAsset("Water Final Color", WaterShaderPath, VariantSet.FogTerrain, "CSMain");
+    private static readonly ShaderAsset Main = new ShaderAsset("Wavefront Surface", MainShaderPath, VariantSet.Terrain,
+        "CSWavefrontClearFrame", "CSWavefrontClearQueues", "CSWavefrontGenerate", "CSWavefrontBuildDispatchArgs", "CSWavefrontIntersect",
+        "CSWavefrontClassify", "CSWavefrontDirectLight", "CSWavefrontScatter", "CSWavefrontCopyNextQueue",
+        "CSWavefrontPublishNextQueue", "CSWavefrontRetireCurrentQueue", "CSWavefrontResolve", "CSWavefrontPresent");
+    private static readonly ShaderAsset Water = new ShaderAsset("Water Final Color", WaterShaderPath, VariantSet.Terrain, "CSMain");
+    private static readonly ShaderAsset Fog = new ShaderAsset("Fog Final Color", FogShaderPath, VariantSet.FogTerrainOnly, "CSMain");
+    private static readonly ShaderAsset WaterFog = new ShaderAsset("Water + Fog Final Color", WaterFogShaderPath, VariantSet.FogTerrainOnly, "CSMain");
     private static readonly ShaderAsset ExperimentalPathGuided = new ShaderAsset("Experimental Path Guided", ExperimentalPathGuidedShaderPath, VariantSet.FogTerrain, "CSMain");
     private static readonly ShaderAsset ExperimentalRis = new ShaderAsset("Experimental RIS", ExperimentalRisShaderPath, VariantSet.FogTerrain, "CSMain");
     private static readonly ShaderAsset AdaptiveTrace = new ShaderAsset("Adaptive Trace", AdaptiveTraceShaderPath, VariantSet.FogTerrain,
@@ -67,31 +74,40 @@ public static class RayTracingShaderPrecompiler
           "ClearAdaptiveFrameMetadata", "RecordAdaptiveRetiredPaths", "CSAdaptiveClassifyGroups", "CSAdaptiveApplyBucketRemap",
          "CSAdaptiveDiagnostics");
     private static readonly ShaderAsset Utility = new ShaderAsset("Utility", UtilityShaderPath, VariantSet.None,
-        "ClearAccumulation", "UpscaleAdaptiveBootstrap", "SeedAdaptiveBootstrap", "ComposeAdaptiveBootstrap");
+        "ClearAccumulation", "UpscaleAdaptiveBootstrap", "SeedAdaptiveBootstrap", "ComposeAdaptiveBootstrap", "CompositeCaustics");
     private static readonly ShaderAsset Features = new ShaderAsset("Features", FeaturesShaderPath, VariantSet.FogTerrain, "CSFeatures");
     private static readonly ShaderAsset SpatialRisPrepass = new ShaderAsset("Spatial RIS Prepass", SpatialRisPrepassShaderPath, VariantSet.FogTerrain,
         "CSSpatialRisPrepass");
     private static readonly ShaderAsset Focus = new ShaderAsset("Focus", FocusShaderPath, VariantSet.Terrain, "CSFocusQuery");
     private static readonly ShaderAsset RegressionProbe = new ShaderAsset("Regression Probe", RegressionProbeShaderPath, VariantSet.None, "CSRegressionProbe");
-    private static readonly ShaderAsset[] RendererAssets = { Main, Water, ExperimentalPathGuided, ExperimentalRis, AdaptiveTrace, AdaptiveScheduler, Utility, Features, SpatialRisPrepass, Focus, RegressionProbe };
+    private static readonly ShaderAsset[] RendererAssets = { Main, Water, Fog, WaterFog, ExperimentalPathGuided, ExperimentalRis, AdaptiveTrace, AdaptiveScheduler, Utility, Features, SpatialRisPrepass, Focus, RegressionProbe };
 
-    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Main Final Color/All Fog + Terrain Variants")]
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Main Final Color/All Terrain Variants")]
     private static void PrecompileMainAllVariants() => Precompile(new[] { Main }, true);
 
     [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Main Final Color/Default (Fog Off, Terrain Off)")]
     private static void PrecompileMainDefault() => Precompile(new[] { Main }, true, 0);
 
-    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Main Final Color/Fog (Terrain Off)")]
-    private static void PrecompileMainFog() => Precompile(new[] { Main }, true, 1);
-
     [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Main Final Color/Terrain (Fog Off)")]
-    private static void PrecompileMainTerrain() => Precompile(new[] { Main }, true, 2);
-
-    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Main Final Color/Fog + Terrain")]
-    private static void PrecompileMainFogTerrain() => Precompile(new[] { Main }, true, 3);
+    private static void PrecompileMainTerrain() => Precompile(new[] { Main }, true, 1);
 
     [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Water Final Color/Default (Fog Off, Terrain Off)")]
     private static void PrecompileWaterDefault() => Precompile(new[] { Water }, true, 0);
+
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Water Final Color/Terrain (Fog Off)")]
+    private static void PrecompileWaterTerrain() => Precompile(new[] { Water }, true, 1);
+
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Fog Final Color/Default (Terrain Off)")]
+    private static void PrecompileFogDefault() => Precompile(new[] { Fog }, true, 0);
+
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Fog Final Color/Terrain")]
+    private static void PrecompileFogTerrain() => Precompile(new[] { Fog }, true, 1);
+
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Water + Fog Final Color/Default (Terrain Off)")]
+    private static void PrecompileWaterFogDefault() => Precompile(new[] { WaterFog }, true, 0);
+
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Water + Fog Final Color/Terrain")]
+    private static void PrecompileWaterFogTerrain() => Precompile(new[] { WaterFog }, true, 1);
 
     [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Experimental Path Guided/Default (Fog Off, Terrain Off)")]
     private static void PrecompileExperimentalPathGuidedDefault() => Precompile(new[] { ExperimentalPathGuided }, true, 0);
@@ -283,6 +299,7 @@ public static class RayTracingShaderPrecompiler
     {
         if (set == VariantSet.None) return new[] { new Variant(false, false) };
         if (set == VariantSet.Terrain) return new[] { new Variant(false, false), new Variant(false, true) };
+        if (set == VariantSet.FogTerrainOnly) return new[] { new Variant(true, false), new Variant(true, true) };
         return new[] { new Variant(false, false), new Variant(true, false), new Variant(false, true), new Variant(true, true) };
     }
 
@@ -313,6 +330,7 @@ public static class RayTracingShaderPrecompiler
         shader.SetFloat("_AdaptiveSpatialDisagreementPriority", 0.0f);
         shader.SetVector("_FogBoundsMin", Vector3.zero); shader.SetVector("_FogBoundsMax", Vector3.one); shader.SetVector("_TerrainSize", Vector3.one);
         shader.SetTexture(kernel, "Result", r.Color); shader.SetTexture(kernel, "AccumulationResult", r.Color); shader.SetTexture(kernel, "Beauty", r.Color);
+        shader.SetTexture(kernel, "CausticResult", r.Color); shader.SetTexture(kernel, "CausticAccumulation", r.Color);
         shader.SetTexture(kernel, "FeatureNormal", r.Color); shader.SetTexture(kernel, "FeatureAlbedo", r.Color); shader.SetTexture(kernel, "FeatureDepth", r.Scalar);
         shader.SetTexture(kernel, "FeatureIdentity", r.Scalar); shader.SetTexture(kernel, "FeatureValidity", r.Scalar); shader.SetTexture(kernel, "_SkyboxTexture", Texture2D.blackTexture);
         shader.SetTexture(kernel, "_MeshAlbedoTextures", r.TextureArray); shader.SetTexture(kernel, "_MeshMetallicRoughnessTextures", r.TextureArray);
@@ -322,6 +340,8 @@ public static class RayTracingShaderPrecompiler
         shader.SetTexture(kernel, "_TerrainNormal0", Texture2D.normalTexture); shader.SetTexture(kernel, "_TerrainNormal1", Texture2D.normalTexture); shader.SetTexture(kernel, "_TerrainNormal2", Texture2D.normalTexture); shader.SetTexture(kernel, "_TerrainNormal3", Texture2D.normalTexture);
         shader.SetTexture(kernel, "_TerrainMask0", Texture2D.whiteTexture); shader.SetTexture(kernel, "_TerrainMask1", Texture2D.whiteTexture); shader.SetTexture(kernel, "_TerrainMask2", Texture2D.whiteTexture); shader.SetTexture(kernel, "_TerrainMask3", Texture2D.whiteTexture);
         shader.SetTexture(kernel, "AdaptiveSamplingState", r.Color); shader.SetTexture(kernel, "AdaptiveSamplingM2", r.Color); shader.SetTexture(kernel, "AdaptiveBootstrapPriority", r.Color);
+        foreach (var name in r.WavefrontBufferNames) shader.SetBuffer(kernel, name, r.GetWavefrontBuffer(name));
+        shader.SetTexture(kernel, "_WavefrontFrameResult", r.Color);
         foreach (var name in r.FloatBufferNames) shader.SetBuffer(kernel, name, r.FloatBuffer);
         foreach (var name in r.StructuredBufferNames) shader.SetBuffer(kernel, name, r.GetStructuredBuffer(name));
         foreach (var name in r.AdaptiveBufferNames) shader.SetBuffer(kernel, name, r.GetAdaptiveBuffer(name));
@@ -341,9 +361,12 @@ public static class RayTracingShaderPrecompiler
         private readonly ComputeBuffer terrainCellBuffer = new ComputeBuffer(1, 8);
         private readonly ComputeBuffer float4Buffer = new ComputeBuffer(64, 16);
         private readonly ComputeBuffer uintBuffer = new ComputeBuffer(64, 4);
+        private readonly ComputeBuffer wavefrontPathBuffer = new ComputeBuffer(64, 348);
+        private readonly ComputeBuffer wavefrontHitBuffer = new ComputeBuffer(64, 144);
         public readonly string[] FloatBufferNames = { "_EnvironmentConditionalCdf", "_EnvironmentMarginalCdf", "_MeshLightTriangleCdf", "_CausticPhotonMetadata", "_CausticGridCellHeads", "_CausticPhotonNext", "_TerrainHeights" };
         public readonly string[] StructuredBufferNames = { "_Spheres", "_Lights", "_Triangles", "_Meshes", "_BvhNodes", "_TopLevelBvhNodes", "_ShadowBvhNodes", "_CausticPhotons", "_TerrainCells", "_SobolDirectionNumbers", "RegressionResults", "_FocusQueryResult" };
         public readonly string[] AdaptiveBufferNames = { "AdaptiveGroupState", "AdaptiveGroupInfo", "AdaptiveProbeGroups", "AdaptiveGroupBucket", "AdaptiveGroupExtraDemand", "AdaptiveRawBucketDemand", "AdaptiveWorkListMetadata" };
+        public readonly string[] WavefrontBufferNames = { "_WavefrontPaths", "_WavefrontHits", "_WavefrontCurrentQueue", "_WavefrontNextQueue", "_WavefrontCompletedQueue", "_WavefrontCounters", "_WavefrontDispatchArgs" };
 
         public DummyResources()
         {
@@ -380,6 +403,13 @@ public static class RayTracingShaderPrecompiler
             }
         }
 
+        public ComputeBuffer GetWavefrontBuffer(string name)
+        {
+            if (name == "_WavefrontPaths") return wavefrontPathBuffer;
+            if (name == "_WavefrontHits") return wavefrontHitBuffer;
+            return uintBuffer;
+        }
+
         public void WaitForGpu()
         {
             var previous = RenderTexture.active;
@@ -394,7 +424,7 @@ public static class RayTracingShaderPrecompiler
         {
             FloatBuffer.Release(); sphereBuffer.Release(); lightBuffer.Release(); triangleBuffer.Release();
             meshAndBvhBuffer.Release(); causticPhotonBuffer.Release(); terrainCellBuffer.Release();
-            float4Buffer.Release(); uintBuffer.Release(); Color.Release(); Scalar.Release();
+            float4Buffer.Release(); uintBuffer.Release(); wavefrontPathBuffer.Release(); wavefrontHitBuffer.Release(); Color.Release(); Scalar.Release();
             Object.DestroyImmediate(TextureArray); Object.DestroyImmediate(Color); Object.DestroyImmediate(Scalar);
         }
 
@@ -416,10 +446,13 @@ public static class RayTracingShaderPrecompiler
         if (shader == null || !LogCompileMessages("Caustics", shader)) return;
         using (var resources = new DummyResources())
         {
-            int kernel = shader.FindKernel("CSCausticsDebug");
-            BindResources(shader, kernel, resources);
-            shader.SetInt("_NumCausticTargetPairs", 0);
-            PathTracing.ComputeDispatch.Dispatch(shader, kernel, 1, 1, 1);
+            foreach (string kernelName in new[] { "CSCausticsDebug", "CSCausticsFinalColor" })
+            {
+                int kernel = shader.FindKernel(kernelName);
+                BindResources(shader, kernel, resources);
+                shader.SetInt("_NumCausticTargetPairs", 0);
+                PathTracing.ComputeDispatch.Dispatch(shader, kernel, 1, 1, 1);
+            }
             resources.WaitForGpu();
         }
         Debug.Log("Caustics compute shader precompile dispatched successfully.");

@@ -334,7 +334,7 @@ public static class RayTracingSceneGenerator
             GlareSoftKnee = 0.15f,
         });
         
-        AddFloor(context.Root, new Vector2(0.0f, 5.0f), new Vector2(18.0f, 24.0f), 0.32f, "Display Floor");
+        AddFloor(context.Root, new Vector2(0.0f, 5.0f), new Vector2(18.0f, 24.0f), 0.32f, new Color32(204, 204, 204, 255), "Display Floor");
         
         RayMeshPrimitive.PrimitiveType[] shapes = { RayMeshPrimitive.PrimitiveType.Cube, RayMeshPrimitive.PrimitiveType.Pyramid, RayMeshPrimitive.PrimitiveType.Dodecahedron };
         var parallexStrengths = new[] { 0.0193f, 0.0138f, 0.041f };
@@ -645,7 +645,7 @@ public static class RayTracingSceneGenerator
         const float slatWidth = 0.72f;
         const float slatDepth = 17.25f;
 
-        AddFloor(context.Root, new Vector2(0.0f, 2.5f), new Vector2(35.0f, 500.0f), 0.12f, "Matte Floor");
+        AddFloor(context.Root, new Vector2(0.0f, 2.5f), new Vector2(35.0f, 500.0f), 0.12f, new Color32(204, 204, 204, 255), "Matte Floor");
         
         // AddMeshLight(
         //     context.Root,
@@ -777,11 +777,11 @@ public static class RayTracingSceneGenerator
             ShadowBvhMinObjectCount = 1024, 
             ShadowQuality = 0,
             DirectionalLightIntensity = 2.5f,
-            SkyboxLightColor = Color.white
-            
+            SkyboxLightColor = Color.white,
+            SobolDimensionLimit = 1,
         });
         AddLight(context.Root, "Key Light", new Vector3(0.0f, 13.0f, -4.0f), 1.8f, new Color32(255, 235, 210, 255));
-        AddFloor(context.Root, new Vector2(0.0f, 6.0f), new Vector2(32.0f, 28.0f), 0.5f);
+        AddFloor(context.Root, new Vector2(0.0f, 6.0f), new Vector2(32.0f, 28.0f), 0.5f, new Color32(204, 204, 204, 255));
 
         const int gridX = 24;
         const int gridZ = 16;
@@ -1176,7 +1176,7 @@ public static class RayTracingSceneGenerator
             ShadowBvhMinObjectCount = 1024, LightFalloffScale = 0.027f
         });
         AddLight(context.Root, "Wide Light", new Vector3(0.0f, 12.0f, -6.0f), 2.4f, new Color32(255, 240, 220, 255));
-        AddFloor(context.Root, new Vector2(0.0f, 5.0f), new Vector2(26.0f, 18.0f), 0.5f);
+        AddFloor(context.Root, new Vector2(0.0f, 5.0f), new Vector2(26.0f, 18.0f), 0.5f, new Color32(204, 204, 204, 255));
 
         for (int z = 0; z < 9; z++)
         {
@@ -1206,9 +1206,10 @@ public static class RayTracingSceneGenerator
             ShadowBvhMinObjectCount = 1024, 
             LightFalloffScale = 0.12f,
             DirectionalLightIntensity = 0.0f,
-            FieldOfView = 24.5f
+            FieldOfView = 24.5f,
+            SobolDimensionLimit = 1,
         });
-        AddFloor(context.Root, new Vector2(0.0f, 5.0f), new Vector2(24.0f, 24.0f), 0.955f);
+        AddFloor(context.Root, new Vector2(0.0f, 5.0f), new Vector2(24.0f, 24.0f), 0.955f, new Color32(204, 204, 204, 255));
 
         for (var i = 0; i < 72; i++)
         {
@@ -1252,7 +1253,7 @@ public static class RayTracingSceneGenerator
             LightFalloffScale = 0.075f,
             ShadowBvhMinObjectCount = 1024
         });
-        AddFloor(context.Root, new Vector2(0.0f, 4.5f), new Vector2(18.0f, 18.0f), 0.15f, "Diffuse Receiver");
+        AddFloor(context.Root, new Vector2(0.0f, 4.5f), new Vector2(18.0f, 18.0f), 0.15f, new Color32(204, 204, 204, 255), "Diffuse Receiver");
 
         for (var i = 0; i < 12; i++)
         {
@@ -1299,7 +1300,7 @@ public static class RayTracingSceneGenerator
             ShadowBvhMinObjectCount = 1024
         });
 
-        AddFloor(context.Root, new Vector2(0.0f, 5.0f), new Vector2(20.0f, 20.0f), 0.12f, "Diffuse Receiver");
+        AddFloor(context.Root, new Vector2(0.0f, 5.0f), new Vector2(20.0f, 20.0f), 0.12f, new Color32(204, 204, 204, 255), "Diffuse Receiver");
         for (var i = 0; i < 20; i++)
         {
             float angle = i * Mathf.PI * 2.0f / 20.0f;
@@ -1334,9 +1335,11 @@ public static class RayTracingSceneGenerator
             TopLevelBvhMinObjectCount = 0,
             DirectionalLightIntensity = 2.7f,
             SkyboxLightColor = Color.white,
+            SobolDimensionLimit = 1,
+            NumBounces = 5,
         });
-        AddLight(context.Root, "Key Light", new Vector3(0.0f, 14.0f, -5.0f), 2.0f, new Color32(255, 238, 218, 255));
-        AddFloor(context.Root, new Vector2(0.0f, 6.0f), new Vector2(24.0f, 18.0f), 0.5f);
+        //AddLight(context.Root, "Key Light", new Vector3(0.0f, 14.0f, -5.0f), 2.0f, new Color32(255, 238, 218, 255));
+        AddFloor(context.Root, new Vector2(0.0f, 6.0f), new Vector2(24.0f, 18.0f), 0.5f, new Color32(204, 204, 204, 255));
 
         for (int z = 0; z < 10; z++)
         {
@@ -1370,7 +1373,10 @@ public static class RayTracingSceneGenerator
             DirectionalLightAngularRadius = 1.5f,
             DirectionalLightRotation = new Vector3(67.0f, -45.0f, 0.0f),
             SkyboxLightColor = Color.white,
-            Exposure = 1.2f
+            Exposure = 1.2f,
+            EnableGlare = false,
+            EnvironmentHighlightThreshold = 0.63f,
+            EnvironmentHighlightIntensity = 2.23f,
         });
         
         var defaultCheckerGray = AssetDatabase.GetBuiltinExtraResource<Texture2D>(DefaultCheckerGrayTexturePath);
@@ -1409,13 +1415,16 @@ public static class RayTracingSceneGenerator
             NumBounces = 16, 
             ShadowQuality = 0,
             LightFalloffScale = 0.015f, 
-            Exposure = 1.29f,
+            Exposure = 3.0f,
             SkyboxLightColor = new Color32(18, 18, 22, 255),
             TopLevelBvhMinObjectCount = 1024, 
             ShadowBvhMinObjectCount = 1024,
             DirectionalLightAngularRadius = 1.61f,
             EnableCaustics = true,
             CausticIntensity = 0.16f,
+            EnableSpatialDenoising = true,
+            DenoiserLuminanceSigma = 0.05f,
+            DenoiserIterations = 2,
         });
 
 
@@ -1596,11 +1605,16 @@ public static class RayTracingSceneGenerator
 
         var context = CreateBaseScene(new SceneSettings
         {
-            SceneName = "Benchmark_Dynamic", CameraPosition = new Vector3(0.0f, 7.0f, -22.0f), CameraEuler = new Vector3(15.0f, 0.0f, 0.0f)
+            SceneName = "Benchmark_Dynamic", 
+            CameraPosition = new Vector3(0.0f, 7.0f, -22.0f), CameraEuler = new Vector3(15.0f, 0.0f, 0.0f), 
+            FieldOfView = 24.2f,
+            SobolDimensionLimit = 1,
+            SubpixelJitterScale = 1.0f,
+            NumBounces = 4,
         });
         
-        AddFloor(context.Root, new Vector2(0.0f, 5.0f), new Vector2(22.0f, 22.0f), 0.5f);
-        AddLight(context.Root, "Key Light", new Vector3(0.0f, 12.0f, -5.0f), 1.7f, new Color32(255, 238, 218, 255));
+        AddFloor(context.Root, new Vector2(0.0f, 5.0f), new Vector2(22.0f, 22.0f), 1f, new Color32(204, 204, 204, 255));
+        //AddLight(context.Root, "Key Light", new Vector3(0.0f, 12.0f, -5.0f), 1.7f, new Color32(255, 238, 218, 255));
 
         for (var i = 0; i < 96; i++)
         {
@@ -1646,6 +1660,7 @@ public static class RayTracingSceneGenerator
             CausticPhotonCount = 183000,
             CausticGatherRadius = 0.015f,
             CausticIntensity = 1f,
+            SobolDimensionLimit = 1,
         });
         context.Manager._singleFrame = true;    // Start the scene paused because moving water will prevent frame accumulation
         
@@ -1728,16 +1743,25 @@ public static class RayTracingSceneGenerator
         var context = CreateBaseScene(new SceneSettings
         {
             SceneName = sceneName, CameraPosition = new Vector3(0.0f, 3.9277854f, -6.0574317f), CameraEuler = new Vector3(14.3395891f, 358.70932f, 0.0f),
-            NumBounces = 10, ShadowQuality = 0,
-            CameraFocalDistance = 7.5f, LightFalloffScale = 0.003f,
-            TopLevelBvhMinObjectCount = 0, ShadowBvhMinObjectCount = 1024,
-            SkyboxLightColor = new Color32(140, 149, 164, 255)
+            NumBounces = 10, 
+            ShadowQuality = 0,
+            CameraFocalDistance = 7.5f, 
+            LightFalloffScale = 0.003f,
+            TopLevelBvhMinObjectCount = 0, 
+            ShadowBvhMinObjectCount = 1024,
+            SkyboxLightColor = new Color32(140, 149, 164, 255),
+            EnableCaustics = true,
+            CausticPhotonCount = 600000,
+            CausticGatherRadius = 0.06f,
+            CausticGatherRadiusDecayRate = 0.35f,
+            CausticIntensity = 0.55f,
+            DirectionalLightIntensity = 2f,
+            DirectionalLightAngularRadius = 0.27f,
+            EnvironmentHighlightThreshold = 0.08f,
+            EnvironmentHighlightIntensity = 1.6f
         });
 
-        AddLight(context.Root, "Large Softbox", new Vector3(-3.5f, 5.6f, -3.8f), 1.6f, Color.white);
-        AddFloor(context.Root, Vector2.zero, new Vector2(12.0f, 10.0f), 0.28f, "Tabletop");
-        var rimHighlight = AddLight(context.Root, "Rim Highlight", new Vector3(3.5f, 3.7f, -2.2f), 0.55f, new Color32(210, 230, 255, 255));
-        rimHighlight.transform.localScale = Vector3.one * 0.1f;
+        AddFloor(context.Root, Vector2.zero, new Vector2(20.0f, 20.0f), 0.28f, new Color32(152, 152, 152, 255), "Tabletop");
 
         var tumblerRoot = new GameObject("Glass Tumbler");
         tumblerRoot.transform.SetParent(context.Root, false);
@@ -1745,11 +1769,11 @@ public static class RayTracingSceneGenerator
         tumblerRoot.transform.localRotation = Quaternion.identity;
         tumblerRoot.transform.localScale = Vector3.one;
 
-        var glassWall = AddRayMesh(tumblerRoot.transform, "Glass Wall", CreateOpenCylinderMesh("Glass Wall", 96, 1.36f, 3.05f, 0.055f), new Vector3(0.0f, 1.56f, 0.0f), Vector3.zero, Vector3.one, new Color32(212, 238, 245, 255), RayMaterial.MaterialType.Glass, 0.98f, 0.146f, 1.83f);
+        var glassWall = AddRayMesh(tumblerRoot.transform, "Glass Wall", CreateOpenCylinderMesh("Glass Wall", 96, 1.36f, 3.05f, 0.055f), new Vector3(0.0f, 1.56f, 0.0f), Vector3.zero, Vector3.one, new Color32(212, 238, 245, 255), RayMaterial.MaterialType.Glass, 0.98f, 0.146f, 1.83f, 0f, 0.9f);
         glassWall.GetComponent<RayMaterial>().InterpolateNormals = true;
         var waterVolume = AddRayMesh(tumblerRoot.transform, "Water Volume", CreateCylinderMesh("Water Volume", 96, 1.24f, 1.86f), new Vector3(0.0f, 1.17f, 0.0f), Vector3.zero, Vector3.one, new Color32(190, 226, 238, 255), RayMaterial.MaterialType.Glass, 0.99f, 0.08f, 2.2f);
         waterVolume.GetComponent<RayMaterial>().InterpolateNormals = true;
-        var topRim = AddRayMesh(tumblerRoot.transform, "Top Rim", CreateTorusMesh("Top Rim", 96, 12, 1.36f, 0.055f), new Vector3(0.0f, 3.09f, 0.0f), Vector3.zero, Vector3.one, new Color32(220, 244, 250, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.16f, 1.52f);
+        var topRim = AddRayMesh(tumblerRoot.transform, "Top Rim", CreateTorusMesh("Top Rim", 96, 12, 1.36f, 0.055f), new Vector3(0.0f, 3.09f, 0.0f), Vector3.zero, Vector3.one, new Color32(220, 244, 250, 255), RayMaterial.MaterialType.Glass, 1.0f, 0.16f, 1.52f, 0f, 0.9f);
         topRim.GetComponent<RayMaterial>().InterpolateNormals = true;
 
         var pencilRoot = new GameObject("Tilted Pencil");
@@ -1758,7 +1782,7 @@ public static class RayTracingSceneGenerator
         pencilRoot.transform.localEulerAngles = new Vector3(0.17f, 0.0f, -55.0f);
         pencilRoot.transform.localScale = Vector3.one;
 
-        AddRayMesh(pencilRoot.transform, "Red Pencil Cylinder", CreateHorizontalCylinderMesh("Red Pencil Cylinder", 10, 0.14f, 5.7f), new Vector3(0.1f, 2.25f, 0.0f), Vector3.zero, Vector3.one, new Color32(174, 28, 36, 255), RayMaterial.MaterialType.Diffuse, 0.52f);
+        AddRayMesh(pencilRoot.transform, "Red Pencil Cylinder", CreateHorizontalCylinderMesh("Red Pencil Cylinder", 50, 0.14f, 5.7f), new Vector3(0.1f, 2.25f, 0.0f), Vector3.zero, Vector3.one, new Color32(174, 28, 36, 255), RayMaterial.MaterialType.Diffuse, 0.52f);
 
         Save(context.Scene, sceneName);
     }
@@ -2106,7 +2130,7 @@ public static class RayTracingSceneGenerator
             ShadowBvhMinObjectCount = 0
         });
 
-        AddFloor(context.Root, Vector2.zero, new Vector2(14.0f, 14.0f), 0.25f, "Diffuse Receiver");
+        AddFloor(context.Root, Vector2.zero, new Vector2(14.0f, 14.0f), 0.25f, new Color32(204, 204, 204, 255), "Diffuse Receiver");
         AddPrimitiveMesh(context.Root, "Receiver Sphere Stand", RayMeshPrimitive.PrimitiveType.Cube,
             new Vector3(2.6f, 0.35f, 1.4f), Vector3.zero, new Vector3(1.4f, 0.7f, 1.4f),
             new Color32(88, 105, 125, 255), RayMaterial.MaterialType.Diffuse, 0.35f, 1.0f);
@@ -2176,7 +2200,7 @@ public static class RayTracingSceneGenerator
         {
             Object.DestroyImmediate(directionalLight.gameObject);
         }
-        AddFloor(context.Root, new Vector2(0.0f, 0.0f), new Vector2(30.0f, 30.0f) * sceneScale, 0.25f, "Neutral Ground Plane");
+        AddFloor(context.Root, new Vector2(0.0f, 0.0f), new Vector2(30.0f, 30.0f) * sceneScale, 0.25f, new Color32(204, 204, 204, 255), "Neutral Ground Plane");
 
         var bunny = AddRayMesh(context.Root, "Copper Stanford Bunny", bunnyMesh,
             new Vector3(0.0f, -3.34f, 0.0f), new Vector3(0.0f, 0.0f, 0.0f), new Vector3(-0.1f, 0.1f, 0.1f), // Negative X scale for the bunny to flip it over the X-axis
@@ -2198,10 +2222,17 @@ public static class RayTracingSceneGenerator
         var context = CreateBaseScene(new SceneSettings
         {
             SceneName = sceneName, CameraPosition = new Vector3(5.4f, 1.29f, 0.99f), CameraEuler = new Vector3(2.0f, -60.55f, 0.0f),
-            NumberOfPasses = 2, NumBounces = 6, ShadowQuality = 1,
-            CameraFocalDistance = 10.0f, LightFalloffScale = 0.035f, Exposure = 1.25f,
+            NumberOfPasses = 1, 
+            NumBounces = 4, 
+            ShadowQuality = 0,
+            CameraFocalDistance = 10.0f,
+            LightFalloffScale = 0.035f,
+            Exposure = 1.25f,
+            SobolDimensionLimit = 1,
             SkyboxLightColor = new Color32(8, 8, 8, 255),
-            TopLevelBvhMinObjectCount = 1024, ShadowBvhMinObjectCount = 1024
+            TopLevelBvhMinObjectCount = 1024,
+            ShadowBvhMinObjectCount = 1024,
+            DirectionalLightIntensity = 0f,
         });
 
         AddRayMesh(context.Root, "Back Stone Wall", CreateQuadMesh("Back Stone Wall", 12.0f, 3.0f, 6.0f, 1.5f), new Vector3(0.0f, 1.5f, 7.0f), Vector3.zero, Vector3.one, Color.white, RayMaterial.MaterialType.Diffuse, 0.18f, 1.0f, 1.0f, albedoTexture: wallTexture);
@@ -2211,8 +2242,8 @@ public static class RayTracingSceneGenerator
         AddRayMesh(context.Root, "Ceiling", CreateHorizontalQuadMesh("Ceiling", 12.0f, 12.0f, 3.0f, 3.0f), new Vector3(0.0f, 2.0f, 1.0f), new Vector3(180.0f, 0.0f, 0.0f), Vector3.one, new Color32(92, 78, 54, 255), RayMaterial.MaterialType.Diffuse, 0.2f);
 
         //AddLight(context.Root, "Bright Wall Light", new Vector3(1.9f, 0.75f, 5.35f), 0.42f, new Color32(255, 245, 190, 255));
-        AddLight(context.Root, "Small Warm Light", new Vector3(-0.35f, 1.1f, 5.85f), 0.35f, new Color32(255, 238, 178, 255));
-        AddLight(context.Root, "Ceiling Fill", new Vector3(0.47f, 2f, -1.62f), 0.7f, new Color32(170, 135, 85, 255));
+        AddLight(context.Root, "Small Warm Light", new Vector3(-0.35f, 1.1f, 5.85f), 0.35f, new Color32(255, 238, 178, 255), intensity: 5f);
+        AddLight(context.Root, "Ceiling Fill", new Vector3(0.47f, 1.25f, -1.62f), 0.7f, new Color32(170, 135, 85, 255), intensity: 5f);
 
         AddSphere(context.Root, "Large Center Sphere", new Vector3(-1.2f, 0.85f, 2.85f), 0.85f, new Color32(150, 146, 105, 255), RayMaterial.MaterialType.Diffuse, 0.4f);
         AddSphere(context.Root, "Cyan Sphere", new Vector3(-2.65f, 0.72f, 2.45f), 0.72f, new Color32(32, 128, 135, 255), RayMaterial.MaterialType.Diffuse, 0.35f);
@@ -2250,7 +2281,7 @@ public static class RayTracingSceneGenerator
         return obj;
     }
 
-    private static GameObject AddFloor(Transform parent, Vector2 center, Vector2 size, float smoothness, string name = "Floor")
+    private static GameObject AddFloor(Transform parent, Vector2 center, Vector2 size, float smoothness, Color32 color, string name = "Floor")
     {
         return AddPrimitiveMesh(
             parent,
@@ -2259,7 +2290,7 @@ public static class RayTracingSceneGenerator
             new Vector3(center.x, -0.02f, center.y),
             Vector3.zero,
             new Vector3(size.x, 0.04f, size.y),
-            new Color32(204, 204, 204, 255),
+            color,
             RayMaterial.MaterialType.Diffuse,
             smoothness,
             1.0f);

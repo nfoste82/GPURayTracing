@@ -44,9 +44,12 @@ public class GameManager : MonoBehaviour
     [SerializeField] private ComputeShader adaptiveSchedulerShader;
     [SerializeField] private ComputeShader adaptiveTraceShader;
     [SerializeField] private ComputeShader waterShader;
+    [SerializeField] private ComputeShader fogShader;
+    [SerializeField] private ComputeShader waterFogShader;
     [SerializeField] private ComputeShader waterFeaturesShader;
     [SerializeField] private ComputeShader waterFocusShader;
     [SerializeField] private ComputeShader waterAdaptiveTraceShader;
+    private ComputeShader _wavefrontShader;
 
     [SerializeField]
     public ComputeShader causticsShader;
@@ -318,6 +321,8 @@ public class GameManager : MonoBehaviour
     // Reconstruction-neutral, linear feature outputs. They are allocated now but do not change
     // presentation until a denoiser consumes them in a later milestone.
     private RenderTexture _beautyTexture;
+    private RenderTexture _causticResultTexture;
+    private RenderTexture _causticAccumulationTexture;
     private RenderTexture _featureNormalTexture;
     private RenderTexture _featureAlbedoTexture;
     private RenderTexture _featureDepthTexture;
@@ -446,6 +451,7 @@ public class GameManager : MonoBehaviour
     private CausticsManager _causticsManager = new();
     
     private readonly SceneBvhManager _sceneBvhs = new();
+    private readonly WavefrontPathTracingManager _wavefrontPathTracingManager = new();
     
     private TerrainManager _terrainManager;
     
@@ -556,10 +562,26 @@ public class GameManager : MonoBehaviour
     }
     public bool HasWaterVolume => WaterManager.HasWaterVolume;
     private bool IsExperimentalFinalColorShader(ComputeShader targetShader) => targetShader == experimentalPathGuidedShader || targetShader == experimentalRisShader;
+    private bool IsProductionFinalColorShader(ComputeShader targetShader) => targetShader == ActiveFinalColorShader;
     private bool ShouldUseExperimentalRisShader() => experimentalRisShader != null && ShouldRunTemporalRis()
         && !IsTemporalRisUnsupported() && !HasWaterVolume;
     private bool ShouldUseExperimentalPathGuidedShader() => experimentalPathGuidedShader != null && enablePathGuiding
         && !ShouldUseExperimentalRisShader() && !HasWaterVolume;
+    private ComputeShader ActiveFinalColorShader
+    {
+        get
+        {
+            if (_wavefrontShader == null)
+            {
+                _wavefrontShader = Resources.Load<ComputeShader>("RayTracingWavefront");
+            }
+            if (_wavefrontShader == null)
+            {
+                throw new InvalidOperationException("Missing Resources/RayTracingWavefront.compute.");
+            }
+            return _wavefrontShader;
+        }
+    }
     private ComputeShader ActiveFeaturesShader => HasWaterVolume ? waterFeaturesShader : featuresShader;
     private ComputeShader ActiveFocusShader => HasWaterVolume ? waterFocusShader : focusShader;
     private ComputeShader ActiveAdaptiveTraceShader
@@ -807,7 +829,11 @@ public class GameManager : MonoBehaviour
         {
             focusShader = Resources.Load<ComputeShader>("RayTracingFocus");
         }
-        if (utilityShader == null || featuresShader == null || focusShader == null)
+        if (_wavefrontShader == null)
+        {
+            _wavefrontShader = Resources.Load<ComputeShader>("RayTracingWavefront");
+        }
+        if (utilityShader == null || featuresShader == null || focusShader == null || _wavefrontShader == null)
         {
             Debug.LogError("Split ray tracing compute shaders are missing from Resources.", this);
         }
@@ -821,6 +847,14 @@ public class GameManager : MonoBehaviour
         if (waterShader == null)
         {
             waterShader = Resources.Load<ComputeShader>("RayTracingWater");
+        }
+        if (fogShader == null)
+        {
+            fogShader = Resources.Load<ComputeShader>("RayTracingFog");
+        }
+        if (waterFogShader == null)
+        {
+            waterFogShader = Resources.Load<ComputeShader>("RayTracingWaterFog");
         }
         if (waterFeaturesShader == null)
         {
@@ -846,9 +880,10 @@ public class GameManager : MonoBehaviour
         {
             Debug.LogError("Adaptive compute shaders are missing. Add RayTracingAdaptiveScheduler and RayTracingAdaptiveTrace to Resources.", this);
         }
-        if (waterShader == null || waterFeaturesShader == null || waterFocusShader == null || waterAdaptiveTraceShader == null)
+        if (waterShader == null || fogShader == null || waterFogShader == null || waterFeaturesShader == null
+            || waterFocusShader == null || waterAdaptiveTraceShader == null)
         {
-            Debug.LogError("Water-capable ray tracing compute shaders are missing from Resources.", this);
+            Debug.LogError("Water/fog-capable ray tracing compute shaders are missing from Resources.", this);
         }
 
         if (causticsShader == null)
@@ -964,10 +999,13 @@ public class GameManager : MonoBehaviour
 
     private void CreateOutputTexture(int width, int height)
     {
+        _wavefrontPathTracingManager.ReleaseResources();
         _outputTexture?.Release();
         _presentationTexture?.Release();
         _accumulationTexture?.Release();
         _beautyTexture?.Release();
+        _causticResultTexture?.Release();
+        _causticAccumulationTexture?.Release();
         _featureNormalTexture?.Release();
         _featureAlbedoTexture?.Release();
         _featureDepthTexture?.Release();
@@ -1012,6 +1050,8 @@ public class GameManager : MonoBehaviour
         _accumulationTexture.Create();
 
         _beautyTexture = CreateFeatureTexture(RenderTextureFormat.ARGBFloat);
+        _causticResultTexture = CreateFeatureTexture(RenderTextureFormat.ARGBFloat);
+        _causticAccumulationTexture = CreateFeatureTexture(RenderTextureFormat.ARGBFloat);
         _featureNormalTexture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
         _featureAlbedoTexture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
         _featureDepthTexture = CreateFeatureTexture(RenderTextureFormat.RHalf);
@@ -1248,6 +1288,8 @@ public class GameManager : MonoBehaviour
         _presentationTexture?.Release();
         _accumulationTexture?.Release();
         _beautyTexture?.Release();
+        _causticResultTexture?.Release();
+        _causticAccumulationTexture?.Release();
         _featureNormalTexture?.Release();
         _featureAlbedoTexture?.Release();
         _featureDepthTexture?.Release();
@@ -1284,6 +1326,7 @@ public class GameManager : MonoBehaviour
         _sobolDirectionNumbers.Dispose();
         
         _causticsManager.ReleaseResources();
+        _wavefrontPathTracingManager.ReleaseResources();
         
         DestroyRuntimeTextureArrays();
     }
@@ -1406,6 +1449,8 @@ public class GameManager : MonoBehaviour
                     Mathf.CeilToInt(bootstrapSize.y / (float)RenderThreadCountY), 1);
                 utilityShader.SetTexture(clearKernel, AccumulationResult, _adaptiveBootstrapPriorityTexture);
                 ComputeDispatch.Dispatch(utilityShader, clearKernel, clearGroupsX, clearGroupsY, 1);
+                utilityShader.SetTexture(clearKernel, AccumulationResult, _causticAccumulationTexture);
+                ComputeDispatch.Dispatch(utilityShader, clearKernel, clearGroupsX, clearGroupsY, 1);
                 _accumulationClearPending = false;
             }
 
@@ -1453,6 +1498,13 @@ public class GameManager : MonoBehaviour
             ComputeDispatch.Dispatch(spatialRisPrepassShader, prepassKernel, spatialGroupsX, spatialGroupsY, 1);
             _temporalRisManager.BindSpatialResolve(targetShader, kernelHandle, this);
             }
+        }
+
+        if (targetShader == ActiveFinalColorShader)
+        {
+            _wavefrontPathTracingManager.Dispatch(targetShader, _textureSize, numberOfPasses, numBounces,
+                SetShaderParameters, _outputTexture, _accumulationTexture);
+            return;
         }
 
         targetShader.SetTexture(kernelHandle, Result, _outputTexture);
@@ -1560,7 +1612,7 @@ public class GameManager : MonoBehaviour
     private void DispatchAdaptiveBootstrap()
     {
         EnsureAdaptiveBootstrapTextureSize();
-        var bootstrapShader = HasWaterVolume ? waterShader : shader;
+        var bootstrapShader = ActiveFinalColorShader;
         var kernel = bootstrapShader.FindKernel("CSMain");
         SetShaderParameters(bootstrapShader, kernel);
         bootstrapShader.SetTexture(kernel, Result, _adaptiveBootstrapResultTexture);
@@ -1818,6 +1870,26 @@ public class GameManager : MonoBehaviour
     {
         _glareManager.Present(_presentationSource ?? _beautyTexture, _presentationTexture,
             exposure, enableGlare, glareThreshold, glareSoftKnee, glareIntensity);
+    }
+
+    private void DispatchFinalColorCaustics(bool useFrameAccumulation)
+    {
+        int gatherKernel = causticsShader.FindKernel("CSCausticsFinalColor");
+        SetShaderParameters(causticsShader, gatherKernel);
+        causticsShader.SetTexture(gatherKernel, Result, _causticResultTexture);
+        causticsShader.SetTexture(gatherKernel, "CausticAccumulation", _causticAccumulationTexture);
+        causticsShader.SetInt("_UseCausticAccumulation", useFrameAccumulation ? 1 : 0);
+        causticsShader.SetInt("_CausticAccumulatedFrameCount", _accumulatedFrameCount);
+        ComputeDispatch.Dispatch(causticsShader, gatherKernel,
+            Mathf.CeilToInt(_textureSize.x / 8.0f), Mathf.CeilToInt(_textureSize.y / 4.0f), 1);
+
+        int compositeKernel = utilityShader.FindKernel("CompositeCaustics");
+        utilityShader.SetTexture(compositeKernel, Beauty, _beautyTexture);
+        utilityShader.SetTexture(compositeKernel, Result, _outputTexture);
+        utilityShader.SetTexture(compositeKernel, "CausticResult", _causticResultTexture);
+        ComputeDispatch.Dispatch(utilityShader, compositeKernel,
+            Mathf.CeilToInt(_textureSize.x / (float)RenderThreadCountX),
+            Mathf.CeilToInt(_textureSize.y / (float)RenderThreadCountY), 1);
     }
 
     private void PresentLinearTexture(RenderTexture source, RenderTexture destination)
@@ -2298,8 +2370,9 @@ public class GameManager : MonoBehaviour
         bool useAdaptiveTraceShader = ShouldUseAdaptiveSampling()
             && (!enableAdaptiveBootstrap || _adaptiveBootstrapFrameCount >= Mathf.Clamp(adaptiveBootstrapFrames, 1, 512));
         int rendererKind = frame.useDedicatedCausticsDebugKernel ? 2
-            : frame.useGeometryDebugShader ? 1 : useAdaptiveTraceShader ? 4 : HasWaterVolume ? 3
-            : ShouldUseExperimentalRisShader() ? 5 : ShouldUseExperimentalPathGuidedShader() ? 6 : 0;
+            : frame.useGeometryDebugShader ? 1 : useAdaptiveTraceShader ? 4
+            : ShouldUseExperimentalRisShader() ? 5 : ShouldUseExperimentalPathGuidedShader() ? 6
+            : HasWaterVolume ? frame.fogEnabled ? 8 : 3 : frame.fogEnabled ? 7 : 0;
         frame.requestedVariant = GetShaderVariantKey(rendererKind, frame.fogEnabled,
             _terrainManager != null && _terrainManager.Terrain != null);
         
@@ -2362,12 +2435,9 @@ public class GameManager : MonoBehaviour
             _preserveTemporalRisHistoryForNextNonAccumulatedFrame = false;
         }
         
-        frame.computeShader = frame.useDedicatedCausticsDebugKernel ? causticsShader
-            : ShouldUseAdaptiveSampling() ? ActiveAdaptiveTraceShader : HasWaterVolume ? waterShader
-            : ShouldUseExperimentalRisShader() ? experimentalRisShader
-            : ShouldUseExperimentalPathGuidedShader() ? experimentalPathGuidedShader : shader;
+        frame.computeShader = frame.useDedicatedCausticsDebugKernel ? causticsShader : ActiveFinalColorShader;
         frame.kernelHandle = frame.computeShader.FindKernel(frame.useDedicatedCausticsDebugKernel ? "CSCausticsDebug"
-            : ShouldUseAdaptiveSampling() ? "CSAdaptiveTrace" : "CSMain");
+            : "CSWavefrontPresent");
     }
 
     private void DispatchRenderFrame(ref RenderFrame frame)
@@ -2387,13 +2457,24 @@ public class GameManager : MonoBehaviour
         
         var dispatchStart = _startupProfilePending ? Stopwatch.GetTimestamp() : 0;
         UpdateTextureFromCompute(frame.computeShader, frame.kernelHandle);
-        if (frame.computeShader == shader || IsExperimentalFinalColorShader(frame.computeShader))
+        if (IsProductionFinalColorShader(frame.computeShader) || IsExperimentalFinalColorShader(frame.computeShader))
         {
             Graphics.CopyTexture(_outputTexture, _beautyTexture);
         }
+        else if (ShouldUseAdaptiveSampling() && !_adaptiveBootstrapPreviewActive)
+        {
+            // Adaptive tracing only changes scheduled pixels in Beauty. Rebuild it from the
+            // unbiased base accumulator before adding the new full-frame caustic estimate so
+            // prior-frame caustics are not added again in unscheduled regions.
+            Graphics.CopyTexture(_accumulationTexture, _beautyTexture);
+        }
+        if (!frame.useDedicatedCausticsDebugKernel && enableCaustics && debugRenderMode == DebugRenderMode.FinalColor)
+        {
+            DispatchFinalColorCaustics(frame.useFrameAccumulation);
+        }
         _presentationSource = _beautyTexture;
         
-        bool usedExperimentalRis = frame.computeShader == experimentalRisShader;
+        bool usedExperimentalRis = false;
         if (!frame.useDedicatedCausticsDebugKernel && (ShouldRunSpatialDenoiser() || ShouldRunTemporalDenoiser() || usedExperimentalRis || IsFeatureDebugMode() || IsCausticPreservationDebugMode()))
         {
             UpdateFeaturesFromCompute();
@@ -3869,7 +3950,7 @@ public class GameManager : MonoBehaviour
         targetShader.SetFloat(Exposure, exposure);
         targetShader.SetFloat(FireflyClamp, Mathf.Max(0.0f, fireflyClamp));
         
-        if (targetShader == waterShader || targetShader == waterFeaturesShader || targetShader == waterFocusShader
+        if (targetShader == waterShader || targetShader == waterFogShader || targetShader == waterFeaturesShader || targetShader == waterFocusShader
             || targetShader == waterAdaptiveTraceShader || targetShader == causticsShader)
         {
             WaterManager.SetShaderParameters(targetShader, Application.isPlaying ? GetRenderTime() : 0.0f);
@@ -3883,13 +3964,12 @@ public class GameManager : MonoBehaviour
         var fogAlbedo = fogEnabled ? _fogVolume.ScatteringAlbedo : Color.black;
         if (targetShader != focusShader && targetShader != waterFocusShader)
         {
-            if (fogEnabled)
+            // Final-color fog is isolated in dedicated assets. Companion feature/adaptive and
+            // experimental assets still use their existing fog keyword variants.
+            if (!IsProductionFinalColorShader(targetShader))
             {
-                targetShader.EnableKeyword("FOG_ENABLED");
-            }
-            else
-            {
-                targetShader.DisableKeyword("FOG_ENABLED");
+                if (fogEnabled) targetShader.EnableKeyword("FOG_ENABLED");
+                else targetShader.DisableKeyword("FOG_ENABLED");
             }
             if (fogEnabled)
             {

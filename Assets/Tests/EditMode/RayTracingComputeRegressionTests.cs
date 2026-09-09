@@ -476,6 +476,20 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void AdaptiveCaustics_RebuildsBaseBeautyBeforeCompositing()
+        {
+            string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+            int dispatchStart = managerSource.IndexOf("private void DispatchRenderFrame", StringComparison.Ordinal);
+            int dispatchEnd = managerSource.IndexOf("private void FinalizeRenderFrame", dispatchStart, StringComparison.Ordinal);
+            string dispatch = managerSource.Substring(dispatchStart, dispatchEnd - dispatchStart);
+
+            Assert.That(dispatch, Does.Contain("ShouldUseAdaptiveSampling() && !_adaptiveBootstrapPreviewActive"));
+            Assert.That(dispatch, Does.Contain("Graphics.CopyTexture(_accumulationTexture, _beautyTexture)"));
+            Assert.That(dispatch.IndexOf("Graphics.CopyTexture(_accumulationTexture, _beautyTexture)", StringComparison.Ordinal),
+                Is.LessThan(dispatch.IndexOf("DispatchFinalColorCaustics(frame.useFrameAccumulation)", StringComparison.Ordinal)));
+        }
+
+        [Test]
         public void AdaptiveScheduler_UsesUniformBootstrapBeforeFullResolutionScheduling()
         {
             string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
@@ -753,6 +767,26 @@ namespace GPURayTracing.Tests
             Assert.That(sharedSource.IndexOf("bool IntersectAabbInverse", helperIndex + 1, StringComparison.Ordinal), Is.EqualTo(-1));
             Assert.That(helperIndex, Is.LessThan(waterBlockIndex));
             Assert.That(helperIndex, Is.LessThan(terrainBlockIndex));
+        }
+
+        [Test]
+        public void FinalColor_FogIsIsolatedInDedicatedAssets()
+        {
+            string main = System.IO.File.ReadAllText("Assets/Scripts/RayTracingCompute.compute");
+            string water = System.IO.File.ReadAllText("Assets/Resources/RayTracingWater.compute");
+            string fog = System.IO.File.ReadAllText("Assets/Resources/RayTracingFog.compute");
+            string waterFog = System.IO.File.ReadAllText("Assets/Resources/RayTracingWaterFog.compute");
+            string manager = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+
+            Assert.That(main, Does.Not.Contain("#pragma multi_compile _ FOG_ENABLED"));
+            Assert.That(water, Does.Contain("#define WATER_ENABLED 1"));
+            Assert.That(water, Does.Not.Contain("FOG_ENABLED"));
+            Assert.That(fog, Does.Contain("#define FOG_ENABLED 1"));
+            Assert.That(fog, Does.Not.Contain("WATER_ENABLED"));
+            Assert.That(waterFog, Does.Contain("#define WATER_ENABLED 1"));
+            Assert.That(waterFog, Does.Contain("#define FOG_ENABLED 1"));
+            Assert.That(manager, Does.Contain("fogEnabled ? waterFogShader : waterShader"));
+            Assert.That(manager, Does.Contain("fogEnabled ? fogShader : shader"));
         }
 
         [Test]
@@ -1239,6 +1273,10 @@ namespace GPURayTracing.Tests
                 "RIS candidates must reuse SampleSingleLight's only production shadow query.");
             Assert.That(CountOccurrences(source, "accumulated += SampleSingleLight("), Is.EqualTo(1),
                 "RIS candidates must reuse GetLightHittingPoint's only production light-sampling call site.");
+            Assert.That(CountOccurrences(source, "float3 directLight = GetLightHittingPoint("), Is.EqualTo(1),
+                "Surface and fog events must share one optimizer-visible production direct-light call site.");
+            Assert.That(source, Does.Not.Contain("GetFogDirectLight("),
+                "A fog wrapper with constant arguments can make Metal specialize a second shadow traversal graph.");
             Assert.That(source, Does.Contain("out bool initialRisSelected"));
             Assert.That(source, Does.Not.Contain("suppressInitialRisTerminalEvent"),
                 "RIS NEE must retain the complementary BRDF terminal-light path for mesh emitters.");
@@ -1298,7 +1336,7 @@ namespace GPURayTracing.Tests
             }
 
             int kernel = shader.FindKernel("CSRegressionProbe");
-                var buffer = new ComputeBuffer(47, sizeof(float) * 4);
+                var buffer = new ComputeBuffer(48, sizeof(float) * 4);
                 var sphereBuffer = new ComputeBuffer(1, 64);
                 var sobolBuffer = new ComputeBuffer(1, sizeof(uint));
                 try
@@ -1320,7 +1358,7 @@ namespace GPURayTracing.Tests
                 shader.SetBuffer(kernel, "RegressionResults", buffer);
                 shader.Dispatch(kernel, 1, 1, 1);
 
-                var results = new Vector4[47];
+                var results = new Vector4[48];
                 buffer.GetData(results);
 
                 AssertVector(results[0], new Vector4(0.70710677f, 0.70710677f, 0.0f, 1.0f), "reflection");
@@ -1341,6 +1379,7 @@ namespace GPURayTracing.Tests
                 AssertVector(results[15], new Vector4(0.6950495f, 0.8005689f, 0.9084640f, 1.0f), "glass active-medium segment", 0.0002f);
                 AssertVector(results[16], new Vector4(0.6940578f, 0.7850562f, 0.8096121f, 1.0f), "water active-medium segment", 0.0002f);
                 AssertVector(results[17], new Vector4(1.0f, 1.0f, 1.0f, 0.0f), "air segment is neutral");
+                AssertVector(results[47], new Vector4(0.6496169f, 0.7189237f, 0.7189237f, 1.0f), "pale water retains neutral depth absorption", 0.0002f);
                 AssertVector(results[18], new Vector4(4.0f, 1.0f, 4.0f, 1.0f), "water AABB bottom and side intersections", 0.001f);
                 AssertVector(results[19], new Vector4(-1.0f, 0.0f, 0.0f, 1.0f), "water AABB side normal");
                 AssertVector(results[20], new Vector4(2.0f, 1.5f, 1.0f, 1.0f), "production water-to-glass transition selection");
@@ -2644,12 +2683,20 @@ namespace GPURayTracing.Tests
         public void CausticsDebugMode_UsesDedicatedGatherKernelWithoutDebugVariant()
         {
             string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+            string sharedSource = System.IO.File.ReadAllText("Assets/Scripts/RayTracingShared.hlsl");
+            string causticsSource = System.IO.File.ReadAllText("Assets/Resources/RayTracingCaustics.compute");
             Assert.That(managerSource, Does.Contain(
                 "enableCaustics && debugRenderMode == DebugRenderMode.Caustics"));
             Assert.That(managerSource, Does.Contain(
                 "useDedicatedCausticsDebugKernel ? \"CSCausticsDebug\" : \"CSMain\""));
             Assert.That(managerSource, Does.Contain(
                 "debugRenderMode == DebugRenderMode.FinalColor || debugRenderMode == DebugRenderMode.Caustics"));
+            Assert.That(managerSource, Does.Contain("DispatchFinalColorCaustics(frame.useFrameAccumulation)"));
+            Assert.That(managerSource, Does.Contain("FindKernel(\"CSCausticsFinalColor\")"));
+            Assert.That(managerSource, Does.Contain("FindKernel(\"CompositeCaustics\")"));
+            Assert.That(causticsSource, Does.Contain("#define CAUSTICS_KERNELS 1"));
+            Assert.That(sharedSource, Does.Contain("#if defined(CAUSTICS_KERNELS)\nbool IsCausticReceiver"));
+            Assert.That(sharedSource, Does.Not.Contain("radiance += throughput * GatherCausticRadiance(hit)"));
         }
 
         [Test]
