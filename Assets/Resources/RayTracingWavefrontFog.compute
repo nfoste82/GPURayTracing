@@ -1,0 +1,3 @@
+// Fog-capable queue-driven path tracer. Keep volume code separate from the dry-surface route.
+#define FOG_ENABLED 1
+#include_with_pragmas "RayTracingWavefront.compute"

@@ -51,6 +51,8 @@ public class GameManager : MonoBehaviour
     [SerializeField] private ComputeShader waterAdaptiveTraceShader;
     private ComputeShader _wavefrontShader;
     private ComputeShader _wavefrontWaterShader;
+    private ComputeShader _wavefrontFogShader;
+    private ComputeShader _wavefrontWaterFogShader;
 
     [SerializeField]
     public ComputeShader causticsShader;
@@ -572,6 +574,14 @@ public class GameManager : MonoBehaviour
     {
         get
         {
+            if (HasWaterVolume && IsFogEnabled())
+            {
+                if (_wavefrontWaterFogShader == null)
+                    _wavefrontWaterFogShader = Resources.Load<ComputeShader>("RayTracingWavefrontWaterFog");
+                if (_wavefrontWaterFogShader == null)
+                    throw new InvalidOperationException("Missing Resources/RayTracingWavefrontWaterFog.compute.");
+                return _wavefrontWaterFogShader;
+            }
             if (HasWaterVolume)
             {
                 if (_wavefrontWaterShader == null)
@@ -583,6 +593,15 @@ public class GameManager : MonoBehaviour
                     throw new InvalidOperationException("Missing Resources/RayTracingWavefrontWater.compute.");
                 }
                 return _wavefrontWaterShader;
+            }
+
+            if (IsFogEnabled())
+            {
+                if (_wavefrontFogShader == null)
+                    _wavefrontFogShader = Resources.Load<ComputeShader>("RayTracingWavefrontFog");
+                if (_wavefrontFogShader == null)
+                    throw new InvalidOperationException("Missing Resources/RayTracingWavefrontFog.compute.");
+                return _wavefrontFogShader;
             }
 
             if (_wavefrontShader == null)
@@ -851,8 +870,16 @@ public class GameManager : MonoBehaviour
         {
             _wavefrontWaterShader = Resources.Load<ComputeShader>("RayTracingWavefrontWater");
         }
+        if (_wavefrontFogShader == null)
+        {
+            _wavefrontFogShader = Resources.Load<ComputeShader>("RayTracingWavefrontFog");
+        }
+        if (_wavefrontWaterFogShader == null)
+        {
+            _wavefrontWaterFogShader = Resources.Load<ComputeShader>("RayTracingWavefrontWaterFog");
+        }
         if (utilityShader == null || featuresShader == null || focusShader == null || _wavefrontShader == null
-            || _wavefrontWaterShader == null)
+            || _wavefrontWaterShader == null || _wavefrontFogShader == null || _wavefrontWaterFogShader == null)
         {
             Debug.LogError("Split ray tracing compute shaders are missing from Resources.", this);
         }
@@ -3969,7 +3996,7 @@ public class GameManager : MonoBehaviour
         targetShader.SetFloat(Exposure, exposure);
         targetShader.SetFloat(FireflyClamp, Mathf.Max(0.0f, fireflyClamp));
         
-        if (targetShader == _wavefrontWaterShader || targetShader == waterShader || targetShader == waterFogShader || targetShader == waterFeaturesShader || targetShader == waterFocusShader
+        if (targetShader == _wavefrontWaterShader || targetShader == _wavefrontWaterFogShader || targetShader == waterShader || targetShader == waterFogShader || targetShader == waterFeaturesShader || targetShader == waterFocusShader
             || targetShader == waterAdaptiveTraceShader || targetShader == causticsShader)
         {
             WaterManager.SetShaderParameters(targetShader, Application.isPlaying ? GetRenderTime() : 0.0f);

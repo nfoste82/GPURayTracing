@@ -776,6 +776,8 @@ namespace GPURayTracing.Tests
             string water = System.IO.File.ReadAllText("Assets/Resources/RayTracingWater.compute");
             string fog = System.IO.File.ReadAllText("Assets/Resources/RayTracingFog.compute");
             string waterFog = System.IO.File.ReadAllText("Assets/Resources/RayTracingWaterFog.compute");
+            string wavefrontFog = System.IO.File.ReadAllText("Assets/Resources/RayTracingWavefrontFog.compute");
+            string wavefrontWaterFog = System.IO.File.ReadAllText("Assets/Resources/RayTracingWavefrontWaterFog.compute");
             string manager = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
 
             Assert.That(main, Does.Not.Contain("#pragma multi_compile _ FOG_ENABLED"));
@@ -785,8 +787,12 @@ namespace GPURayTracing.Tests
             Assert.That(fog, Does.Not.Contain("WATER_ENABLED"));
             Assert.That(waterFog, Does.Contain("#define WATER_ENABLED 1"));
             Assert.That(waterFog, Does.Contain("#define FOG_ENABLED 1"));
-            Assert.That(manager, Does.Contain("fogEnabled ? waterFogShader : waterShader"));
-            Assert.That(manager, Does.Contain("fogEnabled ? fogShader : shader"));
+            Assert.That(wavefrontFog, Does.Contain("#define FOG_ENABLED 1"));
+            Assert.That(wavefrontFog, Does.Not.Contain("WATER_ENABLED"));
+            Assert.That(wavefrontWaterFog, Does.Contain("#define WATER_ENABLED 1"));
+            Assert.That(wavefrontWaterFog, Does.Contain("#define FOG_ENABLED 1"));
+            Assert.That(manager, Does.Contain("Resources.Load<ComputeShader>(\"RayTracingWavefrontFog\")"));
+            Assert.That(manager, Does.Contain("Resources.Load<ComputeShader>(\"RayTracingWavefrontWaterFog\")"));
         }
 
         [Test]
@@ -2688,7 +2694,7 @@ namespace GPURayTracing.Tests
             Assert.That(managerSource, Does.Contain(
                 "enableCaustics && debugRenderMode == DebugRenderMode.Caustics"));
             Assert.That(managerSource, Does.Contain(
-                "useDedicatedCausticsDebugKernel ? \"CSCausticsDebug\" : \"CSMain\""));
+                "useDedicatedCausticsDebugKernel ? \"CSCausticsDebug\" : \"CSWavefrontPresent\""));
             Assert.That(managerSource, Does.Contain(
                 "debugRenderMode == DebugRenderMode.FinalColor || debugRenderMode == DebugRenderMode.Caustics"));
             Assert.That(managerSource, Does.Contain("DispatchFinalColorCaustics(frame.useFrameAccumulation)"));
@@ -2697,6 +2703,22 @@ namespace GPURayTracing.Tests
             Assert.That(causticsSource, Does.Contain("#define CAUSTICS_KERNELS 1"));
             Assert.That(sharedSource, Does.Contain("#if defined(CAUSTICS_KERNELS)\nbool IsCausticReceiver"));
             Assert.That(sharedSource, Does.Not.Contain("radiance += throughput * GatherCausticRadiance(hit)"));
+        }
+
+        [Test]
+        public void WavefrontFinalColor_CompositesDedicatedCausticsAfterBeautyCopy()
+        {
+            string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+            int dispatchStart = managerSource.IndexOf("private void DispatchRenderFrame", StringComparison.Ordinal);
+            int dispatchEnd = managerSource.IndexOf("private void FinalizeRenderFrame", dispatchStart, StringComparison.Ordinal);
+            string dispatch = managerSource.Substring(dispatchStart, dispatchEnd - dispatchStart);
+
+            int wavefrontBeautyCopy = dispatch.IndexOf("IsProductionFinalColorShader(frame.computeShader)", StringComparison.Ordinal);
+            int causticsDispatch = dispatch.IndexOf("DispatchFinalColorCaustics(frame.useFrameAccumulation)", StringComparison.Ordinal);
+            Assert.That(wavefrontBeautyCopy, Is.GreaterThanOrEqualTo(0));
+            Assert.That(causticsDispatch, Is.GreaterThan(wavefrontBeautyCopy));
+            Assert.That(dispatch, Does.Contain("Graphics.CopyTexture(_outputTexture, _beautyTexture)"));
+            Assert.That(dispatch, Does.Contain("enableCaustics && debugRenderMode == DebugRenderMode.FinalColor"));
         }
 
         [Test]

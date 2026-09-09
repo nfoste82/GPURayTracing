@@ -10,6 +10,8 @@ public static class RayTracingShaderPrecompiler
 {
     private const string MainShaderPath = "Assets/Resources/RayTracingWavefront.compute";
     private const string WavefrontWaterShaderPath = "Assets/Resources/RayTracingWavefrontWater.compute";
+    private const string WavefrontFogShaderPath = "Assets/Resources/RayTracingWavefrontFog.compute";
+    private const string WavefrontWaterFogShaderPath = "Assets/Resources/RayTracingWavefrontWaterFog.compute";
     private const string WaterShaderPath = "Assets/Resources/RayTracingWater.compute";
     private const string FogShaderPath = "Assets/Resources/RayTracingFog.compute";
     private const string WaterFogShaderPath = "Assets/Resources/RayTracingWaterFog.compute";
@@ -67,6 +69,14 @@ public static class RayTracingShaderPrecompiler
         "CSWavefrontClearFrame", "CSWavefrontClearQueues", "CSWavefrontGenerate", "CSWavefrontBuildDispatchArgs", "CSWavefrontIntersect",
         "CSWavefrontClassify", "CSWavefrontDirectLight", "CSWavefrontScatter", "CSWavefrontCopyNextQueue",
         "CSWavefrontPublishNextQueue", "CSWavefrontRetireCurrentQueue", "CSWavefrontResolve", "CSWavefrontPresent");
+    private static readonly ShaderAsset WavefrontFog = new ShaderAsset("Wavefront Fog", WavefrontFogShaderPath, VariantSet.FogTerrainOnly,
+        "CSWavefrontClearFrame", "CSWavefrontClearQueues", "CSWavefrontGenerate", "CSWavefrontBuildDispatchArgs", "CSWavefrontIntersect",
+        "CSWavefrontClassify", "CSWavefrontDirectLight", "CSWavefrontScatter", "CSWavefrontCopyNextQueue",
+        "CSWavefrontPublishNextQueue", "CSWavefrontRetireCurrentQueue", "CSWavefrontResolve", "CSWavefrontPresent");
+    private static readonly ShaderAsset WavefrontWaterFog = new ShaderAsset("Wavefront Water + Fog", WavefrontWaterFogShaderPath, VariantSet.FogTerrainOnly,
+        "CSWavefrontClearFrame", "CSWavefrontClearQueues", "CSWavefrontGenerate", "CSWavefrontBuildDispatchArgs", "CSWavefrontIntersect",
+        "CSWavefrontClassify", "CSWavefrontDirectLight", "CSWavefrontScatter", "CSWavefrontCopyNextQueue",
+        "CSWavefrontPublishNextQueue", "CSWavefrontRetireCurrentQueue", "CSWavefrontResolve", "CSWavefrontPresent");
     private static readonly ShaderAsset Water = new ShaderAsset("Water Final Color", WaterShaderPath, VariantSet.Terrain, "CSMain");
     private static readonly ShaderAsset Fog = new ShaderAsset("Fog Final Color", FogShaderPath, VariantSet.FogTerrainOnly, "CSMain");
     private static readonly ShaderAsset WaterFog = new ShaderAsset("Water + Fog Final Color", WaterFogShaderPath, VariantSet.FogTerrainOnly, "CSMain");
@@ -85,7 +95,7 @@ public static class RayTracingShaderPrecompiler
         "CSSpatialRisPrepass");
     private static readonly ShaderAsset Focus = new ShaderAsset("Focus", FocusShaderPath, VariantSet.Terrain, "CSFocusQuery");
     private static readonly ShaderAsset RegressionProbe = new ShaderAsset("Regression Probe", RegressionProbeShaderPath, VariantSet.None, "CSRegressionProbe");
-    private static readonly ShaderAsset[] RendererAssets = { Main, WavefrontWater, Water, Fog, WaterFog, ExperimentalPathGuided, ExperimentalRis, AdaptiveTrace, AdaptiveScheduler, Utility, Features, SpatialRisPrepass, Focus, RegressionProbe };
+    private static readonly ShaderAsset[] RendererAssets = { Main, WavefrontWater, WavefrontFog, WavefrontWaterFog, Water, Fog, WaterFog, ExperimentalPathGuided, ExperimentalRis, AdaptiveTrace, AdaptiveScheduler, Utility, Features, SpatialRisPrepass, Focus, RegressionProbe };
 
     [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Main Final Color/All Terrain Variants")]
     private static void PrecompileMainAllVariants() => Precompile(new[] { Main }, true);
@@ -101,6 +111,18 @@ public static class RayTracingShaderPrecompiler
 
     [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Wavefront Water/Terrain (Fog Off)")]
     private static void PrecompileWavefrontWaterTerrain() => Precompile(new[] { WavefrontWater }, true, 1);
+
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Wavefront Fog/Default (Terrain Off)")]
+    private static void PrecompileWavefrontFogDefault() => Precompile(new[] { WavefrontFog }, true, 0);
+
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Wavefront Fog/Terrain")]
+    private static void PrecompileWavefrontFogTerrain() => Precompile(new[] { WavefrontFog }, true, 1);
+
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Wavefront Water + Fog/Default (Terrain Off)")]
+    private static void PrecompileWavefrontWaterFogDefault() => Precompile(new[] { WavefrontWaterFog }, true, 0);
+
+    [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Wavefront Water + Fog/Terrain")]
+    private static void PrecompileWavefrontWaterFogTerrain() => Precompile(new[] { WavefrontWaterFog }, true, 1);
 
     [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Water Final Color/Default (Fog Off, Terrain Off)")]
     private static void PrecompileWaterDefault() => Precompile(new[] { Water }, true, 0);
@@ -372,7 +394,7 @@ public static class RayTracingShaderPrecompiler
         private readonly ComputeBuffer terrainCellBuffer = new ComputeBuffer(1, 8);
         private readonly ComputeBuffer float4Buffer = new ComputeBuffer(64, 16);
         private readonly ComputeBuffer uintBuffer = new ComputeBuffer(64, 4);
-        private readonly ComputeBuffer wavefrontPathBuffer = new ComputeBuffer(64, 348);
+        private readonly ComputeBuffer wavefrontPathBuffer = new ComputeBuffer(64, 352);
         private readonly ComputeBuffer wavefrontHitBuffer = new ComputeBuffer(64, 144);
         public readonly string[] FloatBufferNames = { "_EnvironmentConditionalCdf", "_EnvironmentMarginalCdf", "_MeshLightTriangleCdf", "_CausticPhotonMetadata", "_CausticGridCellHeads", "_CausticPhotonNext", "_TerrainHeights" };
         public readonly string[] StructuredBufferNames = { "_Spheres", "_Lights", "_Triangles", "_Meshes", "_BvhNodes", "_TopLevelBvhNodes", "_ShadowBvhNodes", "_CausticPhotons", "_TerrainCells", "_SobolDirectionNumbers", "RegressionResults", "_FocusQueryResult" };

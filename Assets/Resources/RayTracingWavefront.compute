@@ -1,5 +1,5 @@
-// Queue-driven surface path tracer. Fog, water, path guiding, and temporal RIS are intentionally
-// not included in this first wavefront asset; they will receive dedicated event stages.
+// Queue-driven path tracer. Optional water and fog are compiled by dedicated wrapper assets so
+// their intersection and volume code stays out of the common dry-surface route.
 #pragma kernel CSWavefrontClearFrame
 #pragma kernel CSWavefrontClearQueues
 #pragma kernel CSWavefrontGenerate
@@ -33,6 +33,7 @@ struct WavefrontPathState
     int previousInitialRisSampled;
     int previousNearDeltaSpecular;
     int previousSoftShadows;
+    int volumeEvent;
 };
 
 RWStructuredBuffer<WavefrontPathState> _WavefrontPaths;
@@ -129,6 +130,7 @@ void CSWavefrontGenerate(uint3 id : SV_DispatchThreadID)
     path.previousInitialRisSampled = 0;
     path.previousNearDeltaSpecular = 0;
     path.previousSoftShadows = 0;
+    path.volumeEvent = 0;
     _WavefrontPaths[pathIndex] = path;
     EnqueueCurrent(pathIndex);
 }
@@ -159,14 +161,44 @@ void CSWavefrontClassify(uint3 id : SV_DispatchThreadID)
     uint pathIndex = _WavefrontCurrentQueue[id.x];
     WavefrontPathState path = _WavefrontPaths[pathIndex];
     RayHit hit = _WavefrontHits[pathIndex];
+#if defined(FOG_ENABLED)
+    SetRngDimension(path.rngState, BounceSampleDimension((uint)path.bounce, SampleDimensionFogOffset));
+    float fogEventDistance;
+    if (SampleFogScatteringEvent(path.ray, hit.distance, path.rngState, fogEventDistance))
+    {
+        path.throughput *= GetActiveMediumSegmentTransmittance(path.ray, fogEventDistance, path.mediumStack);
+        RayHit fogSegmentHit = CreateRayHit();
+        fogSegmentHit.distance = fogEventDistance;
+        ApplyFiniteMediumExitAfterSegment(path.mediumStack, path.ray, fogSegmentHit);
+        hit = CreateRayHit();
+        hit.position = path.ray.origin + path.ray.direction * fogEventDistance;
+        hit.distance = fogEventDistance;
+        path.volumeEvent = 1;
+        _WavefrontHits[pathIndex] = hit;
+    }
+    else
+    {
+        path.throughput *= GetActiveMediumSegmentTransmittance(path.ray, hit.distance, path.mediumStack);
+        ApplyFiniteMediumExitAfterSegment(path.mediumStack, path.ray, hit);
+        path.volumeEvent = 0;
+    }
+#else
     path.throughput *= GetActiveMediumSegmentTransmittance(path.ray, hit.distance, path.mediumStack);
     ApplyFiniteMediumExitAfterSegment(path.mediumStack, path.ray, hit);
+    path.volumeEvent = 0;
+#endif
 
     if (!HasPathEnergy(path.throughput))
     {
         path.active = 0;
         _WavefrontPaths[pathIndex] = path;
         EnqueueCompleted(pathIndex);
+        return;
+    }
+
+    if (path.volumeEvent != 0)
+    {
+        _WavefrontPaths[pathIndex] = path;
         return;
     }
 
@@ -225,14 +257,18 @@ void CSWavefrontDirectLight(uint3 id : SV_DispatchThreadID)
     SetRngDimension(path.rngState, BounceSampleDimension((uint)path.bounce, SampleDimensionDirectLightOffset));
     bool softShadows = path.bounce == 0;
     bool hasInitialRisProposal = _NumLights > 0 || (_EnvironmentLightEnabled != 0 && _EnvironmentCdfWidth > 0 && _EnvironmentCdfHeight > 0);
-    bool useInitialRis = path.bounce == 0 && hasInitialRisProposal && IsInitialRisEligible(hit);
+    bool volumeEvent = path.volumeEvent != 0;
+    bool useInitialRis = !volumeEvent && path.bounce == 0 && hasInitialRisProposal && IsInitialRisEligible(hit);
     int samplesPerLight = softShadows ? max(1, _ShadowQuality + 1) : 1;
     bool sampledInitialRis;
     InitialRisCandidate ignoredCandidate;
     float ignoredWeightSum;
     int ignoredM;
-    float3 directLight = GetLightHittingPoint(path.ray, hit, samplesPerLight, false, path.bounce > 0,
+    float3 directLight = GetLightHittingPoint(path.ray, hit, samplesPerLight, volumeEvent, !volumeEvent && path.bounce > 0,
         useInitialRis, sampledInitialRis, path.pixel, path.rngState, false, ignoredCandidate, ignoredWeightSum, ignoredM);
+#if defined(FOG_ENABLED)
+    if (volumeEvent) directLight *= _FogScatteringAlbedo * max(0.0f, _FogInScatteringIntensity);
+#endif
     path.radiance += path.throughput * directLight;
     path.previousDirectLightSampled = 1;
     path.previousInitialRisSampled = sampledInitialRis ? 1 : 0;
@@ -249,6 +285,43 @@ void CSWavefrontScatter(uint3 id : SV_DispatchThreadID)
     if (path.active == 0) return;
 
     RayHit hit = _WavefrontHits[pathIndex];
+#if defined(FOG_ENABLED)
+    if (path.volumeEvent != 0)
+    {
+        if (_FogMultipleScattering == 0)
+        {
+            path.active = 0;
+            _WavefrontPaths[pathIndex] = path;
+            EnqueueCompleted(pathIndex);
+            return;
+        }
+
+        path.throughput *= saturate(_FogScatteringAlbedo);
+        SetRngDimension(path.rngState, BounceSampleDimension((uint)path.bounce, SampleDimensionScatterOffset));
+        path.ray.direction = SampleUniformSphere(path.rngState);
+        path.ray.origin = hit.position + path.ray.direction * 0.001f;
+        path.bounce++;
+        path.previousMaterialPdf = 0.0f;
+        path.previousDirectLightSampled = 0;
+        path.previousInitialRisSampled = 0;
+        path.previousNearDeltaSpecular = 0;
+        path.previousSoftShadows = 0;
+        path.volumeEvent = 0;
+        int fogRouletteBounce = path.bounce - 1;
+        SetRngDimension(path.rngState, BounceSampleDimension((uint)fogRouletteBounce, SampleDimensionRouletteOffset));
+        if (!HasPathEnergy(path.throughput) || !ApplyRussianRoulette(path.throughput, fogRouletteBounce, path.rngState))
+        {
+            path.active = 0;
+            _WavefrontPaths[pathIndex] = path;
+            EnqueueCompleted(pathIndex);
+            return;
+        }
+
+        _WavefrontPaths[pathIndex] = path;
+        EnqueueNext(pathIndex);
+        return;
+    }
+#endif
     int remainingBounces = _NumBounces - path.bounce;
     SetRngDimension(path.rngState, BounceSampleDimension((uint)path.bounce, SampleDimensionScatterOffset));
     ScatterResult scatter = CreateScatteredRay(path.ray, hit, path.bounce, remainingBounces, path.mediumStack, path.rngState);

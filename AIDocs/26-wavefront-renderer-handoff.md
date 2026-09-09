@@ -2,9 +2,10 @@
 
 ## Status
 
-**Current phase: the queue-driven surface and water renderers are active for final color. The
-surface route is Metal-compiled and manually smoke-tested. Fog, adaptive scheduling, path guiding,
-temporal/spatial RIS, and general debug modes have not yet been ported to the active wavefront route.**
+**Current phase: queue-driven surface, water, fog, and water+fog renderers are active for final
+color. Surface and water routes are compiled and manually smoke-tested. Fog image parity remains
+pending. Adaptive scheduling, path guiding, temporal/spatial RIS, and general debug modes have not
+yet been ported to the active wavefront route.**
 
 The user explicitly chose not to preserve `CSMain` as a runtime fallback. Use Git history if old
 behavior must be consulted. Do not restore an old path merely as a fallback during this migration.
@@ -13,8 +14,9 @@ behavior must be consulted. Do not restore an old path merely as a fallback duri
 
 `GameManager.ActiveFinalColorShader` lazily loads the dry
 `Resources/RayTracingWavefront.compute` or water
-`Resources/RayTracingWavefrontWater.compute` asset into nonserialized fields, so existing scenes
-require no Inspector assignment. The frame route is:
+`Resources/RayTracingWavefrontWater.compute` asset into nonserialized fields, selecting dedicated
+fog and water+fog wrappers whenever those features are active. Existing scenes require no Inspector
+assignment. The frame route is:
 
 ```text
 GameManager.RenderImage
@@ -28,6 +30,8 @@ Key files:
 - `Assets/Resources/RayTracingWavefront.compute`: state layout and GPU kernels.
 - `Assets/Resources/RayTracingWavefrontWater.compute`: water-enabled wrapper around the same
   wavefront stages, selected only while a water volume is registered.
+- `Assets/Resources/RayTracingWavefrontFog.compute` and
+  `Assets/Resources/RayTracingWavefrontWaterFog.compute`: dedicated volume variants.
 - `Assets/Scripts/WavefrontPathTracingManager.cs`: buffer lifecycle, stage bindings, indirect
   dispatches, and host-side stage order.
 - `Assets/Scripts/GameManager.cs`: shader load, renderer selection, resize/destruction release.
@@ -76,7 +80,7 @@ than recomputed.
 Current C# buffer strides must match the HLSL layouts:
 
 ```text
-WavefrontPathState: 348 bytes
+WavefrontPathState: 352 bytes
 RayHit:             144 bytes
 ```
 
@@ -101,15 +105,45 @@ Manual testing is not image-regression parity.
 
 ## Unsupported Or Bypassed
 
-- **Fog:** no free-flight events, fog scattering, fog direct lighting, or fog shadow attenuation.
 - **Adaptive sampling:** the existing layered Welford scheduler remains in source but is bypassed.
 - **Path guiding and temporal/spatial RIS reuse:** bypassed. Local initial RIS remains active.
 - **General geometry debug modes:** still unavailable. Do not revive the monolithic debug tracer.
 - **Wavefront-native shadow queues:** `CSWavefrontDirectLight` still owns candidate generation and
   shadow traversal through `GetLightHittingPoint`.
 
-Caustics still run outside camera tracing. Treat water-dependent caustics as unsupported until the
-water wavefront path passes regressions.
+## Caustics Integration
+
+Caustics are wavefront-compatible without a camera-path event stage. `PrepareRenderFrame` updates
+the independent photon map before the camera dispatch. After `WavefrontPathTracingManager` writes
+the wavefront beauty into `_outputTexture`, `DispatchRenderFrame` copies it to `_beautyTexture`,
+dispatches `CSCausticsFinalColor`, and uses `CompositeCaustics` to add the gathered radiance.
+
+This preserves the intentional split: `RayTracingCaustics.compute` owns photon generation, grid
+build, camera-side gather, and its dedicated debug mode, rather than adding nested photon-grid
+traversal to the wavefront shader. Glass and water photon transport continue to compile in the
+dedicated caustics asset. The user manually confirmed water rendering; caustic image regression
+parity is still required before claiming broad renderer parity.
+
+## Fog Integration
+
+Fog variants sample bounded free-flight after closest-hit traversal and before surface/terminal
+classification. A sampled fog event replaces the pending surface event for that bounce, preserves
+active-medium attenuation over the traveled distance, and uses the existing volume direct-light
+estimator with fog shadow attenuation. Single scattering completes the path after direct light;
+multiple scattering samples an isotropic continuation, resets surface MIS state, and requeues the
+path. The dry and water variants remain free of fog branches.
+
+The dry fog wrapper cold-compiled successfully on the M3 Max:
+
+```text
+CSWavefrontDirectLight: 34.099 s
+CSWavefrontScatter:      9.745 s
+Total:                  46.974 s
+```
+
+Log: `/tmp/raytracing-wavefront-fog-compile.log`. The water+fog wrapper reached its direct-light
+kernel (`91.359 s`) but was still compiling when the 120-second command timeout elapsed; do not
+claim that combined variant validated until it completes in a standalone Unity session.
 
 ## Compile Results
 
@@ -186,8 +220,8 @@ Still required:
 2. Convert direct-CSMain image fixtures into a deterministic full-wavefront dispatch harness.
 3. Add queue tests: zero/partial/exact group counts, counter reset, overflow, odd dimensions,
    completion accounting, and maximum-bounce retirement.
-4. Capture dry image comparisons for Root, CornellBox, ManyLights, ManySpheres, ManyMeshes,
-   GlassTransmission, mesh lights, texture-heavy glTF, and dry caustics.
+4. Capture image comparisons for Root, CornellBox, ManyLights, ManySpheres, ManyMeshes,
+   GlassTransmission, mesh lights, texture-heavy glTF, dry caustics, and water caustics.
 5. Benchmark equal samples and equal time, including stage cost and queue occupancy. Do not use
    synchronous readback in interactive timing.
 6. Compile and test the terrain keyword variant separately.
@@ -214,12 +248,12 @@ wavefront stages, and `GameManager` selects it only while `HasWaterVolume`. Wate
 all stages. Compile its default and terrain variants, then run the existing water, nested
 water/glass, underwater-camera, finite side/bottom exit, segment attenuation, and caustic fixtures.
 
-### 3. Fog Assets
+### 3. Validate Fog
 
-Create separate fog and water+fog wavefront assets. After closest-hit traversal, sample free-flight
-against `RayHit.distance`, attenuate through the active medium, and classify fog as a volume event.
-Move fog light-segment attenuation into the shadow stage after shadow queues exist. Do not return
-fog to the common surface shader.
+Run bounded-fog GPU probes and deterministic light-shaft image fixtures against the wavefront
+assets. Compile both terrain variants and let the combined water+fog default compile finish without
+the command timeout. Move fog light-segment attenuation into the shadow stage after shadow queues
+exist. Do not return fog to the common surface shader.
 
 ### 4. Debug, Adaptive, And Experiments
 

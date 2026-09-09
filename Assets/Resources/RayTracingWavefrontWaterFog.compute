@@ -1,0 +1,4 @@
+// Water and fog queue-driven path tracer. This is isolated from both common variants.
+#define WATER_ENABLED 1
+#define FOG_ENABLED 1
+#include_with_pragmas "RayTracingWavefront.compute"

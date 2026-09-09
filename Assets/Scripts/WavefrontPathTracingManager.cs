@@ -7,7 +7,7 @@ namespace PathTracing
     public sealed class WavefrontPathTracingManager
     {
         // These match the scalar StructuredBuffer layouts in RayTracingWavefront.compute.
-        private const int PathStateStride = 348;
+        private const int PathStateStride = 352;
         private const int HitRecordStride = 144;
         private const int ThreadCount = 64;
 
