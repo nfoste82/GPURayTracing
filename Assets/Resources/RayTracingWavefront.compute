@@ -7,6 +7,9 @@
 #pragma kernel CSWavefrontIntersect
 #pragma kernel CSWavefrontClassify
 #pragma kernel CSWavefrontDirectLight
+#pragma kernel CSWavefrontClearShadowQueue
+#pragma kernel CSWavefrontTraceShadows
+#pragma kernel CSWavefrontResolveShadowWork
 #pragma kernel CSWavefrontScatter
 #pragma kernel CSWavefrontCopyNextQueue
 #pragma kernel CSWavefrontPublishNextQueue
@@ -36,11 +39,18 @@ struct WavefrontPathState
     int volumeEvent;
 };
 
+struct ShadowWorkItem
+{
+    uint pathIndex;
+    float3 directLight;
+};
+
 RWStructuredBuffer<WavefrontPathState> _WavefrontPaths;
 RWStructuredBuffer<RayHit> _WavefrontHits;
 RWStructuredBuffer<uint> _WavefrontCurrentQueue;
 RWStructuredBuffer<uint> _WavefrontNextQueue;
 RWStructuredBuffer<uint> _WavefrontCompletedQueue;
+RWStructuredBuffer<ShadowWorkItem> _WavefrontShadowWork;
 RWStructuredBuffer<uint> _WavefrontCounters;
 RWStructuredBuffer<uint> _WavefrontDispatchArgs;
 RWTexture2D<float4> _WavefrontFrameResult;
@@ -68,6 +78,16 @@ void EnqueueCompleted(uint pathIndex)
     _WavefrontCompletedQueue[queueIndex] = pathIndex;
 }
 
+void EnqueueShadowWork(uint pathIndex)
+{
+    uint queueIndex;
+    InterlockedAdd(_WavefrontCounters[3], 1, queueIndex);
+    ShadowWorkItem work;
+    work.pathIndex = pathIndex;
+    work.directLight = 0.0f;
+    _WavefrontShadowWork[queueIndex] = work;
+}
+
 [numthreads(4, 4, 1)]
 void CSWavefrontClearFrame(uint3 id : SV_DispatchThreadID)
 {
@@ -83,6 +103,7 @@ void CSWavefrontClearQueues(uint3 id : SV_DispatchThreadID)
     _WavefrontCounters[0] = 0;
     _WavefrontCounters[1] = 0;
     _WavefrontCounters[2] = 0;
+    _WavefrontCounters[3] = 0;
 }
 
 [numthreads(4, 4, 1)]
@@ -251,9 +272,32 @@ void CSWavefrontDirectLight(uint3 id : SV_DispatchThreadID)
     if (id.x >= _WavefrontCounters[0]) return;
     uint pathIndex = _WavefrontCurrentQueue[id.x];
     WavefrontPathState path = _WavefrontPaths[pathIndex];
-    if (path.active == 0 || !ShouldSampleDirectLight(path.throughput)) return;
+    if (path.active == 0) return;
+    if (!ShouldSampleDirectLight(path.throughput))
+    {
+        path.previousDirectLightSampled = 0;
+        path.previousInitialRisSampled = 0;
+        path.previousSoftShadows = 0;
+        _WavefrontPaths[pathIndex] = path;
+        return;
+    }
+    EnqueueShadowWork(pathIndex);
+}
 
-    RayHit hit = _WavefrontHits[pathIndex];
+[numthreads(1, 1, 1)]
+void CSWavefrontClearShadowQueue(uint3 id : SV_DispatchThreadID)
+{
+    _WavefrontCounters[3] = 0;
+}
+
+[numthreads(4, 1, 1)]
+void CSWavefrontTraceShadows(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _WavefrontCounters[3]) return;
+    ShadowWorkItem work = _WavefrontShadowWork[id.x];
+    WavefrontPathState path = _WavefrontPaths[work.pathIndex];
+
+    RayHit hit = _WavefrontHits[work.pathIndex];
     SetRngDimension(path.rngState, BounceSampleDimension((uint)path.bounce, SampleDimensionDirectLightOffset));
     bool softShadows = path.bounce == 0;
     bool hasInitialRisProposal = _NumLights > 0 || (_EnvironmentLightEnabled != 0 && _EnvironmentCdfWidth > 0 && _EnvironmentCdfHeight > 0);
@@ -269,11 +313,22 @@ void CSWavefrontDirectLight(uint3 id : SV_DispatchThreadID)
 #if defined(FOG_ENABLED)
     if (volumeEvent) directLight *= _FogScatteringAlbedo * max(0.0f, _FogInScatteringIntensity);
 #endif
-    path.radiance += path.throughput * directLight;
+    work.directLight = directLight;
     path.previousDirectLightSampled = 1;
     path.previousInitialRisSampled = sampledInitialRis ? 1 : 0;
     path.previousSoftShadows = softShadows ? 1 : 0;
-    _WavefrontPaths[pathIndex] = path;
+    _WavefrontPaths[work.pathIndex] = path;
+    _WavefrontShadowWork[id.x] = work;
+}
+
+[numthreads(4, 1, 1)]
+void CSWavefrontResolveShadowWork(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _WavefrontCounters[3]) return;
+    ShadowWorkItem work = _WavefrontShadowWork[id.x];
+    WavefrontPathState path = _WavefrontPaths[work.pathIndex];
+    path.radiance += path.throughput * work.directLight;
+    _WavefrontPaths[work.pathIndex] = path;
 }
 
 [numthreads(4, 1, 1)]

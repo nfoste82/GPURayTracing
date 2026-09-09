@@ -63,19 +63,19 @@ public static class RayTracingShaderPrecompiler
 
     private static readonly ShaderAsset Main = new ShaderAsset("Wavefront Surface", MainShaderPath, VariantSet.Terrain,
         "CSWavefrontClearFrame", "CSWavefrontClearQueues", "CSWavefrontGenerate", "CSWavefrontBuildDispatchArgs", "CSWavefrontIntersect",
-        "CSWavefrontClassify", "CSWavefrontDirectLight", "CSWavefrontScatter", "CSWavefrontCopyNextQueue",
+        "CSWavefrontClassify", "CSWavefrontClearShadowQueue", "CSWavefrontDirectLight", "CSWavefrontTraceShadows", "CSWavefrontResolveShadowWork", "CSWavefrontScatter", "CSWavefrontCopyNextQueue",
         "CSWavefrontPublishNextQueue", "CSWavefrontRetireCurrentQueue", "CSWavefrontResolve", "CSWavefrontPresent");
     private static readonly ShaderAsset WavefrontWater = new ShaderAsset("Wavefront Water", WavefrontWaterShaderPath, VariantSet.Terrain,
         "CSWavefrontClearFrame", "CSWavefrontClearQueues", "CSWavefrontGenerate", "CSWavefrontBuildDispatchArgs", "CSWavefrontIntersect",
-        "CSWavefrontClassify", "CSWavefrontDirectLight", "CSWavefrontScatter", "CSWavefrontCopyNextQueue",
+        "CSWavefrontClassify", "CSWavefrontClearShadowQueue", "CSWavefrontDirectLight", "CSWavefrontTraceShadows", "CSWavefrontResolveShadowWork", "CSWavefrontScatter", "CSWavefrontCopyNextQueue",
         "CSWavefrontPublishNextQueue", "CSWavefrontRetireCurrentQueue", "CSWavefrontResolve", "CSWavefrontPresent");
     private static readonly ShaderAsset WavefrontFog = new ShaderAsset("Wavefront Fog", WavefrontFogShaderPath, VariantSet.FogTerrainOnly,
         "CSWavefrontClearFrame", "CSWavefrontClearQueues", "CSWavefrontGenerate", "CSWavefrontBuildDispatchArgs", "CSWavefrontIntersect",
-        "CSWavefrontClassify", "CSWavefrontDirectLight", "CSWavefrontScatter", "CSWavefrontCopyNextQueue",
+        "CSWavefrontClassify", "CSWavefrontClearShadowQueue", "CSWavefrontDirectLight", "CSWavefrontTraceShadows", "CSWavefrontResolveShadowWork", "CSWavefrontScatter", "CSWavefrontCopyNextQueue",
         "CSWavefrontPublishNextQueue", "CSWavefrontRetireCurrentQueue", "CSWavefrontResolve", "CSWavefrontPresent");
     private static readonly ShaderAsset WavefrontWaterFog = new ShaderAsset("Wavefront Water + Fog", WavefrontWaterFogShaderPath, VariantSet.FogTerrainOnly,
         "CSWavefrontClearFrame", "CSWavefrontClearQueues", "CSWavefrontGenerate", "CSWavefrontBuildDispatchArgs", "CSWavefrontIntersect",
-        "CSWavefrontClassify", "CSWavefrontDirectLight", "CSWavefrontScatter", "CSWavefrontCopyNextQueue",
+        "CSWavefrontClassify", "CSWavefrontClearShadowQueue", "CSWavefrontDirectLight", "CSWavefrontTraceShadows", "CSWavefrontResolveShadowWork", "CSWavefrontScatter", "CSWavefrontCopyNextQueue",
         "CSWavefrontPublishNextQueue", "CSWavefrontRetireCurrentQueue", "CSWavefrontResolve", "CSWavefrontPresent");
     private static readonly ShaderAsset Water = new ShaderAsset("Water Final Color", WaterShaderPath, VariantSet.Terrain, "CSMain");
     private static readonly ShaderAsset Fog = new ShaderAsset("Fog Final Color", FogShaderPath, VariantSet.FogTerrainOnly, "CSMain");
@@ -399,7 +399,7 @@ public static class RayTracingShaderPrecompiler
         public readonly string[] FloatBufferNames = { "_EnvironmentConditionalCdf", "_EnvironmentMarginalCdf", "_MeshLightTriangleCdf", "_CausticPhotonMetadata", "_CausticGridCellHeads", "_CausticPhotonNext", "_TerrainHeights" };
         public readonly string[] StructuredBufferNames = { "_Spheres", "_Lights", "_Triangles", "_Meshes", "_BvhNodes", "_TopLevelBvhNodes", "_ShadowBvhNodes", "_CausticPhotons", "_TerrainCells", "_SobolDirectionNumbers", "RegressionResults", "_FocusQueryResult" };
         public readonly string[] AdaptiveBufferNames = { "AdaptiveGroupState", "AdaptiveGroupInfo", "AdaptiveProbeGroups", "AdaptiveGroupBucket", "AdaptiveGroupExtraDemand", "AdaptiveRawBucketDemand", "AdaptiveWorkListMetadata" };
-        public readonly string[] WavefrontBufferNames = { "_WavefrontPaths", "_WavefrontHits", "_WavefrontCurrentQueue", "_WavefrontNextQueue", "_WavefrontCompletedQueue", "_WavefrontCounters", "_WavefrontDispatchArgs" };
+        public readonly string[] WavefrontBufferNames = { "_WavefrontPaths", "_WavefrontHits", "_WavefrontCurrentQueue", "_WavefrontNextQueue", "_WavefrontCompletedQueue", "_WavefrontShadowWork", "_WavefrontCounters", "_WavefrontDispatchArgs" };
 
         public DummyResources()
         {

@@ -811,6 +811,37 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void WavefrontFinalColor_QueuesAndResolvesShadowWorkBeforeScatter()
+        {
+            string wavefront = System.IO.File.ReadAllText("Assets/Resources/RayTracingWavefront.compute");
+            string manager = System.IO.File.ReadAllText("Assets/Scripts/WavefrontPathTracingManager.cs");
+            string precompiler = System.IO.File.ReadAllText("Assets/Editor/RayTracingShaderPrecompiler.cs");
+
+            Assert.That(wavefront, Does.Contain("struct ShadowWorkItem"));
+            Assert.That(wavefront, Does.Contain("void CSWavefrontClearShadowQueue"));
+            Assert.That(wavefront, Does.Contain("void CSWavefrontTraceShadows"));
+            Assert.That(wavefront, Does.Contain("void CSWavefrontResolveShadowWork"));
+            Assert.That(wavefront, Does.Contain("EnqueueShadowWork(pathIndex)"));
+            Assert.That(wavefront, Does.Contain("float3 directLight = GetLightHittingPoint("));
+            Assert.That(manager, Does.Contain("new ComputeBuffer(4, sizeof(uint))"));
+            Assert.That(manager, Does.Contain("shader.SetBuffer(kernel, \"_WavefrontShadowWork\", _shadowWork)"));
+            Assert.That(manager, Does.Contain("BindAndDispatchIndirect(shader, traceShadows"));
+            Assert.That(manager, Does.Contain("BindAndDispatchIndirect(shader, resolveShadowWork"));
+            Assert.That(manager.IndexOf("BindAndDispatch(shader, clearShadowQueue", StringComparison.Ordinal),
+                Is.LessThan(manager.IndexOf("BindAndDispatchIndirect(shader, directLight", StringComparison.Ordinal)));
+            Assert.That(manager.IndexOf("BindAndDispatchIndirect(shader, traceShadows", StringComparison.Ordinal),
+                Is.LessThan(manager.IndexOf("BindAndDispatchIndirect(shader, scatter", StringComparison.Ordinal)));
+            int resolveShadowIndex = manager.IndexOf("BindAndDispatchIndirect(shader, resolveShadowWork", StringComparison.Ordinal);
+            int scatterDispatchArgumentsIndex = manager.IndexOf("BuildQueueDispatch(shader, buildDispatchArgs, bindShared, output, accumulation, 0, 4)",
+                resolveShadowIndex, StringComparison.Ordinal);
+            Assert.That(scatterDispatchArgumentsIndex, Is.GreaterThan(resolveShadowIndex));
+            Assert.That(scatterDispatchArgumentsIndex,
+                Is.LessThan(manager.IndexOf("BindAndDispatchIndirect(shader, scatter", StringComparison.Ordinal)));
+            Assert.That(precompiler, Does.Contain("CSWavefrontTraceShadows"));
+            Assert.That(precompiler, Does.Contain("CSWavefrontResolveShadowWork"));
+        }
+
+        [Test]
         public void BulkShaderPrecompile_ExcludesKnownTimedOutDebugKernel()
         {
             string source = System.IO.File.ReadAllText("Assets/Editor/RayTracingShaderPrecompiler.cs");

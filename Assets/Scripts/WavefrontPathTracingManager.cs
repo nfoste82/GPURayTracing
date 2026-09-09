@@ -16,6 +16,7 @@ namespace PathTracing
         private ComputeBuffer _currentQueue;
         private ComputeBuffer _nextQueue;
         private ComputeBuffer _completedQueue;
+        private ComputeBuffer _shadowWork;
         private ComputeBuffer _counters;
         private ComputeBuffer _dispatchArguments;
         private RenderTexture _frameResult;
@@ -32,7 +33,8 @@ namespace PathTracing
             _currentQueue = new ComputeBuffer(capacity, sizeof(uint));
             _nextQueue = new ComputeBuffer(capacity, sizeof(uint));
             _completedQueue = new ComputeBuffer(capacity, sizeof(uint));
-            _counters = new ComputeBuffer(3, sizeof(uint));
+            _shadowWork = new ComputeBuffer(capacity, sizeof(uint) + sizeof(float) * 3);
+            _counters = new ComputeBuffer(4, sizeof(uint));
             _dispatchArguments = new ComputeBuffer(3, sizeof(uint), ComputeBufferType.IndirectArguments);
             _frameResult = new RenderTexture(size.x, size.y, 0, RenderTextureFormat.ARGBFloat)
             {
@@ -57,6 +59,9 @@ namespace PathTracing
             int intersect = shader.FindKernel("CSWavefrontIntersect");
             int classify = shader.FindKernel("CSWavefrontClassify");
             int directLight = shader.FindKernel("CSWavefrontDirectLight");
+            int clearShadowQueue = shader.FindKernel("CSWavefrontClearShadowQueue");
+            int traceShadows = shader.FindKernel("CSWavefrontTraceShadows");
+            int resolveShadowWork = shader.FindKernel("CSWavefrontResolveShadowWork");
             int scatter = shader.FindKernel("CSWavefrontScatter");
             int copyNextQueue = shader.FindKernel("CSWavefrontCopyNextQueue");
             int publishNextQueue = shader.FindKernel("CSWavefrontPublishNextQueue");
@@ -77,7 +82,14 @@ namespace PathTracing
                     BindAndDispatchIndirect(shader, intersect, bindShared, output, accumulation);
                     BuildQueueDispatch(shader, buildDispatchArgs, bindShared, output, accumulation, 0, 4);
                     BindAndDispatchIndirect(shader, classify, bindShared, output, accumulation);
+                    BindAndDispatch(shader, clearShadowQueue, bindShared, output, accumulation, 1, 1, 1, 0);
                     BindAndDispatchIndirect(shader, directLight, bindShared, output, accumulation);
+                    BuildQueueDispatch(shader, buildDispatchArgs, bindShared, output, accumulation, 3, 4);
+                    BindAndDispatchIndirect(shader, traceShadows, bindShared, output, accumulation);
+                    BindAndDispatchIndirect(shader, resolveShadowWork, bindShared, output, accumulation);
+                    // Shadow dispatches overwrite the indirect arguments with the shadow-work count.
+                    // Scatter must still process every current path, not only paths with direct light.
+                    BuildQueueDispatch(shader, buildDispatchArgs, bindShared, output, accumulation, 0, 4);
                     BindAndDispatchIndirect(shader, scatter, bindShared, output, accumulation);
                     BuildQueueDispatch(shader, buildDispatchArgs, bindShared, output, accumulation, 1, ThreadCount);
                     BindAndDispatchIndirect(shader, copyNextQueue, bindShared, output, accumulation);
@@ -128,6 +140,7 @@ namespace PathTracing
             shader.SetBuffer(kernel, "_WavefrontCurrentQueue", _currentQueue);
             shader.SetBuffer(kernel, "_WavefrontNextQueue", _nextQueue);
             shader.SetBuffer(kernel, "_WavefrontCompletedQueue", _completedQueue);
+            shader.SetBuffer(kernel, "_WavefrontShadowWork", _shadowWork);
             shader.SetBuffer(kernel, "_WavefrontCounters", _counters);
             shader.SetBuffer(kernel, "_WavefrontDispatchArgs", _dispatchArguments);
             shader.SetTexture(kernel, "_WavefrontFrameResult", _frameResult);
@@ -142,10 +155,11 @@ namespace PathTracing
             _currentQueue?.Release();
             _nextQueue?.Release();
             _completedQueue?.Release();
+            _shadowWork?.Release();
             _counters?.Release();
             _dispatchArguments?.Release();
             _frameResult?.Release();
-            _paths = _hits = _currentQueue = _nextQueue = _completedQueue = _counters = _dispatchArguments = null;
+            _paths = _hits = _currentQueue = _nextQueue = _completedQueue = _shadowWork = _counters = _dispatchArguments = null;
             _frameResult = null;
             _capacity = 0;
         }

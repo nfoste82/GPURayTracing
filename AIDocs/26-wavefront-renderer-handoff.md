@@ -4,9 +4,9 @@
 
 **Current phase: queue-driven surface, water, fog, and water+fog renderers are active for final
 color. Surface, water, fog, water+fog, and dry-terrain routes are compiled; the user manually
-smoke-tested water, fog, and water+fog. Fog and terrain image parity remain pending. Adaptive
-scheduling, path guiding, temporal/spatial RIS, and general debug modes have not yet been ported
-to the active wavefront route.**
+smoke-tested water, fog, water+fog, and terrain. Fog and terrain image parity remain pending.
+Adaptive scheduling, path guiding, temporal/spatial RIS, and general debug modes have not yet been
+ported to the active wavefront route.**
 
 The user explicitly chose not to preserve `CSMain` as a runtime fallback. Use Git history if old
 behavior must be consulted. Do not restore an old path merely as a fallback during this migration.
@@ -57,7 +57,10 @@ for each camera pass:
     build indirect args for current queue
     CSWavefrontIntersect
     CSWavefrontClassify
+    CSWavefrontClearShadowQueue
     CSWavefrontDirectLight
+    CSWavefrontTraceShadows
+    CSWavefrontResolveShadowWork
     CSWavefrontScatter
     build indirect args for next queue
     CSWavefrontCopyNextQueue
@@ -68,8 +71,8 @@ for each camera pass:
 CSWavefrontPresent
 ```
 
-The explicit counter buffer holds current, next, and completed path counts. Queue stages use
-GPU-generated indirect arguments and `ComputeDispatch.DispatchIndirect`. Retirement after the
+The explicit counter buffer holds current, next, completed, and shadow-work counts. Queue stages
+use GPU-generated indirect arguments and `ComputeDispatch.DispatchIndirect`. Retirement after the
 fixed host-side bounce loop is intentional: it accounts for all camera paths at the former maximum
 bounce limit instead of silently dropping survivors.
 
@@ -104,13 +107,41 @@ camera passes, frame accumulation, and existing post-trace caustic/feature/denoi
 
 Manual testing is not image-regression parity.
 
+## Shadow Queue Integration
+
+`CSWavefrontDirectLight` now queues each eligible active path as a `ShadowWorkItem`.
+`CSWavefrontTraceShadows` runs indirect over that queue and retains the established
+`GetLightHittingPoint` estimator, including transparent shadow traversal, environment/mesh lights,
+initial RIS, complementary MIS metadata, primary soft shadows, water attenuation, and fog shadow
+attenuation. `CSWavefrontResolveShadowWork` applies the visibility-weighted radiance before
+`CSWavefrontScatter` continues the path. Clearing the shadow counter per bounce prevents stale
+work from being replayed.
+
+This is deliberately a path-level queue boundary. Candidate generation and individual light sample
+materialization remain in the trace kernel to preserve the shared estimator's single inlined
+`SampleSingleLight` call site while moving the expensive shadow-BVH code out of the direct-light
+kernel.
+
+The dry default targeted cold Metal compile passed on the M3 Max:
+
+```text
+CSWavefrontDirectLight:       42 ms
+CSWavefrontTraceShadows:  23.505 s
+CSWavefrontScatter:        7.298 s
+Total:                    33.066 s
+```
+
+All 16 wavefront kernels completed with no shader warnings or errors. The compile moved the
+expensive work from direct-light into the dedicated shadow kernel and reduced the total cold compile
+from the prior 44.142 s baseline. Log: `/tmp/raytracing-wavefront-shadow-queue-compile.log`.
+
 ## Unsupported Or Bypassed
 
 - **Adaptive sampling:** the existing layered Welford scheduler remains in source but is bypassed.
 - **Path guiding and temporal/spatial RIS reuse:** bypassed. Local initial RIS remains active.
 - **General geometry debug modes:** still unavailable. Do not revive the monolithic debug tracer.
-- **Wavefront-native shadow queues:** `CSWavefrontDirectLight` still owns candidate generation and
-  shadow traversal through `GetLightHittingPoint`.
+- **Per-candidate shadow queues:** the queue is currently one work item per path. Direct-light
+  candidate generation and individual light samples remain materialized inside the shadow stage.
 
 ## Caustics Integration
 
@@ -249,23 +280,18 @@ Still required:
    GlassTransmission, mesh lights, texture-heavy glTF, dry caustics, and water caustics.
 5. Benchmark equal samples and equal time, including stage cost and queue occupancy. Do not use
    synchronous readback in interactive timing.
-6. Manually validate the generated Terrain scene and capture deterministic terrain image parity.
+6. Terrain manually smoke-tested; capture deterministic terrain image parity.
 7. Compile/test terrain-on water, fog, and water+fog variants as their combinations are needed.
 
 ## Ordered Remaining Work
 
-### 1. Extract Shadow Work
+### 1. Validate And Refine Shadow Work
 
-This is the highest-value next compile-time task because `CSWavefrontDirectLight` is 33.7 seconds.
-
-1. Define a `ShadowWorkItem`: path ID, finite/environment identity, sampled direction/endpoint,
-   unshadowed contribution, PDFs/RIS normalization, and needed MIS metadata.
-2. Change `CSWavefrontDirectLight` to candidate generation only.
-3. Add a shadow queue and `CSTraceShadowRays` owning `GetShadowTransmittance`.
-4. Add a resolve stage that applies visibility-weighted contribution before scatter.
-5. Preserve transparent shadows, local RIS, environment/mesh lights, primary soft shadows, and
-   complementary MIS.
-6. Re-run the targeted compile and image tests.
+The path-level shadow queue has compiled successfully. Manually validate opaque and transparent
+blockers, environment, sphere/mesh/directional lights, initial RIS, primary soft shadows, water,
+and fog. Add queue-accounting and deterministic image fixtures before splitting one path's light
+candidates into separate shadow work items; retain a single inlined `SampleSingleLight` call site
+unless the estimator is deliberately decomposed.
 
 ### 2. Validate Water
 
@@ -302,10 +328,11 @@ AIDocs/11-regression-testing.md, and AIDocs/10-benchmarking-and-performance.md.
 
 The active final-color route is Resources/RayTracingWavefront.compute, dispatched by
 Assets/Scripts/WavefrontPathTracingManager.cs. Do not restore CSMain as a runtime fallback and do
-not run all-assets shader precompile. The common surface wavefront compile is 44.1 s cold on the M3
-Max; CSWavefrontDirectLight is 33.7 s. Next: add a ShadowWorkItem queue, splitting candidate
-generation from shadow traversal while preserving transparent shadows, local RIS, environment/mesh
-lights, and complementary MIS. Use explicit counters plus GPU-built indirect dispatch. Build and
-compile only RayTracingWavefront fog=0;terrain=0 after focused changes, and add queue/accounting
-tests before broad image/performance claims.
+not run all-assets shader precompile. A path-level ShadowWorkItem queue is active:
+CSWavefrontDirectLight enqueues active paths, CSWavefrontTraceShadows owns GetLightHittingPoint,
+and CSWavefrontResolveShadowWork applies radiance before scatter. The dry default cold compile is
+33.066 s on the M3 Max with the 23.505 s expensive kernel isolated in CSWavefrontTraceShadows.
+Next: manually validate shadow behavior, add queue/accounting and deterministic image fixtures,
+then decide whether per-candidate work items are worth the estimator decomposition. Build and
+compile only RayTracingWavefront fog=0;terrain=0 after focused changes.
 ```
