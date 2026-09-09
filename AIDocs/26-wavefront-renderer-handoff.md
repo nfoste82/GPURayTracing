@@ -3,9 +3,10 @@
 ## Status
 
 **Current phase: queue-driven surface, water, fog, and water+fog renderers are active for final
-color. Surface and water routes are compiled and manually smoke-tested. Fog image parity remains
-pending. Adaptive scheduling, path guiding, temporal/spatial RIS, and general debug modes have not
-yet been ported to the active wavefront route.**
+color. Surface, water, fog, water+fog, and dry-terrain routes are compiled; the user manually
+smoke-tested water, fog, and water+fog. Fog and terrain image parity remain pending. Adaptive
+scheduling, path guiding, temporal/spatial RIS, and general debug modes have not yet been ported
+to the active wavefront route.**
 
 The user explicitly chose not to preserve `CSMain` as a runtime fallback. Use Git history if old
 behavior must be consulted. Do not restore an old path merely as a fallback during this migration.
@@ -145,6 +146,30 @@ Log: `/tmp/raytracing-wavefront-fog-compile.log`. The water+fog wrapper reached 
 kernel (`91.359 s`) but was still compiling when the 120-second command timeout elapsed; do not
 claim that combined variant validated until it completes in a standalone Unity session.
 
+## Terrain Integration
+
+Terrain remains a `TERRAIN_ENABLED` keyword permutation rather than a wrapper asset. The
+`TerrainManager` enables the keyword and binds heightfield, alphamap, layer textures, normals,
+masks, and buffers each time `WavefrontPathTracingManager` binds a queue-stage kernel. This makes
+the same terrain implementation available to the dry, water, fog, and water+fog wrappers without
+adding separate terrain asset-selection logic.
+
+The dry terrain variant cold-compiled successfully on the M3 Max:
+
+```text
+CSWavefrontIntersect:    9.943 s
+CSWavefrontDirectLight: 51.599 s
+CSWavefrontScatter:     13.638 s
+Total:                  77.339 s
+```
+
+The compile completed all 13 wavefront kernels. Metal reported the existing terrain texture
+sampling integer-modulus performance warnings in `RayTracingShared.hlsl`; it reported no errors.
+Log: `/tmp/raytracing-wavefront-terrain-compile.log`. A structural regression test locks the
+keyword declaration and per-stage terrain binding. Run the generated Terrain scene manually and
+capture image parity before claiming visual terrain parity; then compile/test terrain-on water,
+fog, and water+fog variants as their combinations are needed.
+
 ## Compile Results
 
 All timings below are targeted cold Metal compiles of **only** `RayTracingWavefront`, default
@@ -224,7 +249,8 @@ Still required:
    GlassTransmission, mesh lights, texture-heavy glTF, dry caustics, and water caustics.
 5. Benchmark equal samples and equal time, including stage cost and queue occupancy. Do not use
    synchronous readback in interactive timing.
-6. Compile and test the terrain keyword variant separately.
+6. Manually validate the generated Terrain scene and capture deterministic terrain image parity.
+7. Compile/test terrain-on water, fog, and water+fog variants as their combinations are needed.
 
 ## Ordered Remaining Work
 
@@ -248,7 +274,12 @@ wavefront stages, and `GameManager` selects it only while `HasWaterVolume`. Wate
 all stages. Compile its default and terrain variants, then run the existing water, nested
 water/glass, underwater-camera, finite side/bottom exit, segment attenuation, and caustic fixtures.
 
-### 3. Validate Fog
+### 3. Validate Terrain And Fog
+
+The dry terrain keyword variant compiles. Manually validate the generated Terrain scene's
+heightfield intersection, painted layer albedo, normal maps, masks, and shadows, then capture a
+deterministic wavefront image fixture. Compile the water, fog, and water+fog terrain permutations
+when validating those combinations.
 
 Run bounded-fog GPU probes and deterministic light-shaft image fixtures against the wavefront
 assets. Compile both terrain variants and let the combined water+fog default compile finish without

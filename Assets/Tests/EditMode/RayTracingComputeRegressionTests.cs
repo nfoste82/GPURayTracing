@@ -796,6 +796,21 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void WavefrontFinalColor_UsesTerrainKeywordAndBindsTerrainForEveryStage()
+        {
+            string wavefront = System.IO.File.ReadAllText("Assets/Resources/RayTracingWavefront.compute");
+            string terrainManager = System.IO.File.ReadAllText("Assets/Scripts/TerrainManager.cs");
+            string wavefrontManager = System.IO.File.ReadAllText("Assets/Scripts/WavefrontPathTracingManager.cs");
+            string gameManager = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+
+            Assert.That(wavefront, Does.Contain("#pragma multi_compile _ TERRAIN_ENABLED"));
+            Assert.That(terrainManager, Does.Contain("shader.EnableKeyword(\"TERRAIN_ENABLED\")"));
+            Assert.That(terrainManager, Does.Contain("shader.DisableKeyword(\"TERRAIN_ENABLED\")"));
+            Assert.That(wavefrontManager, Does.Contain("bindShared(shader, kernel)"));
+            Assert.That(gameManager, Does.Contain("SetTerrainShaderParameters(kernelHandle, targetShader)"));
+        }
+
+        [Test]
         public void BulkShaderPrecompile_ExcludesKnownTimedOutDebugKernel()
         {
             string source = System.IO.File.ReadAllText("Assets/Editor/RayTracingShaderPrecompiler.cs");
