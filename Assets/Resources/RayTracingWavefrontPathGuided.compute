@@ -1,0 +1,3 @@
+// Opt-in queue-driven path guiding. Keep guide sampling and training out of the common surface asset.
+#define PATH_GUIDING_ENABLED 1
+#include_with_pragmas "RayTracingWavefront.compute"

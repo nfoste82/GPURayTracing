@@ -2,12 +2,11 @@
 
 // Create a RenderTexture with enableRandomWrite flag and set it
 // with cs.SetTexture
-#if !defined(RAY_TRACING_ADAPTIVE_TRACE)
 RWTexture2D<float4> Result;
 #if defined(EXPERIMENTAL_RIS_REUSE)
 int _SpatialRisEnabled;
 int _SpatialRisNeighborCount;
-#if defined(EXPERIMENTAL_RIS_REUSE) && ((defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)) || defined(SPATIAL_RIS_PREPASS))
+#if defined(EXPERIMENTAL_RIS_REUSE) && (((defined(FINAL_COLOR_KERNEL) || defined(WAVEFRONT_RIS_REUSE)) && defined(TEMPORAL_RIS_ENABLED)) || defined(SPATIAL_RIS_PREPASS))
 struct TemporalRisReservoir
 {
     float4 data0;
@@ -15,7 +14,7 @@ struct TemporalRisReservoir
     float4 data2;
     float4 data3;
 };
-#if defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
+#if (defined(FINAL_COLOR_KERNEL) || defined(WAVEFRONT_RIS_REUSE)) && defined(TEMPORAL_RIS_ENABLED)
 StructuredBuffer<TemporalRisReservoir> _TemporalRisPreviousReservoir;
 Texture2D<float4> _TemporalRisPreviousNormal;
 Texture2D<float> _TemporalRisPreviousDepth;
@@ -43,17 +42,14 @@ Texture2D<float> _SpatialRisReceiverIdentity;
 Texture2D<float> _SpatialRisReceiverValidity;
 #endif
 #endif
-#endif
 RWTexture2D<float4> AccumulationResult;
 #if !defined(FINAL_COLOR_KERNEL)
 RWTexture2D<float4> Beauty;
-#if !defined(RAY_TRACING_ADAPTIVE_TRACE)
 RWTexture2D<float4> FeatureNormal;
 RWTexture2D<float4> FeatureAlbedo;
 RWTexture2D<float> FeatureDepth;
 RWTexture2D<float> FeatureIdentity;
 RWTexture2D<float> FeatureValidity;
-#endif
 #endif
 RWStructuredBuffer<float4> RegressionResults;
 RWStructuredBuffer<float4> _FocusQueryResult;
@@ -579,19 +575,10 @@ struct CausticPhoton
     float3 power;
 };
 
-#if defined(RAY_TRACING_ADAPTIVE_TRACE)
-// Adaptive trace gathers completed photon data but never builds or mutates the caustic grid.
-// Read-only declarations keep this kernel below Metal's eight-UAV limit.
-StructuredBuffer<CausticPhoton> _CausticPhotons;
-StructuredBuffer<uint> _CausticPhotonMetadata;
-StructuredBuffer<int> _CausticGridCellHeads;
-StructuredBuffer<int> _CausticPhotonNext;
-#else
 RWStructuredBuffer<CausticPhoton> _CausticPhotons;
 RWStructuredBuffer<uint> _CausticPhotonMetadata;
 RWStructuredBuffer<int> _CausticGridCellHeads;
 RWStructuredBuffer<int> _CausticPhotonNext;
-#endif
 
 #if defined(CAUSTIC_PHOTON_TRACE)
 struct CausticTargetPair
@@ -3115,7 +3102,7 @@ struct InitialRisCandidate
     int valid;
 };
 
-#if (defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)) || defined(SPATIAL_RIS_PREPASS)
+#if ((defined(FINAL_COLOR_KERNEL) || defined(WAVEFRONT_RIS_REUSE)) && defined(TEMPORAL_RIS_ENABLED)) || defined(SPATIAL_RIS_PREPASS)
 bool IsInitialRisEligible(RayHit hit);
 bool IsFiniteRisValue(float value);
 bool IsFiniteRisColor(float3 value);
@@ -3125,7 +3112,7 @@ float GetTemporalRisReceiverIdentity(RayHit hit)
     return hit.obj_radius > 0.0f ? 2.0f + hit.objectIndex : 1000000.0f + hit.meshIndex;
 }
 
-#if defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
+#if (defined(FINAL_COLOR_KERNEL) || defined(WAVEFRONT_RIS_REUSE)) && defined(TEMPORAL_RIS_ENABLED)
 bool IsTemporalRisEligible(RayHit hit)
 {
     return _TemporalRisEnabled != 0 && _TemporalRisUnsupported == 0 && IsInitialRisEligible(hit)
@@ -3145,7 +3132,7 @@ bool IsSpatialRisEligible(RayHit hit)
 }
 #endif
 
-#if defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
+#if (defined(FINAL_COLOR_KERNEL) || defined(WAVEFRONT_RIS_REUSE)) && defined(TEMPORAL_RIS_ENABLED)
 bool IsTemporalRisReceiverMatch(RayHit hit, uint2 sourcePixel)
 {
     if (_TemporalRisPreviousValidity[sourcePixel] <= 0.5f) return false;
@@ -3269,8 +3256,8 @@ bool LoadTemporalRisCandidate(uint2 previousPixel, out InitialRisCandidate candi
 }
 
 bool LoadSpatialRisCandidate(uint2 sourcePixel, RayHit hit, out InitialRisCandidate candidate,
-                             out float weightSum, out float selectedTarget, out int reservoirM,
-                             bool recordDiagnostics)
+                              out float weightSum, out float selectedTarget, out int reservoirM,
+                              bool recordDiagnostics)
 {
     candidate.valid = 0;
     weightSum = 0.0f;
@@ -3333,6 +3320,14 @@ bool LoadSpatialRisCandidate(uint2 sourcePixel, RayHit hit, out InitialRisCandid
     selectedTarget = reservoir.data2.y;
     reservoirM = (int)reservoir.data2.w;
     return true;
+}
+
+bool HasSpatialRisLocalReservoir(uint2 pixel)
+{
+    uint index = pixel.y * (uint)_TemporalRisTextureSize.x + pixel.x;
+    TemporalRisReservoir reservoir = _SpatialRisLocalReservoir[index];
+    return reservoir.data3.w >= 0.5f && reservoir.data2.x > 0.0f
+        && reservoir.data2.y > 0.0f && reservoir.data2.w >= 1.0f;
 }
 
 float EvaluateTemporalRisCandidateTarget(Ray ray, RayHit hit, InitialRisCandidate candidate)
@@ -3940,8 +3935,11 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
     // SINGLE inlined SampleSingleLight call site. Finite-light and environment samples both use
     // this visibility path so the Metal compiler sees only one shadow-BVH traversal body.
     bool useInitialRis = initialRis && !volumeEvent && IsInitialRisEligible(hit);
-#if defined(EXPERIMENTAL_RIS_REUSE) && defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
+#if defined(EXPERIMENTAL_RIS_REUSE) && (defined(FINAL_COLOR_KERNEL) || defined(WAVEFRONT_RIS_REUSE)) && defined(TEMPORAL_RIS_ENABLED)
     bool useSpatialRis = useInitialRis && IsSpatialRisEligible(hit);
+    // A missing prepass result must fall back to the ordinary local estimator rather than
+    // replacing direct lighting with an empty spatial reservoir.
+    bool useSpatialRisReservoir = useSpatialRis && HasSpatialRisLocalReservoir(pixel);
 #endif
     InitialRisCandidate selectedRisCandidate;
     InitializeRisCandidate(selectedRisCandidate);
@@ -3953,8 +3951,8 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
         float selectedWeight = 0.0f;
         int candidateCount = max(1, _InitialRisCandidateCount);
         int candidateIndex;
-#if defined(EXPERIMENTAL_RIS_REUSE) && defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
-        if (!useSpatialRis)
+#if defined(EXPERIMENTAL_RIS_REUSE) && (defined(FINAL_COLOR_KERNEL) || defined(WAVEFRONT_RIS_REUSE)) && defined(TEMPORAL_RIS_ENABLED)
+        if (!useSpatialRisReservoir)
 #endif
         {
             [loop]
@@ -4084,11 +4082,11 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
             }
         }
         int effectiveCandidateCount =
-#if defined(EXPERIMENTAL_RIS_REUSE) && defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
-            useSpatialRis ? 0 :
+#if defined(EXPERIMENTAL_RIS_REUSE) && (defined(FINAL_COLOR_KERNEL) || defined(WAVEFRONT_RIS_REUSE)) && defined(TEMPORAL_RIS_ENABLED)
+            useSpatialRisReservoir ? 0 :
 #endif
             candidateCount;
-#if defined(EXPERIMENTAL_RIS_REUSE) && defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
+#if defined(EXPERIMENTAL_RIS_REUSE) && (defined(FINAL_COLOR_KERNEL) || defined(WAVEFRONT_RIS_REUSE)) && defined(TEMPORAL_RIS_ENABLED)
         // Reweight a validated reservoir by the current receiver target before merging. This is
         // the temporal ReSTIR-DI cross-domain correction; visibility remains deferred.
         if (_SpatialRisEnabled == 0 && IsTemporalRisEligible(hit))
@@ -4138,8 +4136,8 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
             }
         }
 #endif
- #if defined(EXPERIMENTAL_RIS_REUSE) && defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
-        if (useSpatialRis)
+#if defined(EXPERIMENTAL_RIS_REUSE) && (defined(FINAL_COLOR_KERNEL) || defined(WAVEFRONT_RIS_REUSE)) && defined(TEMPORAL_RIS_ENABLED)
+        if (useSpatialRisReservoir)
         {
             // The prepass owns local generation. Restart from its post-candidate state so final
             // path sampling preserves the local RIS RNG contract while only neighbor merges add RNG.
@@ -4203,7 +4201,7 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
             selectedRisCandidate.risScale = GetInitialRisReservoirScale(totalWeight, effectiveCandidateCount, selectedTarget);
             initialRisSelected = IsFiniteRisValue(selectedRisCandidate.risScale)
                 && selectedRisCandidate.risScale > 0.0f;
-#if defined(EXPERIMENTAL_RIS_REUSE) && defined(FINAL_COLOR_KERNEL) && defined(TEMPORAL_RIS_ENABLED)
+#if defined(EXPERIMENTAL_RIS_REUSE) && (defined(FINAL_COLOR_KERNEL) || defined(WAVEFRONT_RIS_REUSE)) && defined(TEMPORAL_RIS_ENABLED)
             if (!useSpatialRis && IsTemporalRisEligible(hit))
             {
                 InterlockedAdd(_TemporalRisDiagnostics[9], (uint)effectiveCandidateCount);
@@ -5526,7 +5524,7 @@ float3 GetDebugRenderColor(Ray ray, inout RngState rngState)
 }
 #endif // DEBUG_RENDER
 
-#if !defined(FINAL_COLOR_KERNEL) && !defined(RAY_TRACING_ADAPTIVE_TRACE)
+#if !defined(FINAL_COLOR_KERNEL)
 float GetFeatureIdentity(RayHit hit)
 {
     if (DidHitSky(hit))

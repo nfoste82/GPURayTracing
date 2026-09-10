@@ -38,21 +38,19 @@ public class GameManager : MonoBehaviour
     [SerializeField] private ComputeShader utilityShader;
     [SerializeField] private ComputeShader featuresShader;
     [SerializeField] private ComputeShader spatialRisPrepassShader;
-    [SerializeField] private ComputeShader experimentalPathGuidedShader;
-    [SerializeField] private ComputeShader experimentalRisShader;
     [SerializeField] private ComputeShader focusShader;
     [SerializeField] private ComputeShader adaptiveSchedulerShader;
-    [SerializeField] private ComputeShader adaptiveTraceShader;
     [SerializeField] private ComputeShader waterShader;
     [SerializeField] private ComputeShader fogShader;
     [SerializeField] private ComputeShader waterFogShader;
     [SerializeField] private ComputeShader waterFeaturesShader;
     [SerializeField] private ComputeShader waterFocusShader;
-    [SerializeField] private ComputeShader waterAdaptiveTraceShader;
     private ComputeShader _wavefrontShader;
     private ComputeShader _wavefrontWaterShader;
     private ComputeShader _wavefrontFogShader;
     private ComputeShader _wavefrontWaterFogShader;
+    private ComputeShader _wavefrontPathGuidedShader;
+    private ComputeShader _wavefrontRisShader;
 
     [SerializeField]
     public ComputeShader causticsShader;
@@ -564,16 +562,26 @@ public class GameManager : MonoBehaviour
         }
     }
     public bool HasWaterVolume => WaterManager.HasWaterVolume;
-    private bool IsExperimentalFinalColorShader(ComputeShader targetShader) => targetShader == experimentalPathGuidedShader || targetShader == experimentalRisShader;
     private bool IsProductionFinalColorShader(ComputeShader targetShader) => targetShader == ActiveFinalColorShader;
-    private bool ShouldUseExperimentalRisShader() => experimentalRisShader != null && ShouldRunTemporalRis()
-        && !IsTemporalRisUnsupported() && !HasWaterVolume;
-    private bool ShouldUseExperimentalPathGuidedShader() => experimentalPathGuidedShader != null && enablePathGuiding
-        && !ShouldUseExperimentalRisShader() && !HasWaterVolume;
+    private bool ShouldUseWavefrontPathGuidedShader() => enablePathGuiding && !HasWaterVolume && !IsFogEnabled();
     private ComputeShader ActiveFinalColorShader
     {
         get
         {
+            if (ShouldRunTemporalRis() && !IsTemporalRisUnsupported() && !HasWaterVolume)
+            {
+                _wavefrontRisShader ??= Resources.Load<ComputeShader>("RayTracingWavefrontRis");
+                if (_wavefrontRisShader == null)
+                    throw new InvalidOperationException("Missing Resources/RayTracingWavefrontRis.compute.");
+                return _wavefrontRisShader;
+            }
+            if (ShouldUseWavefrontPathGuidedShader())
+            {
+                _wavefrontPathGuidedShader ??= Resources.Load<ComputeShader>("RayTracingWavefrontPathGuided");
+                if (_wavefrontPathGuidedShader == null)
+                    throw new InvalidOperationException("Missing Resources/RayTracingWavefrontPathGuided.compute.");
+                return _wavefrontPathGuidedShader;
+            }
             if (HasWaterVolume && IsFogEnabled())
             {
                 if (_wavefrontWaterFogShader == null)
@@ -617,21 +625,6 @@ public class GameManager : MonoBehaviour
     }
     private ComputeShader ActiveFeaturesShader => HasWaterVolume ? waterFeaturesShader : featuresShader;
     private ComputeShader ActiveFocusShader => HasWaterVolume ? waterFocusShader : focusShader;
-    private ComputeShader ActiveAdaptiveTraceShader
-    {
-        get
-        {
-            // Batch captures can render before Unity has delivered Start(), so lazily restore the
-            // split adaptive assets here as well as during normal scene initialization.
-            if (adaptiveSchedulerShader == null)
-                adaptiveSchedulerShader = Resources.Load<ComputeShader>("RayTracingAdaptiveScheduler");
-            if (adaptiveTraceShader == null)
-                adaptiveTraceShader = Resources.Load<ComputeShader>("RayTracingAdaptiveTrace");
-            if (waterAdaptiveTraceShader == null)
-                waterAdaptiveTraceShader = Resources.Load<ComputeShader>("RayTracingWaterAdaptiveTrace");
-            return HasWaterVolume ? waterAdaptiveTraceShader : adaptiveTraceShader;
-        }
-    }
     public int EnvironmentDistributionWidth => _environmentImportanceSampling.Width;
     public int EnvironmentDistributionHeight => _environmentImportanceSampling.Height;
     public bool IsVolumetricFogActive => IsFogEnabled();
@@ -886,10 +879,6 @@ public class GameManager : MonoBehaviour
         // Geometry diagnostics are temporarily disabled because their Metal kernel can exceed
         // Unity's compiler timeout. Keep all runtime rendering on the production path.
         debugRenderMode = DebugRenderMode.FinalColor;
-        if (adaptiveTraceShader == null)
-        {
-            adaptiveTraceShader = Resources.Load<ComputeShader>("RayTracingAdaptiveTrace");
-        }
         if (waterShader == null)
         {
             waterShader = Resources.Load<ComputeShader>("RayTracingWater");
@@ -910,24 +899,12 @@ public class GameManager : MonoBehaviour
         {
             waterFocusShader = Resources.Load<ComputeShader>("RayTracingWaterFocus");
         }
-        if (waterAdaptiveTraceShader == null)
+        if (adaptiveSchedulerShader == null)
         {
-            waterAdaptiveTraceShader = Resources.Load<ComputeShader>("RayTracingWaterAdaptiveTrace");
-        }
-        if (experimentalPathGuidedShader == null)
-        {
-            experimentalPathGuidedShader = Resources.Load<ComputeShader>("RayTracingExperimentalPathGuided");
-        }
-        if (experimentalRisShader == null)
-        {
-            experimentalRisShader = Resources.Load<ComputeShader>("RayTracingExperimentalRis");
-        }
-        if (adaptiveSchedulerShader == null || adaptiveTraceShader == null)
-        {
-            Debug.LogError("Adaptive compute shaders are missing. Add RayTracingAdaptiveScheduler and RayTracingAdaptiveTrace to Resources.", this);
+            Debug.LogError("Adaptive scheduler shader is missing. Add RayTracingAdaptiveScheduler to Resources.", this);
         }
         if (waterShader == null || fogShader == null || waterFogShader == null || waterFeaturesShader == null
-            || waterFocusShader == null || waterAdaptiveTraceShader == null)
+            || waterFocusShader == null)
         {
             Debug.LogError("Water/fog-capable ray tracing compute shaders are missing from Resources.", this);
         }
@@ -1514,17 +1491,21 @@ public class GameManager : MonoBehaviour
             }
         }
 
-        var activeAdaptiveTraceShader = ActiveAdaptiveTraceShader;
-        if (targetShader == activeAdaptiveTraceShader && kernelHandle == activeAdaptiveTraceShader.FindKernel("CSAdaptiveTrace"))
-        {
-            DispatchAdaptiveSampling();
-            return;
-        }
-
-        if (targetShader == experimentalRisShader && Lighting.SpatialRisEnabled && ShouldRunTemporalRis()
+        if (targetShader == _wavefrontRisShader && Lighting.SpatialRisEnabled && ShouldRunTemporalRis()
             && !IsTemporalRisUnsupported())
         {
-            spatialRisPrepassShader ??= Resources.Load<ComputeShader>("RayTracingSpatialRisPrepass");
+            // Unity can retain a destroyed/missing serialized shader wrapper after an importer
+            // refresh. `??=` only tests the managed reference, so use Unity null semantics here.
+            if (spatialRisPrepassShader == null)
+            {
+                spatialRisPrepassShader = Resources.Load<ComputeShader>("RayTracingSpatialRisPrepass");
+#if UNITY_EDITOR
+                // Command-line editor captures can request this immediately after a domain reload,
+                // before Resources has surfaced a freshly imported compute asset.
+                spatialRisPrepassShader ??= UnityEditor.AssetDatabase.LoadAssetAtPath<ComputeShader>(
+                    "Assets/Resources/RayTracingSpatialRisPrepass.compute");
+#endif
+            }
             if (spatialRisPrepassShader == null)
             {
                 Debug.LogError("Spatial RIS prepass shader is missing from Resources.", this);
@@ -1548,9 +1529,16 @@ public class GameManager : MonoBehaviour
 
         if (targetShader == ActiveFinalColorShader)
         {
+            if (ShouldUseAdaptiveSampling())
+            {
+                DispatchAdaptiveSampling(targetShader);
+                return;
+            }
             _wavefrontPathTracingManager.Dispatch(targetShader, _textureSize, numberOfPasses, numBounces,
+                0,
                 debugRenderMode == DebugRenderMode.DirectLight,
                 debugRenderMode == DebugRenderMode.Throughput || debugRenderMode == DebugRenderMode.BounceCount,
+                targetShader == _wavefrontPathGuidedShader,
                 SetShaderParameters, _outputTexture, _accumulationTexture);
             return;
         }
@@ -1565,11 +1553,11 @@ public class GameManager : MonoBehaviour
         ComputeDispatch.Dispatch(targetShader, kernelHandle, threadGroupsX, threadGroupsY, 1);
     }
 
-    private void DispatchAdaptiveSampling()
+    private void DispatchAdaptiveSampling(ComputeShader wavefrontShader = null)
     {
         if (enableAdaptiveBootstrap && _adaptiveBootstrapFrameCount < Mathf.Clamp(adaptiveBootstrapFrames, 1, 512))
         {
-            DispatchAdaptiveBootstrap();
+            DispatchAdaptiveBootstrap(wavefrontShader);
             return;
         }
 
@@ -1579,12 +1567,10 @@ public class GameManager : MonoBehaviour
             _adaptiveBootstrapSeeded = true;
         }
 
-        var activeAdaptiveTraceShader = ActiveAdaptiveTraceShader;
         var classifyKernel = adaptiveSchedulerShader.FindKernel("CSAdaptiveClassifyGroups");
         var applyBucketRemapKernel = adaptiveSchedulerShader.FindKernel("CSAdaptiveApplyBucketRemap");
         var clearSchedulerKernel = adaptiveSchedulerShader.FindKernel("ClearAdaptiveScheduler");
         var clearAllocationMetadataKernel = adaptiveSchedulerShader.FindKernel("ClearAdaptiveAllocationMetadata");
-        var traceKernel = activeAdaptiveTraceShader.FindKernel("CSAdaptiveTrace");
         var clearFrameMetadataKernel = adaptiveSchedulerShader.FindKernel("ClearAdaptiveFrameMetadata");
         var recordRetiredPathsKernel = adaptiveSchedulerShader.FindKernel("RecordAdaptiveRetiredPaths");
         var groupWidth = Mathf.CeilToInt(_textureSize.x / 8.0f);
@@ -1622,17 +1608,18 @@ public class GameManager : MonoBehaviour
 
         CompleteAdaptivePhaseTiming(schedulerStopwatch, out _adaptiveSchedulerMilliseconds);
 
-        SetAdaptiveGroupDimensions(groupWidth, groupHeight);
-        SetShaderParameters(activeAdaptiveTraceShader, traceKernel);
-        BindAdaptiveTraceResources(traceKernel);
         var traceStopwatch = _adaptiveCaptureDiagnostics ? Stopwatch.StartNew() : null;
         int maxLayers = Mathf.Clamp(Mathf.CeilToInt(Mathf.Min(adaptiveHighestBucketSampleRate, adaptiveMaxPathsPerPixel)), 1, 16);
-        for (int sampleLayer = 0; sampleLayer < maxLayers; sampleLayer++)
+        if (wavefrontShader != null)
         {
-            activeAdaptiveTraceShader.SetInt(AdaptiveSampleLayer, sampleLayer);
-            ComputeDispatch.Dispatch(activeAdaptiveTraceShader, traceKernel,
-                Mathf.CeilToInt(_textureSize.x / 4.0f), Mathf.CeilToInt(_textureSize.y / 4.0f), 1);
+            _wavefrontPathTracingManager.Dispatch(wavefrontShader, _textureSize, numberOfPasses, numBounces,
+                maxLayers,
+                debugRenderMode == DebugRenderMode.DirectLight,
+                debugRenderMode == DebugRenderMode.Throughput || debugRenderMode == DebugRenderMode.BounceCount,
+                wavefrontShader == _wavefrontPathGuidedShader,
+                SetShaderParameters, _outputTexture, _accumulationTexture);
         }
+        else throw new InvalidOperationException("Adaptive sampling requires a wavefront final-color shader.");
         CompleteAdaptivePhaseTiming(traceStopwatch, out _adaptiveTraceMilliseconds);
         if (_adaptiveCaptureDiagnostics)
         {
@@ -1657,20 +1644,13 @@ public class GameManager : MonoBehaviour
         _adaptiveBootstrapPriorityActive = false;
     }
 
-    private void DispatchAdaptiveBootstrap()
+    private void DispatchAdaptiveBootstrap(ComputeShader wavefrontShader)
     {
         EnsureAdaptiveBootstrapTextureSize();
-        var bootstrapShader = ActiveFinalColorShader;
-        var kernel = bootstrapShader.FindKernel("CSMain");
-        SetShaderParameters(bootstrapShader, kernel);
-        bootstrapShader.SetTexture(kernel, Result, _adaptiveBootstrapResultTexture);
-        bootstrapShader.SetTexture(kernel, AccumulationResult, _adaptiveBootstrapAccumulationTexture);
-        bootstrapShader.SetTexture(kernel, Beauty, _adaptiveBootstrapBeautyTexture);
-        bootstrapShader.SetInt(AccumulatedFrameCount, _adaptiveBootstrapFrameCount);
-        bootstrapShader.SetInt(SampleOffset, _adaptiveBootstrapFrameCount * Mathf.Max(1, numberOfPasses));
         var size = CalculateAdaptiveBootstrapSize();
-        ComputeDispatch.Dispatch(bootstrapShader, kernel, Mathf.CeilToInt(size.x / (float)RenderThreadCountX),
-            Mathf.CeilToInt(size.y / (float)RenderThreadCountY), 1);
+        _wavefrontPathTracingManager.Dispatch(wavefrontShader, size, numberOfPasses, numBounces, 0,
+            false, false, false, SetShaderParameters,
+            _adaptiveBootstrapResultTexture, _adaptiveBootstrapAccumulationTexture);
 
         var upscaleKernel = utilityShader.FindKernel("UpscaleAdaptiveBootstrap");
         BindAdaptiveBootstrapUtilityResources(upscaleKernel);
@@ -1872,11 +1852,6 @@ public class GameManager : MonoBehaviour
         BindAdaptiveResources(adaptiveSchedulerShader, kernelHandle);
     }
 
-    private void BindAdaptiveTraceResources(int kernelHandle)
-    {
-        BindAdaptiveResources(ActiveAdaptiveTraceShader, kernelHandle);
-    }
-
     private void BindAdaptiveResources(ComputeShader targetShader, int kernelHandle)
     {
         targetShader.SetTexture(kernelHandle, Result, _outputTexture);
@@ -1908,10 +1883,6 @@ public class GameManager : MonoBehaviour
         adaptiveSchedulerShader.SetInt(AdaptiveGroupWidth, groupWidth);
         adaptiveSchedulerShader.SetInt(AdaptiveGroupHeight, groupHeight);
         adaptiveSchedulerShader.SetInt(AdaptiveGroupCount, groupWidth * groupHeight);
-        var activeAdaptiveTraceShader = ActiveAdaptiveTraceShader;
-        activeAdaptiveTraceShader.SetInt(AdaptiveGroupWidth, groupWidth);
-        activeAdaptiveTraceShader.SetInt(AdaptiveGroupHeight, groupHeight);
-        activeAdaptiveTraceShader.SetInt(AdaptiveGroupCount, groupWidth * groupHeight);
     }
 
     private void PresentFinalColor()
@@ -2310,7 +2281,8 @@ public class GameManager : MonoBehaviour
 
     private bool ShouldUseAdaptiveSampling()
     {
-        return enableAdaptiveSampling && ShouldUseFrameAccumulation() && debugRenderMode == DebugRenderMode.FinalColor;
+        return enableAdaptiveSampling && ShouldUseFrameAccumulation()
+            && debugRenderMode == DebugRenderMode.FinalColor;
     }
 
     private float GetRenderTime()
@@ -2419,7 +2391,7 @@ public class GameManager : MonoBehaviour
             && (!enableAdaptiveBootstrap || _adaptiveBootstrapFrameCount >= Mathf.Clamp(adaptiveBootstrapFrames, 1, 512));
         int rendererKind = frame.useDedicatedCausticsDebugKernel ? 2
             : frame.useGeometryDebugShader ? 1 : useAdaptiveTraceShader ? 4
-            : ShouldUseExperimentalRisShader() ? 5 : ShouldUseExperimentalPathGuidedShader() ? 6
+            : ShouldRunTemporalRis() && !IsTemporalRisUnsupported() && !HasWaterVolume ? 5 : ShouldUseWavefrontPathGuidedShader() ? 6
             : HasWaterVolume ? frame.fogEnabled ? 8 : 3 : frame.fogEnabled ? 7 : 0;
         frame.requestedVariant = GetShaderVariantKey(rendererKind, frame.fogEnabled,
             _terrainManager != null && _terrainManager.Terrain != null);
@@ -2505,7 +2477,7 @@ public class GameManager : MonoBehaviour
         
         var dispatchStart = _startupProfilePending ? Stopwatch.GetTimestamp() : 0;
         UpdateTextureFromCompute(frame.computeShader, frame.kernelHandle);
-        if (IsProductionFinalColorShader(frame.computeShader) || IsExperimentalFinalColorShader(frame.computeShader))
+        if (IsProductionFinalColorShader(frame.computeShader))
         {
             Graphics.CopyTexture(_outputTexture, _beautyTexture);
         }
@@ -2522,7 +2494,7 @@ public class GameManager : MonoBehaviour
         }
         _presentationSource = _beautyTexture;
         
-        bool usedExperimentalRis = false;
+        bool usedExperimentalRis = frame.computeShader == _wavefrontRisShader;
         if (!frame.useDedicatedCausticsDebugKernel && (ShouldRunSpatialDenoiser() || ShouldRunTemporalDenoiser() || usedExperimentalRis || IsFeatureDebugMode() || IsCausticPreservationDebugMode()))
         {
             UpdateFeaturesFromCompute();
@@ -3855,7 +3827,7 @@ public class GameManager : MonoBehaviour
 
     private void SetShaderParameters(ComputeShader targetShader, int kernelHandle)
     {
-        if (targetShader == experimentalPathGuidedShader) EnsurePathGuidingResources();
+        if (targetShader == _wavefrontPathGuidedShader) EnsurePathGuidingResources();
         BindShaderTextures(targetShader, kernelHandle);
         BindShaderCameraAndRendererSamplingParameters(targetShader, kernelHandle);
         BindShaderKeywordsAndLightingParameters(targetShader, kernelHandle);
@@ -3865,19 +3837,37 @@ public class GameManager : MonoBehaviour
     private void BindShaderTextures(ComputeShader targetShader, int kernelHandle)
     {
         targetShader.SetTexture(kernelHandle, SkyboxTexture, skyboxTexture);
+        BindWavefrontAdaptiveResources(targetShader, kernelHandle);
         BindEnvironmentImportanceSampling(targetShader, kernelHandle);
         EnsureMeshTextureArrays();
         targetShader.SetTexture(kernelHandle, MeshAlbedoTextures, _meshAlbedoTextureArray);
         targetShader.SetTexture(kernelHandle, MeshMetallicRoughnessTextures, _meshMetallicRoughnessTextureArray);
         targetShader.SetTexture(kernelHandle, MeshNormalTextures, _meshNormalTextureArray);
         targetShader.SetTexture(kernelHandle, MeshParallaxTextures, _meshParallaxTextureArray);
-        if (targetShader == experimentalRisShader)
+        if (targetShader == _wavefrontRisShader)
         {
             if (ShouldRunTemporalRis()) targetShader.EnableKeyword("TEMPORAL_RIS_ENABLED");
             else targetShader.DisableKeyword("TEMPORAL_RIS_ENABLED");
             if (ShouldRunTemporalRis()) _temporalRisManager.Bind(targetShader, kernelHandle, this, true, IsTemporalRisUnsupported());
         }
-        if (targetShader == experimentalPathGuidedShader) _pathGuidingManager.Bind(targetShader, kernelHandle, _pathGuidingShader);
+        if (targetShader == _wavefrontPathGuidedShader)
+            _pathGuidingManager.Bind(targetShader, kernelHandle, _pathGuidingShader);
+    }
+
+    private void BindWavefrontAdaptiveResources(ComputeShader targetShader, int kernelHandle)
+    {
+        if (targetShader != _wavefrontShader
+            && targetShader != _wavefrontWaterShader
+            && targetShader != _wavefrontFogShader
+            && targetShader != _wavefrontWaterFogShader
+            && targetShader != _wavefrontPathGuidedShader
+            && targetShader != _wavefrontRisShader)
+            return;
+
+        targetShader.SetTexture(kernelHandle, AdaptiveSamplingState, _adaptiveSamplingStateTexture);
+        targetShader.SetTexture(kernelHandle, AdaptiveSamplingM2, _adaptiveSamplingM2Texture);
+        targetShader.SetBuffer(kernelHandle, AdaptiveGroupInfo, _adaptiveGroupInfoBuffer);
+        targetShader.SetInt(AdaptiveGroupWidth, Mathf.CeilToInt(_textureSize.x / 8.0f));
     }
 
     private void BindEnvironmentImportanceSampling(ComputeShader targetShader, int kernelHandle)
@@ -3999,7 +3989,7 @@ public class GameManager : MonoBehaviour
         targetShader.SetFloat(FireflyClamp, Mathf.Max(0.0f, fireflyClamp));
         
         if (targetShader == _wavefrontWaterShader || targetShader == _wavefrontWaterFogShader || targetShader == waterShader || targetShader == waterFogShader || targetShader == waterFeaturesShader || targetShader == waterFocusShader
-            || targetShader == waterAdaptiveTraceShader || targetShader == causticsShader)
+            || targetShader == causticsShader)
         {
             WaterManager.SetShaderParameters(targetShader, Application.isPlaying ? GetRenderTime() : 0.0f);
         }

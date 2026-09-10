@@ -453,6 +453,10 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
 
     private void CaptureLiveFrame()
     {
+        if (_liveGeneration && EditorApplication.isPlaying && _liveManager == null)
+        {
+            ApplyLiveGenerationSettings();
+        }
         if ((!_liveGeneration && _editorRunWriter == null) || !EditorApplication.isPlaying || EditorApplication.isPaused || _liveManager == null
             || _liveManager.AccumulatedFrameCount <= 0
             || _liveManager.AccumulatedFrameCount == _lastLiveFrame)
@@ -464,7 +468,9 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         GameManager.AdaptiveAllocationFrameData allocation = default;
         if (adaptive)
         {
-            allocation = _liveManager.ReadAdaptiveAllocationStatsForCapture();
+            allocation = _showHeatmap
+                ? _liveManager.ReadAdaptiveAllocationForCapture()
+                : _liveManager.ReadAdaptiveAllocationStatsForCapture();
         }
         int frame = _liveManager.AccumulatedFrameCount;
         _metadata = $"Frame: {frame}\n";
@@ -483,9 +489,6 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
         RecordEditorRunFrame(frame, hasReferenceMetrics, referencePsnr, referenceRmse, referenceStatus);
         if (_showHeatmap && adaptive)
         {
-            // The compact work list describes this scheduler epoch only. The monitor's heatmap is
-            // a convergence view, so visualize the persistent per-pixel retired-path totals.
-            allocation = _liveManager.ReadAdaptiveCumulativeAllocationForCapture();
             if (_showRollingHeatmap)
             {
                 allocation = BuildRollingHeatmapAllocation(allocation);
@@ -775,38 +778,42 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
     }
 
     private GameManager.AdaptiveAllocationFrameData BuildRollingHeatmapAllocation(
-        GameManager.AdaptiveAllocationFrameData cumulative)
+        GameManager.AdaptiveAllocationFrameData current)
     {
-        EnsureRollingHistoryCapacity(cumulative.width, cumulative.height);
-        uint[] current = DownsampleGroupCounts(cumulative);
-        _rollingGroupHistory.Enqueue(current);
-        while (_rollingGroupHistory.Count > _rollingHeatmapFrames + 1)
+        EnsureRollingHistoryCapacity(current.width, current.height);
+        uint[] currentGroups = DownsampleGroupCounts(current);
+        _rollingGroupHistory.Enqueue(currentGroups);
+        while (_rollingGroupHistory.Count > _rollingHeatmapFrames)
         {
             _rollingGroupHistory.Dequeue();
         }
 
-        uint[] oldest = _rollingGroupHistory.Count > _rollingHeatmapFrames
-            ? _rollingGroupHistory.Peek()
-            : null;
-        uint[] rolling = new uint[current.Length];
+        uint[] rolling = new uint[currentGroups.Length];
         ulong assignedPaths = 0;
         uint activeWorkItems = 0;
+        foreach (uint[] frameGroups in _rollingGroupHistory)
+        {
+            for (int i = 0; i < rolling.Length; i++)
+            {
+                rolling[i] = rolling[i] > uint.MaxValue - frameGroups[i]
+                    ? uint.MaxValue
+                    : rolling[i] + frameGroups[i];
+            }
+        }
         for (int i = 0; i < rolling.Length; i++)
         {
-            uint previous = oldest == null ? 0u : oldest[i];
-            rolling[i] = current[i] >= previous ? current[i] - previous : 0u;
             assignedPaths += rolling[i];
             if (rolling[i] > 0u) activeWorkItems++;
         }
 
         return new GameManager.AdaptiveAllocationFrameData
         {
-            pixels = ExpandGroupCounts(rolling, cumulative.width, cumulative.height),
-            bucketGroupCounts = cumulative.bucketGroupCounts,
+            pixels = ExpandGroupCounts(rolling, current.width, current.height),
+            bucketGroupCounts = current.bucketGroupCounts,
             assignedPaths = assignedPaths > uint.MaxValue ? uint.MaxValue : (uint)assignedPaths,
             activeWorkItems = activeWorkItems,
-            width = cumulative.width,
-            height = cumulative.height
+            width = current.width,
+            height = current.height
         };
     }
 

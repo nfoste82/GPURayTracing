@@ -212,17 +212,13 @@ MonoBehaviour:
   utilityShader: {fileID: 0}
   featuresShader: {fileID: 0}
   spatialRisPrepassShader: {fileID: 0}
-  experimentalPathGuidedShader: {fileID: 0}
-  experimentalRisShader: {fileID: 0}
   focusShader: {fileID: 0}
   adaptiveSchedulerShader: {fileID: 0}
-  adaptiveTraceShader: {fileID: 0}
   waterShader: {fileID: 0}
   fogShader: {fileID: 0}
   waterFogShader: {fileID: 0}
   waterFeaturesShader: {fileID: 0}
   waterFocusShader: {fileID: 0}
-  waterAdaptiveTraceShader: {fileID: 0}
   causticsShader: {fileID: 7200000, guid: 3f6f46a7edd34f308c1eac1557178d41, type: 3}
   causticPreservationThreshold: 4
   renderResolutionPercent: 50
@@ -238,7 +234,7 @@ MonoBehaviour:
   shadowRandomness: 0.65
   sobolDimensionLimit: 656
   samplingSeed: 1
-  enablePathGuiding: 0
+  enablePathGuiding: 1
   pathGuidingMixtureWeight: 0.5
   pathGuidingMinimumSamples: 8
   enableAdaptiveSampling: 1
@@ -249,7 +245,7 @@ MonoBehaviour:
   adaptiveReclassificationInterval: 4
   adaptiveHighestBucketSampleRate: 3
   adaptiveMaxPathsPerPixel: 3
-  enableAdaptiveBootstrap: 0
+  enableAdaptiveBootstrap: 1
   adaptiveBootstrapGroupDivisor: 16
   adaptiveBootstrapFrames: 128
   adaptiveBootstrapResolutionScale: 0.25
@@ -265,7 +261,7 @@ MonoBehaviour:
     _lightSamplingStrategy: 2
     _lightSampleCount: 1
     _initialRisCandidateCount: 4
-    _temporalRisEnabled: 0
+    _temporalRisEnabled: 1
     _temporalRisHistoryMCap: 1
     _spatialRisEnabled: 0
     _spatialRisNeighborCount: 4
@@ -275,9 +271,9 @@ MonoBehaviour:
       rgba: 4294967295
   enableCaustics: 1
   enableVolumetricFog: 1
-  fogDensityScale: 1
-  fogScatteringScale: 1
-  fogInScatteringIntensity: 8
+  fogDensityScale: 0.091
+  fogScatteringScale: 0.241
+  fogInScatteringIntensity: 10.23
   enableFogMultipleScattering: 0
   debugRenderMode: 0
   exposure: 4
@@ -326,7 +322,7 @@ MonoBehaviour:
     _gatherRadius: 0.025
     _gatherRadiusDecayRate: 0.35
     _seed: 1
-    _intensity: 1
+    _intensity: 0.44
   _videoCaptureManager:
     samplesPerFrame: 128
     frameTimeStep: 0.033333335
@@ -334,7 +330,7 @@ MonoBehaviour:
     outputFolder: VideoFrames
     encodeMp4: 1
     ffmpegPath: 
-  _singleFrame: 0
+  _singleFrame: 1
 --- !u!4 &40371818
 Transform:
   m_ObjectHideFlags: 0

@@ -22,10 +22,7 @@ RayTracingCompute.compute              CSMain surface final color; TERRAIN_ENABL
 RayTracingWater.compute                CSMain water-capable final color; TERRAIN_ENABLED
 RayTracingFog.compute                  CSMain fog-capable final color; TERRAIN_ENABLED
 RayTracingWaterFog.compute             CSMain water + fog final color; TERRAIN_ENABLED
-RayTracingExperimentalPathGuided.compute Opt-in path-guided final color; FOG_ENABLED x TERRAIN_ENABLED
-RayTracingExperimentalRis.compute      Opt-in temporal/spatial RIS final color; FOG_ENABLED x TERRAIN_ENABLED x TEMPORAL_RIS_ENABLED
 RayTracingDebug.compute                CSDebugMain; FOG_ENABLED x TERRAIN_ENABLED
-RayTracingAdaptiveTrace.compute        guidance/root trace/resolve/reference; FOG_ENABLED x TERRAIN_ENABLED
 RayTracingAdaptiveScheduler.compute    clear/classify/remap/compact/diagnostics; no variants
 RayTracingFeatures.compute             CSFeatures; FOG_ENABLED x TERRAIN_ENABLED
 RayTracingFocus.compute                CSFocusQuery; TERRAIN_ENABLED only
@@ -120,7 +117,7 @@ new-format rows. The command-line tool supports a single named asset:
 ```
 
 Accepted asset values are the compute asset basename, for example `RayTracingDebug`,
-`RayTracingAdaptiveTrace`, `RayTracingFeatures`, `RayTracingFocus`, and
+`RayTracingFeatures`, `RayTracingFocus`, and
 `RayTracingAdaptiveScheduler`. Omit `-rayTracingColdShaderPrecompile` for a cache-preserving warm
 dispatch. Pass `-rayTracingPrecompileVariant fog=0;terrain=0` with one selected asset to compile
 one fog/terrain combination at a time; quote the value when invoking through a shell.
@@ -224,7 +221,7 @@ preferable for a cold timing because it keeps the editor usable.
 /Applications/Unity/Hub/Editor/6000.3.18f1/Unity.app/Contents/MacOS/Unity \
   -batchmode -projectPath /Users/nic.foster/Projects/GPURayTracing \
   -executeMethod RayTracingShaderPrecompiler.PrecompileFromCommandLine \
-  -rayTracingColdShaderPrecompile -rayTracingPrecompileAsset RayTracingAdaptiveTrace \
+  -rayTracingColdShaderPrecompile -rayTracingPrecompileAsset RayTracingAdaptiveScheduler \
   -logFile /tmp/raytracing-adaptive-trace.log
 ```
 

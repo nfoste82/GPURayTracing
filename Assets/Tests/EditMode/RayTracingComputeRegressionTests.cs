@@ -25,7 +25,6 @@ namespace GPURayTracing.Tests
         private const string FeaturesShaderPath = "Assets/Resources/RayTracingFeatures.compute";
         private const string FocusShaderPath = "Assets/Resources/RayTracingFocus.compute";
         private const string AdaptiveSchedulerShaderPath = "Assets/Resources/RayTracingAdaptiveScheduler.compute";
-        private const string AdaptiveTraceShaderPath = "Assets/Resources/RayTracingAdaptiveTrace.compute";
         private const string RegressionProbeShaderPath = "Assets/Resources/RayTracingRegressionProbe.compute";
         private const string DenoiserShaderPath = "Assets/Resources/RayTracingSpatialDenoiser.compute";
 
@@ -62,7 +61,6 @@ namespace GPURayTracing.Tests
         {
             string shared = System.IO.File.ReadAllText(SharedShaderPath);
             string main = System.IO.File.ReadAllText(ComputeShaderPath);
-            string adaptive = System.IO.File.ReadAllText(AdaptiveTraceShaderPath);
 
             Assert.That(shared, Does.Contain("struct RngState"));
             Assert.That(shared, Does.Contain("RngState CreateRngState(uint2 pixel, uint sampleIndex)"));
@@ -89,7 +87,7 @@ namespace GPURayTracing.Tests
             Assert.That(shared, Does.Contain("BounceSampleDimension((uint)bounce, SampleDimensionRouletteOffset)"));
             Assert.That(main, Does.Contain("SetRngDimension(rngState, SampleDimensionPixelFilter)"));
             Assert.That(main, Does.Contain("SetRngDimension(rngState, SampleDimensionLens)"));
-            Assert.That(adaptive, Does.Contain("RngState rngState = CreateRngState(pixel, oldCount)"));
+            Assert.That(main, Does.Contain("RngState rngState = CreateRngState(pixel, _SampleOffset + pass)"));
 
             int setDimensionStart = shared.IndexOf("void SetRngDimension(inout RngState rngState, uint dimension)", StringComparison.Ordinal);
             int causticSampleStart = shared.IndexOf("float CausticSequenceSample", setDimensionStart, StringComparison.Ordinal);
@@ -390,23 +388,23 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
-        public void AdaptiveTrace_UsesOnePathPerEligibleSampleLayer()
+        public void AdaptiveWavefront_UsesOnePathPerEligibleSampleLayer()
         {
-            string traceSource = System.IO.File.ReadAllText(AdaptiveTraceShaderPath);
             string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
-            Assert.That(traceSource, Does.Contain("if (samples <= _AdaptiveSampleLayer) return"));
-            Assert.That(traceSource, Does.Not.Contain("for (uint localSample"));
-            Assert.That(managerSource, Does.Contain("for (int sampleLayer = 0; sampleLayer < maxLayers; sampleLayer++)"));
-            Assert.That(managerSource, Does.Contain("SetInt(AdaptiveSampleLayer, sampleLayer)"));
+            string wavefrontSource = System.IO.File.ReadAllText("Assets/Resources/RayTracingWavefront.compute");
+            Assert.That(wavefrontSource, Does.Contain("_AdaptiveSampleLayer"));
+            Assert.That(managerSource, Does.Contain("maxLayers,"));
+            Assert.That(managerSource, Does.Not.Contain("RayTracingAdaptiveTrace"));
         }
 
         [Test]
-        public void AdaptiveBootstrap_UsesTheUniformRenderer()
+        public void AdaptiveBootstrap_UsesTheWavefrontRenderer()
         {
             string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
 
-            Assert.That(managerSource, Does.Contain("private void DispatchAdaptiveBootstrap()"));
-            Assert.That(managerSource, Does.Contain("bootstrapShader.FindKernel(\"CSMain\")"));
+            Assert.That(managerSource, Does.Contain("private void DispatchAdaptiveBootstrap(ComputeShader wavefrontShader)"));
+            Assert.That(managerSource, Does.Contain("_wavefrontPathTracingManager.Dispatch(wavefrontShader, size"));
+            Assert.That(managerSource, Does.Not.Contain("bootstrapShader.FindKernel(\"CSMain\")"));
             Assert.That(managerSource, Does.Contain("UpscaleAdaptiveBootstrap"));
         }
 
@@ -445,7 +443,7 @@ namespace GPURayTracing.Tests
         [Test]
         public void AdaptiveScheduler_MapsGroupsAndPublishesOffsetsInOnePass()
         {
-            string shaderSource = System.IO.File.ReadAllText(AdaptiveTraceShaderPath);
+            string shaderSource = System.IO.File.ReadAllText(AdaptiveSchedulerShaderPath);
             int start = shaderSource.IndexOf("void CSAdaptiveApplyBucketRemap", StringComparison.Ordinal);
             int attributeStart = shaderSource.LastIndexOf("[numthreads", start, StringComparison.Ordinal);
             int end = shaderSource.IndexOf("void CSAdaptiveDiagnostics", start, StringComparison.Ordinal);
@@ -469,7 +467,7 @@ namespace GPURayTracing.Tests
         {
             string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
             int start = managerSource.IndexOf("if (_adaptiveSamplingStateTexture != null)", StringComparison.Ordinal);
-            int end = managerSource.IndexOf("if (targetShader == adaptiveTraceShader", start, StringComparison.Ordinal);
+            int end = managerSource.IndexOf("if (targetShader == _wavefrontRisShader", start, StringComparison.Ordinal);
             string reset = managerSource.Substring(start, end - start);
             Assert.That(reset, Does.Contain("ClearAdaptiveSamplingState"));
             Assert.That(reset, Does.Contain("ClearAdaptiveGroupState"));
@@ -646,11 +644,8 @@ namespace GPURayTracing.Tests
         public void AdaptiveScheduler_UsesGroupAssignmentsWithoutACompactWorkList()
         {
             string shaderSource = System.IO.File.ReadAllText(AdaptiveSchedulerShaderPath);
-            string traceSource = System.IO.File.ReadAllText(AdaptiveTraceShaderPath);
             Assert.That(shaderSource, Does.Not.Contain("CSAdaptiveCompactGroupWorkList"));
             Assert.That(shaderSource, Does.Not.Contain("AdaptiveWorkList["));
-            Assert.That(traceSource, Does.Contain("uint samples = AdaptiveGroupInfo[flatGroup].w"));
-            Assert.That(traceSource, Does.Contain("if (samples <= _AdaptiveSampleLayer) return"));
         }
 
         [Test]
@@ -667,7 +662,7 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
-        public void AdaptiveScheduler_UsesGuardedFullScreenTrace()
+        public void AdaptiveScheduler_UsesWavefrontTrace()
         {
             string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
             int start = managerSource.IndexOf("private void DispatchAdaptiveSampling", StringComparison.Ordinal);
@@ -676,23 +671,17 @@ namespace GPURayTracing.Tests
 
             Assert.That(dispatch, Does.Not.Contain("_adaptiveRootWorkListBuffer"));
             Assert.That(dispatch, Does.Not.Contain("CSAdaptiveResolveRoot"));
-            Assert.That(dispatch, Does.Contain("CSAdaptiveTrace"));
-            Assert.That(dispatch, Does.Not.Contain("DispatchIndirect"));
+            Assert.That(dispatch, Does.Contain("_wavefrontPathTracingManager.Dispatch(wavefrontShader"));
             Assert.That(managerSource, Does.Not.Contain("_adaptiveWorkListBuffer"));
-            string traceSource = System.IO.File.ReadAllText(AdaptiveTraceShaderPath);
-            Assert.That(traceSource, Does.Not.Contain("for (uint localSample"));
-            Assert.That(traceSource, Does.Not.Contain("AdaptiveWorkList["));
         }
 
         [Test]
-        public void AdaptiveTrace_FullScreenPathReadsExistingGroupAssignments()
+        public void AdaptiveWavefront_ReceivesExistingGroupAssignments()
         {
             string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
-            string traceSource = System.IO.File.ReadAllText(AdaptiveTraceShaderPath);
 
-            Assert.That(traceSource, Does.Contain("uint samples = AdaptiveGroupInfo[flatGroup].w"));
-            Assert.That(traceSource, Does.Contain("if (samples <= _AdaptiveSampleLayer) return"));
-            Assert.That(managerSource, Does.Contain("SetAdaptiveGroupDimensions(groupWidth, groupHeight);\n        SetShaderParameters(activeAdaptiveTraceShader, traceKernel);"));
+            Assert.That(managerSource, Does.Contain("BindWavefrontAdaptiveResources"));
+            Assert.That(managerSource, Does.Not.Contain("ActiveAdaptiveTraceShader"));
             Assert.That(managerSource, Does.Not.Contain("CSBuildAdaptiveDispatchArgs"));
         }
 
@@ -713,46 +702,40 @@ namespace GPURayTracing.Tests
         public void AdaptiveTrace_DiagnosticsRetirementIsCaptureOnly()
         {
             string shaderSource = System.IO.File.ReadAllText(AdaptiveSchedulerShaderPath);
-            int start = shaderSource.IndexOf("void CSAdaptiveTrace", StringComparison.Ordinal);
             Assert.That(shaderSource, Does.Contain("void RecordAdaptiveRetiredPaths"));
             Assert.That(shaderSource, Does.Contain("AdaptiveMetadataRetiredPaths] = AdaptiveWorkListMetadata[AdaptiveMetadataAssignedPaths]"));
         }
 
         [Test]
-        public void AdaptiveTrace_DoesNotRequireTemporalRisHistoryUavs()
+        public void AdaptiveWavefront_DoesNotRetainLegacyAdaptiveTraceDeclarations()
         {
-            string traceSource = System.IO.File.ReadAllText(AdaptiveTraceShaderPath);
             string sharedSource = System.IO.File.ReadAllText("Assets/Scripts/RayTracingShared.hlsl");
             string schedulerSharedSource = System.IO.File.ReadAllText("Assets/Scripts/RayTracingAdaptiveSchedulerShared.hlsl");
 
-            Assert.That(sharedSource, Does.Contain("#if !defined(RAY_TRACING_ADAPTIVE_TRACE)\nRWTexture2D<float4> Result;"));
-            Assert.That(sharedSource, Does.Contain("#if !defined(RAY_TRACING_ADAPTIVE_TRACE)\nRWTexture2D<float4> FeatureNormal;"));
-            Assert.That(sharedSource, Does.Contain("#if defined(RAY_TRACING_ADAPTIVE_TRACE)\n// Adaptive trace gathers completed photon data"));
-            Assert.That(sharedSource, Does.Contain("StructuredBuffer<CausticPhoton> _CausticPhotons;"));
-            Assert.That(schedulerSharedSource, Does.Contain("#else\n// The trace only reads group assignments"));
-            Assert.That(schedulerSharedSource, Does.Contain("#else\n// The trace only reads group assignments and updates its two adaptive per-pixel estimators."));
-            Assert.That(schedulerSharedSource, Does.Contain("StructuredBuffer<uint4> AdaptiveGroupInfo;\n#endif"));
-            Assert.That(traceSource, Does.Not.Contain("_TemporalRisPrevious"));
-            Assert.That(traceSource, Does.Not.Contain("_TemporalRisNext"));
+            Assert.That(sharedSource, Does.Not.Contain("RAY_TRACING_ADAPTIVE_TRACE"));
+            Assert.That(schedulerSharedSource, Does.Not.Contain("RAY_TRACING_ADAPTIVE_TRACE"));
         }
 
         [Test]
-        public void ProductionRenderer_ExcludesExperimentalPathGuidingAndRisReuse()
+        public void ProductionRenderer_UsesDedicatedWavefrontPathGuidingAndRisReuse()
         {
             string main = System.IO.File.ReadAllText(ComputeShaderPath);
             string shared = System.IO.File.ReadAllText(SharedShaderPath);
             string manager = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
-            string pathGuided = System.IO.File.ReadAllText("Assets/Resources/RayTracingExperimentalPathGuided.compute");
-            string ris = System.IO.File.ReadAllText("Assets/Resources/RayTracingExperimentalRis.compute");
+            string wavefrontPathGuided = System.IO.File.ReadAllText("Assets/Resources/RayTracingWavefrontPathGuided.compute");
+            string wavefrontRis = System.IO.File.ReadAllText("Assets/Resources/RayTracingWavefrontRis.compute");
 
             Assert.That(main, Does.Not.Contain("#pragma multi_compile _ TEMPORAL_RIS_ENABLED\n#define FINAL_COLOR_KERNEL"));
             Assert.That(main, Does.Contain("#if defined(EXPERIMENTAL_RIS_REUSE)\n#pragma multi_compile _ TEMPORAL_RIS_ENABLED"));
             Assert.That(shared, Does.Contain("#if defined(PATH_GUIDING_ENABLED)\nRWStructuredBuffer<uint> _PathGuideTraining;"));
-            Assert.That(shared, Does.Contain("#if defined(EXPERIMENTAL_RIS_REUSE) && ((defined(FINAL_COLOR_KERNEL)"));
-            Assert.That(pathGuided, Does.Contain("#define PATH_GUIDING_ENABLED 1"));
-            Assert.That(ris, Does.Contain("#define EXPERIMENTAL_RIS_REUSE 1"));
-            Assert.That(manager, Does.Contain("ShouldUseExperimentalRisShader()"));
-            Assert.That(manager, Does.Contain("ShouldUseExperimentalPathGuidedShader()"));
+            Assert.That(shared, Does.Contain("defined(WAVEFRONT_RIS_REUSE)"));
+            Assert.That(wavefrontPathGuided, Does.Contain("#define PATH_GUIDING_ENABLED 1"));
+            Assert.That(wavefrontPathGuided, Does.Contain("#include_with_pragmas \"RayTracingWavefront.compute\""));
+            Assert.That(wavefrontRis, Does.Contain("#define EXPERIMENTAL_RIS_REUSE 1"));
+            Assert.That(wavefrontRis, Does.Contain("#define WAVEFRONT_RIS_REUSE 1"));
+            Assert.That(manager, Does.Not.Contain("RayTracingExperimentalRis"));
+            Assert.That(manager, Does.Not.Contain("RayTracingExperimentalPathGuided"));
+            Assert.That(manager, Does.Contain("ShouldUseWavefrontPathGuidedShader()"));
         }
 
         [Test]
@@ -877,6 +860,21 @@ namespace GPURayTracing.Tests
             Assert.That(manager, Does.Contain("_pathDiagnostics?.Release();"));
             Assert.That(precompiler, Does.Contain("_WavefrontFirstDirectLight"));
             Assert.That(precompiler, Does.Contain("_WavefrontPathDiagnostics"));
+            Assert.That(wavefront, Does.Contain("struct WavefrontPathGuideState"));
+            Assert.That(wavefront, Does.Contain("RecordWavefrontPathGuide"));
+            Assert.That(wavefront, Does.Contain("IsPathGuideEligible(hit, path.bounce > 0)"));
+            Assert.That(manager, Does.Contain("bool usePathGuiding"));
+            Assert.That(manager, Does.Contain("new ComputeBuffer(_capacity, sizeof(float) * 10)"));
+            Assert.That(precompiler, Does.Contain("_WavefrontPathGuideStates"));
+            Assert.That(wavefront, Does.Contain("_WavefrontAdaptiveSampling"));
+            Assert.That(wavefront, Does.Contain("AdaptiveGroupInfo[flatGroup].w <= _AdaptiveSampleLayer"));
+            Assert.That(wavefront, Does.Contain("AdaptiveSamplingState[path.pixel]"));
+            Assert.That(manager, Does.Contain("BindWavefrontAdaptiveResources"));
+            Assert.That(manager, Does.Contain("targetShader.SetBuffer(kernelHandle, AdaptiveGroupInfo, _adaptiveGroupInfoBuffer)"));
+            Assert.That(manager, Does.Contain("DispatchAdaptiveSampling(targetShader)"));
+            Assert.That(manager, Does.Contain("_wavefrontPathTracingManager.Dispatch(wavefrontShader"));
+            Assert.That(manager, Does.Contain("DispatchAdaptiveBootstrap(wavefrontShader)"));
+            Assert.That(manager, Does.Not.Contain("!enableAdaptiveBootstrap && ShouldUseFrameAccumulation()"));
         }
 
         [Test]
@@ -923,18 +921,25 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("GetTemporalRisMergedWeight"));
             Assert.That(source, Does.Contain("unshadowed *= PowerHeuristic(candidate.proposalPdf, materialPdf);"));
             Assert.That(source, Does.Contain("candidate.proposalPdf * candidate.triangleSelectionProbability * lightShapePdf"));
-            Assert.That(source, Does.Contain("uint temporalReuseRngState = Hash(rngState ^ 0x9e3779b9u);"));
+            Assert.That(source, Does.Contain("uint temporalReuseRngState = Hash(rngState.fallback ^ 0x9e3779b9u);"));
             Assert.That(source, Does.Contain("rand(temporalReuseRngState) * totalWeight < mergedWeight"));
-            Assert.That(source, Does.Contain("uint spatialReuseRngState = Hash(rngState ^ 0x85ebca6bu);"));
+            Assert.That(source, Does.Contain("uint spatialReuseRngState = Hash(rngState.fallback ^ 0x85ebca6bu);"));
             Assert.That(source, Does.Contain("rand(spatialReuseRngState) * totalWeight < mergedWeight"));
+            Assert.That(source, Does.Contain("bool useSpatialRisReservoir = useSpatialRis && HasSpatialRisLocalReservoir(pixel);"));
+            Assert.That(source, Does.Contain("if (!useSpatialRisReservoir)"));
             Assert.That(manager, Does.Contain("ShouldRunTemporalRis"));
             Assert.That(manager, Does.Contain("TemporalRisManager"));
             Assert.That(manager, Does.Contain("_temporalRisManager.InvalidateHistory()"));
+            Assert.That(manager, Does.Contain("if (spatialRisPrepassShader == null)"));
+            Assert.That(manager, Does.Contain("Resources.Load<ComputeShader>(\"RayTracingSpatialRisPrepass\")"));
+            Assert.That(manager, Does.Contain("UnityEditor.AssetDatabase.LoadAssetAtPath<ComputeShader>"));
             Assert.That(temporalManager, Does.Contain("gameManager.Lighting.InitialRisCandidateCount + (gameManager.Lighting.SpatialRisEnabled"));
             Assert.That(temporalManager, Does.Contain("gameManager.Lighting.TemporalRisHistoryMCap"));
             Assert.That(temporalManager, Does.Contain("public void InvalidateHistory()"));
             Assert.That(source, Does.Contain("_TemporalRisDiagnostics"));
             Assert.That(temporalManager, Does.Contain("DiagnosticsCount = 10"));
+            string spatialPrepassMeta = System.IO.File.ReadAllText("Assets/Resources/RayTracingSpatialRisPrepass.compute.meta");
+            Assert.That(spatialPrepassMeta, Does.Contain("currentAPIMask: 65536"));
         }
 
         [Test]
@@ -982,7 +987,7 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("if (reclassify)"));
             Assert.That(source, Does.Contain("_adaptiveScheduleFrame = reclassify ? 0 : _adaptiveScheduleFrame + 1"));
             int dispatchStart = source.IndexOf("private void DispatchAdaptiveSampling", StringComparison.Ordinal);
-            int traceStart = source.IndexOf("SetShaderParameters(activeAdaptiveTraceShader, traceKernel)", dispatchStart, StringComparison.Ordinal);
+            int traceStart = source.IndexOf("_wavefrontPathTracingManager.Dispatch(wavefrontShader", dispatchStart, StringComparison.Ordinal);
             string dispatch = source.Substring(dispatchStart, traceStart - dispatchStart);
             Assert.That(dispatch, Does.Contain("ComputeDispatch.Dispatch(adaptiveSchedulerShader, classifyKernel, groupWidth, groupHeight, 1)"));
             Assert.That(dispatch, Does.Contain("ComputeDispatch.Dispatch(adaptiveSchedulerShader, applyBucketRemapKernel, groupWidth, groupHeight, 1)"));
@@ -995,7 +1000,7 @@ namespace GPURayTracing.Tests
             int start = source.IndexOf("private void DispatchAdaptiveSampling", StringComparison.Ordinal);
             int end = source.IndexOf("private void DispatchAdaptiveDiagnostics", start, StringComparison.Ordinal);
             string dispatch = source.Substring(start, end - start);
-            Assert.That(dispatch, Does.Contain("DispatchIndirect(activeAdaptiveTraceShader, traceKernel"));
+            Assert.That(dispatch, Does.Contain("_wavefrontPathTracingManager.Dispatch(wavefrontShader"));
             Assert.That(dispatch, Does.Not.Contain("CSAdaptiveResolveRoot"));
         }
 
@@ -1944,169 +1949,6 @@ namespace GPURayTracing.Tests
             const uint previous = 7;
             Assert.That(Math.Min(previous + 1u, Math.Max(previous - 1u, 15u)), Is.EqualTo(8u));
             Assert.That(Math.Min(previous + 1u, Math.Max(previous - 1u, 0u)), Is.EqualTo(6u));
-        }
-
-        [Test]
-        [Timeout(600000)]
-        public void AdaptiveTrace_ControlledAssignments_MatchPerPixelSampleIndexReference()
-        {
-            if (!SystemInfo.supportsComputeShaders || SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
-                Assert.Ignore("Adaptive trace parity requires an active compute graphics device.");
-
-            ComputeShader shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(AdaptiveTraceShaderPath);
-            if (shader == null || !shader.HasKernel("CSAdaptiveTraceReference"))
-                Assert.Ignore("The active graphics device did not compile the adaptive trace parity kernels.");
-
-            const int width = 3;
-            const int height = 5;
-            const int pixelCount = width * height;
-            int adaptiveTrace = shader.FindKernel("CSAdaptiveTrace");
-            int referenceTrace = shader.FindKernel("CSAdaptiveTraceReference");
-            var initialStatePixels = new Color[pixelCount];
-            var initialAccumulationPixels = new Color[pixelCount];
-            for (int pixel = 0; pixel < pixelCount; pixel++)
-            {
-                float count = 2 + pixel % 3;
-                initialStatePixels[pixel] = new Color(count, 0.15f + pixel * 0.01f, 0.02f + pixel * 0.003f, 0.0f);
-                initialAccumulationPixels[pixel] = new Color(0.1f + pixel * 0.01f, 0.2f, 0.3f, 1.0f);
-            }
-
-            var initialState = new Texture2D(width, height, TextureFormat.RGBAFloat, false, true);
-            var initialAccumulation = new Texture2D(width, height, TextureFormat.RGBAFloat, false, true);
-            var adaptiveState = CreateRandomWriteTexture(width, height, RenderTextureFormat.ARGBFloat);
-            var adaptiveM2 = CreateRandomWriteTexture(width, height, RenderTextureFormat.ARGBFloat);
-            var adaptiveAlternating = CreateRandomWriteTexture(width, height, RenderTextureFormat.ARGBFloat);
-            var adaptiveAccumulation = CreateRandomWriteTexture(width, height, RenderTextureFormat.ARGBFloat);
-            var adaptiveBeauty = CreateRandomWriteTexture(width, height, RenderTextureFormat.ARGBFloat);
-            var adaptiveResult = CreateRandomWriteTexture(width, height, RenderTextureFormat.ARGBFloat);
-            var referenceState = CreateRandomWriteTexture(width, height, RenderTextureFormat.ARGBFloat);
-            var referenceM2 = CreateRandomWriteTexture(width, height, RenderTextureFormat.ARGBFloat);
-            var referenceAlternating = CreateRandomWriteTexture(width, height, RenderTextureFormat.ARGBFloat);
-            var referenceAccumulation = CreateRandomWriteTexture(width, height, RenderTextureFormat.ARGBFloat);
-            var referenceResult = CreateRandomWriteTexture(width, height, RenderTextureFormat.ARGBFloat);
-            var skybox = new Texture2D(1, 1, TextureFormat.RGBAFloat, false, true);
-            var meshTextures = new Texture2DArray(1, 1, 1, TextureFormat.RGBA32, false, true);
-            var groupInfo = new ComputeBuffer(1, sizeof(uint) * 4);
-            var dummySphere = new ComputeBuffer(1, 92);
-            var dummyLight = new ComputeBuffer(1, 88);
-            var dummyTriangle = new ComputeBuffer(1, 268);
-            var dummyMesh = new ComputeBuffer(1, 48);
-            var dummyBvh = new ComputeBuffer(1, 48);
-            var dummyTopLevelBvh = new ComputeBuffer(1, 48);
-            var dummyMeshLightCdf = new ComputeBuffer(1, sizeof(float));
-            var dummyEnvironmentCdf = new ComputeBuffer(1, sizeof(float));
-            var dummyPhoton = new ComputeBuffer(1, 40);
-            var dummyPhotonMetadata = new ComputeBuffer(1, 24);
-            var dummyPhotonGrid = new ComputeBuffer(1, sizeof(int));
-            var dummyPhotonNext = new ComputeBuffer(1, sizeof(int));
-            var dummyTargetPair = new ComputeBuffer(1, 32);
-            var dummyTargetTriangle = new ComputeBuffer(1, 12);
-            var dummySobolDirections = new ComputeBuffer(1, sizeof(uint));
-            try
-            {
-                initialState.SetPixels(initialStatePixels);
-                initialState.Apply(false, false);
-                initialAccumulation.SetPixels(initialAccumulationPixels);
-                initialAccumulation.Apply(false, false);
-                skybox.SetPixel(0, 0, new Color(0.18f, 0.32f, 0.58f, 1.0f));
-                skybox.Apply(false, false);
-                meshTextures.SetPixels(new[] { Color.white }, 0);
-                meshTextures.Apply(false, false);
-                Graphics.Blit(initialState, adaptiveState);
-                Graphics.Blit(initialState, referenceState);
-                Graphics.Blit(initialAccumulation, adaptiveAccumulation);
-                Graphics.Blit(initialAccumulation, referenceAccumulation);
-                groupInfo.SetData(new uint[] { 0u, 0u, 0u, 2u });
-
-                foreach (int kernel in new[] { adaptiveTrace, referenceTrace })
-                {
-                    shader.SetTexture(kernel, "Result", adaptiveResult);
-                    shader.SetTexture(kernel, "_SkyboxTexture", skybox);
-                    shader.SetTexture(kernel, "_MeshAlbedoTextures", meshTextures);
-                    shader.SetTexture(kernel, "_MeshMetallicRoughnessTextures", meshTextures);
-                    shader.SetTexture(kernel, "_MeshNormalTextures", meshTextures);
-                    shader.SetTexture(kernel, "_MeshParallaxTextures", meshTextures);
-                    shader.SetBuffer(kernel, "AdaptiveGroupInfo", groupInfo);
-                    shader.SetBuffer(kernel, "_Spheres", dummySphere);
-                    shader.SetBuffer(kernel, "_Lights", dummyLight);
-                    shader.SetBuffer(kernel, "_Triangles", dummyTriangle);
-                    shader.SetBuffer(kernel, "_Meshes", dummyMesh);
-                    shader.SetBuffer(kernel, "_BvhNodes", dummyBvh);
-                    shader.SetBuffer(kernel, "_TopLevelBvhNodes", dummyTopLevelBvh);
-                    shader.SetBuffer(kernel, "_ShadowBvhNodes", dummyTopLevelBvh);
-                    shader.SetBuffer(kernel, "_MeshLightTriangleCdf", dummyMeshLightCdf);
-                    shader.SetBuffer(kernel, "_EnvironmentConditionalCdf", dummyEnvironmentCdf);
-                    shader.SetBuffer(kernel, "_EnvironmentMarginalCdf", dummyEnvironmentCdf);
-                    shader.SetBuffer(kernel, "_CausticPhotons", dummyPhoton);
-                    shader.SetBuffer(kernel, "_CausticPhotonMetadata", dummyPhotonMetadata);
-                    shader.SetBuffer(kernel, "_CausticGridCellHeads", dummyPhotonGrid);
-                    shader.SetBuffer(kernel, "_CausticPhotonNext", dummyPhotonNext);
-                    shader.SetBuffer(kernel, "_CausticTargetPairs", dummyTargetPair);
-                    shader.SetBuffer(kernel, "_CausticTargetTriangles", dummyTargetTriangle);
-                    shader.SetBuffer(kernel, "_SobolDirectionNumbers", dummySobolDirections);
-                    shader.SetInt("_AdaptiveGroupWidth", 1);
-                    shader.SetInt("_Seed", 12345);
-                    shader.SetInt("_SobolDimensionLimit", 1);
-                    shader.SetInt("_NumSpheres", 0);
-                    shader.SetInt("_NumLights", 0);
-                    shader.SetInt("_NumTriangles", 0);
-                    shader.SetInt("_NumMeshes", 0);
-                    shader.SetInt("_NumTopLevelBvhNodes", 0);
-                    shader.SetInt("_NumShadowBvhNodes", 0);
-                    shader.SetInt("_EnvironmentLightEnabled", 0);
-                    shader.SetInt("_WaterEnabled", 0);
-                    shader.SetInt("_CausticsEnabled", 0);
-                    shader.SetInt("_CausticPhotonCapacity", 1);
-                    shader.SetInt("_CausticGridCellCount", 1);
-                    shader.SetInt("_UseTemporalJitter", 0);
-                    shader.SetVector("_FrameJitterNdc", Vector4.zero);
-                    shader.SetMatrix("_CameraToWorld", Matrix4x4.TRS(Vector3.zero, Quaternion.identity, new Vector3(1, 1, -1)));
-                    shader.SetMatrix("_CameraInverseProjection", Matrix4x4.Perspective(48.0f, (float)width / height, 0.1f, 100.0f).inverse);
-                    shader.SetVector("_SkyboxLight", Vector4.one);
-                    shader.SetFloat("_SubpixelJitterScale", 1.0f);
-                    shader.SetFloat("_ApertureRadius", 0.0f);
-                    shader.SetFloat("_Exposure", 1.0f);
-                    shader.SetFloat("_FireflyClamp", 0.0f);
-                    shader.SetInt("_NumBounces", 1);
-                }
-                shader.SetTexture(adaptiveTrace, "AccumulationResult", adaptiveAccumulation);
-                shader.SetTexture(adaptiveTrace, "AdaptiveSamplingState", adaptiveState);
-                shader.SetTexture(adaptiveTrace, "AdaptiveSamplingM2", adaptiveM2);
-                shader.SetTexture(adaptiveTrace, "Beauty", adaptiveBeauty);
-                shader.SetTexture(referenceTrace, "Result", referenceResult);
-                shader.SetTexture(referenceTrace, "AccumulationResult", referenceAccumulation);
-                shader.SetTexture(referenceTrace, "AdaptiveSamplingState", referenceState);
-                shader.SetTexture(referenceTrace, "AdaptiveSamplingM2", referenceM2);
-
-                shader.SetInt("_AdaptiveSampleLayer", 0);
-                shader.Dispatch(adaptiveTrace, 1, 2, 1);
-                shader.SetInt("_AdaptiveSampleLayer", 1);
-                shader.Dispatch(adaptiveTrace, 1, 2, 1);
-                shader.Dispatch(referenceTrace, 1, 2, 1);
-
-                Color[] actualState = ReadPixels(adaptiveState);
-                Color[] expectedState = ReadPixels(referenceState);
-                Color[] actualAccumulation = ReadPixels(adaptiveAccumulation);
-                Color[] expectedAccumulation = ReadPixels(referenceAccumulation);
-                for (int pixel = 0; pixel < pixelCount; pixel++)
-                {
-                    AssertColor(actualState[pixel], expectedState[pixel], $"pixel {pixel} adaptive state", 0.0005f);
-                    AssertColor(actualAccumulation[pixel], expectedAccumulation[pixel], $"pixel {pixel} accumulated RGB", 0.0005f);
-                }
-            }
-            finally
-            {
-                groupInfo.Release();
-                dummySphere.Release(); dummyLight.Release(); dummyTriangle.Release(); dummyMesh.Release(); dummyBvh.Release();
-                dummyTopLevelBvh.Release(); dummyMeshLightCdf.Release(); dummyEnvironmentCdf.Release(); dummyPhoton.Release();
-                dummyPhotonMetadata.Release(); dummyPhotonGrid.Release(); dummyPhotonNext.Release(); dummyTargetPair.Release();
-                dummyTargetTriangle.Release(); dummySobolDirections.Release();
-                adaptiveState.Release(); adaptiveAccumulation.Release(); adaptiveBeauty.Release(); adaptiveResult.Release();
-                adaptiveM2.Release(); adaptiveAlternating.Release(); referenceState.Release(); referenceM2.Release(); referenceAlternating.Release(); referenceAccumulation.Release(); referenceResult.Release();
-                UnityEngine.Object.DestroyImmediate(initialState); UnityEngine.Object.DestroyImmediate(initialAccumulation);
-                UnityEngine.Object.DestroyImmediate(skybox);
-                UnityEngine.Object.DestroyImmediate(meshTextures);
-            }
         }
 
         [TestCase(1, 1, 1)]

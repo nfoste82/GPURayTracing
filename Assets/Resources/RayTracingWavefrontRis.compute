@@ -1,0 +1,5 @@
+// Opt-in queue-driven temporal/spatial RIS reuse. Current reuse eligibility excludes water and fog.
+#define EXPERIMENTAL_RIS_REUSE 1
+#define WAVEFRONT_RIS_REUSE 1
+#pragma multi_compile _ TEMPORAL_RIS_ENABLED
+#include_with_pragmas "RayTracingWavefront.compute"

@@ -1,5 +1,4 @@
 // Adaptive resources intentionally stay independent of the renderer's scene declarations.
-#ifndef RAY_TRACING_ADAPTIVE_TRACE
 RWTexture2D<float4> Result;
 RWTexture2D<float4> AccumulationResult;
 RWTexture2D<float4> Beauty;
@@ -13,13 +12,6 @@ RWStructuredBuffer<uint> AdaptiveGroupBucket;
 RWStructuredBuffer<uint> AdaptiveGroupExtraDemand;
 RWStructuredBuffer<uint> AdaptiveRawBucketDemand;
 RWStructuredBuffer<uint> AdaptiveWorkListMetadata;
-#else
-// The trace only reads group assignments and updates its two adaptive per-pixel estimators.
-// Keeping scheduler-only UAV declarations out of this kernel avoids Metal's eight-UAV limit.
-RWTexture2D<float4> AdaptiveSamplingState;
-RWTexture2D<float4> AdaptiveSamplingM2;
-StructuredBuffer<uint4> AdaptiveGroupInfo;
-#endif
 
 #define AdaptiveMetadataWorkItemCount 0u
 #define AdaptiveMetadataPrioritySum 1u
@@ -41,9 +33,7 @@ StructuredBuffer<uint4> AdaptiveGroupInfo;
 #define AdaptiveMetadataBucketAdmittedPathsStart 32u
 #define AdaptiveMetadataBucketBudgetStart 48u
 
-#ifndef RAY_TRACING_ADAPTIVE_TRACE
 int _NumberOfPasses;
-#endif
 int _AdaptiveSamplingMinSamples;
 uint _AdaptiveGroupWidth;
 uint _AdaptiveGroupHeight;
@@ -59,7 +49,6 @@ float _AdaptiveSpatialDisagreementPriority;
 int _UseAdaptiveBootstrapPriority;
 uint _AdaptiveBootstrapGroupDivisor;
 
-#ifndef RAY_TRACING_ADAPTIVE_TRACE
 uint Hash(uint value)
 {
     value ^= value >> 16;
@@ -69,4 +58,3 @@ uint Hash(uint value)
     value ^= value >> 16;
     return value;
 }
-#endif

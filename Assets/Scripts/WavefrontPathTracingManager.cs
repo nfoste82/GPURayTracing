@@ -21,6 +21,8 @@ namespace PathTracing
         private ComputeBuffer _emptyFirstDirectLight;
         private ComputeBuffer _pathDiagnostics;
         private ComputeBuffer _emptyPathDiagnostics;
+        private ComputeBuffer _pathGuideStates;
+        private ComputeBuffer _emptyPathGuideStates;
         private ComputeBuffer _counters;
         private ComputeBuffer _dispatchArguments;
         private RenderTexture _frameResult;
@@ -49,8 +51,8 @@ namespace PathTracing
             _frameResult.Create();
         }
 
-        public void Dispatch(ComputeShader shader, Vector2Int size, int passes, int bounces,
-            bool useDirectLightDebug, bool usePathDiagnostics, Action<ComputeShader, int> bindShared, RenderTexture output, RenderTexture accumulation)
+        public void Dispatch(ComputeShader shader, Vector2Int size, int passes, int bounces, int adaptiveLayers,
+            bool useDirectLightDebug, bool usePathDiagnostics, bool usePathGuiding, Action<ComputeShader, int> bindShared, RenderTexture output, RenderTexture accumulation)
         {
             EnsureResources(size);
             if (useDirectLightDebug && _firstDirectLight == null)
@@ -66,6 +68,13 @@ namespace PathTracing
             {
                 _pathDiagnostics.Release();
                 _pathDiagnostics = null;
+            }
+            if (usePathGuiding && _pathGuideStates == null)
+                _pathGuideStates = new ComputeBuffer(_capacity, sizeof(float) * 10);
+            if (!usePathGuiding && _pathGuideStates != null)
+            {
+                _pathGuideStates.Release();
+                _pathGuideStates = null;
             }
             int clearFrame = shader.FindKernel("CSWavefrontClearFrame");
             Bind(shader, clearFrame, output, accumulation);
@@ -89,8 +98,11 @@ namespace PathTracing
             int present = shader.FindKernel("CSWavefrontPresent");
             int queueGroups = Mathf.CeilToInt(_capacity / (float)ThreadCount);
 
-            for (int pass = 0; pass < Mathf.Max(1, passes); pass++)
+            int pathPasses = adaptiveLayers > 0 ? adaptiveLayers : Mathf.Max(1, passes);
+            for (int pass = 0; pass < pathPasses; pass++)
             {
+                shader.SetInt("_WavefrontAdaptiveSampling", adaptiveLayers > 0 ? 1 : 0);
+                shader.SetInt("_AdaptiveSampleLayer", pass);
                 BindAndDispatch(shader, clearQueues, bindShared, output, accumulation, 1, 1, 1, pass);
                 BindAndDispatch(shader, generate, bindShared, output, accumulation,
                     Mathf.CeilToInt(size.x / 4.0f), Mathf.CeilToInt(size.y / 4.0f), 1, pass);
@@ -121,6 +133,7 @@ namespace PathTracing
                 BindAndDispatchIndirect(shader, resolve, bindShared, output, accumulation);
             }
 
+            shader.SetInt("_WavefrontAdaptiveSampling", adaptiveLayers > 0 ? 1 : 0);
             BindAndDispatch(shader, present, bindShared, output, accumulation,
                 Mathf.CeilToInt(size.x / 4.0f), Mathf.CeilToInt(size.y / 4.0f), 1, 0);
         }
@@ -162,6 +175,7 @@ namespace PathTracing
             shader.SetBuffer(kernel, "_WavefrontShadowWork", _shadowWork);
             shader.SetBuffer(kernel, "_WavefrontFirstDirectLight", _firstDirectLight ?? _emptyFirstDirectLight);
             shader.SetBuffer(kernel, "_WavefrontPathDiagnostics", _pathDiagnostics ?? (_emptyPathDiagnostics ??= new ComputeBuffer(1, sizeof(float) * 4)));
+            shader.SetBuffer(kernel, "_WavefrontPathGuideStates", _pathGuideStates ?? (_emptyPathGuideStates ??= new ComputeBuffer(1, sizeof(float) * 10)));
             shader.SetBuffer(kernel, "_WavefrontCounters", _counters);
             shader.SetBuffer(kernel, "_WavefrontDispatchArgs", _dispatchArguments);
             shader.SetTexture(kernel, "_WavefrontFrameResult", _frameResult);
@@ -181,10 +195,12 @@ namespace PathTracing
             _emptyFirstDirectLight?.Release();
             _pathDiagnostics?.Release();
             _emptyPathDiagnostics?.Release();
+            _pathGuideStates?.Release();
+            _emptyPathGuideStates?.Release();
             _counters?.Release();
             _dispatchArguments?.Release();
             _frameResult?.Release();
-            _paths = _hits = _currentQueue = _nextQueue = _completedQueue = _shadowWork = _firstDirectLight = _emptyFirstDirectLight = _pathDiagnostics = _emptyPathDiagnostics = _counters = _dispatchArguments = null;
+            _paths = _hits = _currentQueue = _nextQueue = _completedQueue = _shadowWork = _firstDirectLight = _emptyFirstDirectLight = _pathDiagnostics = _emptyPathDiagnostics = _pathGuideStates = _emptyPathGuideStates = _counters = _dispatchArguments = null;
             _frameResult = null;
             _capacity = 0;
         }

@@ -5,8 +5,8 @@
 **Current phase: queue-driven surface, water, fog, and water+fog renderers are active for final
 color. Surface, water, fog, water+fog, and dry-terrain routes are compiled; the user manually
 smoke-tested water, fog, water+fog, and terrain. Fog and terrain image parity remain pending.
-Adaptive scheduling, path guiding, temporal/spatial RIS, and advanced debug modes have not yet been
-ported to the active wavefront route. Basic first-hit normals, albedo, emission, hit-distance, BVH,
+Adaptive scheduling uses the existing fixed-8x8 scheduler with layered wavefront generation and resolve.
+Path guiding and temporal/spatial RIS use opt-in dry wavefront wrappers. Basic first-hit normals, albedo, emission, hit-distance, BVH,
 and terrain-cell diagnostics are available from stored wavefront hits; throughput and bounce-count
 diagnostics are captured when paths complete.**
 
@@ -137,10 +137,44 @@ All 16 wavefront kernels completed with no shader warnings or errors. The compil
 expensive work from direct-light into the dedicated shadow kernel and reduced the total cold compile
 from the prior 44.142 s baseline. Log: `/tmp/raytracing-wavefront-shadow-queue-compile.log`.
 
+## Experimental Wavefront Features
+
+The dry `RayTracingWavefrontPathGuided.compute` wrapper defines `PATH_GUIDING_ENABLED` before
+including the common queue pipeline. It keeps guide-training state out of `WavefrontPathState` by
+using an opt-in per-pixel guide-state buffer, captures guided continuation context at scatter, and
+records terminal/direct-light observations through the existing guide manager. It is selected only
+for dry scenes while `enablePathGuiding` is set.
+
+The dry `RayTracingWavefrontRis.compute` wrapper defines `EXPERIMENTAL_RIS_REUSE` and
+`WAVEFRONT_RIS_REUSE`. It reuses the existing temporal/spatial RIS history manager and spatial
+prepass, selecting the wrapper only under the established static, one-pass, non-water/non-fog
+eligibility gate. Reuse remains experimental and default-off.
+
+Adaptive scheduling reuses the fixed-8x8 scheduler. Every admitted group layer runs the standard
+queue stages after guarded generation; adaptive resolve performs the Welford mean/M2 update and
+present reads the per-pixel HDR accumulator. Adaptive bootstrap and debug modes remain excluded.
+Validate deterministic count and image parity before treating this as benchmark-ready.
+
+## Retired Legacy Routes
+
+The separate `RayTracingAdaptiveTrace.compute` / `RayTracingWaterAdaptiveTrace.compute` route and
+the monolithic `RayTracingExperimentalPathGuided.compute` / `RayTracingExperimentalRis.compute`
+wrappers were retired after their active wavefront replacements landed. `GameManager` no longer
+loads, serializes, dispatches, or precompiles those assets. Adaptive sampling now requires the
+active wavefront final-color shader; path guiding and RIS select their wavefront wrappers directly.
+Historical assets and measurements remain available in repository history.
+
 ## Unsupported Or Bypassed
 
-- **Adaptive sampling:** the existing layered Welford scheduler remains in source but is bypassed.
-- **Path guiding and temporal/spatial RIS reuse:** bypassed. Local initial RIS remains active.
+- **Adaptive sampling:** uses the existing fixed-8x8 scheduler. Each admitted sample layer runs the
+  queue pipeline, then wavefront resolve updates the persistent Welford state and HDR accumulation.
+  Low-resolution bootstrap also uses the active wavefront shader. Runtime scheduler/heatmap and
+  deterministic parity validation remain required before treating adaptive results as benchmark-ready.
+- **Temporal/spatial RIS reuse:** available through the opt-in dry `RayTracingWavefrontRis` wrapper.
+  It preserves the existing one-pass, static-scene eligibility restrictions and uses the existing history
+  and spatial-prepass resources. Local initial RIS remains active in every wavefront route.
+- **Path guiding:** available only through the opt-in dry `RayTracingWavefrontPathGuided` wrapper.
+  It uses a separate per-pixel guide-state buffer while enabled, preserving the 352-byte path state.
 - **Advanced geometry and path debug modes:** still unavailable. `Normals`, `Albedo`, `Emission`,
   `HitDistance`, `AccelerationStructures`, and `TerrainCells` use the stored first `RayHit`.
   `DirectLight` uses the stored first-bounce next-event estimate; `Throughput` and `BounceCount`

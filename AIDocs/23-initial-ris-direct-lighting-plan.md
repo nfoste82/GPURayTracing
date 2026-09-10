@@ -393,6 +393,106 @@ require a two-times whole-image CornellBox improvement. Require a material direc
 equal-time benefit on a true many-light fixture first, then ensure CornellBox does not regress
 unacceptably.
 
+## Deferred Automatic Sampling Policy
+
+The renderer should eventually choose a suitable direct-light sampling mode automatically instead
+of requiring users to understand RIS candidate counts, reuse modes, and compatibility limits. This
+is a product-facing policy layer above the existing estimators, not a change to the mathematical
+local-RIS estimator or a reason to enable experimental reuse by default.
+
+### Intent
+
+The default scene experience should be "just run better": choose ordinary importance-sampled
+direct lighting when RIS has little proposal-selection variance to reduce, and choose local RIS
+when several finite/mesh-light proposals make one selected visibility evaluation worthwhile.
+Advanced/manual controls remain available for experiments, reproduction, and benchmarking.
+
+The initial policy must be deterministic, cheap, explainable, and conservative. It must not use
+per-frame trial-and-error tuning or silently alter a progressive accumulation once rendering has
+started.
+
+### First Policy Scope
+
+The first automatic policy chooses only between:
+
+```text
+ordinary importance-sampled direct lighting
+local primary direct-light RIS with four candidates
+```
+
+It must leave temporal/spatial reuse disabled. Spatial reuse remains experimental: it needs static
+opaque receivers, has known estimator architecture gaps, and has not met broad mean-correctness or
+equal-time acceptance gates. Automatic spatial selection is explicitly out of scope until those
+gates pass.
+
+### Proposed Deterministic Heuristic
+
+Use existing scene-light information before the first accumulation sample:
+
+```text
+ordinary importance sampling when:
+  - the direct proposal set is trivial (one finite/directional light, environment only, or
+    directional plus environment only), or
+  - final-color/local-RIS eligibility is unavailable.
+
+local RIS-4 when:
+  - ImportanceSampled lighting is active,
+  - final-color primary opaque direct-light sampling is eligible, and
+  - there are multiple independently selectable finite or mesh lights with meaningful selection
+    diversity (initial conservative threshold: at least four finite/mesh lights).
+```
+
+An environment is one proposal family, not evidence by itself that local RIS is beneficial. For
+example, a Sponza-like scene lit primarily by one directional light plus an environment has little
+direct-light selection uncertainty and substantial indirect transport; local RIS targets neither
+of those costs, so ordinary importance sampling should be selected.
+
+The policy must be evaluated before computing the accumulation-state hash and remain fixed until a
+scene/light/settings change invalidates accumulation. This avoids mixing unaccounted estimators in
+one progressive average. It must also report its resolved decision and concise reason, for example:
+
+```text
+Automatic lighting sampling: ordinary importance sampling
+Reason: directional light plus environment; insufficient finite-light proposal diversity for RIS.
+```
+
+or:
+
+```text
+Automatic lighting sampling: local RIS, 4 candidates
+Reason: 24 finite lights; reduces light-selection variance while retaining one visibility query.
+```
+
+### User Controls
+
+Replace feature-centric default UI over time with a small policy selector:
+
+```text
+Lighting Sampling: Automatic | Quality | Performance | Advanced
+```
+
+- `Automatic` is the default and applies the deterministic heuristic.
+- `Quality` may choose local RIS in more eligible many-light scenes, but still rejects trivial
+  light sets.
+- `Performance` remains ordinary importance sampling unless measured evidence supports a clearly
+  beneficial local-RIS threshold.
+- `Advanced` exposes explicit local candidate count and experimental temporal/spatial controls for
+  benchmark work. It must retain reproducible capture metadata and explicit override semantics.
+
+### Validation Before Implementation
+
+1. Add scene-light-policy unit tests for directional-only, environment-only, directional plus
+   environment, one finite light, mixed finite/environment, and many-light configurations.
+2. Capture equal-work and repeated randomized-order equal-time trials for local-off versus
+   local-RIS-4 on low-light-count, environment/directional, and many-light fixtures.
+3. Require the automatic choice to match the measured winner or choose ordinary sampling when the
+   result is inconclusive.
+4. Record the resolved mode and reason in benchmark/capture metadata and expose it read-only in
+   the overlay/inspector.
+5. Consider runtime direct-light variance, shadow-query cost, and receiver coherence only after the
+   deterministic scene-light policy is validated. These signals must not make unstable per-frame
+   mode changes.
+
 Add a static direct-light fixture with approximately 256-512 individually selectable varied finite
 lights, broad diffuse receivers, controlled occlusion, no environment/directional light, and no
 indirect-path ambiguity. Report first-bounce direct-light or region-isolated linear-HDR error in

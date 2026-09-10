@@ -51,6 +51,14 @@ struct WavefrontPathDiagnostic
     uint bounceCount;
 };
 
+struct WavefrontPathGuideState
+{
+    float3 position;
+    float3 normal;
+    float3 direction;
+    uint sampled;
+};
+
 RWStructuredBuffer<WavefrontPathState> _WavefrontPaths;
 RWStructuredBuffer<RayHit> _WavefrontHits;
 RWStructuredBuffer<uint> _WavefrontCurrentQueue;
@@ -59,11 +67,18 @@ RWStructuredBuffer<uint> _WavefrontCompletedQueue;
 RWStructuredBuffer<ShadowWorkItem> _WavefrontShadowWork;
 RWStructuredBuffer<float3> _WavefrontFirstDirectLight;
 RWStructuredBuffer<WavefrontPathDiagnostic> _WavefrontPathDiagnostics;
+RWStructuredBuffer<WavefrontPathGuideState> _WavefrontPathGuideStates;
 RWStructuredBuffer<uint> _WavefrontCounters;
 RWStructuredBuffer<uint> _WavefrontDispatchArgs;
 RWTexture2D<float4> _WavefrontFrameResult;
+RWTexture2D<float4> AdaptiveSamplingState;
+RWTexture2D<float4> AdaptiveSamplingM2;
+StructuredBuffer<uint4> AdaptiveGroupInfo;
 int _WavefrontPassIndex;
 int _WavefrontThreadsPerGroup;
+int _WavefrontAdaptiveSampling;
+uint _AdaptiveGroupWidth;
+uint _AdaptiveSampleLayer;
 
 void EnqueueCurrent(uint pathIndex)
 {
@@ -96,6 +111,16 @@ void EnqueueShadowWork(uint pathIndex)
     _WavefrontShadowWork[queueIndex] = work;
 }
 
+#if defined(PATH_GUIDING_ENABLED)
+void RecordWavefrontPathGuide(uint pathIndex, float3 radiance)
+{
+    WavefrontPathGuideState guide = _WavefrontPathGuideStates[pathIndex];
+    if (guide.sampled != 0)
+        RecordPathGuideObservation(guide.position, guide.normal, guide.direction,
+            dot(abs(radiance), float3(0.2126f, 0.7152f, 0.0722f)));
+}
+#endif
+
 [numthreads(4, 4, 1)]
 void CSWavefrontClearFrame(uint3 id : SV_DispatchThreadID)
 {
@@ -122,7 +147,15 @@ void CSWavefrontGenerate(uint3 id : SV_DispatchThreadID)
     uint2 pixel = id.xy;
     if (pixel.x >= width || pixel.y >= height) return;
 
-    RngState rngState = CreateRngState(pixel, _SampleOffset + (uint)_WavefrontPassIndex);
+    if (_WavefrontAdaptiveSampling != 0)
+    {
+        uint flatGroup = pixel.x / 8u + (pixel.y / 8u) * _AdaptiveGroupWidth;
+        if (AdaptiveGroupInfo[flatGroup].w <= _AdaptiveSampleLayer) return;
+    }
+
+    uint sampleIndex = _WavefrontAdaptiveSampling != 0
+        ? (uint)AdaptiveSamplingState[pixel].x : _SampleOffset + (uint)_WavefrontPassIndex;
+    RngState rngState = CreateRngState(pixel, sampleIndex);
     SetRngDimension(rngState, SampleDimensionPixelFilter);
     float2 pixelJitter = float2(rand(rngState), rand(rngState));
     if (_SubpixelJitterScale != 1.0f)
@@ -162,6 +195,14 @@ void CSWavefrontGenerate(uint3 id : SV_DispatchThreadID)
     path.volumeEvent = 0;
     _WavefrontPaths[pathIndex] = path;
     if (_DebugRenderMode == DebugDirectLight) _WavefrontFirstDirectLight[pathIndex] = 0.0f;
+#if defined(PATH_GUIDING_ENABLED)
+    WavefrontPathGuideState guide;
+    guide.position = 0.0f;
+    guide.normal = 0.0f;
+    guide.direction = 0.0f;
+    guide.sampled = 0;
+    _WavefrontPathGuideStates[pathIndex] = guide;
+#endif
     EnqueueCurrent(pathIndex);
 }
 
@@ -246,6 +287,9 @@ void CSWavefrontClassify(uint3 id : SV_DispatchThreadID)
             }
         }
         path.radiance += path.throughput * GetTerminalHitColor(path.ray, hit) * misWeight;
+#if defined(PATH_GUIDING_ENABLED)
+        RecordWavefrontPathGuide(pathIndex, GetTerminalHitColor(path.ray, hit) * misWeight);
+#endif
         path.active = 0;
         _WavefrontPaths[pathIndex] = path;
         EnqueueCompleted(pathIndex);
@@ -266,6 +310,9 @@ void CSWavefrontClassify(uint3 id : SV_DispatchThreadID)
             }
         }
         path.radiance += path.throughput * GetEmission(hit) * misWeight;
+#if defined(PATH_GUIDING_ENABLED)
+        RecordWavefrontPathGuide(pathIndex, GetEmission(hit) * misWeight);
+#endif
         path.active = 0;
         _WavefrontPaths[pathIndex] = path;
         EnqueueCompleted(pathIndex);
@@ -323,6 +370,9 @@ void CSWavefrontTraceShadows(uint3 id : SV_DispatchThreadID)
     if (volumeEvent) directLight *= _FogScatteringAlbedo * max(0.0f, _FogInScatteringIntensity);
 #endif
     work.directLight = directLight;
+#if defined(PATH_GUIDING_ENABLED)
+    RecordWavefrontPathGuide(work.pathIndex, directLight);
+#endif
     if (_DebugRenderMode == DebugDirectLight && path.bounce == 0)
         _WavefrontFirstDirectLight[work.pathIndex] = directLight;
     path.previousDirectLightSampled = 1;
@@ -391,6 +441,14 @@ void CSWavefrontScatter(uint3 id : SV_DispatchThreadID)
     int remainingBounces = _NumBounces - path.bounce;
     SetRngDimension(path.rngState, BounceSampleDimension((uint)path.bounce, SampleDimensionScatterOffset));
     ScatterResult scatter = CreateScatteredRay(path.ray, hit, path.bounce, remainingBounces, path.mediumStack, path.rngState);
+#if defined(PATH_GUIDING_ENABLED)
+    WavefrontPathGuideState guide;
+    guide.position = hit.position;
+    guide.normal = hit.normal;
+    guide.direction = scatter.ray.direction;
+    guide.sampled = IsPathGuideEligible(hit, path.bounce > 0) && scatter.materialPdf > 1e-6f ? 1u : 0u;
+    _WavefrontPathGuideStates[pathIndex] = guide;
+#endif
     ApplyMediumTransition(path.mediumStack, hit, scatter.mediumTransition);
     path.previousSurfacePosition = hit.position;
     path.previousMaterialPdf = scatter.materialPdf;
@@ -451,6 +509,20 @@ void CSWavefrontResolve(uint3 id : SV_DispatchThreadID)
     if (id.x >= _WavefrontCounters[2]) return;
     uint pathIndex = _WavefrontCompletedQueue[id.x];
     WavefrontPathState path = _WavefrontPaths[pathIndex];
+    float3 radiance = ClampFirefly(path.radiance);
+    if (_WavefrontAdaptiveSampling != 0)
+    {
+        radiance = all(isfinite(radiance)) ? radiance : 0.0f;
+        float4 previousState = AdaptiveSamplingState[path.pixel];
+        float4 previousM2 = AdaptiveSamplingM2[path.pixel];
+        float newCount = previousState.x + 1.0f;
+        float3 mean = AccumulationResult[path.pixel].rgb;
+        float3 delta = radiance - mean;
+        mean += delta / newCount;
+        AdaptiveSamplingM2[path.pixel] = float4(previousM2.rgb + delta * (radiance - mean), previousM2.a);
+        AdaptiveSamplingState[path.pixel] = float4(newCount, previousState.yzw);
+        AccumulationResult[path.pixel] = float4(mean, 1.0f);
+    }
     if (_DebugRenderMode == DebugThroughput || _DebugRenderMode == DebugBounceCount)
     {
         WavefrontPathDiagnostic diagnostic;
@@ -458,7 +530,7 @@ void CSWavefrontResolve(uint3 id : SV_DispatchThreadID)
         diagnostic.bounceCount = (uint)path.bounce;
         _WavefrontPathDiagnostics[pathIndex] = diagnostic;
     }
-    _WavefrontFrameResult[path.pixel] += float4(ClampFirefly(path.radiance), 1.0f);
+    _WavefrontFrameResult[path.pixel] += float4(radiance, 1.0f);
 }
 
 [numthreads(4, 4, 1)]
@@ -468,7 +540,8 @@ void CSWavefrontPresent(uint3 id : SV_DispatchThreadID)
     Result.GetDimensions(width, height);
     if (id.x >= width || id.y >= height) return;
 
-    float3 color = _WavefrontFrameResult[id.xy].rgb / max(1, _NumberOfPasses);
+    float3 color = _WavefrontAdaptiveSampling != 0
+        ? AccumulationResult[id.xy].rgb : _WavefrontFrameResult[id.xy].rgb / max(1, _NumberOfPasses);
     if ((_DebugRenderMode >= DebugNormals && _DebugRenderMode <= DebugThroughput)
         || _DebugRenderMode == DebugBounceCount || _DebugRenderMode == DebugHitDistance
         || _DebugRenderMode == DebugAccelerationStructures || _DebugRenderMode == DebugTerrainCells)
@@ -540,7 +613,7 @@ void CSWavefrontPresent(uint3 id : SV_DispatchThreadID)
             color = saturate(hit.distance / 25.0f).xxx;
         }
     }
-    if (_UseFrameAccumulation != 0)
+    if (_UseFrameAccumulation != 0 && _WavefrontAdaptiveSampling == 0)
     {
         float previousSampleCount = max(0, _AccumulatedFrameCount);
         if (previousSampleCount > 0.0f)
