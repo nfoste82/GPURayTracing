@@ -187,7 +187,7 @@ namespace PathTracing.Lighting
                     Debug.LogWarning(
                         $"ImportanceSampled light strategy supports up to {MaxImportanceLights} lights, " +
                         $"but the scene has {_lights.Count}. Lights beyond {MaxImportanceLights} are ignored " +
-                        "for importance weighting. Raise MaxImportanceLights in RayTracingCompute.compute " +
+                        "for importance weighting. Raise MaxImportanceLights in the wavefront renderer " +
                         "(and the matching constant in LightingManager) or use a different light sampling strategy.");
                     _warnedImportanceLightOverflow = true;
                 }

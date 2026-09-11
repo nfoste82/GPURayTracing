@@ -1,14 +1,14 @@
 {
     "schemaVersion": 2,
     "scenePath": "Assets/Scenes/Generated/TeapotMaterials.unity",
-    "imageSha256": "0D3C7C696A7065FDE148D9A84F500D27FA4473509E30436CDDFB42079AD5D471",
-    "sceneSha256": "F26188E4996745587CCE575205A8BDA8208045DEAE1AACD4A06E0F0B2D52B213",
-    "shaderSha256": "0A4DD89E9033502F16253D7D97F8FB5C19E2070ED86698138EF1E68819379CA7",
-    "sourceRevision": "5e591fe46f8ca9e7566ba57ce03dab8a73472302",
-    "settingsSha256": "F00C0BD1A761A5ECC8B6EC5BF1843E2D0E433649DDA05E3A13A07B4F5B46AA79",
+    "imageSha256": "F2E0B0AA799B0F9D84B26BAF3C77A847FB52C70D7E16A88F7FB576C0C21B0A48",
+    "sceneSha256": "E39EBAFA8BD5CD8635F02BCA16857775195961091039DF162EE63EFAAE176999",
+    "shaderSha256": "C47BC5824C4D4CCD399E1810E1310B9C912440CF19D9A142B762944DD0234448",
+    "sourceRevision": "e050fd56b83f8bc4db5f4d27daf13873457ce8f4",
+    "settingsSha256": "C90AEA98AB118228762DB8F3EED75B5BE1230EBD09877AB11A7AA3EDDE720DDF",
     "settings": {
         "temporalRisEnabled": false,
-        "initialRisCandidateCount": 4,
+        "initialRisCandidateCount": 1,
         "temporalRisHistoryMCap": 1,
         "spatialRisEnabled": false,
         "spatialRisNeighborCount": 4,
@@ -16,13 +16,13 @@
         "lightSampleCount": 1,
         "maxLightSamples": 0,
         "numberOfPasses": 1,
-        "numBounces": 12,
+        "numBounces": 8,
         "shadowQuality": 0,
         "shadowRandomness": 0.6499999761581421,
         "lightFalloffScale": 0.07000000029802323,
         "environmentLighting": true,
         "environmentLightSampleCount": 1,
-        "fireflyClamp": 3.0,
+        "fireflyClamp": 8.0,
         "frameAccumulation": true,
         "randomNoise": false,
         "captureSeed": 0
@@ -30,8 +30,8 @@
     "width": 1024,
     "height": 1024,
     "durationSeconds": 360.0,
-    "measuredFrames": 436,
+    "measuredFrames": 365,
     "unityVersion": "6000.3.18f1",
     "graphicsDeviceType": "Metal",
-    "generatedUtc": "2026-09-02T15:59:09.2012540Z"
+    "generatedUtc": "2026-09-11T16:58:22.6908890Z"
 }

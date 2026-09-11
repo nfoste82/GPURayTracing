@@ -7,8 +7,8 @@ color. Surface, water, fog, water+fog, and dry-terrain routes are compiled; the 
 smoke-tested water, fog, water+fog, and terrain. Fog and terrain image parity remain pending.
 Adaptive scheduling uses the existing fixed-8x8 scheduler with layered wavefront generation and resolve.
 Path guiding and temporal/spatial RIS use opt-in dry wavefront wrappers. Basic first-hit normals, albedo, emission, hit-distance, BVH,
-and terrain-cell diagnostics are available from stored wavefront hits; throughput and bounce-count
-diagnostics are captured when paths complete.**
+terrain-cell, and glass-scatter diagnostics are available from stored wavefront hits; direct-light,
+throughput, and bounce-count diagnostics use opt-in wavefront buffers.**
 
 The user explicitly chose not to preserve `CSMain` as a runtime fallback. Use Git history if old
 behavior must be consulted. Do not restore an old path merely as a fallback during this migration.
@@ -27,6 +27,11 @@ GameManager.RenderImage
 -> UpdateTextureFromCompute
 -> WavefrontPathTracingManager.Dispatch
 ```
+
+Low-resolution adaptive bootstrap and the following full-resolution adaptive schedule dispatch the
+same selected wavefront asset. Shader warmup is keyed by the asset family plus fog/terrain bits, not
+by bootstrap state, so enabling bootstrap cannot cause a second final-color shader compilation at
+handoff.
 
 Key files:
 
@@ -151,8 +156,10 @@ prepass, selecting the wrapper only under the established static, one-pass, non-
 eligibility gate. Reuse remains experimental and default-off.
 
 Adaptive scheduling reuses the fixed-8x8 scheduler. Every admitted group layer runs the standard
-queue stages after guarded generation; adaptive resolve performs the Welford mean/M2 update and
-present reads the per-pixel HDR accumulator. Adaptive bootstrap and debug modes remain excluded.
+queue stages after one layered generation dispatch; path indices include the sample layer so all
+admitted layers share one queue traversal. A final per-pixel adaptive resolve applies layer
+radiances to the Welford mean/M2 in deterministic sample order, and present reads the HDR
+accumulator. Adaptive bootstrap and debug modes remain excluded.
 Validate deterministic count and image parity before treating this as benchmark-ready.
 
 ## Retired Legacy Routes
@@ -175,12 +182,11 @@ Historical assets and measurements remain available in repository history.
   and spatial-prepass resources. Local initial RIS remains active in every wavefront route.
 - **Path guiding:** available only through the opt-in dry `RayTracingWavefrontPathGuided` wrapper.
   It uses a separate per-pixel guide-state buffer while enabled, preserving the 352-byte path state.
-- **Advanced geometry and path debug modes:** still unavailable. `Normals`, `Albedo`, `Emission`,
-  `HitDistance`, `AccelerationStructures`, and `TerrainCells` use the stored first `RayHit`.
-  `DirectLight` uses the stored first-bounce next-event estimate; `Throughput` and `BounceCount`
-  use state captured at path completion. The direct-light and path-diagnostic buffers are allocated
-  only while their modes are active; do not add diagnostic fields to `WavefrontPathState` or revive
-  the monolithic debug tracer.
+- `Normals`, `Albedo`, `Emission`, `HitDistance`, `AccelerationStructures`, `TerrainCells`, and
+  `GlassScatter` use first-hit wavefront state. `DirectLight` uses the stored first-bounce
+  next-event estimate; `Throughput` and `BounceCount` use state captured at path completion. The
+  direct-light and path-diagnostic buffers are allocated only while their modes are active; do not
+  add diagnostic fields to `WavefrontPathState` or revive the monolithic debug tracer.
 - **Per-candidate shadow queues:** the queue is currently one work item per path. Direct-light
   candidate generation and individual light samples remain materialized inside the shadow stage.
 
@@ -314,7 +320,7 @@ passed for the user-tested material, texture, reflection, refraction, and causti
 Still required:
 
 1. Run EditMode tests without `-nographics` so GPU probes execute.
-2. Convert direct-CSMain image fixtures into a deterministic full-wavefront dispatch harness.
+2. Recapture and review deterministic image-fixture baselines after the full-wavefront dispatch conversion.
 3. Add queue tests: zero/partial/exact group counts, counter reset, overflow, odd dimensions,
    completion accounting, and maximum-bounce retirement.
 4. Capture image comparisons for Root, CornellBox, ManyLights, ManySpheres, ManyMeshes,

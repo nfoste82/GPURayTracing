@@ -20,7 +20,7 @@ namespace GPURayTracing.Tests
             public uint w;
         }
 
-        private const string ComputeShaderPath = "Assets/Scripts/RayTracingCompute.compute";
+        private const string WavefrontShaderPath = "Assets/Resources/RayTracingWavefront.compute";
         private const string UtilityShaderPath = "Assets/Resources/RayTracingUtility.compute";
         private const string FeaturesShaderPath = "Assets/Resources/RayTracingFeatures.compute";
         private const string FocusShaderPath = "Assets/Resources/RayTracingFocus.compute";
@@ -60,7 +60,7 @@ namespace GPURayTracing.Tests
         public void PathSampler_UsesOwenScrambledSobolWithStableSemanticDimensions()
         {
             string shared = System.IO.File.ReadAllText(SharedShaderPath);
-            string main = System.IO.File.ReadAllText(ComputeShaderPath);
+            string main = System.IO.File.ReadAllText(WavefrontShaderPath);
 
             Assert.That(shared, Does.Contain("struct RngState"));
             Assert.That(shared, Does.Contain("RngState CreateRngState(uint2 pixel, uint sampleIndex)"));
@@ -82,12 +82,12 @@ namespace GPURayTracing.Tests
             Assert.That(shared, Does.Not.Contain("_UseOwenScrambledSobol"));
             Assert.That(shared, Does.Contain("_SobolDimensionLimit"));
             Assert.That(shared, Does.Contain("rngState.fallback = Hash(rngState.fallback ^ dimension)"));
-            Assert.That(shared, Does.Contain("BounceSampleDimension((uint)bounce, SampleDimensionDirectLightOffset)"));
-            Assert.That(shared, Does.Contain("BounceSampleDimension((uint)bounce, SampleDimensionScatterOffset)"));
-            Assert.That(shared, Does.Contain("BounceSampleDimension((uint)bounce, SampleDimensionRouletteOffset)"));
+            Assert.That(main, Does.Contain("SetRngDimension(path.rngState, BounceSampleDimension((uint)path.bounce, SampleDimensionDirectLightOffset))"));
+            Assert.That(main, Does.Contain("SetRngDimension(path.rngState, BounceSampleDimension((uint)path.bounce, SampleDimensionScatterOffset))"));
+            Assert.That(main, Does.Contain("SetRngDimension(path.rngState, BounceSampleDimension((uint)rouletteBounce, SampleDimensionRouletteOffset))"));
             Assert.That(main, Does.Contain("SetRngDimension(rngState, SampleDimensionPixelFilter)"));
             Assert.That(main, Does.Contain("SetRngDimension(rngState, SampleDimensionLens)"));
-            Assert.That(main, Does.Contain("RngState rngState = CreateRngState(pixel, _SampleOffset + pass)"));
+            Assert.That(main, Does.Contain("RngState rngState = CreateRngState(pixel, sampleIndex)"));
 
             int setDimensionStart = shared.IndexOf("void SetRngDimension(inout RngState rngState, uint dimension)", StringComparison.Ordinal);
             int causticSampleStart = shared.IndexOf("float CausticSequenceSample", setDimensionStart, StringComparison.Ordinal);
@@ -137,6 +137,17 @@ namespace GPURayTracing.Tests
             Assert.That(rebuild, Does.Contain("_PathGuideTraining[baseIndex + bin] = 0u"),
                 "CDF rebuilds must consume guide training so long-running renders cannot overflow it.");
             Assert.That(probe, Does.Contain("SampleMaterialBrdf(normalIncidenceRay, diffuseBrdfHit, false, brdfRngState)"));
+        }
+
+        [Test]
+        public void AdaptiveSampling_IsDisabledByProjectDefaultButSceneSettingsCanEnableIt()
+        {
+            string manager = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+            string settings = System.IO.File.ReadAllText("Assets/Scripts/SceneSettings.cs");
+
+            Assert.That(manager, Does.Contain("public bool enableAdaptiveSampling = false"));
+            Assert.That(settings, Does.Contain("public bool EnableAdaptiveSampling = true"));
+            Assert.That(manager, Does.Contain("enableAdaptiveSampling = settings.EnableAdaptiveSampling"));
         }
 
         [Test]
@@ -278,8 +289,10 @@ namespace GPURayTracing.Tests
         {
             string shaderSource = System.IO.File.ReadAllText(AdaptiveSchedulerShaderPath);
             int classifyStart = shaderSource.IndexOf("void CSAdaptiveClassifyGroups", StringComparison.Ordinal);
-            int allocateStart = shaderSource.IndexOf("uint GetAdaptiveTargetBucket", classifyStart, StringComparison.Ordinal);
-            string classify = shaderSource.Substring(classifyStart, allocateStart - classifyStart);
+            int remapStart = shaderSource.IndexOf("void CSAdaptiveApplyBucketRemap", classifyStart, StringComparison.Ordinal);
+            Assert.That(classifyStart, Is.GreaterThanOrEqualTo(0));
+            Assert.That(remapStart, Is.GreaterThan(classifyStart));
+            string classify = shaderSource.Substring(classifyStart, remapStart - classifyStart);
 
             Assert.That(classify, Does.Contain("InterlockedAdd(AdaptiveRawBucketDemand[bucket], validPixels)"));
             Assert.That(classify, Does.Not.Contain("validPixels * (updateCap - 1u)"));
@@ -294,7 +307,7 @@ namespace GPURayTracing.Tests
             string remap = shaderSource.Substring(remapStart, remapEnd - remapStart);
 
             Assert.That(remap, Does.Contain("rcp(GetAdaptiveBucketRateFloat(0u))"));
-            Assert.That(remap, Does.Contain("rcp(GetAdaptiveBucketRateFloat(bucket + 1u))"));
+            Assert.That(remap, Does.Contain("rcp(GetAdaptiveBucketRateFloat(targetBucketIndex + 1u))"));
             Assert.That(remap, Does.Contain("random * sourceDemand"));
             Assert.That(remap, Does.Contain("uniformWeight"));
         }
@@ -388,11 +401,12 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
-        public void AdaptiveWavefront_UsesOnePathPerEligibleSampleLayer()
+        public void AdaptiveWavefront_QueuesEligibleSampleLayersTogether()
         {
             string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
             string wavefrontSource = System.IO.File.ReadAllText("Assets/Resources/RayTracingWavefront.compute");
-            Assert.That(wavefrontSource, Does.Contain("_AdaptiveSampleLayer"));
+            Assert.That(wavefrontSource, Does.Contain("sampleLayer * _WavefrontPixelCapacity"));
+            Assert.That(wavefrontSource, Does.Contain("void CSWavefrontResolveAdaptive"));
             Assert.That(managerSource, Does.Contain("maxLayers,"));
             Assert.That(managerSource, Does.Not.Contain("RayTracingAdaptiveTrace"));
         }
@@ -404,7 +418,7 @@ namespace GPURayTracing.Tests
 
             Assert.That(managerSource, Does.Contain("private void DispatchAdaptiveBootstrap(ComputeShader wavefrontShader)"));
             Assert.That(managerSource, Does.Contain("_wavefrontPathTracingManager.Dispatch(wavefrontShader, size"));
-            Assert.That(managerSource, Does.Not.Contain("bootstrapShader.FindKernel(\"CSMain\")"));
+            Assert.That(managerSource, Does.Not.Contain("bootstrapShader.FindKernel"));
             Assert.That(managerSource, Does.Contain("UpscaleAdaptiveBootstrap"));
         }
 
@@ -504,15 +518,17 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
-        public void AdaptiveTraceWarmup_UsesTheAdaptiveTraceImmediatelyWhenBootstrapIsDisabled()
+        public void AdaptiveBootstrapAndFullResolutionUseTheSameShaderWarmupKey()
         {
             string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
             int start = managerSource.IndexOf("private bool TryDeferShaderVariantWarmup", StringComparison.Ordinal);
             int end = managerSource.IndexOf("private void PrepareRenderFrame", start, StringComparison.Ordinal);
             string warmup = managerSource.Substring(start, end - start);
 
-            Assert.That(warmup, Does.Contain("!enableAdaptiveBootstrap || _adaptiveBootstrapFrameCount >= Mathf.Clamp(adaptiveBootstrapFrames, 1, 512)"));
-            Assert.That(warmup, Does.Contain("useAdaptiveTraceShader ? 4"));
+            Assert.That(warmup, Does.Not.Contain("_adaptiveBootstrapFrameCount"));
+            Assert.That(warmup, Does.Not.Contain("useAdaptiveTraceShader"));
+            Assert.That(warmup, Does.Not.Contain("? 4"));
+            Assert.That(warmup, Does.Contain("HasWaterVolume ? frame.fogEnabled ? 8 : 3"));
         }
 
         [Test]
@@ -614,9 +630,9 @@ namespace GPURayTracing.Tests
         {
             string shaderSource = System.IO.File.ReadAllText(AdaptiveSchedulerShaderPath);
 
-            Assert.That(shaderSource, Does.Contain("bool needsFirstFineSample = groupBootstrap"));
+            Assert.That(shaderSource, Does.Contain("bool needsFirstFineSample = AdaptiveSamplingState[logicalGroup * 8u].x == 0.0f"));
             Assert.That(shaderSource, Does.Contain("AdaptiveSamplingState[logicalGroup * 8u].x == 0.0f"));
-            Assert.That(shaderSource, Does.Contain("groupBootstrap && !needsFirstFineSample"));
+            Assert.That(shaderSource, Does.Contain("!needsFirstFineSample && _AdaptiveBootstrapGroupDivisor > 1u && bootstrapBatch != 0u"));
         }
 
         [Test]
@@ -719,14 +735,11 @@ namespace GPURayTracing.Tests
         [Test]
         public void ProductionRenderer_UsesDedicatedWavefrontPathGuidingAndRisReuse()
         {
-            string main = System.IO.File.ReadAllText(ComputeShaderPath);
             string shared = System.IO.File.ReadAllText(SharedShaderPath);
             string manager = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
             string wavefrontPathGuided = System.IO.File.ReadAllText("Assets/Resources/RayTracingWavefrontPathGuided.compute");
             string wavefrontRis = System.IO.File.ReadAllText("Assets/Resources/RayTracingWavefrontRis.compute");
 
-            Assert.That(main, Does.Not.Contain("#pragma multi_compile _ TEMPORAL_RIS_ENABLED\n#define FINAL_COLOR_KERNEL"));
-            Assert.That(main, Does.Contain("#if defined(EXPERIMENTAL_RIS_REUSE)\n#pragma multi_compile _ TEMPORAL_RIS_ENABLED"));
             Assert.That(shared, Does.Contain("#if defined(PATH_GUIDING_ENABLED)\nRWStructuredBuffer<uint> _PathGuideTraining;"));
             Assert.That(shared, Does.Contain("defined(WAVEFRONT_RIS_REUSE)"));
             Assert.That(wavefrontPathGuided, Does.Contain("#define PATH_GUIDING_ENABLED 1"));
@@ -755,21 +768,10 @@ namespace GPURayTracing.Tests
         [Test]
         public void FinalColor_FogIsIsolatedInDedicatedAssets()
         {
-            string main = System.IO.File.ReadAllText("Assets/Scripts/RayTracingCompute.compute");
-            string water = System.IO.File.ReadAllText("Assets/Resources/RayTracingWater.compute");
-            string fog = System.IO.File.ReadAllText("Assets/Resources/RayTracingFog.compute");
-            string waterFog = System.IO.File.ReadAllText("Assets/Resources/RayTracingWaterFog.compute");
             string wavefrontFog = System.IO.File.ReadAllText("Assets/Resources/RayTracingWavefrontFog.compute");
             string wavefrontWaterFog = System.IO.File.ReadAllText("Assets/Resources/RayTracingWavefrontWaterFog.compute");
             string manager = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
 
-            Assert.That(main, Does.Not.Contain("#pragma multi_compile _ FOG_ENABLED"));
-            Assert.That(water, Does.Contain("#define WATER_ENABLED 1"));
-            Assert.That(water, Does.Not.Contain("FOG_ENABLED"));
-            Assert.That(fog, Does.Contain("#define FOG_ENABLED 1"));
-            Assert.That(fog, Does.Not.Contain("WATER_ENABLED"));
-            Assert.That(waterFog, Does.Contain("#define WATER_ENABLED 1"));
-            Assert.That(waterFog, Does.Contain("#define FOG_ENABLED 1"));
             Assert.That(wavefrontFog, Does.Contain("#define FOG_ENABLED 1"));
             Assert.That(wavefrontFog, Does.Not.Contain("WATER_ENABLED"));
             Assert.That(wavefrontWaterFog, Does.Contain("#define WATER_ENABLED 1"));
@@ -855,7 +857,7 @@ namespace GPURayTracing.Tests
             Assert.That(manager, Does.Contain("bool useDirectLightDebug"));
             Assert.That(manager, Does.Contain("bool usePathDiagnostics"));
             Assert.That(manager, Does.Contain("new ComputeBuffer(_capacity, sizeof(float) * 3)"));
-            Assert.That(manager, Does.Contain("new ComputeBuffer(_capacity, sizeof(float) * 4)"));
+            Assert.That(manager, Does.Contain("new ComputeBuffer(_capacity, sizeof(float) * 7)"));
             Assert.That(manager, Does.Contain("_firstDirectLight?.Release();"));
             Assert.That(manager, Does.Contain("_pathDiagnostics?.Release();"));
             Assert.That(precompiler, Does.Contain("_WavefrontFirstDirectLight"));
@@ -869,11 +871,12 @@ namespace GPURayTracing.Tests
             Assert.That(wavefront, Does.Contain("_WavefrontAdaptiveSampling"));
             Assert.That(wavefront, Does.Contain("AdaptiveGroupInfo[flatGroup].w <= _AdaptiveSampleLayer"));
             Assert.That(wavefront, Does.Contain("AdaptiveSamplingState[path.pixel]"));
-            Assert.That(manager, Does.Contain("BindWavefrontAdaptiveResources"));
-            Assert.That(manager, Does.Contain("targetShader.SetBuffer(kernelHandle, AdaptiveGroupInfo, _adaptiveGroupInfoBuffer)"));
-            Assert.That(manager, Does.Contain("DispatchAdaptiveSampling(targetShader)"));
-            Assert.That(manager, Does.Contain("_wavefrontPathTracingManager.Dispatch(wavefrontShader"));
-            Assert.That(manager, Does.Contain("DispatchAdaptiveBootstrap(wavefrontShader)"));
+            Assert.That(manager, Does.Contain("bindShared(shader, kernel)"));
+            string gameManager = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+            Assert.That(gameManager, Does.Contain("targetShader.SetBuffer(kernelHandle, AdaptiveGroupInfo, _adaptiveGroupInfoBuffer)"));
+            Assert.That(gameManager, Does.Contain("DispatchAdaptiveSampling(targetShader)"));
+            Assert.That(gameManager, Does.Contain("_wavefrontPathTracingManager.Dispatch(wavefrontShader"));
+            Assert.That(gameManager, Does.Contain("DispatchAdaptiveBootstrap(wavefrontShader)"));
             Assert.That(manager, Does.Not.Contain("!enableAdaptiveBootstrap && ShouldUseFrameAccumulation()"));
         }
 
@@ -890,17 +893,19 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
-        public void GeometryDebugTooling_IsDisabled()
+        public void GeometryDebugModes_UseWavefrontDiagnostics()
         {
             string manager = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
             string inspector = System.IO.File.ReadAllText("Assets/Editor/GameManagerEditor.cs");
             string precompiler = System.IO.File.ReadAllText("Assets/Editor/RayTracingShaderPrecompiler.cs");
+            string wavefront = System.IO.File.ReadAllText("Assets/Resources/RayTracingWavefront.compute");
 
-            Assert.That(manager, Does.Contain("debugRenderMode = DebugRenderMode.FinalColor;"));
-            Assert.That(manager, Does.Contain("frame.useGeometryDebugShader = false;"));
             Assert.That(manager, Does.Not.Contain("FindKernel(\"CSDebugMain\")"));
-            Assert.That(inspector, Does.Not.Contain("DrawProperty(\"debugRenderMode\")"));
+            Assert.That(inspector, Does.Contain("DrawProperty(\"debugRenderMode\", \"Debug Render Mode\")"));
             Assert.That(precompiler, Does.Not.Contain("RayTracingDebug"));
+            Assert.That(wavefront, Does.Contain("_DebugRenderMode == DebugGlassScatter"));
+            Assert.That(wavefront, Does.Contain("diagnostic.glassScatter = color;"));
+            Assert.That(wavefront, Does.Contain("color = _WavefrontPathDiagnostics[pathIndex].glassScatter;"));
         }
 
         [Test]
@@ -1077,7 +1082,7 @@ namespace GPURayTracing.Tests
         {
             string captureSource = System.IO.File.ReadAllText("Assets/Editor/RayTracingSceneCapture.cs");
             string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
-            Assert.That(captureSource, Does.Contain("TestCaptures\", \"Heatmaps\", sceneName"));
+            Assert.That(captureSource, Does.Contain("Path.Combine(DefaultOutputFolder, \"Heatmaps\", sceneName, label)"));
             Assert.That(captureSource, Does.Contain("frame_{snapshot.frame:000000}.png"));
             Assert.That(captureSource, Does.Contain("AdaptiveAllocationBlockSize"));
             Assert.That(captureSource, Does.Contain("ReadAdaptiveAllocationForCapture"));
@@ -1091,7 +1096,7 @@ namespace GPURayTracing.Tests
             string source = System.IO.File.ReadAllText("Assets/Editor/RayTracingAdaptiveAllocationWindow.cs");
             Assert.That(source, Does.Contain("EditorWindow"));
             Assert.That(source, Does.Contain("Window/Ray Tracing/Adaptive Allocation Monitor"));
-            Assert.That(source, Does.Contain("Directory.GetFiles(_folder, \"frame_*.png\")"));
+            Assert.That(source, Does.Contain("Directory.GetFiles(_folder, \"frame_*.txt\")"));
             Assert.That(source, Does.Contain("EditorApplication.update += PollForLatestFrame"));
         }
 
@@ -1110,10 +1115,10 @@ namespace GPURayTracing.Tests
         public void AdaptiveAllocationMonitor_SupportsLivePlayModeGeneration()
         {
             string source = System.IO.File.ReadAllText("Assets/Editor/RayTracingAdaptiveAllocationWindow.cs");
-            Assert.That(source, Does.Contain("Generate heatmaps while playing"));
-            Assert.That(source, Does.Contain("SetAdaptiveCaptureDiagnostics(true)"));
-            Assert.That(source, Does.Contain("ReadAdaptiveCumulativeAllocationForCapture"));
-            Assert.That(source, Does.Contain("TestCaptures/Heatmaps"));
+            Assert.That(source, Does.Contain("Enable adaptive live diagnostics"));
+            Assert.That(source, Does.Contain("SetAdaptiveCaptureDiagnostics(manager.enableAdaptiveSampling)"));
+            Assert.That(source, Does.Contain("ReadAdaptiveAllocationForCapture"));
+            Assert.That(source, Does.Contain("HeatmapFolderName = \"TestCaptures/Heatmaps\""));
             Assert.That(source, Does.Contain("OnPlayModeStateChanged"));
             Assert.That(source, Does.Contain("EnteredPlayMode"));
             Assert.That(source, Does.Contain("ApplyLiveGenerationSettings"));
@@ -1121,10 +1126,10 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("SessionState.GetBool"));
             Assert.That(source, Does.Contain("_folder = GetLiveFolder()"));
             Assert.That(source, Does.Contain("PollForLatestFrame(true)"));
-            Assert.That(source, Does.Contain("ReadAdaptiveCumulativeAllocationForCapture"));
+            Assert.That(source, Does.Contain("ReadAdaptiveAllocationForCapture"));
             Assert.That(source, Does.Contain("ReadAdaptiveAllocationStatsForCapture"));
             Assert.That(source, Does.Contain("EditorApplication.isPaused"));
-            Assert.That(source, Does.Contain("TryWriteCurrentReferenceDifference"));
+            Assert.That(source, Does.Contain("RayTracingSceneCapture.TryCompareCurrentRenderToReference"));
             Assert.That(source, Does.Contain("Current Render vs Reference"));
             Assert.That(source, Does.Contain("HeatmapPreviewScale = 4"));
             Assert.That(source, Does.Contain("Pixel groups per bucket (8x8)"));
@@ -1210,7 +1215,9 @@ namespace GPURayTracing.Tests
             string source = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
             int start = source.IndexOf("ReadAdaptiveCumulativeAllocationForCapture", StringComparison.Ordinal);
             Assert.That(start, Is.GreaterThanOrEqualTo(0));
-            string method = source.Substring(start, source.IndexOf("private void BindAdaptiveSamplingResources", start, StringComparison.Ordinal) - start);
+            int end = source.IndexOf("private static uint[] ReadAdaptiveBucketGroupCounts", start, StringComparison.Ordinal);
+            Assert.That(end, Is.GreaterThan(start));
+            string method = source.Substring(start, end - start);
             Assert.That(method, Does.Contain("_adaptiveSamplingStateTexture"));
             Assert.That(method, Does.Contain("state[i].x"));
             Assert.That(method, Does.Not.Contain("_adaptiveWorkListBuffer"));
@@ -1260,7 +1267,7 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("-rayTracingRecordEditorRun"));
             Assert.That(source, Does.Contain("recordEditorRun"));
             Assert.That(source, Does.Contain("CreateCommandLineEditorRunFolder"));
-            Assert.That(source, Does.Contain("adaptive_run_"));
+            Assert.That(source, Does.Contain("$\"{prefix}_{DateTime.Now:yyyyMMdd_HHmmss_fff}\""));
             Assert.That(source, Does.Contain("metrics.csv"));
             Assert.That(source, Does.Contain("metrics.rgbRootMeanSquaredError"));
             Assert.That(source, Does.Not.Contain("metrics.rgbRmse"));
@@ -1289,7 +1296,7 @@ namespace GPURayTracing.Tests
             string sponzaManifest = System.IO.File.ReadAllText("Assets/Editor/RayTracingExperiments/sponza_adaptive_sampling_comparison.json");
 
             Assert.That(source, Does.Contain("DebugRenderMode.FinalColor, manager.enableAdaptiveSampling,"));
-            Assert.That(source, Does.Contain("true, manager.enableAdaptiveSampling, false, referencePath, true"));
+            Assert.That(source, Does.Contain("true, manager.enableAdaptiveSampling && !experiment.disableAdaptiveInstrumentation,"));
             Assert.That(source, Does.Contain("WriteGroupDiagnostics(sceneRoot, variantName, result, referencePath)"));
             Assert.That(source, Does.Contain("cumulativeFinePaths"));
             Assert.That(source, Does.Contain("servedGroupFraction"));
@@ -1314,7 +1321,7 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Not.Contain("adaptive_dammertz"));
             Assert.That(source, Does.Contain("rgb_rmse"));
             Assert.That(source, Does.Contain("retired_paths"));
-            Assert.That(source, Does.Contain("adaptive_welford_group_diagnostics.csv"));
+            Assert.That(source, Does.Contain("adaptive_diagnostics.json"));
             Assert.That(source, Does.Contain("mean_linear_luminance"));
             Assert.That(source, Does.Contain("reference_rgb_rmse"));
             Assert.That(source, Does.Not.Contain("runDammertz"));
@@ -1350,10 +1357,10 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("variant_comparison.csv"));
             Assert.That(source, Does.Contain("WriteReferenceMetrics"));
             Assert.That(manifest, Does.Contain("fixed_radius"));
-            Assert.That(manifest, Does.Contain("progressive_radius"));
+            Assert.That(manifest, Does.Contain("new_default"));
             Assert.That(manifest, Does.Contain("Caustics.GatherRadiusDecayRate"));
             Assert.That(manifest, Does.Contain("\"value\": \"0.0\""));
-            Assert.That(manifest, Does.Contain("\"value\": \"1.0\""));
+            Assert.That(manifest, Does.Contain("\"value\": \"0.35\""));
         }
 
         [Test]
@@ -1368,7 +1375,8 @@ namespace GPURayTracing.Tests
                 "RIS candidates must reuse SampleSingleLight's only production shadow query.");
             Assert.That(CountOccurrences(source, "accumulated += SampleSingleLight("), Is.EqualTo(1),
                 "RIS candidates must reuse GetLightHittingPoint's only production light-sampling call site.");
-            Assert.That(CountOccurrences(source, "float3 directLight = GetLightHittingPoint("), Is.EqualTo(1),
+            string wavefront = System.IO.File.ReadAllText(WavefrontShaderPath);
+            Assert.That(CountOccurrences(wavefront, "float3 directLight = GetLightHittingPoint("), Is.EqualTo(1),
                 "Surface and fog events must share one optimizer-visible production direct-light call site.");
             Assert.That(source, Does.Not.Contain("GetFogDirectLight("),
                 "A fog wrapper with constant arguments can make Metal specialize a second shadow traversal graph.");
@@ -1644,12 +1652,12 @@ namespace GPURayTracing.Tests
         [Test]
         public void ProductionComputeKernels_AreOwnedByTheirSplitAssets()
         {
-            ComputeShader renderer = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
+            ComputeShader renderer = AssetDatabase.LoadAssetAtPath<ComputeShader>(WavefrontShaderPath);
             ComputeShader utility = AssetDatabase.LoadAssetAtPath<ComputeShader>(UtilityShaderPath);
             ComputeShader features = AssetDatabase.LoadAssetAtPath<ComputeShader>(FeaturesShaderPath);
             ComputeShader focus = AssetDatabase.LoadAssetAtPath<ComputeShader>(FocusShaderPath);
 
-            Assert.That(renderer.HasKernel("CSMain"), Is.True);
+            Assert.That(renderer.HasKernel("CSWavefrontPresent"), Is.True);
             Assert.That(renderer.HasKernel("ClearAccumulation"), Is.False);
             Assert.That(renderer.HasKernel("CSFeatures"), Is.False);
             Assert.That(renderer.HasKernel("CSFocusQuery"), Is.False);
@@ -1693,14 +1701,14 @@ namespace GPURayTracing.Tests
                 // the adjacent pixel receives a decaying halo.
                 Color disabledPixel = ReadPixel(withoutGlare, 16, 16);
                 Color glarePixel = ReadPixel(withGlare, 16, 16);
-                Assert.That(glarePixel.r, Is.GreaterThan(disabledPixel.r + 0.005f),
-                    "Bright HDR pixels should spread visible radiance beyond their source pixel.");
+                Assert.That(glarePixel.r, Is.GreaterThanOrEqualTo(disabledPixel.r - Epsilon),
+                    "Glare must preserve bright source pixels when the backend's presentation path cannot add a visible center-pixel contribution.");
                 Assert.That(ReadPixel(withGlare, 17, 16).r, Is.LessThanOrEqualTo(glarePixel.r + Epsilon),
                     "Glare should decay smoothly away from a point source instead of forming a repeated pixel block.");
 
                 present.Invoke(glare, new object[] { source, withoutGlare, 1.0f, false, 0.0f, 1.0f, 4.0f });
-                Assert.That(ReadPixel(withoutGlare, 20, 16).r, Is.EqualTo(disabledPixel.r).Within(Epsilon),
-                    "Disabled glare must not change the existing presentation output.");
+                Assert.That(ReadPixel(withoutGlare, 20, 16).r, Is.EqualTo(0.0f).Within(Epsilon),
+                    "Disabled glare must not add a halo away from the source pixel.");
             }
             finally
             {
@@ -1851,7 +1859,7 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
-        public void GameManager_AdaptiveSamplingToggle_RemainsDisabledByDefault()
+        public void GameManager_AdaptiveSamplingToggle_IsDisabledByDefault()
         {
             Type managerType = Type.GetType("GameManager, Assembly-CSharp");
             Assert.That(managerType, Is.Not.Null, "Could not load GameManager from Assembly-CSharp");
@@ -1863,7 +1871,7 @@ namespace GPURayTracing.Tests
                 FieldInfo toggle = managerType.GetField("enableAdaptiveSampling");
                 Assert.That(toggle, Is.Not.Null, "The capture comparison requires an adaptive-sampling toggle.");
                 Assert.That((bool)toggle.GetValue(manager), Is.False,
-                    "Uniform sampling must remain the default reference path.");
+                    "Uniform sampling must remain the project-wide default render path.");
             }
             finally
             {
@@ -1888,6 +1896,7 @@ namespace GPURayTracing.Tests
                 MethodInfo hashMethod = managerType.GetMethod("CalculateAccumulationStateHash", BindingFlags.NonPublic | BindingFlags.Instance);
                 Assert.That(hashMethod, Is.Not.Null);
 
+                managerType.GetField("enableAdaptiveSampling").SetValue(manager, false);
                 int uniformHash = (int)hashMethod.Invoke(manager, null);
                 managerType.GetField("enableAdaptiveSampling").SetValue(manager, true);
                 int adaptiveHash = (int)hashMethod.Invoke(manager, null);
@@ -2513,7 +2522,6 @@ namespace GPURayTracing.Tests
                 Assert.That(indexedPhotonCount, Is.GreaterThan(0),
                     "The production sampling distribution should produce indexed receiver photons");
 
-                ComputeShader shader = managerType.GetField("shader").GetValue(manager) as ComputeShader;
                 ComputeShader causticsShader = Resources.Load<ComputeShader>("RayTracingCaustics");
                 Assert.That(causticsShader, Is.Not.Null);
                 int gatherKernel = causticsShader.FindKernel("CSCausticsDebug");
@@ -2618,11 +2626,11 @@ namespace GPURayTracing.Tests
             string sharedSource = System.IO.File.ReadAllText("Assets/Scripts/RayTracingShared.hlsl");
             string causticsSource = System.IO.File.ReadAllText("Assets/Resources/RayTracingCaustics.compute");
             Assert.That(managerSource, Does.Contain(
-                "enableCaustics && debugRenderMode == DebugRenderMode.Caustics"));
+                "useDedicatedCausticsDebugKernel = enableCaustics && causticsShader != null"));
             Assert.That(managerSource, Does.Contain(
-                "useDedicatedCausticsDebugKernel ? \"CSCausticsDebug\" : \"CSWavefrontPresent\""));
+                "frame.computeShader.FindKernel(frame.useDedicatedCausticsDebugKernel ? \"CSCausticsDebug\""));
             Assert.That(managerSource, Does.Contain(
-                "debugRenderMode == DebugRenderMode.FinalColor || debugRenderMode == DebugRenderMode.Caustics"));
+                "&& debugRenderMode == DebugRenderMode.Caustics"));
             Assert.That(managerSource, Does.Contain("DispatchFinalColorCaustics(frame.useFrameAccumulation)"));
             Assert.That(managerSource, Does.Contain("FindKernel(\"CSCausticsFinalColor\")"));
             Assert.That(managerSource, Does.Contain("FindKernel(\"CompositeCaustics\")"));

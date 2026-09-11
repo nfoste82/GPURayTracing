@@ -4,11 +4,11 @@ This document covers compute-shader debug render modes and random sampling behav
 
 ## Debug Render Modes
 
-`GameManager.debugRenderMode` uploads `_DebugRenderMode` to the compute shader. The active final-color
-route is wavefront-based: first-hit diagnostics read the stored `RayHit`, and path diagnostics capture
-completion state into an opt-in buffer. `GetDebugRenderColor()` remains only in the legacy debug asset.
+`GameManager.debugRenderMode` uploads `_DebugRenderMode` to the compute shader. The active route is
+wavefront-based: first-hit diagnostics read the stored `RayHit`, while direct-light and path diagnostics
+use opt-in buffers. `GlassScatter` records its primary glass decision during wavefront classification.
 
-`CSMain` is final-color-only. Geometry diagnostics use the separate `RayTracingDebug.compute` asset, whose `CSDebugMain` defines `DEBUG_RENDER` locally before including the shared tracer. This keeps debug intersection/scatter code out of the common final-color compile. Fog uses a separate `FOG_ENABLED` variant only while an active fog volume is present, and terrain independently uses `TERRAIN_ENABLED` while terrain resources are present. Photon caustics remain runtime-controlled through `_CausticsEnabled`, while CPU photon resources and dispatches remain disabled when caustics are off. The first use of any selected renderer-asset/fog/terrain combination compiles synchronously on its first dispatch. The debug asset currently exceeds Metal's compiler timeout; read `22-shader-compile-splitting-handoff.md` before compiling or modifying it.
+Fog uses a separate `FOG_ENABLED` wavefront variant only while an active fog volume is present, and terrain independently uses `TERRAIN_ENABLED` while terrain resources are present. Photon caustics remain runtime-controlled through `_CausticsEnabled`, while CPU photon resources and dispatches remain disabled when caustics are off. The first use of any selected renderer-asset/fog/terrain combination compiles synchronously on its first dispatch.
 
 Available modes:
 

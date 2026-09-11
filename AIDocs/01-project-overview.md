@@ -1,6 +1,6 @@
 # Project Overview
 
-This is a Unity real-time GPU ray/path tracing project. The scene runs inside Unity, but the actual image generation is performed by a compute shader in `Assets/Scripts/RayTracingCompute.compute`.
+This is a Unity real-time GPU ray/path tracing project. The scene runs inside Unity, but image generation is performed by the queue-driven compute shader in `Assets/Resources/RayTracingWavefront.compute`.
 
 The renderer currently ray traces spheres, emissive sphere and mesh lights, registered triangle meshes, and one optional finite procedural water surface. Unity scene meshes, walls, and colliders that are not registered as ray-traced objects still exist mostly for scene organization and physics; they are not traced by the compute shader.
 
@@ -8,7 +8,7 @@ The renderer currently ray traces spheres, emissive sphere and mesh lights, regi
 
 - `Assets/Scripts/GameManager.cs`: Main Unity-side controller. Owns render texture creation, compute shader dispatch, quality settings, camera controls, autofocus, object buffers, shader parameter uploads, and optional Unity skybox preview sync. It does not implement `OnRenderImage()` itself; it exposes `RenderImage(src, dest)`, which is called by `RayTracingCameraRenderer`.
 - `Assets/Scripts/RayTracingCameraRenderer.cs`: Camera component whose `OnRenderImage()` delegates to `GameManager.RenderImage()`. It runs on whatever camera holds this component (typically the same camera wired into `GameManager.renderTextureCamera`, but that link is only inspector wiring, not enforced in code).
-- `Assets/Scripts/RayTracingCompute.compute`: Main GPU renderer. Generates camera rays, performs intersections, computes lighting/shadows/reflections/refraction, and writes the final pixel color.
+- `Assets/Resources/RayTracingWavefront.compute`: Main GPU renderer. Generates camera rays, runs staged intersection, lighting, shadow, and scatter queues, and writes the final pixel color.
 - `Assets/Scripts/RayTracingBenchmarkOverlay.cs`: Runtime benchmark overlay for frame timing, geometry counts, BVH status, and quality settings.
 - `Assets/Scripts/BenchmarkOrbitMover.cs`: Simple deterministic movement helper for dynamic benchmark scenes.
 - `Assets/Scripts/RayTracingObject.cs`: Registers and unregisters ray-traced scene objects with the nearest parent `GameManager`.

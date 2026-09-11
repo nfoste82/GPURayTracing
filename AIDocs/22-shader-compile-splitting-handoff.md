@@ -15,6 +15,12 @@ than 30 minutes.
 
 ## Current Asset Layout
 
+The monolithic `CSMain` renderer and its water, fog, water+fog, and geometry-debug wrappers were
+retired after wavefront replacements landed. The active final-color assets are
+`RayTracingWavefront.compute`, `RayTracingWavefrontWater.compute`,
+`RayTracingWavefrontFog.compute`, and `RayTracingWavefrontWaterFog.compute`; image fixtures now
+dispatch the same queue pipeline. The historical layout and timings below are retained as context.
+
 The former monolithic `Assets/Scripts/RayTracingCompute.compute` was split as follows:
 
 ```text

@@ -14,7 +14,6 @@ public static class RayTracingSceneGenerator
 {
     private const string GeneratedSceneFolder = "Assets/Scenes/Generated";
     private const string GeneratedAssetFolder = "Assets/Scenes/Generated/GeneratedAssets";
-    private const string ComputeShaderPath = "Assets/Scripts/RayTracingCompute.compute";
     private const string CausticsShaderPath = "Assets/Resources/RayTracingCaustics.compute";
     private const string SkyboxPath = "Assets/Textures/Skyboxes/skyboxOcean.jpg";
     private const string AutumnFieldSkyboxPath = "Assets/Textures/Skyboxes/autumn_field_puresky_4k.hdr";
@@ -510,28 +509,28 @@ public static class RayTracingSceneGenerator
             SceneName = sceneName,
             CameraPosition = new Vector3(-0.1f, 15f, -36.17f),
             CameraEuler = new Vector3(20.8f, 0.0f, 0.0f),
-            NumBounces = 12,
+            NumBounces = 8,
             ShadowQuality = 0,
             CameraApertureMode = CameraApertureMode.Pinhole,
-            Exposure = 1.2f,
+            Exposure = 1.68f,
             LightFalloffScale = 0.07f,
-            SkyboxLightColor = new Color32(108, 108, 108, 255),
+            SkyboxLightColor = new Color32(168, 168, 168, 255),
             TopLevelBvhMinObjectCount = 0,
             ShadowBvhMinObjectCount = 0,
             FieldOfView = 10.7f,
-            DirectionalLightIntensity = 3.3f,
-            DirectionalLightRotation = new Vector3(70.0f, -30.0f, 0.0f),
-            DirectionalLightAngularRadius = 8.43f,
-            CausticIntensity = 0.53f,
+            DirectionalLightIntensity = 2.5f,
+            DirectionalLightRotation = new Vector3(20.0f, -47.7f, 0.0f),
+            DirectionalLightAngularRadius = 5.0f,
+            EnableCaustics = false,
             FireflyClamp = 8f,
         });
         
         var defaultCheckerGray = AssetDatabase.GetBuiltinExtraResource<Texture2D>(DefaultCheckerGrayTexturePath);
 
         AddRayMesh(context.Root, "Checkerboard Floor", 
-            CreateHorizontalQuadMesh("Teapot Checkerboard Floor", 22.0f, 20.0f, 6.0f, 6.0f), 
+            CreateHorizontalQuadMesh("Teapot Checkerboard Floor", 22.0f, 20.0f, 10.5f, 10.5f), 
             new Vector3(0f, 0f, 3.35f), Vector3.zero, new Vector3(1f, 1f, 1.5f), 
-            new Color32(200, 200, 200, 255), RayMaterial.MaterialType.Diffuse, 
+            Color.white, RayMaterial.MaterialType.Diffuse, 
             0.2f, 1.0f, 1.0f, albedoTexture: defaultCheckerGray);
         
         AddRayMesh(context.Root, "Checkerboard Back Wall", 
@@ -542,19 +541,19 @@ public static class RayTracingSceneGenerator
         
         AddLight(context.Root, "Front Left Fill", new Vector3(-23.25f, 17.2f, -8.7f), 3f, new Color32(225, 247, 255, 255), 4f);
         AddLight(context.Root, "Back Light", new Vector3(0.73f, 3.47f, 23.4f), 1.5f, new Color32(255, 250, 235, 255), 10f);
-        AddLight(context.Root, "Front Right Fill", new Vector3(12.75f, 10f, -14.54f), 2.5f, new Color32(220, 234, 235, 255), 3f);
+        //AddLight(context.Root, "Front Right Fill", new Vector3(12.75f, 10f, -14.54f), 2.5f, new Color32(220, 234, 235, 255), 3f);
 
-        AddTeapot(context.Root, "Blue Tiles", bodyMesh, baseMesh, new Vector3(-4.2f, 0.02f, 4.8f), Color.white, RayMaterial.MaterialType.Diffuse, 0.0f, 1.0f, tilesAlbedo, tilesMetalRough, tilesNormal);
+        AddTeapot(context.Root, "Blue Tiles", bodyMesh, baseMesh, new Vector3(-4.2f, 0.02f, 4.8f), new Color32(221, 221, 221, 255), RayMaterial.MaterialType.Diffuse, 0.0f, 1.0f, tilesAlbedo, tilesMetalRough, tilesNormal);
         AddTeapot(context.Root, "Marble", bodyMesh, baseMesh, new Vector3(0.0f, 0.02f, 4.8f), Color.white, RayMaterial.MaterialType.Diffuse, 0.0f, 1.0f, marbleAlbedo, marbleMetalRough);
         AddTeapot(context.Root, "Blue Scratched", bodyMesh, baseMesh, new Vector3(4.2f, 0.02f, 4.8f), Color.white, RayMaterial.MaterialType.Diffuse, 0.0f, 1.0f, scratchesAlbedo, scratchesMetalRough, scratchesNormal);
-        AddTeapot(context.Root, "Striped Chrome", bodyMesh, baseMesh, new Vector3(-4.2f, 0.02f, -3.63f), Color.white, RayMaterial.MaterialType.Metal, 0.0f, 1.0f, stripedAlbedo, stripedMetalRough, stripedNormal);
+        AddTeapot(context.Root, "Striped Chrome", bodyMesh, baseMesh, new Vector3(-4.2f, 0.02f, -3.63f), new Color32(192, 192, 192, 255), RayMaterial.MaterialType.Metal, 0.0f, 1.0f, stripedAlbedo, stripedMetalRough, stripedNormal);
         
         AddTeapot(context.Root, "Teal Glass", bodyMesh, baseMesh,
-            new Vector3(0.0f, 0.02f, -3.63f), new Color32(0, 221, 159, 255), 
+            new Vector3(0.0f, 0.02f, -3.63f), new Color32(0, 255, 206, 255), 
             RayMaterial.MaterialType.Glass, 
             0.82f, 0.0f, 
             null, null, null, 
-            0.25f, 1.5f, specular: 0.0f, transmission: 0.947f);
+            0.147f, 1.5f, specular: 0.0f, transmission: 0.975f);
         
         AddTeapot(context.Root, "Gold Circles", bodyMesh, baseMesh, new Vector3(4.2f, 0.02f, -3.63f), new Color32(209, 136, 3, 255), RayMaterial.MaterialType.Diffuse, 0.5f, 1.0f, goldAlbedo, goldMetalRough, goldNormal);
 
@@ -583,7 +582,6 @@ public static class RayTracingSceneGenerator
         var manager = managerObject.AddComponent<GameManager>();
         MoveGameManagerToTop(manager);
         var cameraManager = managerObject.GetComponent<CameraManager>();
-        manager.shader = AssetDatabase.LoadAssetAtPath<ComputeShader>(ComputeShaderPath);
         manager.causticsShader = AssetDatabase.LoadAssetAtPath<ComputeShader>(CausticsShaderPath);
         cameraManager.renderTextureCamera = camera;
         // Generated scenes use the production local-RIS path. Reuse prototypes remain

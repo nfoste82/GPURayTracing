@@ -158,6 +158,7 @@ public sealed class GameManagerEditor : Editor
         DrawSection(manager, "Image Export", true, () => DrawImageExport(manager));
         DrawSection(manager, "Diagnostics", false, () =>
         {
+            DrawProperty("debugRenderMode", "Debug Render Mode");
             DrawProperty("profileStartup");
             DrawProperty("maxLightSamples");
         });

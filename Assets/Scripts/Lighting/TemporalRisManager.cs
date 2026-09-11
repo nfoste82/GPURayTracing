@@ -2,7 +2,7 @@ using UnityEngine;
 
 namespace PathTracing.Lighting
 {
-    // Reservoir records use structured buffers so CSMain retains enough UAV slots for its HDR
+    // Reservoir records use structured buffers so the wavefront renderer retains enough UAV slots for HDR
     // output and accumulation textures on Metal.
     public sealed class TemporalRisManager
     {
@@ -105,7 +105,7 @@ namespace PathTracing.Lighting
             var read = _readIsA ? 0 : 1;
             var write = _readIsA ? 1 : 0;
             var camera = gameManager.renderTextureCamera;
-            // CSMain maps its own pixel coordinates to clip space rather than rendering through a
+            // The renderer maps its own pixel coordinates to clip space rather than rendering through a
             // camera target. Asking Unity for a render-texture projection flips Y, which sends
             // temporal history to the vertically mirrored receiver during camera motion.
             var current = GL.GetGPUProjectionMatrix(camera.projectionMatrix, false) * camera.worldToCameraMatrix;

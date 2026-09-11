@@ -17,7 +17,7 @@ The project uses EditMode tests under `Assets/Tests/EditMode/` to make rendering
 - Image fixtures mirror the production `260`-byte triangle layout and bind neutral albedo, metallic/roughness, and normal texture arrays so missing-map defaults remain deterministic.
 - Medium-identity and stack probes for air -> water -> sphere glass -> water -> air, parent lookup, matching exits, overflow, unmatched exits, underwater initialization, and flat water-volume side/bottom intersections.
 - Deterministic randomized CPU reference comparisons for per-mesh, top-level, and shadow BVH traversal against brute force, with maximum build depth checked against the fixed stack capacity of `32`.
-- GPU dispatch smoke coverage at `1x1`, `3x5`, and `13x7`; `CSMain` returns before accessing output textures for partial 8x4 thread groups outside their dimensions.
+- GPU dispatch smoke coverage at `1x1`, `3x5`, and `13x7`; wavefront generation and presentation guard output texture accesses outside partial thread groups.
 - Adaptive group-scheduler coverage verifies fixed exact full-resolution group budgets, RGB Welford standard-error scoring, quantile-bucket tie rotation, compact work-list/root-offset parity, partial dimensions, reset/hash invalidation, and the capture-only scheduler/trace/resolve phase-timing telemetry contract. Controlled trace parity validates the deterministic sample-index and Welford/RGB accumulation contract.
 - Camera coverage verifies that the serialized lens defaults preserve the previous `0.005` blur scale and enable click-to-focus with clicked focus-point tracking. Existing image fixtures explicitly use the pinhole path; deterministic focus-plane and aperture-shape image fixtures remain future coverage.
 - Production GPU probes cover shared Lambert/GGX BRDF values, PDFs, and finite positive sampled throughput.
@@ -96,13 +96,13 @@ Do not loosen tolerances simply to make a changed render pass. CPU math uses tig
 
 ## Image Fixtures
 
-`RayTracingImageRegressionTests` drives `CSMain` directly with in-memory structured buffers and textures. It uses a fixed seed, fixed camera, no frame accumulation, flat object loops, and no scene assets, so the result does not depend on editor scene state. The first execution of `CSMain` may take longer while Unity compiles the kernel.
+`RayTracingImageRegressionTests` dispatches the production wavefront queue pipeline with in-memory structured buffers and textures. It uses a fixed seed, fixed camera, no frame accumulation, flat object loops, and no scene assets, so the result does not depend on editor scene state. The first execution may take longer while Unity compiles the kernels.
 
 The fixtures use deterministic in-memory sphere, light, triangle, mesh-info, BVH, and texture-array data. They do not depend on scene assets or editor scene state.
 
 ## Medium Transition Foundation
 
-`MediumIdentity` in `RayTracingCompute.compute` records medium type, object identity, IOR, opacity, and absorption color. `TracePath()` carries a fixed-capacity stack with implicit air and initializes containing water and translucent spheres at the camera origin. Containing spheres are pushed from largest to smallest so the innermost sphere is active. Transmission updates the stack while reflection and TIR preserve it. Sphere/mesh helpers that internally cross both faces leave the net stack unchanged; paths that stop inside a volume retain that medium for the next production bounce.
+`MediumIdentity` in `RayTracingShared.hlsl` records medium type, object identity, IOR, opacity, and absorption color. Wavefront paths carry a fixed-capacity stack with implicit air and initialize containing water and translucent spheres at the camera origin. Containing spheres are pushed from largest to smallest so the innermost sphere is active. Transmission updates the stack while reflection and TIR preserve it. Sphere/mesh helpers that internally cross both faces leave the net stack unchanged; paths that stop inside a volume retain that medium for the next production bounce.
 
 Stack overflow and genuinely unmatched exits set explicit status bits and preserve valid existing state. A focused overlap probe verifies that exiting a non-current interpenetrating sphere removes it by identity while retaining the active sphere. Per-segment probes cover glass/water attenuation, neutral air, finite water side and surface exits, clipping at the next hit, and finite-medium sky misses. Production probes also cover water -> glass and glass -> water source/target selection, refraction direction, Fresnel, and the case where glass -> air would incorrectly produce TIR but glass -> water transmits.
 

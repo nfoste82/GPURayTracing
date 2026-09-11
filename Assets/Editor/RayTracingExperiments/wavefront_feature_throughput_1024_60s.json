@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "label": "wavefront_feature_throughput_1024_60s",
+  "scenes": [
+    "Assets/Scenes/Generated/TeapotMaterials.unity",
+    "Assets/Scenes/Generated/Water.unity",
+    "Assets/Scenes/Generated/VolumetricFog.unity",
+    "Assets/Scenes/Generated/Terrain.unity"
+  ],
+  "width": 1024,
+  "height": 1024,
+  "durationSeconds": 60.0,
+  "cooldownSeconds": 15.0,
+  "disableAdaptiveInstrumentation": true,
+  "requireReference": false,
+  "variants": [
+    {
+      "name": "adaptive_off_seed1",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "false" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "samplingSeed", "value": "1" },
+        { "path": "randomNoise", "value": "false" }
+      ]
+    },
+    {
+      "name": "adaptive_no_bootstrap_seed1",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "enableAdaptiveBootstrap", "value": "false" },
+        { "path": "adaptiveSamplingMinSamples", "value": "8" },
+        { "path": "adaptiveBootstrapGroupDivisor", "value": "1" },
+        { "path": "adaptiveLuminanceErrorWeight", "value": "-1" },
+        { "path": "adaptiveReclassificationInterval", "value": "4" },
+        { "path": "adaptiveHighestBucketSampleRate", "value": "1.7" },
+        { "path": "adaptiveMaxPathsPerPixel", "value": "3" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "samplingSeed", "value": "1" },
+        { "path": "randomNoise", "value": "false" }
+      ]
+    },
+    {
+      "name": "adaptive_bootstrap12_seed1",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "enableAdaptiveBootstrap", "value": "true" },
+        { "path": "adaptiveBootstrapFrames", "value": "12" },
+        { "path": "adaptiveBootstrapResolutionScale", "value": "0.5" },
+        { "path": "adaptiveGuidanceHistoryFrames", "value": "0" },
+        { "path": "adaptiveSamplingMinSamples", "value": "8" },
+        { "path": "adaptiveBootstrapGroupDivisor", "value": "1" },
+        { "path": "adaptiveLuminanceErrorWeight", "value": "-1" },
+        { "path": "adaptiveReclassificationInterval", "value": "4" },
+        { "path": "adaptiveHighestBucketSampleRate", "value": "1.7" },
+        { "path": "adaptiveMaxPathsPerPixel", "value": "3" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "samplingSeed", "value": "1" },
+        { "path": "randomNoise", "value": "false" }
+      ]
+    }
+  ]
+}

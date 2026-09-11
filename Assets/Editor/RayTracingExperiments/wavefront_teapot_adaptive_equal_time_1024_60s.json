@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "label": "wavefront_teapot_adaptive_equal_time_1024_60s",
+  "scenes": ["Assets/Scenes/Generated/TeapotMaterials.unity"],
+  "width": 1024,
+  "height": 1024,
+  "durationSeconds": 180.0,
+  "cooldownSeconds": 30.0,
+  "disableAdaptiveInstrumentation": true,
+  "requireReference": true,
+  "referenceRoot": "Assets/Editor/RayTracingSceneReferences",
+  "variants": [
+    {
+      "name": "adaptive_welford_2samples_3bucketrate",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "enableAdaptiveBootstrap", "value": "false" },
+        { "path": "adaptiveSamplingMinSamples", "value": "2" },
+        { "path": "adaptiveBootstrapGroupDivisor", "value": "1" },
+        { "path": "adaptiveLuminanceErrorWeight", "value": "-2" },
+        { "path": "adaptiveReclassificationInterval", "value": "4" },
+        { "path": "adaptiveHighestBucketSampleRate", "value": "3" },
+        { "path": "adaptiveMaxPathsPerPixel", "value": "4" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "adaptive_welford_1samples_2bucketrate",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "enableAdaptiveBootstrap", "value": "false" },
+        { "path": "adaptiveSamplingMinSamples", "value": "1" },
+        { "path": "adaptiveBootstrapGroupDivisor", "value": "1" },
+        { "path": "adaptiveLuminanceErrorWeight", "value": "-2" },
+        { "path": "adaptiveReclassificationInterval", "value": "4" },
+        { "path": "adaptiveHighestBucketSampleRate", "value": "2" },
+        { "path": "adaptiveMaxPathsPerPixel", "value": "4" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "adaptive_welford_2samples_3bucketrate_n1luminance",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "enableAdaptiveBootstrap", "value": "false" },
+        { "path": "adaptiveSamplingMinSamples", "value": "1" },
+        { "path": "adaptiveBootstrapGroupDivisor", "value": "1" },
+        { "path": "adaptiveLuminanceErrorWeight", "value": "-1" },
+        { "path": "adaptiveReclassificationInterval", "value": "4" },
+        { "path": "adaptiveHighestBucketSampleRate", "value": "2" },
+        { "path": "adaptiveMaxPathsPerPixel", "value": "4" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "adaptive_welford_2samples_3bucketrate_n3luminance",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "enableAdaptiveBootstrap", "value": "false" },
+        { "path": "adaptiveSamplingMinSamples", "value": "1" },
+        { "path": "adaptiveBootstrapGroupDivisor", "value": "1" },
+        { "path": "adaptiveLuminanceErrorWeight", "value": "-3" },
+        { "path": "adaptiveReclassificationInterval", "value": "4" },
+        { "path": "adaptiveHighestBucketSampleRate", "value": "2" },
+        { "path": "adaptiveMaxPathsPerPixel", "value": "4" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "adaptive_off_seed1",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "false" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "samplingSeed", "value": "1" },
+        { "path": "randomNoise", "value": "false" }
+      ]
+    }
+  ]
+}

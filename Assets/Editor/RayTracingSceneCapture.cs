@@ -453,9 +453,9 @@ public static class RayTracingSceneCapture
                 var trimmedPath = scenePath.Trim();
                 EditorSceneManager.OpenScene(trimmedPath);
                 var manager = UnityEngine.Object.FindFirstObjectByType<GameManager>();
-                if (manager == null || manager.renderTextureCamera == null || manager.shader == null)
+                if (manager == null || manager.renderTextureCamera == null)
                 {
-                    throw new InvalidOperationException($"Scene capture requires a configured GameManager, render camera, and compute shader: {trimmedPath}");
+                    throw new InvalidOperationException($"Scene capture requires a configured GameManager and render camera: {trimmedPath}");
                 }
 
                 foreach (var setup in UnityEngine.Object.FindObjectsByType<MaterialBallRoomRuntimeSetup>(FindObjectsInactive.Exclude, FindObjectsSortMode.None))
@@ -529,9 +529,9 @@ public static class RayTracingSceneCapture
                 string trimmedPath = scenePath.Trim();
                 EditorSceneManager.OpenScene(trimmedPath);
                 var manager = UnityEngine.Object.FindFirstObjectByType<GameManager>();
-                if (manager == null || manager.renderTextureCamera == null || manager.shader == null)
+                if (manager == null || manager.renderTextureCamera == null)
                 {
-                    throw new InvalidOperationException($"Experiment requires a configured GameManager, render camera, and compute shader: {trimmedPath}");
+                    throw new InvalidOperationException($"Experiment requires a configured GameManager and render camera: {trimmedPath}");
                 }
                 foreach (var setup in UnityEngine.Object.FindObjectsByType<MaterialBallRoomRuntimeSetup>(FindObjectsInactive.Exclude, FindObjectsSortMode.None))
                 {
@@ -734,8 +734,10 @@ public static class RayTracingSceneCapture
         {
             if (item == null || string.IsNullOrWhiteSpace(item.path))
                 throw new InvalidOperationException("Experiment overrides require a property path.");
-            // Existing Welford manifests retain this removed selector; no other estimator remains.
-            if (item.path == "adaptivePriorityMode" && item.value == "WelfordStandardError") continue;
+            // Historical manifests retain removed selectors. The Sobol sampler and Welford
+            // estimator are now unconditional, so preserve their captures without changing intent.
+            if ((item.path == "adaptivePriorityMode" && item.value == "WelfordStandardError")
+                || (item.path == "useOwenScrambledSobol" && item.value == "true")) continue;
             object target = manager;
             string[] segments = item.path.Split('.');
             for (int index = 0; index < segments.Length - 1; index++)
@@ -2133,7 +2135,7 @@ public static class RayTracingSceneCapture
             captureSeed = 0
         };
         string sceneAbsolutePath = Path.GetFullPath(scenePath);
-        string shaderPath = AssetDatabase.GetAssetPath(manager.shader);
+        const string shaderPath = "Assets/Resources/RayTracingWavefront.compute";
         var metadata = new ReferenceMetadata
         {
             scenePath = scenePath,
@@ -2830,9 +2832,9 @@ public static class RayTracingSceneCapture
     private static void UpdatePlayModeCapture()
     {
         GameManager manager = UnityEngine.Object.FindFirstObjectByType<GameManager>();
-        if (manager == null || manager.renderTextureCamera == null || manager.shader == null)
+        if (manager == null || manager.renderTextureCamera == null)
         {
-            FailCurrentScene("requires a configured GameManager, render camera, and compute shader");
+            FailCurrentScene("requires a configured GameManager and render camera");
             return;
         }
 

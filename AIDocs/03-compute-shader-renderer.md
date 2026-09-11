@@ -1,6 +1,6 @@
 # Compute Shader Renderer
 
-The renderer lives in `Assets/Scripts/RayTracingCompute.compute`, with shared declarations and helpers in `Assets/Scripts/RayTracingShared.hlsl`. Its main image kernel, `CSMain`, uses `[numthreads(4,4,1)]` (16 threads) to keep Metal's threadgroup-wide temporary-register use within its recommended budget. Caustics generation and gather-only debugging are isolated in `Assets/Resources/RayTracingCaustics.compute`; both assets consume the shared scene/intersection/material code.
+The renderer lives in `Assets/Resources/RayTracingWavefront.compute`, with shared declarations and helpers in `Assets/Scripts/RayTracingShared.hlsl`. Its queue stages use small fixed thread groups and GPU-generated indirect dispatches. Caustics generation and gather-only debugging are isolated in `Assets/Resources/RayTracingCaustics.compute`; both assets consume the shared scene/intersection/material code.
 
 ## GPU Inputs
 
@@ -16,8 +16,8 @@ Important shader globals:
 - `_NumberOfPasses`: per-frame samples per pixel.
 - `_SubpixelJitterScale`: width of the random primary-ray pixel filter. `1` samples the full pixel footprint; values above `1` intentionally extend into neighboring pixels and blur the image.
 - `_UseFrameAccumulation`, `_AccumulatedFrameCount`, `_SampleOffset`: control progressive final-color accumulation and advance deterministic sample indices across frames. The sample sequence also advances when accumulation is disabled, so animated scenes do not repeat the same stochastic samples every frame.
-- `GameManager.enableAdaptiveSampling`: experimental static-final-color progressive path. It schedules full-resolution pixels in independent `8x8` groups at a configurable cadence. Linear-RGB Welford standard-error scores map groups into 16 global urgency buckets. The 15 non-bootstrap tiers span reciprocal sample-rate endpoints; lower-rate tiers contain more groups using inverse-rate weights plus a uniform normalization term, preserving one expected path per pixel. A deterministic within-band hash prevents quantized score bands from collapsing into one tier. Each compact active pixel is traced through one indirect thread that loops over its assigned paths and updates accumulation once. `CSMain` remains the unchanged uniform reference when the toggle is off.
-- `_NumBounces`: maximum bounces for `TracePath()`.
+- `GameManager.enableAdaptiveSampling`: experimental static-final-color progressive path. It schedules full-resolution pixels in independent `8x8` groups at a configurable cadence. Linear-RGB Welford standard-error scores map groups into 16 global urgency buckets. The 15 non-bootstrap tiers span reciprocal sample-rate endpoints; lower-rate tiers contain more groups using inverse-rate weights plus a uniform normalization term, preserving one expected path per pixel. Each admitted layer runs the same wavefront queue stages and updates per-pixel accumulation once.
+- `_NumBounces`: maximum wavefront scatter iterations.
 - `_DebugRenderMode`: selects final path-traced color or a debug visualization.
 - `_ShadowQuality`: soft-shadow sample budget control. Bounce-0 direct lighting takes `max(1, _ShadowQuality + 1)` stochastic area-light samples per light.
 - `_ShadowRandomness`: area-light sampling radius multiplier for soft shadow samples.
@@ -116,17 +116,17 @@ The scene also uploads a top-level BVH over ray-traced spheres, emissive light s
 3. Transforming the direction through `_CameraToWorld`.
 4. Normalizing the result.
 
-`CSMain` maps each pixel to `[-1, 1]` UV space with dimensions `0-1` of the per-pixel Burley-style shuffled, Owen-scrambled Sobol sequence. The jitter samples the full pixel footprint by default (`_SubpixelJitterScale = 1`); progressive accumulation and `_NumberOfPasses` increase the number of such samples rather than widening that footprint.
+`CSWavefrontGenerate` maps each pixel to `[-1, 1]` UV space with dimensions `0-1` of the per-pixel Burley-style shuffled, Owen-scrambled Sobol sequence. The jitter samples the full pixel footprint by default (`_SubpixelJitterScale = 1`); progressive accumulation and `_NumberOfPasses` increase the number of such samples rather than widening that footprint.
 
 ## Tone Mapping And Exposure
 
-Each final-color path sample is optionally luminance-clamped before averaging. After all passes are averaged, `CSMain` optionally blends final-color HDR radiance into `AccumulationResult` using `_AccumulatedFrameCount`. This happens before exposure/tone mapping, so exposure changes can remap the accumulated HDR result without changing the stored radiance. Debug visualizations skip both the clamp and accumulation and are written with their raw diagnostic values.
+Each final-color path sample is optionally luminance-clamped before averaging. After all queue passes resolve, `CSWavefrontPresent` optionally blends final-color HDR radiance into `AccumulationResult` using `_AccumulatedFrameCount`. This happens before exposure/tone mapping, so exposure changes can remap the accumulated HDR result without changing the stored radiance. Debug visualizations skip both the clamp and accumulation and are written with their raw diagnostic values.
 
-`CSMain` leaves final-color radiance linear HDR. `RayTracingSpatialDenoiser.compute` then uses `CSPresent` to reconstruct it at display resolution with Catmull-Rom filtering and applies `ACESFilmicToneMap(color * _Exposure)`, the Narkowicz 2015 ACES filmic approximation. With `GameManager.enableGlare`, `SpatialDenoisingManager` first builds a four-level HDR bright-pass pyramid beginning at presentation resolution, and `CSPresent` composites those progressively wider levels as an approximate optical glare point-spread tail. The glare pyramid uses tent-filtered reduction and bilinear reconstruction rather than Catmull-Rom so bright, pixel-scale sources do not preserve a blocky grid or exhibit reconstruction ringing. This maps open-ended HDR radiance into `[0, 1]` so bright values roll off smoothly instead of clipping hard to white. `_Exposure` comes from `GameManager.exposure`.
+`CSWavefrontPresent` leaves final-color radiance linear HDR. `RayTracingSpatialDenoiser.compute` then uses `CSPresent` to reconstruct it at display resolution with Catmull-Rom filtering and applies `ACESFilmicToneMap(color * _Exposure)`, the Narkowicz 2015 ACES filmic approximation. With `GameManager.enableGlare`, `SpatialDenoisingManager` first builds a four-level HDR bright-pass pyramid beginning at presentation resolution, and `CSPresent` composites those progressively wider levels as an approximate optical glare point-spread tail. The glare pyramid uses tent-filtered reduction and bilinear reconstruction rather than Catmull-Rom so bright, pixel-scale sources do not preserve a blocky grid or exhibit reconstruction ringing. This maps open-ended HDR radiance into `[0, 1]` so bright values roll off smoothly instead of clipping hard to white. `_Exposure` comes from `GameManager.exposure`.
 
 ## Depth Of Field
 
-For each pass with a nonzero aperture, `CSMain` intersects the pinhole ray with a camera-forward focal plane:
+For each pass with a nonzero aperture, `CSWavefrontGenerate` intersects the pinhole ray with a camera-forward focal plane:
 
 ```hlsl
 float focusRayDistance = _FocalDistance / dot(ray.direction, cameraForward);

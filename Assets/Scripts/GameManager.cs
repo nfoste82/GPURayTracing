@@ -33,16 +33,11 @@ public class GameManager : MonoBehaviour
     [Tooltip("Logs phase timings for initial scene buffer construction and the first compute dispatch.")]
     public bool profileStartup = true;
 
-    public ComputeShader shader;
-
     [SerializeField] private ComputeShader utilityShader;
     [SerializeField] private ComputeShader featuresShader;
     [SerializeField] private ComputeShader spatialRisPrepassShader;
     [SerializeField] private ComputeShader focusShader;
     [SerializeField] private ComputeShader adaptiveSchedulerShader;
-    [SerializeField] private ComputeShader waterShader;
-    [SerializeField] private ComputeShader fogShader;
-    [SerializeField] private ComputeShader waterFogShader;
     [SerializeField] private ComputeShader waterFeaturesShader;
     [SerializeField] private ComputeShader waterFocusShader;
     private ComputeShader _wavefrontShader;
@@ -139,7 +134,7 @@ public class GameManager : MonoBehaviour
     public int pathGuidingMinimumSamples = 32;
 
     [Tooltip("Redistributes a fixed image-wide full-resolution path budget using group uncertainty. It never automatically stops rendering.")]
-    public bool enableAdaptiveSampling = true;
+    public bool enableAdaptiveSampling = false;
 
     [Tooltip("Records per-frame reference PSNR/RMSE and the final render to TestCaptures/EditorRuns when Play mode ends. The Adaptive Allocation Monitor must be open.")]
     public bool recordEditorRun = false;
@@ -166,12 +161,12 @@ public class GameManager : MonoBehaviour
 
     [Range(1, 512), Tooltip("Frames rendered uniformly at the bootstrap resolution before full-resolution adaptive sampling begins.")]
     public int adaptiveBootstrapFrames = 8;
-    [Range(0.125f, 0.5f), Tooltip("Resolution used by the normal CSMain bootstrap renderer before full-resolution adaptive sampling begins.")]
+    [Range(0.125f, 0.5f), Tooltip("Resolution used by the wavefront bootstrap renderer before full-resolution adaptive sampling begins.")]
     public float adaptiveBootstrapResolutionScale = 0.25f;
     [Range(0, 32), Tooltip("Coarse History Passed to Fine: approximate accumulation samples initialized from the upscaled bootstrap image. Set to 0 to keep the bootstrap display-only and preserve unbiased fine accumulation.")]
     public int adaptiveGuidanceHistoryFrames = 2;
     // Retained only to deserialize existing scenes and command-line settings. Bootstrap is now a
-    // uniform CSMain render, so stability-driven guide handoff no longer exists.
+    // uniform wavefront render, so stability-driven guide handoff no longer exists.
     [HideInInspector] public float adaptiveGuidanceChangeThreshold = 0.02f;
     [HideInInspector] public int adaptiveGuidanceMaxUpdates = 2;
     // Kept serialized so existing scenes and capture command lines load without losing data. The
@@ -739,8 +734,6 @@ public class GameManager : MonoBehaviour
     // The photon transport kernel carries a medium stack and intersection state. A 32-thread
     // group keeps Metal register allocation within its recommended per-group budget.
     private const int CausticTraceThreadCount = 32;
-    // CSMain combines path tracing with optional volumetric fog. Keeping its groups at 16 threads
-    // avoids Metal's recommended temporary-register budget being exceeded.
     private const int RenderThreadCountX = 4;
     private const int RenderThreadCountY = 4;
     private const int MaxCausticGridCells = 262144;
@@ -876,21 +869,6 @@ public class GameManager : MonoBehaviour
         {
             Debug.LogError("Split ray tracing compute shaders are missing from Resources.", this);
         }
-        // Geometry diagnostics are temporarily disabled because their Metal kernel can exceed
-        // Unity's compiler timeout. Keep all runtime rendering on the production path.
-        debugRenderMode = DebugRenderMode.FinalColor;
-        if (waterShader == null)
-        {
-            waterShader = Resources.Load<ComputeShader>("RayTracingWater");
-        }
-        if (fogShader == null)
-        {
-            fogShader = Resources.Load<ComputeShader>("RayTracingFog");
-        }
-        if (waterFogShader == null)
-        {
-            waterFogShader = Resources.Load<ComputeShader>("RayTracingWaterFog");
-        }
         if (waterFeaturesShader == null)
         {
             waterFeaturesShader = Resources.Load<ComputeShader>("RayTracingWaterFeatures");
@@ -903,8 +881,7 @@ public class GameManager : MonoBehaviour
         {
             Debug.LogError("Adaptive scheduler shader is missing. Add RayTracingAdaptiveScheduler to Resources.", this);
         }
-        if (waterShader == null || fogShader == null || waterFogShader == null || waterFeaturesShader == null
-            || waterFocusShader == null)
+        if (waterFeaturesShader == null || waterFocusShader == null)
         {
             Debug.LogError("Water/fog-capable ray tracing compute shaders are missing from Resources.", this);
         }
@@ -1537,7 +1514,7 @@ public class GameManager : MonoBehaviour
             _wavefrontPathTracingManager.Dispatch(targetShader, _textureSize, numberOfPasses, numBounces,
                 0,
                 debugRenderMode == DebugRenderMode.DirectLight,
-                debugRenderMode == DebugRenderMode.Throughput || debugRenderMode == DebugRenderMode.BounceCount,
+                debugRenderMode == DebugRenderMode.Throughput || debugRenderMode == DebugRenderMode.BounceCount || debugRenderMode == DebugRenderMode.GlassScatter,
                 targetShader == _wavefrontPathGuidedShader,
                 SetShaderParameters, _outputTexture, _accumulationTexture);
             return;
@@ -1615,7 +1592,7 @@ public class GameManager : MonoBehaviour
             _wavefrontPathTracingManager.Dispatch(wavefrontShader, _textureSize, numberOfPasses, numBounces,
                 maxLayers,
                 debugRenderMode == DebugRenderMode.DirectLight,
-                debugRenderMode == DebugRenderMode.Throughput || debugRenderMode == DebugRenderMode.BounceCount,
+                debugRenderMode == DebugRenderMode.Throughput || debugRenderMode == DebugRenderMode.BounceCount || debugRenderMode == DebugRenderMode.GlassScatter,
                 wavefrontShader == _wavefrontPathGuidedShader,
                 SetShaderParameters, _outputTexture, _accumulationTexture);
         }
@@ -2360,7 +2337,6 @@ public class GameManager : MonoBehaviour
     {
         public bool fogEnabled;
         public bool useDedicatedCausticsDebugKernel;
-        public bool useGeometryDebugShader;
         public int requestedVariant;
         public bool useFrameAccumulation;
         public int kernelHandle;
@@ -2383,14 +2359,7 @@ public class GameManager : MonoBehaviour
             useDedicatedCausticsDebugKernel = enableCaustics && causticsShader != null
                 && debugRenderMode == DebugRenderMode.Caustics
         };
-        frame.useGeometryDebugShader = false;
-        // The low-resolution adaptive bootstrap still dispatches CSMain. Do not mark the separate
-        // adaptive trace asset as warmed until the bootstrap has actually reached its handoff.
-        // Otherwise the first real trace compiles synchronously without the warning frame.
-        bool useAdaptiveTraceShader = ShouldUseAdaptiveSampling()
-            && (!enableAdaptiveBootstrap || _adaptiveBootstrapFrameCount >= Mathf.Clamp(adaptiveBootstrapFrames, 1, 512));
         int rendererKind = frame.useDedicatedCausticsDebugKernel ? 2
-            : frame.useGeometryDebugShader ? 1 : useAdaptiveTraceShader ? 4
             : ShouldRunTemporalRis() && !IsTemporalRisUnsupported() && !HasWaterVolume ? 5 : ShouldUseWavefrontPathGuidedShader() ? 6
             : HasWaterVolume ? frame.fogEnabled ? 8 : 3 : frame.fogEnabled ? 7 : 0;
         frame.requestedVariant = GetShaderVariantKey(rendererKind, frame.fogEnabled,
@@ -3456,14 +3425,6 @@ public class GameManager : MonoBehaviour
             AddStartupProfilePhase($"shadow BVH ({_sceneBvhs.ShadowNodeCount:N0} nodes)", phaseStart);
         }
 
-        shader.SetInt(NumSpheres, _spheres.Count);
-        shader.SetInt(NumTriangles, _triangles.Count);
-        shader.SetInt(NumMeshes, _meshInfos.Count);
-        
-        Lighting.SetShaderLightCount(shader);
-        
-        _sceneBvhs.SetShaderParameters(shader);
-
         phaseStart = Stopwatch.GetTimestamp();
         _sphereBuffer = CreateComputeBuffer(_spheres, SphereStride);
         _triangleBuffer = CreateComputeBuffer(_triangles, TriangleStride);
@@ -3750,9 +3711,8 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    private void SetSceneBuffers(int kernelHandle, ComputeShader targetShader = null)
+    private void SetSceneBuffers(int kernelHandle, ComputeShader targetShader)
     {
-        targetShader ??= shader;
         SetComputeBuffer(targetShader, Spheres, _sphereBuffer, kernelHandle);
         _lightingManager.SetBuffers(targetShader, kernelHandle);
         SetComputeBuffer(targetShader, Triangles, _triangleBuffer, kernelHandle);
@@ -3820,11 +3780,6 @@ public class GameManager : MonoBehaviour
         return nearestDistance;
     }
     
-    private void SetShaderParameters(int kernelHandle)
-    {
-        SetShaderParameters(shader, kernelHandle);
-    }
-
     private void SetShaderParameters(ComputeShader targetShader, int kernelHandle)
     {
         if (targetShader == _wavefrontPathGuidedShader) EnsurePathGuidingResources();
@@ -3932,7 +3887,7 @@ public class GameManager : MonoBehaviour
         targetShader.SetInt(NumberOfPasses, numberOfPasses);
         targetShader.SetFloat(SubpixelJitterScale, subpixelJitterScale);
         targetShader.SetInt(NumBounces, numBounces);
-        // Temporal modes are presented by RayTracingSpatialDenoiser after CSMain. Keep CSMain
+        // Temporal modes are presented by RayTracingSpatialDenoiser after wavefront tracing. Keep
         // on its normal HDR beauty path so an out-of-range renderer debug value cannot write
         // an untonemapped fallback before the temporal presentation pass runs.
         targetShader.SetInt(Mode, IsTemporalDebugMode() ? (int)DebugRenderMode.FinalColor : (int)debugRenderMode);
@@ -3988,7 +3943,7 @@ public class GameManager : MonoBehaviour
         targetShader.SetFloat(Exposure, exposure);
         targetShader.SetFloat(FireflyClamp, Mathf.Max(0.0f, fireflyClamp));
         
-        if (targetShader == _wavefrontWaterShader || targetShader == _wavefrontWaterFogShader || targetShader == waterShader || targetShader == waterFogShader || targetShader == waterFeaturesShader || targetShader == waterFocusShader
+        if (targetShader == _wavefrontWaterShader || targetShader == _wavefrontWaterFogShader || targetShader == waterFeaturesShader || targetShader == waterFocusShader
             || targetShader == causticsShader)
         {
             WaterManager.SetShaderParameters(targetShader, Application.isPlaying ? GetRenderTime() : 0.0f);
@@ -4042,9 +3997,8 @@ public class GameManager : MonoBehaviour
         SetSceneBuffers(kernelHandle, targetShader);
     }
 
-    private void SetTerrainShaderParameters(int kernelHandle, ComputeShader targetShader = null)
+    private void SetTerrainShaderParameters(int kernelHandle, ComputeShader targetShader)
     {
-        targetShader ??= shader;
         _terrainManager ??= GetComponent<TerrainManager>();
         _terrainManager.SetShaderParameters(targetShader, kernelHandle);
     }

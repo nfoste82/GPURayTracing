@@ -15,6 +15,7 @@
 #pragma kernel CSWavefrontPublishNextQueue
 #pragma kernel CSWavefrontRetireCurrentQueue
 #pragma kernel CSWavefrontResolve
+#pragma kernel CSWavefrontResolveAdaptive
 #pragma kernel CSWavefrontPresent
 #pragma multi_compile _ TERRAIN_ENABLED
 
@@ -49,6 +50,7 @@ struct WavefrontPathDiagnostic
 {
     float3 throughput;
     uint bounceCount;
+    float3 glassScatter;
 };
 
 struct WavefrontPathGuideState
@@ -70,6 +72,7 @@ RWStructuredBuffer<WavefrontPathDiagnostic> _WavefrontPathDiagnostics;
 RWStructuredBuffer<WavefrontPathGuideState> _WavefrontPathGuideStates;
 RWStructuredBuffer<uint> _WavefrontCounters;
 RWStructuredBuffer<uint> _WavefrontDispatchArgs;
+RWStructuredBuffer<float3> _WavefrontAdaptiveRadiance;
 RWTexture2D<float4> _WavefrontFrameResult;
 RWTexture2D<float4> AdaptiveSamplingState;
 RWTexture2D<float4> AdaptiveSamplingM2;
@@ -77,6 +80,7 @@ StructuredBuffer<uint4> AdaptiveGroupInfo;
 int _WavefrontPassIndex;
 int _WavefrontThreadsPerGroup;
 int _WavefrontAdaptiveSampling;
+uint _WavefrontPixelCapacity;
 uint _AdaptiveGroupWidth;
 uint _AdaptiveSampleLayer;
 
@@ -144,17 +148,18 @@ void CSWavefrontGenerate(uint3 id : SV_DispatchThreadID)
 {
     uint width, height;
     _WavefrontFrameResult.GetDimensions(width, height);
-    uint2 pixel = id.xy;
+    uint sampleLayer = _WavefrontAdaptiveSampling != 0 ? id.x / width : (uint)_WavefrontPassIndex;
+    uint2 pixel = uint2(_WavefrontAdaptiveSampling != 0 ? id.x % width : id.x, id.y);
     if (pixel.x >= width || pixel.y >= height) return;
 
     if (_WavefrontAdaptiveSampling != 0)
     {
         uint flatGroup = pixel.x / 8u + (pixel.y / 8u) * _AdaptiveGroupWidth;
-        if (AdaptiveGroupInfo[flatGroup].w <= _AdaptiveSampleLayer) return;
+        if (AdaptiveGroupInfo[flatGroup].w <= sampleLayer) return;
     }
 
     uint sampleIndex = _WavefrontAdaptiveSampling != 0
-        ? (uint)AdaptiveSamplingState[pixel].x : _SampleOffset + (uint)_WavefrontPassIndex;
+        ? (uint)AdaptiveSamplingState[pixel].x + sampleLayer : _SampleOffset + sampleLayer;
     RngState rngState = CreateRngState(pixel, sampleIndex);
     SetRngDimension(rngState, SampleDimensionPixelFilter);
     float2 pixelJitter = float2(rand(rngState), rand(rngState));
@@ -176,7 +181,7 @@ void CSWavefrontGenerate(uint3 id : SV_DispatchThreadID)
         ray.direction = normalize(focalPoint - ray.origin);
     }
 
-    uint pathIndex = pixel.x + pixel.y * width;
+    uint pathIndex = pixel.x + pixel.y * width + sampleLayer * _WavefrontPixelCapacity;
     WavefrontPathState path;
     path.ray = ray;
     path.radiance = 0.0f;
@@ -232,6 +237,26 @@ void CSWavefrontClassify(uint3 id : SV_DispatchThreadID)
     uint pathIndex = _WavefrontCurrentQueue[id.x];
     WavefrontPathState path = _WavefrontPaths[pathIndex];
     RayHit hit = _WavefrontHits[pathIndex];
+    if (_DebugRenderMode == DebugGlassScatter && path.bounce == 0)
+    {
+        float3 color = DidHitSky(hit) ? 0.0f : !IsGlassMaterial(hit) ? GetAlbedo(hit) * 0.12f : 0.0f;
+        if (IsGlassMaterial(hit))
+        {
+            bool entering;
+            float2 transitionIndices = GetBoundaryTransitionIndices(path.mediumStack, hit, entering);
+            float fresnelReflectance = GetFresnelReflectance(path.ray, hit, transitionIndices.x, transitionIndices.y);
+            float reflectionProbability = GetGlassReflectionProbability(fresnelReflectance, hit);
+            SetRngDimension(path.rngState, BounceSampleDimension(0u, SampleDimensionScatterOffset));
+            color = rand(path.rngState) < saturate(hit.transmission) * (1.0f - reflectionProbability)
+                ? float3(0.0f, reflectionProbability, GetTransmissionAmount(hit) * hit.transmission)
+                : float3(1.0f, reflectionProbability, 0.0f);
+        }
+        WavefrontPathDiagnostic diagnostic;
+        diagnostic.throughput = 0.0f;
+        diagnostic.bounceCount = 0;
+        diagnostic.glassScatter = color;
+        _WavefrontPathDiagnostics[pathIndex] = diagnostic;
+    }
 #if defined(FOG_ENABLED)
     SetRngDimension(path.rngState, BounceSampleDimension((uint)path.bounce, SampleDimensionFogOffset));
     float fogEventDistance;
@@ -513,24 +538,46 @@ void CSWavefrontResolve(uint3 id : SV_DispatchThreadID)
     if (_WavefrontAdaptiveSampling != 0)
     {
         radiance = all(isfinite(radiance)) ? radiance : 0.0f;
-        float4 previousState = AdaptiveSamplingState[path.pixel];
-        float4 previousM2 = AdaptiveSamplingM2[path.pixel];
-        float newCount = previousState.x + 1.0f;
-        float3 mean = AccumulationResult[path.pixel].rgb;
-        float3 delta = radiance - mean;
-        mean += delta / newCount;
-        AdaptiveSamplingM2[path.pixel] = float4(previousM2.rgb + delta * (radiance - mean), previousM2.a);
-        AdaptiveSamplingState[path.pixel] = float4(newCount, previousState.yzw);
-        AccumulationResult[path.pixel] = float4(mean, 1.0f);
+        _WavefrontAdaptiveRadiance[pathIndex] = radiance;
     }
-    if (_DebugRenderMode == DebugThroughput || _DebugRenderMode == DebugBounceCount)
+    else if (_DebugRenderMode == DebugThroughput || _DebugRenderMode == DebugBounceCount)
     {
         WavefrontPathDiagnostic diagnostic;
         diagnostic.throughput = path.throughput;
         diagnostic.bounceCount = (uint)path.bounce;
+        diagnostic.glassScatter = 0.0f;
         _WavefrontPathDiagnostics[pathIndex] = diagnostic;
     }
-    _WavefrontFrameResult[path.pixel] += float4(radiance, 1.0f);
+    if (_WavefrontAdaptiveSampling == 0) _WavefrontFrameResult[path.pixel] += float4(radiance, 1.0f);
+}
+
+[numthreads(4, 4, 1)]
+void CSWavefrontResolveAdaptive(uint3 id : SV_DispatchThreadID)
+{
+    uint width, height;
+    AccumulationResult.GetDimensions(width, height);
+    uint2 pixel = id.xy;
+    if (pixel.x >= width || pixel.y >= height) return;
+
+    uint flatGroup = pixel.x / 8u + (pixel.y / 8u) * _AdaptiveGroupWidth;
+    uint sampleCount = AdaptiveGroupInfo[flatGroup].w;
+    float4 state = AdaptiveSamplingState[pixel];
+    float4 m2 = AdaptiveSamplingM2[pixel];
+    float3 mean = AccumulationResult[pixel].rgb;
+    uint basePathIndex = pixel.x + pixel.y * width;
+    [loop]
+    for (uint layer = 0u; layer < sampleCount; layer++)
+    {
+        float3 radiance = _WavefrontAdaptiveRadiance[basePathIndex + layer * _WavefrontPixelCapacity];
+        float newCount = state.x + 1.0f;
+        float3 delta = radiance - mean;
+        mean += delta / newCount;
+        m2.rgb += delta * (radiance - mean);
+        state.x = newCount;
+    }
+    AdaptiveSamplingM2[pixel] = m2;
+    AdaptiveSamplingState[pixel] = state;
+    AccumulationResult[pixel] = float4(mean, 1.0f);
 }
 
 [numthreads(4, 4, 1)]
@@ -544,7 +591,8 @@ void CSWavefrontPresent(uint3 id : SV_DispatchThreadID)
         ? AccumulationResult[id.xy].rgb : _WavefrontFrameResult[id.xy].rgb / max(1, _NumberOfPasses);
     if ((_DebugRenderMode >= DebugNormals && _DebugRenderMode <= DebugThroughput)
         || _DebugRenderMode == DebugBounceCount || _DebugRenderMode == DebugHitDistance
-        || _DebugRenderMode == DebugAccelerationStructures || _DebugRenderMode == DebugTerrainCells)
+        || _DebugRenderMode == DebugAccelerationStructures || _DebugRenderMode == DebugGlassScatter
+        || _DebugRenderMode == DebugTerrainCells)
     {
         uint pathIndex = id.x + id.y * width;
         RayHit hit = _WavefrontHits[pathIndex];
@@ -611,6 +659,10 @@ void CSWavefrontPresent(uint3 id : SV_DispatchThreadID)
         else if (_DebugRenderMode == DebugHitDistance)
         {
             color = saturate(hit.distance / 25.0f).xxx;
+        }
+        else if (_DebugRenderMode == DebugGlassScatter)
+        {
+            color = _WavefrontPathDiagnostics[pathIndex].glassScatter;
         }
     }
     if (_UseFrameAccumulation != 0 && _WavefrontAdaptiveSampling == 0)

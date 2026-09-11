@@ -1,3 +1,0 @@
-// Fog-capable final-color renderer. The default asset excludes the volumetric path entirely.
-#define FOG_ENABLED 1
-#include_with_pragmas "../Scripts/RayTracingCompute.compute"
