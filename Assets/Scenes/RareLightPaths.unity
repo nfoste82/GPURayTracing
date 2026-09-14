@@ -252,7 +252,7 @@ MeshCollider:
   serializedVersion: 5
   m_Convex: 0
   m_CookingOptions: 30
-  m_Mesh: {fileID: 116483850}
+  m_Mesh: {fileID: 2108195282}
 --- !u!23 &16758581
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -309,8 +309,8 @@ MeshFilter:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 16758574}
-  m_Mesh: {fileID: 116483850}
---- !u!43 &116483850
+  m_Mesh: {fileID: 2108195282}
+--- !u!43 &115307893
 Mesh:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -504,7 +504,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!4 &208512934
 Transform:
   m_ObjectHideFlags: 0
@@ -535,7 +535,7 @@ MonoBehaviour:
   Color:
     serializedVersion: 2
     rgba: 4292801791
-  Intensity: 1
+  Intensity: 0
   AngularRadius: 0.27
 --- !u!1001 &558338164
 PrefabInstance:
@@ -978,13 +978,12 @@ MonoBehaviour:
   topLevelBvhMinObjectCount: 64
   shadowBvhMinObjectCount: 64
   shadowRandomness: 0.65
-  useOwenScrambledSobol: 1
-  sobolDimensionLimit: 656
+  sobolDimensionLimit: 1
   samplingSeed: 1
   enablePathGuiding: 1
   pathGuidingMixtureWeight: 0.5
-  pathGuidingMinimumSamples: 32
-  enableAdaptiveSampling: 1
+  pathGuidingMinimumSamples: 64
+  enableAdaptiveSampling: 0
   recordEditorRun: 0
   adaptiveSamplingMinSamples: 2
   adaptiveLuminanceErrorWeight: -3
@@ -1005,9 +1004,9 @@ MonoBehaviour:
   parallaxMaximumStrengthAngle: 20
   maxLightSamples: 0
   _lightingManager:
-    _lightSamplingStrategy: 2
+    _lightSamplingStrategy: 0
     _lightSampleCount: 1
-    _initialRisCandidateCount: 4
+    _initialRisCandidateCount: 1
     _temporalRisEnabled: 0
     _temporalRisHistoryMCap: 1
     _spatialRisEnabled: 0
@@ -1015,7 +1014,7 @@ MonoBehaviour:
     _lightFalloffScale: 0.08
     _skyboxLightColor:
       serializedVersion: 2
-      rgba: 4285095775
+      rgba: 4278190080
   enableCaustics: 0
   enableVolumetricFog: 0
   fogDensityScale: 1
@@ -1024,7 +1023,7 @@ MonoBehaviour:
   enableFogMultipleScattering: 0
   debugRenderMode: 0
   exposure: 5
-  enableGlare: 1
+  enableGlare: 0
   exportWithFxaa: 0
   exportWithSmaa: 0
   openImageAfterExport: 0
@@ -1032,9 +1031,9 @@ MonoBehaviour:
   glareSoftKnee: 0.1
   glareIntensity: 1
   fireflyClamp: 0
-  randomNoise: 0
+  randomNoise: 1
   skyboxTexture: {fileID: 2800000, guid: 498101212922c43cb9800ac08f1737bd, type: 3}
-  enableEnvironmentLighting: 1
+  enableEnvironmentLighting: 0
   environmentLightSampleCount: 1
   environmentHighlightThreshold: 0
   environmentHighlightSoftKnee: 0.5
@@ -1048,7 +1047,7 @@ MonoBehaviour:
   unitySkyboxExposure: 1
   unitySkyboxRotation: 0
   _spatialDenoisingManager:
-    enabled: 1
+    enabled: 0
     iterations: 1
     depthSigma: 0.25
     normalPower: 64
@@ -1231,7 +1230,7 @@ MeshCollider:
   serializedVersion: 5
   m_Convex: 0
   m_CookingOptions: 30
-  m_Mesh: {fileID: 1846618363}
+  m_Mesh: {fileID: 115307893}
 --- !u!23 &1326505269
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -1288,7 +1287,7 @@ MeshFilter:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1326505262}
-  m_Mesh: {fileID: 1846618363}
+  m_Mesh: {fileID: 115307893}
 --- !u!1 &1557012207
 GameObject:
   m_ObjectHideFlags: 0
@@ -1395,7 +1394,7 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!43 &1846618363
+--- !u!43 &2108195282
 Mesh:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}

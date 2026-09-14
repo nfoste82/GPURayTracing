@@ -95,12 +95,14 @@ namespace PathTracing
             int directLight = shader.FindKernel("CSWavefrontDirectLight");
             int clearShadowQueue = shader.FindKernel("CSWavefrontClearShadowQueue");
             int traceShadows = shader.FindKernel("CSWavefrontTraceShadows");
+            int recordDirectLightGuides = shader.FindKernel("CSWavefrontRecordDirectLightGuides");
             int resolveShadowWork = shader.FindKernel("CSWavefrontResolveShadowWork");
             int scatter = shader.FindKernel("CSWavefrontScatter");
             int copyNextQueue = shader.FindKernel("CSWavefrontCopyNextQueue");
             int publishNextQueue = shader.FindKernel("CSWavefrontPublishNextQueue");
             int retireCurrentQueue = shader.FindKernel("CSWavefrontRetireCurrentQueue");
             int resolve = shader.FindKernel("CSWavefrontResolve");
+            int recordPathGuides = shader.FindKernel("CSWavefrontRecordPathGuides");
             int resolveAdaptive = shader.FindKernel("CSWavefrontResolveAdaptive");
             int present = shader.FindKernel("CSWavefrontPresent");
 
@@ -123,6 +125,8 @@ namespace PathTracing
                     BindAndDispatchIndirect(shader, directLight, bindShared, output, accumulation);
                     BuildQueueDispatch(shader, buildDispatchArgs, bindShared, output, accumulation, 3, 4);
                     BindAndDispatchIndirect(shader, traceShadows, bindShared, output, accumulation);
+                    if (usePathGuiding)
+                        BindAndDispatchIndirect(shader, recordDirectLightGuides, bindShared, output, accumulation);
                     BindAndDispatchIndirect(shader, resolveShadowWork, bindShared, output, accumulation);
                     // Shadow dispatches overwrite the indirect arguments with the shadow-work count.
                     // Scatter must still process every current path, not only paths with direct light.
@@ -137,6 +141,8 @@ namespace PathTracing
                 BindAndDispatchIndirect(shader, retireCurrentQueue, bindShared, output, accumulation);
                 BuildQueueDispatch(shader, buildDispatchArgs, bindShared, output, accumulation, 2, ThreadCount);
                 BindAndDispatchIndirect(shader, resolve, bindShared, output, accumulation);
+                if (usePathGuiding)
+                    BindAndDispatchIndirect(shader, recordPathGuides, bindShared, output, accumulation);
             }
 
             if (adaptiveLayers > 0)

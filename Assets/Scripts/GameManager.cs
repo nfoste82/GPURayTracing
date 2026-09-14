@@ -411,6 +411,7 @@ public class GameManager : MonoBehaviour
     public bool LastAdaptiveSamplingReclassified { get; private set; }
     private long _renderedFrameCount;
     private int _accumulationStateHash;
+    private int _initialRisCandidateCount = -1;
     private bool _hasAccumulationStateHash;
     private RenderTexture _presentationSource;
 
@@ -1626,7 +1627,7 @@ public class GameManager : MonoBehaviour
         EnsureAdaptiveBootstrapTextureSize();
         var size = CalculateAdaptiveBootstrapSize();
         _wavefrontPathTracingManager.Dispatch(wavefrontShader, size, numberOfPasses, numBounces, 0,
-            false, false, false, SetShaderParameters,
+            false, false, wavefrontShader == _wavefrontPathGuidedShader, SetShaderParameters,
             _adaptiveBootstrapResultTexture, _adaptiveBootstrapAccumulationTexture);
 
         var upscaleKernel = utilityShader.FindKernel("UpscaleAdaptiveBootstrap");
@@ -2400,6 +2401,13 @@ public class GameManager : MonoBehaviour
             _nearestIntersectionDistanceCallback);
         CameraManager.AutoFocusSceneChanged = false;
         UpdateCausticPhotonMap();
+
+        if (Lighting.InitialRisCandidateCount != _initialRisCandidateCount)
+        {
+            if (_initialRisCandidateCount >= 0 && ShouldRunTemporalRis())
+                _temporalRisManager.InvalidateHistory();
+            _initialRisCandidateCount = Lighting.InitialRisCandidateCount;
+        }
         
         if (ShouldRunTemporalDenoiser())
         {
@@ -4029,10 +4037,6 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, _textureSize.x);
             hash = AddHash(hash, _textureSize.y);
             hash = AddHash(hash, numberOfPasses);
-            hash = AddHash(hash, sobolDimensionLimit);
-            hash = AddHash(hash, samplingSeed);
-            hash = AddHash(hash, enablePathGuiding ? 1 : 0);
-            hash = AddHash(hash, pathGuidingMixtureWeight);
             hash = AddHash(hash, pathGuidingMinimumSamples);
             hash = AddHash(hash, enableAdaptiveSampling ? 1 : 0);
             hash = AddHash(hash, adaptiveSamplingMinSamples);
@@ -4055,7 +4059,6 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, maxLightSamples);
             hash = AddHash(hash, (int)Lighting.LightSamplingStrategy);
             hash = AddHash(hash, Lighting.LightSampleCount);
-            hash = AddHash(hash, Lighting.InitialRisCandidateCount);
             hash = AddHash(hash, Lighting.TemporalRisEnabled ? 1 : 0);
             hash = AddHash(hash, Lighting.TemporalRisHistoryMCap);
             hash = AddHash(hash, Lighting.SpatialRisEnabled ? 1 : 0);
@@ -4076,7 +4079,6 @@ public class GameManager : MonoBehaviour
             {
                 hash = _fogVolume.AddAccumulationStateHash(hash);
             }
-            hash = AddHash(hash, randomNoise ? 1 : 0);
             hash = AddHash(hash, skyboxTexture != null ? skyboxTexture.GetInstanceID() : 0);
             hash = AddHash(hash, Lighting.SkyboxLightColor.r);
             hash = AddHash(hash, Lighting.SkyboxLightColor.g);

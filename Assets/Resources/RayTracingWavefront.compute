@@ -9,12 +9,14 @@
 #pragma kernel CSWavefrontDirectLight
 #pragma kernel CSWavefrontClearShadowQueue
 #pragma kernel CSWavefrontTraceShadows
+#pragma kernel CSWavefrontRecordDirectLightGuides
 #pragma kernel CSWavefrontResolveShadowWork
 #pragma kernel CSWavefrontScatter
 #pragma kernel CSWavefrontCopyNextQueue
 #pragma kernel CSWavefrontPublishNextQueue
 #pragma kernel CSWavefrontRetireCurrentQueue
 #pragma kernel CSWavefrontResolve
+#pragma kernel CSWavefrontRecordPathGuides
 #pragma kernel CSWavefrontResolveAdaptive
 #pragma kernel CSWavefrontPresent
 #pragma multi_compile _ TERRAIN_ENABLED
@@ -312,9 +314,6 @@ void CSWavefrontClassify(uint3 id : SV_DispatchThreadID)
             }
         }
         path.radiance += path.throughput * GetTerminalHitColor(path.ray, hit) * misWeight;
-#if defined(PATH_GUIDING_ENABLED)
-        RecordWavefrontPathGuide(pathIndex, GetTerminalHitColor(path.ray, hit) * misWeight);
-#endif
         path.active = 0;
         _WavefrontPaths[pathIndex] = path;
         EnqueueCompleted(pathIndex);
@@ -335,9 +334,6 @@ void CSWavefrontClassify(uint3 id : SV_DispatchThreadID)
             }
         }
         path.radiance += path.throughput * GetEmission(hit) * misWeight;
-#if defined(PATH_GUIDING_ENABLED)
-        RecordWavefrontPathGuide(pathIndex, GetEmission(hit) * misWeight);
-#endif
         path.active = 0;
         _WavefrontPaths[pathIndex] = path;
         EnqueueCompleted(pathIndex);
@@ -389,15 +385,14 @@ void CSWavefrontTraceShadows(uint3 id : SV_DispatchThreadID)
     InitialRisCandidate ignoredCandidate;
     float ignoredWeightSum;
     int ignoredM;
-    float3 directLight = GetLightHittingPoint(path.ray, hit, samplesPerLight, volumeEvent, !volumeEvent && path.bounce > 0,
+    // The continuation sampler can use the guide at the primary bounce too, so NEE must use the
+    // same mixture PDF for its complementary MIS weight at every surface bounce.
+    float3 directLight = GetLightHittingPoint(path.ray, hit, samplesPerLight, volumeEvent, !volumeEvent,
         useInitialRis, sampledInitialRis, path.pixel, path.rngState, false, ignoredCandidate, ignoredWeightSum, ignoredM);
 #if defined(FOG_ENABLED)
     if (volumeEvent) directLight *= _FogScatteringAlbedo * max(0.0f, _FogInScatteringIntensity);
 #endif
     work.directLight = directLight;
-#if defined(PATH_GUIDING_ENABLED)
-    RecordWavefrontPathGuide(work.pathIndex, directLight);
-#endif
     if (_DebugRenderMode == DebugDirectLight && path.bounce == 0)
         _WavefrontFirstDirectLight[work.pathIndex] = directLight;
     path.previousDirectLightSampled = 1;
@@ -405,6 +400,16 @@ void CSWavefrontTraceShadows(uint3 id : SV_DispatchThreadID)
     path.previousSoftShadows = softShadows ? 1 : 0;
     _WavefrontPaths[work.pathIndex] = path;
     _WavefrontShadowWork[id.x] = work;
+}
+
+[numthreads(4, 1, 1)]
+void CSWavefrontRecordDirectLightGuides(uint3 id : SV_DispatchThreadID)
+{
+#if defined(PATH_GUIDING_ENABLED)
+    if (id.x >= _WavefrontCounters[3]) return;
+    ShadowWorkItem work = _WavefrontShadowWork[id.x];
+    RecordWavefrontPathGuide(work.pathIndex, work.directLight);
+#endif
 }
 
 [numthreads(4, 1, 1)]
@@ -471,7 +476,7 @@ void CSWavefrontScatter(uint3 id : SV_DispatchThreadID)
     guide.position = hit.position;
     guide.normal = hit.normal;
     guide.direction = scatter.ray.direction;
-    guide.sampled = IsPathGuideEligible(hit, path.bounce > 0) && scatter.materialPdf > 1e-6f ? 1u : 0u;
+    guide.sampled = IsPathGuideEligible(hit, true) && scatter.materialPdf > 1e-6f ? 1u : 0u;
     _WavefrontPathGuideStates[pathIndex] = guide;
 #endif
     ApplyMediumTransition(path.mediumStack, hit, scatter.mediumTransition);
@@ -549,6 +554,50 @@ void CSWavefrontResolve(uint3 id : SV_DispatchThreadID)
         _WavefrontPathDiagnostics[pathIndex] = diagnostic;
     }
     if (_WavefrontAdaptiveSampling == 0) _WavefrontFrameResult[path.pixel] += float4(radiance, 1.0f);
+}
+
+[numthreads(64, 1, 1)]
+void CSWavefrontRecordPathGuides(uint3 id : SV_DispatchThreadID)
+{
+#if defined(PATH_GUIDING_ENABLED)
+    if (id.x >= _WavefrontCounters[2]) return;
+    uint pathIndex = _WavefrontCompletedQueue[id.x];
+    WavefrontPathState path = _WavefrontPaths[pathIndex];
+    RayHit hit = _WavefrontHits[pathIndex];
+    float misWeight = 1.0f;
+    float3 observation = 0.0f;
+
+    if (DidHitSky(hit))
+    {
+        if (path.previousDirectLightSampled != 0 && path.previousMaterialPdf > 0.0f && _EnvironmentLightEnabled != 0)
+        {
+            float environmentPdf = GetEnvironmentPdf(path.ray.direction);
+            if (environmentPdf > 0.0f)
+            {
+                float directPdf = _EnvironmentLightSampleCount * environmentPdf;
+                if (path.previousInitialRisSampled != 0) directPdf *= GetInitialRisProposalBranchPdf();
+                misWeight = PowerHeuristic(path.previousMaterialPdf, directPdf);
+            }
+        }
+        observation = GetTerminalHitColor(path.ray, hit) * misWeight;
+    }
+    else if (DidHitLight(hit))
+    {
+        if (path.previousDirectLightSampled != 0 && path.previousNearDeltaSpecular == 0 && path.previousMaterialPdf > 0.0f)
+        {
+            int lightSampleCount;
+            float lightPdf = GetLightPdfForHit(path.previousSurfacePosition, hit, path.previousSoftShadows != 0, lightSampleCount);
+            if (lightPdf > 0.0f)
+            {
+                if (path.previousInitialRisSampled != 0) lightPdf *= GetInitialRisProposalBranchPdf();
+                misWeight = PowerHeuristic(path.previousMaterialPdf, lightSampleCount * lightPdf);
+            }
+        }
+        observation = GetEmission(hit) * misWeight;
+    }
+
+    RecordWavefrontPathGuide(pathIndex, observation);
+#endif
 }
 
 [numthreads(4, 4, 1)]

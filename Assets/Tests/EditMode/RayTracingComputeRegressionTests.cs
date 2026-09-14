@@ -124,6 +124,10 @@ namespace GPURayTracing.Tests
                 "Guide sampling must fall back until the CDF is initialized by a completed rebuild.");
             Assert.That(shared, Does.Contain("float GetMaterialContinuationPdf"));
             Assert.That(shared, Does.Contain("GetMaterialContinuationPdf(ray, hit, ptToOffset, allowPathGuide)"));
+            Assert.That(shared, Does.Contain("if (hit.materialType == MaterialDiffuse) return true;"));
+            Assert.That(shared, Does.Contain("SampleMaterialBrdf(sourceRay, hit, true, rngState)"));
+            Assert.That(shared, Does.Contain("materialPdf = GetMaterialContinuationPdf(ray, hit, candidate.direction, allowPathGuide);"),
+                "Initial RIS candidate targets and selected-candidate evaluation must use the same guide-mixture PDF.");
             Assert.That(manager, Does.Contain("public bool Enabled { get; set; }"));
             Assert.That(manager, Does.Contain("_training ?? _inertTraining"),
                 "The disabled path must bind inert buffers because Unity validates shared structured buffers before runtime branches.");
@@ -420,6 +424,17 @@ namespace GPURayTracing.Tests
             Assert.That(managerSource, Does.Contain("_wavefrontPathTracingManager.Dispatch(wavefrontShader, size"));
             Assert.That(managerSource, Does.Not.Contain("bootstrapShader.FindKernel"));
             Assert.That(managerSource, Does.Contain("UpscaleAdaptiveBootstrap"));
+        }
+
+        [Test]
+        public void AdaptiveBootstrap_AllocatesPathGuideStateForThePathGuidedShader()
+        {
+            string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+            int bootstrapStart = managerSource.IndexOf("private void DispatchAdaptiveBootstrap", StringComparison.Ordinal);
+            int bootstrapEnd = managerSource.IndexOf("private void BindAdaptiveBootstrapUtilityResources", bootstrapStart, StringComparison.Ordinal);
+            string bootstrap = managerSource.Substring(bootstrapStart, bootstrapEnd - bootstrapStart);
+
+            Assert.That(bootstrap, Does.Contain("wavefrontShader == _wavefrontPathGuidedShader"));
         }
 
         [Test]
@@ -864,7 +879,9 @@ namespace GPURayTracing.Tests
             Assert.That(precompiler, Does.Contain("_WavefrontPathDiagnostics"));
             Assert.That(wavefront, Does.Contain("struct WavefrontPathGuideState"));
             Assert.That(wavefront, Does.Contain("RecordWavefrontPathGuide"));
-            Assert.That(wavefront, Does.Contain("IsPathGuideEligible(hit, path.bounce > 0)"));
+            Assert.That(wavefront, Does.Contain("IsPathGuideEligible(hit, true)"));
+            Assert.That(wavefront, Does.Contain("samplesPerLight, volumeEvent, !volumeEvent,"),
+                "Direct-light MIS must use the path-guide mixture PDF at the primary bounce when the continuation sampler does.");
             Assert.That(manager, Does.Contain("bool usePathGuiding"));
             Assert.That(manager, Does.Contain("new ComputeBuffer(_capacity, sizeof(float) * 10)"));
             Assert.That(precompiler, Does.Contain("_WavefrontPathGuideStates"));
@@ -1062,6 +1079,17 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("_vs_reference_difference.png"));
             Assert.That(source, Does.Contain("generateVariantComparisonImages = true"));
             Assert.That(source, Does.Contain("if (experiment.generateVariantComparisonImages)"));
+        }
+
+        [Test]
+        public void SceneCapture_ExperimentsAllowSingleVariantReferenceMetrics()
+        {
+            string source = System.IO.File.ReadAllText("Assets/Editor/RayTracingSceneCapture.cs");
+
+            Assert.That(source, Does.Contain("experiment.variants == null || experiment.variants.Length == 0"));
+            Assert.That(source, Does.Contain("at least one variant"));
+            Assert.That(source, Does.Contain("WriteExperimentComparison(sceneRoot, results, referencePath, reference)"));
+            Assert.That(source, Does.Contain("$\"{results[first].name}_vs_reference_difference.png\""));
         }
 
         [Test]
@@ -1346,6 +1374,33 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void SceneCapture_CanImportPngReferencesWithoutRenderStatistics()
+        {
+            string source = System.IO.File.ReadAllText("Assets/Editor/RayTracingSceneCapture.cs");
+            string inspector = System.IO.File.ReadAllText("Assets/Editor/GameManagerEditor.cs");
+            Assert.That(source, Does.Contain("ImportReferencePng"));
+            Assert.That(source, Does.Contain("GetReferenceImagePath(scenePath, DefaultReferenceRoot, image.width, image.height)"));
+            Assert.That(source, Does.Contain("captureKind = captureKind"));
+            Assert.That(source, Does.Contain("durationSeconds < 0.0"));
+            Assert.That(inspector, Does.Contain("Import PNG as Reference"));
+            Assert.That(inspector, Does.Contain("GetImportedReferencePath"));
+        }
+
+        [Test]
+        public void ImageAverageWindow_RequiresPngInputsAndMatchingDimensions()
+        {
+            string source = System.IO.File.ReadAllText("Assets/Editor/RayTracingImageAverageWindow.cs");
+            Assert.That(source, Does.Contain("Average PNG Images"));
+            Assert.That(source, Does.Contain("Path.GetExtension(path)"));
+            Assert.That(source, Does.Contain("width != _width || height != _height"));
+            Assert.That(source, Does.Contain("_sampleCounts"));
+            Assert.That(source, Does.Contain("GetWeight"));
+            Assert.That(source, Does.Contain("sums[pixelIndex] += pixels[pixelIndex] * pixelWeight"));
+            Assert.That(source, Does.Contain("sample count"));
+            Assert.That(source, Does.Contain("output.EncodeToPNG()"));
+        }
+
+        [Test]
         public void SceneCapture_GenericExperimentsUseExistingReferencesAndTypedOverrides()
         {
             string source = System.IO.File.ReadAllText("Assets/Editor/RayTracingSceneCapture.cs");
@@ -1386,7 +1441,7 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
-        public void InitialRis_ExperimentalCandidateCountIsUploadedAndInvalidatesHistories()
+        public void InitialRis_CandidateCountIsUploadedWithoutResettingLocalAccumulation()
         {
             string lighting = System.IO.File.ReadAllText("Assets/Scripts/Lighting/LightingManager.cs");
             string manager = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
@@ -1396,7 +1451,8 @@ namespace GPURayTracing.Tests
             Assert.That(lighting, Does.Contain("shader.SetInt(InitialRisCandidateCountId, _initialRisCandidateCount)"));
             Assert.That(settings, Does.Contain("InitialRisCandidateCount = 4"));
             Assert.That(manager, Does.Contain("Lighting.InitialRisCandidateCount = settings.InitialRisCandidateCount"));
-            Assert.That(manager, Does.Contain("AddHash(hash, Lighting.InitialRisCandidateCount)"));
+            Assert.That(manager, Does.Not.Contain("AddHash(hash, Lighting.InitialRisCandidateCount)"));
+            Assert.That(manager, Does.Contain("_temporalRisManager.InvalidateHistory()"));
             Assert.That(temporal, Does.Contain("AddHash(hash, _gameManager.Lighting.InitialRisCandidateCount)"));
             Assert.That(lighting, Does.Contain("TemporalRisEnabled"));
             Assert.That(manager, Does.Contain("Lighting.TemporalRisEnabled = settings.TemporalRisEnabled"));
@@ -1826,7 +1882,7 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
-        public void GameManager_AccumulationStateHash_ResetsWhenPathSamplerChanges()
+        public void GameManager_AccumulationStateHash_DoesNotResetWhenPathSamplerChanges()
         {
             Type managerType = Type.GetType("GameManager, Assembly-CSharp");
             Assert.That(managerType, Is.Not.Null, "Could not load GameManager from Assembly-CSharp");
@@ -1845,11 +1901,77 @@ namespace GPURayTracing.Tests
                 int defaultHash = (int)hashMethod.Invoke(manager, null);
 
                 managerType.GetField("sobolDimensionLimit").SetValue(manager, 2568);
-                Assert.That(hashMethod.Invoke(manager, null), Is.Not.EqualTo(defaultHash));
+                Assert.That(hashMethod.Invoke(manager, null), Is.EqualTo(defaultHash),
+                    "Changing an unbiased Sobol/hash sampler boundary must preserve progressive accumulation.");
 
                 managerType.GetField("sobolDimensionLimit").SetValue(manager, 328);
                 managerType.GetField("samplingSeed").SetValue(manager, 2);
-                Assert.That(hashMethod.Invoke(manager, null), Is.Not.EqualTo(defaultHash));
+                Assert.That(hashMethod.Invoke(manager, null), Is.EqualTo(defaultHash),
+                    "Changing an unbiased sampling seed must preserve progressive accumulation.");
+
+                managerType.GetField("randomNoise").SetValue(manager, true);
+                Assert.That(hashMethod.Invoke(manager, null), Is.EqualTo(defaultHash),
+                    "Changing an unbiased random-noise source must preserve progressive accumulation.");
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(gameObject);
+                UnityEngine.Object.DestroyImmediate(cameraObject);
+            }
+        }
+
+        [Test]
+        public void GameManager_AccumulationStateHash_DoesNotResetWhenPathGuideMixtureChanges()
+        {
+            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+            Assert.That(managerType, Is.Not.Null, "Could not load GameManager from Assembly-CSharp");
+
+            var gameObject = new GameObject("Path Guide Mixture State Hash Test");
+            var cameraObject = new GameObject("Path Guide Mixture State Hash Camera");
+            try
+            {
+                Component manager = gameObject.AddComponent(managerType);
+                Camera camera = cameraObject.AddComponent<Camera>();
+                Component cameraManager = gameObject.GetComponent(Type.GetType("CameraManager, Assembly-CSharp"));
+                cameraManager.GetType().GetField("renderTextureCamera").SetValue(cameraManager, camera);
+
+                MethodInfo hashMethod = managerType.GetMethod("CalculateAccumulationStateHash", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.That(hashMethod, Is.Not.Null);
+                int defaultHash = (int)hashMethod.Invoke(manager, null);
+
+                managerType.GetField("pathGuidingMixtureWeight").SetValue(manager, 0.8f);
+                Assert.That(hashMethod.Invoke(manager, null), Is.EqualTo(defaultHash),
+                    "Changing an unbiased path-guide mixture must preserve progressive accumulation.");
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(gameObject);
+                UnityEngine.Object.DestroyImmediate(cameraObject);
+            }
+        }
+
+        [Test]
+        public void GameManager_AccumulationStateHash_DoesNotResetWhenPathGuidingChanges()
+        {
+            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+            Assert.That(managerType, Is.Not.Null, "Could not load GameManager from Assembly-CSharp");
+
+            var gameObject = new GameObject("Path Guiding State Hash Test");
+            var cameraObject = new GameObject("Path Guiding State Hash Camera");
+            try
+            {
+                Component manager = gameObject.AddComponent(managerType);
+                Camera camera = cameraObject.AddComponent<Camera>();
+                Component cameraManager = gameObject.GetComponent(Type.GetType("CameraManager, Assembly-CSharp"));
+                cameraManager.GetType().GetField("renderTextureCamera").SetValue(cameraManager, camera);
+
+                MethodInfo hashMethod = managerType.GetMethod("CalculateAccumulationStateHash", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.That(hashMethod, Is.Not.Null);
+                int disabledHash = (int)hashMethod.Invoke(manager, null);
+
+                managerType.GetField("enablePathGuiding").SetValue(manager, true);
+                Assert.That(hashMethod.Invoke(manager, null), Is.EqualTo(disabledHash),
+                    "Toggling an unbiased path-guide proposal must preserve progressive accumulation.");
             }
             finally
             {

@@ -112,6 +112,7 @@ public static class RayTracingSceneCapture
     private class ReferenceMetadata
     {
         public int schemaVersion = 2;
+        public string captureKind;
         public string scenePath;
         public string imageSha256;
         public string sceneSha256;
@@ -402,6 +403,78 @@ public static class RayTracingSceneCapture
             DefaultSamplesPerScene,
             DefaultCaptureWidth,
             DefaultCaptureHeight);
+    }
+
+    public static string ImportReferencePng(string sourcePath, string scenePath)
+    {
+        if (string.IsNullOrWhiteSpace(sourcePath) || !File.Exists(sourcePath))
+        {
+            throw new ArgumentException("A readable source PNG is required.", nameof(sourcePath));
+        }
+        if (!string.Equals(Path.GetExtension(sourcePath), ".png", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("The reference source must be a PNG file.", nameof(sourcePath));
+        }
+        if (string.IsNullOrWhiteSpace(scenePath))
+        {
+            throw new ArgumentException("A scene path is required.", nameof(scenePath));
+        }
+
+        var image = new Texture2D(2, 2, TextureFormat.RGB24, false);
+        try
+        {
+            if (!image.LoadImage(File.ReadAllBytes(sourcePath), false) || image.width <= 0 || image.height <= 0)
+            {
+                throw new InvalidOperationException($"The selected file is not a readable PNG: '{sourcePath}'.");
+            }
+
+            string imagePath = GetReferenceImagePath(scenePath, DefaultReferenceRoot, image.width, image.height);
+            string metadataPath = Path.ChangeExtension(imagePath, ".json");
+            Directory.CreateDirectory(Path.GetDirectoryName(imagePath));
+            if (!string.Equals(Path.GetFullPath(sourcePath), Path.GetFullPath(imagePath), StringComparison.OrdinalIgnoreCase))
+            {
+                File.Copy(sourcePath, imagePath, true);
+            }
+            WriteReferenceMetadata(metadataPath, null, scenePath, imagePath, image.width, image.height, 0.0, 0,
+                "editorImported");
+            RemoveImportedRenderStatistics(metadataPath);
+            AssetDatabase.Refresh();
+            return imagePath;
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(image);
+        }
+    }
+
+    public static string GetImportedReferencePath(string sourcePath, string scenePath)
+    {
+        if (string.IsNullOrWhiteSpace(sourcePath) || !File.Exists(sourcePath))
+        {
+            throw new ArgumentException("A readable source PNG is required.", nameof(sourcePath));
+        }
+        if (!string.Equals(Path.GetExtension(sourcePath), ".png", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("The reference source must be a PNG file.", nameof(sourcePath));
+        }
+        if (string.IsNullOrWhiteSpace(scenePath))
+        {
+            throw new ArgumentException("A scene path is required.", nameof(scenePath));
+        }
+
+        var image = new Texture2D(2, 2, TextureFormat.RGB24, false);
+        try
+        {
+            if (!image.LoadImage(File.ReadAllBytes(sourcePath), false) || image.width <= 0 || image.height <= 0)
+            {
+                throw new InvalidOperationException($"The selected file is not a readable PNG: '{sourcePath}'.");
+            }
+            return GetReferenceImagePath(scenePath, DefaultReferenceRoot, image.width, image.height);
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(image);
+        }
     }
 
     public static void CaptureGalleryThumbnail(string scenePath)
@@ -702,8 +775,8 @@ public static class RayTracingSceneCapture
         if (experiment == null || experiment.schemaVersion != 1)
             throw new InvalidOperationException($"Experiment '{path}' must use schemaVersion 1.");
         if (string.IsNullOrWhiteSpace(experiment.label) || experiment.scenes == null || experiment.scenes.Length == 0
-            || experiment.variants == null || experiment.variants.Length < 2)
-            throw new InvalidOperationException("An experiment requires a label, at least one scene, and at least two variants.");
+            || experiment.variants == null || experiment.variants.Length == 0)
+            throw new InvalidOperationException("An experiment requires a label, at least one scene, and at least one variant.");
         if (experiment.width <= 0 || experiment.height <= 0 || experiment.samples < 0
             || experiment.durationSeconds < 0.0 || experiment.cooldownSeconds < 0.0
             || (experiment.samples <= 0 && experiment.durationSeconds <= 0.0))
@@ -2109,28 +2182,28 @@ public static class RayTracingSceneCapture
     }
 
     private static ReferenceMetadata WriteReferenceMetadata(string metadataPath, GameManager manager, string scenePath, string imagePath,
-        int width, int height, double durationSeconds, int measuredFrames)
+        int width, int height, double durationSeconds, int measuredFrames, string captureKind = "timedCapture")
     {
-        var settings = new ReferenceRenderSettings
+        var settings = manager == null ? new ReferenceRenderSettings() : new ReferenceRenderSettings
         {
-            temporalRisEnabled = manager.Lighting.TemporalRisEnabled,
-            initialRisCandidateCount = manager.Lighting.InitialRisCandidateCount,
-            temporalRisHistoryMCap = manager.Lighting.TemporalRisHistoryMCap,
-            spatialRisEnabled = manager.Lighting.SpatialRisEnabled,
-            spatialRisNeighborCount = manager.Lighting.SpatialRisNeighborCount,
-            lightSamplingStrategy = manager.Lighting.LightSamplingStrategy.ToString(),
-            lightSampleCount = manager.Lighting.LightSampleCount,
-            maxLightSamples = manager.maxLightSamples,
-            numberOfPasses = manager.numberOfPasses,
-            numBounces = manager.numBounces,
-            shadowQuality = manager.shadowQuality,
-            shadowRandomness = manager.shadowRandomness,
-            lightFalloffScale = manager.Lighting.LightFalloffScale,
-            environmentLighting = manager.enableEnvironmentLighting,
-            environmentLightSampleCount = manager.environmentLightSampleCount,
-            fireflyClamp = manager.fireflyClamp,
-            frameAccumulation = manager.enableFrameAccumulation,
-            randomNoise = manager.randomNoise,
+            temporalRisEnabled = manager != null && manager.Lighting.TemporalRisEnabled,
+            initialRisCandidateCount = manager != null ? manager.Lighting.InitialRisCandidateCount : 0,
+            temporalRisHistoryMCap = manager != null ? manager.Lighting.TemporalRisHistoryMCap : 0,
+            spatialRisEnabled = manager != null && manager.Lighting.SpatialRisEnabled,
+            spatialRisNeighborCount = manager != null ? manager.Lighting.SpatialRisNeighborCount : 0,
+            lightSamplingStrategy = manager != null ? manager.Lighting.LightSamplingStrategy.ToString() : null,
+            lightSampleCount = manager != null ? manager.Lighting.LightSampleCount : 0,
+            maxLightSamples = manager != null ? manager.maxLightSamples : 0,
+            numberOfPasses = manager != null ? manager.numberOfPasses : 0,
+            numBounces = manager != null ? manager.numBounces : 0,
+            shadowQuality = manager != null ? manager.shadowQuality : 0,
+            shadowRandomness = manager != null ? manager.shadowRandomness : 0.0f,
+            lightFalloffScale = manager != null ? manager.Lighting.LightFalloffScale : 0.0f,
+            environmentLighting = manager != null && manager.enableEnvironmentLighting,
+            environmentLightSampleCount = manager != null ? manager.environmentLightSampleCount : 0,
+            fireflyClamp = manager != null ? manager.fireflyClamp : 0.0f,
+            frameAccumulation = manager != null && manager.enableFrameAccumulation,
+            randomNoise = manager != null && manager.randomNoise,
             // CaptureVariant fixes the render RNG by setting randomNoise false.
             captureSeed = 0
         };
@@ -2138,6 +2211,7 @@ public static class RayTracingSceneCapture
         const string shaderPath = "Assets/Resources/RayTracingWavefront.compute";
         var metadata = new ReferenceMetadata
         {
+            captureKind = captureKind,
             scenePath = scenePath,
             imageSha256 = ComputeSha256(imagePath),
             sceneSha256 = File.Exists(sceneAbsolutePath) ? ComputeSha256(sceneAbsolutePath) : null,
@@ -2155,6 +2229,14 @@ public static class RayTracingSceneCapture
         };
         File.WriteAllText(metadataPath, JsonUtility.ToJson(metadata, true));
         return metadata;
+    }
+
+    private static void RemoveImportedRenderStatistics(string metadataPath)
+    {
+        string json = File.ReadAllText(metadataPath);
+        json = json.Replace("    \"durationSeconds\": 0,\n", string.Empty)
+            .Replace("    \"measuredFrames\": 0,\n", string.Empty);
+        File.WriteAllText(metadataPath, json);
     }
 
     private static string GetReferenceDirectory(string scenePath, string referenceRoot)
@@ -2182,6 +2264,12 @@ public static class RayTracingSceneCapture
             $"_{width}x{height}_{durationSeconds.ToString("0.###", CultureInfo.InvariantCulture)}s.png");
     }
 
+    private static string GetReferenceImagePath(string scenePath, string referenceRoot, int width, int height)
+    {
+        return Path.Combine(GetReferenceDirectory(scenePath, referenceRoot),
+            SanitizePathSegment(Path.GetFileNameWithoutExtension(scenePath)) + $"_{width}x{height}.png");
+    }
+
     private static string FindLongestReference(string scenePath, string referenceRoot, int width, int height,
         out ReferenceMetadata selectedMetadata)
     {
@@ -2197,7 +2285,12 @@ public static class RayTracingSceneCapture
             try
             {
                 ReferenceMetadata candidate = ValidateReference(scenePath, imagePath, metadataPath, width, height);
-                if (selectedMetadata == null || candidate.durationSeconds > selectedMetadata.durationSeconds)
+                bool candidateIsImported = candidate.captureKind == "editorImported";
+                bool selectedIsImported = selectedMetadata != null && selectedMetadata.captureKind == "editorImported";
+                if (selectedMetadata == null
+                    || (candidateIsImported && !selectedIsImported)
+                    || (candidateIsImported == selectedIsImported
+                        && candidate.durationSeconds > selectedMetadata.durationSeconds))
                 {
                     selectedPath = imagePath;
                     selectedMetadata = candidate;
@@ -2225,7 +2318,7 @@ public static class RayTracingSceneCapture
         }
         if (metadata == null || metadata.schemaVersion != 2 || metadata.scenePath != scenePath
             || metadata.width != expectedWidth || metadata.height != expectedHeight
-            || metadata.durationSeconds <= 0.0 || metadata.imageSha256 != ComputeSha256(imagePath))
+            || metadata.durationSeconds < 0.0 || metadata.imageSha256 != ComputeSha256(imagePath))
         {
             throw new InvalidOperationException($"Reference '{imagePath}' does not match the requested {expectedWidth}x{expectedHeight} reference contract.");
         }

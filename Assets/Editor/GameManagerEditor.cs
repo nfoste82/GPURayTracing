@@ -580,6 +580,48 @@ public sealed class GameManagerEditor : Editor
             }
         }
 
+        using (new EditorGUI.DisabledScope(string.IsNullOrEmpty(manager.gameObject.scene.path)))
+        {
+            if (GUILayout.Button("Import PNG as Reference"))
+            {
+                string sourcePath = EditorUtility.OpenFilePanel("Import Reference PNG", string.Empty, "png");
+                if (string.IsNullOrEmpty(sourcePath))
+                {
+                    return;
+                }
+
+                try
+                {
+                    string scenePath = manager.gameObject.scene.path;
+                    string referencePath = RayTracingSceneCapture.GetImportedReferencePath(sourcePath, scenePath);
+                    if (File.Exists(referencePath)
+                        && !EditorUtility.DisplayDialog("Replace Reference?",
+                            $"A reference already exists for this scene at {Path.GetFileName(referencePath)}. Replace it?",
+                            "Replace", "Cancel"))
+                    {
+                        return;
+                    }
+
+                    RayTracingSceneCapture.ImportReferencePng(sourcePath, scenePath);
+                    Debug.Log($"Imported reference image from '{sourcePath}'.", manager);
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogException(exception, manager);
+                    EditorUtility.DisplayDialog("Import Reference Failed", exception.Message, "OK");
+                }
+            }
+        }
+
+        if (string.IsNullOrEmpty(manager.gameObject.scene.path))
+        {
+            EditorGUILayout.HelpBox("Save the current scene before importing a reference image.", MessageType.Info);
+        }
+        else
+        {
+            EditorGUILayout.HelpBox("Imports a PNG into the scene reference folder and creates its integrity metadata. No render time or frame count is required.", MessageType.None);
+        }
+
         if (!EditorApplication.isPlaying)
         {
             EditorGUILayout.HelpBox("Enter Play mode to save the current ray-traced render.", MessageType.Info);

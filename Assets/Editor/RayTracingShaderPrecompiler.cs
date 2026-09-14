@@ -59,28 +59,28 @@ public static class RayTracingShaderPrecompiler
 
     private static readonly ShaderAsset Main = new ShaderAsset("Wavefront Surface", MainShaderPath, VariantSet.Terrain,
         "CSWavefrontClearFrame", "CSWavefrontClearQueues", "CSWavefrontGenerate", "CSWavefrontBuildDispatchArgs", "CSWavefrontIntersect",
-        "CSWavefrontClassify", "CSWavefrontClearShadowQueue", "CSWavefrontDirectLight", "CSWavefrontTraceShadows", "CSWavefrontResolveShadowWork", "CSWavefrontScatter", "CSWavefrontCopyNextQueue",
-        "CSWavefrontPublishNextQueue", "CSWavefrontRetireCurrentQueue", "CSWavefrontResolve", "CSWavefrontResolveAdaptive", "CSWavefrontPresent");
+        "CSWavefrontClassify", "CSWavefrontClearShadowQueue", "CSWavefrontDirectLight", "CSWavefrontTraceShadows", "CSWavefrontRecordDirectLightGuides", "CSWavefrontResolveShadowWork", "CSWavefrontScatter", "CSWavefrontCopyNextQueue",
+        "CSWavefrontPublishNextQueue", "CSWavefrontRetireCurrentQueue", "CSWavefrontResolve", "CSWavefrontRecordPathGuides", "CSWavefrontResolveAdaptive", "CSWavefrontPresent");
     private static readonly ShaderAsset WavefrontWater = new ShaderAsset("Wavefront Water", WavefrontWaterShaderPath, VariantSet.Terrain,
         "CSWavefrontClearFrame", "CSWavefrontClearQueues", "CSWavefrontGenerate", "CSWavefrontBuildDispatchArgs", "CSWavefrontIntersect",
-        "CSWavefrontClassify", "CSWavefrontClearShadowQueue", "CSWavefrontDirectLight", "CSWavefrontTraceShadows", "CSWavefrontResolveShadowWork", "CSWavefrontScatter", "CSWavefrontCopyNextQueue",
-        "CSWavefrontPublishNextQueue", "CSWavefrontRetireCurrentQueue", "CSWavefrontResolve", "CSWavefrontResolveAdaptive", "CSWavefrontPresent");
+        "CSWavefrontClassify", "CSWavefrontClearShadowQueue", "CSWavefrontDirectLight", "CSWavefrontTraceShadows", "CSWavefrontRecordDirectLightGuides", "CSWavefrontResolveShadowWork", "CSWavefrontScatter", "CSWavefrontCopyNextQueue",
+        "CSWavefrontPublishNextQueue", "CSWavefrontRetireCurrentQueue", "CSWavefrontResolve", "CSWavefrontRecordPathGuides", "CSWavefrontResolveAdaptive", "CSWavefrontPresent");
     private static readonly ShaderAsset WavefrontFog = new ShaderAsset("Wavefront Fog", WavefrontFogShaderPath, VariantSet.FogTerrainOnly,
         "CSWavefrontClearFrame", "CSWavefrontClearQueues", "CSWavefrontGenerate", "CSWavefrontBuildDispatchArgs", "CSWavefrontIntersect",
-        "CSWavefrontClassify", "CSWavefrontClearShadowQueue", "CSWavefrontDirectLight", "CSWavefrontTraceShadows", "CSWavefrontResolveShadowWork", "CSWavefrontScatter", "CSWavefrontCopyNextQueue",
-        "CSWavefrontPublishNextQueue", "CSWavefrontRetireCurrentQueue", "CSWavefrontResolve", "CSWavefrontResolveAdaptive", "CSWavefrontPresent");
+        "CSWavefrontClassify", "CSWavefrontClearShadowQueue", "CSWavefrontDirectLight", "CSWavefrontTraceShadows", "CSWavefrontRecordDirectLightGuides", "CSWavefrontResolveShadowWork", "CSWavefrontScatter", "CSWavefrontCopyNextQueue",
+        "CSWavefrontPublishNextQueue", "CSWavefrontRetireCurrentQueue", "CSWavefrontResolve", "CSWavefrontRecordPathGuides", "CSWavefrontResolveAdaptive", "CSWavefrontPresent");
     private static readonly ShaderAsset WavefrontWaterFog = new ShaderAsset("Wavefront Water + Fog", WavefrontWaterFogShaderPath, VariantSet.FogTerrainOnly,
         "CSWavefrontClearFrame", "CSWavefrontClearQueues", "CSWavefrontGenerate", "CSWavefrontBuildDispatchArgs", "CSWavefrontIntersect",
-        "CSWavefrontClassify", "CSWavefrontClearShadowQueue", "CSWavefrontDirectLight", "CSWavefrontTraceShadows", "CSWavefrontResolveShadowWork", "CSWavefrontScatter", "CSWavefrontCopyNextQueue",
-        "CSWavefrontPublishNextQueue", "CSWavefrontRetireCurrentQueue", "CSWavefrontResolve", "CSWavefrontResolveAdaptive", "CSWavefrontPresent");
+        "CSWavefrontClassify", "CSWavefrontClearShadowQueue", "CSWavefrontDirectLight", "CSWavefrontTraceShadows", "CSWavefrontRecordDirectLightGuides", "CSWavefrontResolveShadowWork", "CSWavefrontScatter", "CSWavefrontCopyNextQueue",
+        "CSWavefrontPublishNextQueue", "CSWavefrontRetireCurrentQueue", "CSWavefrontResolve", "CSWavefrontRecordPathGuides", "CSWavefrontResolveAdaptive", "CSWavefrontPresent");
     private static readonly ShaderAsset WavefrontPathGuided = new ShaderAsset("Wavefront Path Guided", WavefrontPathGuidedShaderPath, VariantSet.Terrain,
         "CSWavefrontClearFrame", "CSWavefrontClearQueues", "CSWavefrontGenerate", "CSWavefrontBuildDispatchArgs", "CSWavefrontIntersect",
-        "CSWavefrontClassify", "CSWavefrontDirectLight", "CSWavefrontClearShadowQueue", "CSWavefrontTraceShadows", "CSWavefrontResolveShadowWork", "CSWavefrontScatter", "CSWavefrontCopyNextQueue",
-        "CSWavefrontPublishNextQueue", "CSWavefrontRetireCurrentQueue", "CSWavefrontResolve", "CSWavefrontResolveAdaptive", "CSWavefrontPresent");
+        "CSWavefrontClassify", "CSWavefrontDirectLight", "CSWavefrontClearShadowQueue", "CSWavefrontTraceShadows", "CSWavefrontRecordDirectLightGuides", "CSWavefrontResolveShadowWork", "CSWavefrontScatter", "CSWavefrontCopyNextQueue",
+        "CSWavefrontPublishNextQueue", "CSWavefrontRetireCurrentQueue", "CSWavefrontResolve", "CSWavefrontRecordPathGuides", "CSWavefrontResolveAdaptive", "CSWavefrontPresent");
     private static readonly ShaderAsset WavefrontRis = new ShaderAsset("Wavefront RIS", WavefrontRisShaderPath, VariantSet.Terrain,
         "CSWavefrontClearFrame", "CSWavefrontClearQueues", "CSWavefrontGenerate", "CSWavefrontBuildDispatchArgs", "CSWavefrontIntersect",
-        "CSWavefrontClassify", "CSWavefrontDirectLight", "CSWavefrontClearShadowQueue", "CSWavefrontTraceShadows", "CSWavefrontResolveShadowWork", "CSWavefrontScatter", "CSWavefrontCopyNextQueue",
-        "CSWavefrontPublishNextQueue", "CSWavefrontRetireCurrentQueue", "CSWavefrontResolve", "CSWavefrontResolveAdaptive", "CSWavefrontPresent");
+        "CSWavefrontClassify", "CSWavefrontDirectLight", "CSWavefrontClearShadowQueue", "CSWavefrontTraceShadows", "CSWavefrontRecordDirectLightGuides", "CSWavefrontResolveShadowWork", "CSWavefrontScatter", "CSWavefrontCopyNextQueue",
+        "CSWavefrontPublishNextQueue", "CSWavefrontRetireCurrentQueue", "CSWavefrontResolve", "CSWavefrontRecordPathGuides", "CSWavefrontResolveAdaptive", "CSWavefrontPresent");
     private static readonly ShaderAsset AdaptiveScheduler = new ShaderAsset("Adaptive Scheduler", AdaptiveSchedulerShaderPath, VariantSet.None,
           "ClearAdaptiveSamplingState", "ClearAdaptiveGroupState", "ClearAdaptiveScheduler", "ClearAdaptiveAllocationMetadata",
           "ClearAdaptiveFrameMetadata", "RecordAdaptiveRetiredPaths", "CSAdaptiveClassifyGroups", "CSAdaptiveApplyBucketRemap",

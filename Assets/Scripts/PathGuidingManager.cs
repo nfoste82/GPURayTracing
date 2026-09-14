@@ -92,17 +92,6 @@ namespace PathTracing.Sampling
             _observationCounts.SetData(new uint[CellCount]);
         }
 
-        public int AddStateHash(int hash)
-        {
-            unchecked
-            {
-                hash = hash * 31 + (Enabled ? 1 : 0);
-                hash = hash * 31 + Mathf.RoundToInt(MixtureWeight * 10000.0f);
-                hash = hash * 31 + MinimumSamples;
-                return hash;
-            }
-        }
-
         public void ReleaseGuideResources()
         {
             _training?.Release();

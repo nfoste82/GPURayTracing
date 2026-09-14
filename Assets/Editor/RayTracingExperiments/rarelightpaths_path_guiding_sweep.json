@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "label": "rarelightpaths_path_guiding_sweep",
+  "scenes": ["Assets/Scenes/RareLightPaths.unity"],
+  "width": 1024,
+  "height": 1024,
+  "durationSeconds": 60.0,
+  "cooldownSeconds": 15.0,
+  "disableAdaptiveInstrumentation": true,
+  "requireReference": true,
+  "variants": [
+    {
+      "name": "path_guiding_disabled",
+      "overrides": [
+        { "path": "enablePathGuiding", "value": "false" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "path_guiding_mixture25_min32",
+      "overrides": [
+        { "path": "enablePathGuiding", "value": "true" },
+        { "path": "pathGuidingMixtureWeight", "value": "0.25" },
+        { "path": "pathGuidingMinimumSamples", "value": "32" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "path_guiding_mixture50_min32",
+      "overrides": [
+        { "path": "enablePathGuiding", "value": "true" },
+        { "path": "pathGuidingMixtureWeight", "value": "0.5" },
+        { "path": "pathGuidingMinimumSamples", "value": "32" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "path_guiding_mixture75_min32",
+      "overrides": [
+        { "path": "enablePathGuiding", "value": "true" },
+        { "path": "pathGuidingMixtureWeight", "value": "0.75" },
+        { "path": "pathGuidingMinimumSamples", "value": "32" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "path_guiding_mixture50_min8",
+      "overrides": [
+        { "path": "enablePathGuiding", "value": "true" },
+        { "path": "pathGuidingMixtureWeight", "value": "0.5" },
+        { "path": "pathGuidingMinimumSamples", "value": "8" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    },
+    {
+      "name": "path_guiding_mixture50_min64",
+      "overrides": [
+        { "path": "enablePathGuiding", "value": "true" },
+        { "path": "pathGuidingMixtureWeight", "value": "0.5" },
+        { "path": "pathGuidingMinimumSamples", "value": "64" },
+        { "path": "samplingSeed", "value": "1" }
+      ]
+    }
+  ]
+}

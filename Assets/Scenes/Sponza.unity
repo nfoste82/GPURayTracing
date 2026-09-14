@@ -228,11 +228,11 @@ MonoBehaviour:
   topLevelBvhMinObjectCount: 64
   shadowBvhMinObjectCount: 64
   shadowRandomness: 0.65
-  sobolDimensionLimit: 656
+  sobolDimensionLimit: 328
   samplingSeed: 1
   enablePathGuiding: 1
   pathGuidingMixtureWeight: 0.5
-  pathGuidingMinimumSamples: 8
+  pathGuidingMinimumSamples: 64
   enableAdaptiveSampling: 1
   recordEditorRun: 0
   adaptiveSamplingMinSamples: 2
@@ -241,11 +241,11 @@ MonoBehaviour:
   adaptiveReclassificationInterval: 4
   adaptiveHighestBucketSampleRate: 3
   adaptiveMaxPathsPerPixel: 3
-  enableAdaptiveBootstrap: 1
+  enableAdaptiveBootstrap: 0
   adaptiveBootstrapGroupDivisor: 16
-  adaptiveBootstrapFrames: 128
+  adaptiveBootstrapFrames: 32
   adaptiveBootstrapResolutionScale: 0.25
-  adaptiveGuidanceHistoryFrames: 32
+  adaptiveGuidanceHistoryFrames: 6
   adaptiveGuidanceChangeThreshold: 0.02
   adaptiveGuidanceMaxUpdates: 2
   adaptiveGuidanceBrightnessPriority: 0.5
@@ -256,8 +256,8 @@ MonoBehaviour:
   _lightingManager:
     _lightSamplingStrategy: 2
     _lightSampleCount: 1
-    _initialRisCandidateCount: 4
-    _temporalRisEnabled: 1
+    _initialRisCandidateCount: 2
+    _temporalRisEnabled: 0
     _temporalRisHistoryMCap: 1
     _spatialRisEnabled: 0
     _spatialRisNeighborCount: 4
@@ -342,8 +342,6 @@ Transform:
   m_Children:
   - {fileID: 504345504}
   - {fileID: 209917531}
-  - {fileID: 1050829795}
-  - {fileID: 1415076454}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &90508154
@@ -507,108 +505,6 @@ MonoBehaviour:
     rgba: 4292801791
   Intensity: 4
   AngularRadius: 0.27
---- !u!1 &1050829794
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 1050829795}
-  - component: {fileID: 1050829796}
-  m_Layer: 0
-  m_Name: Fog Volume
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!4 &1050829795
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1050829794}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: -65.81, y: 25.1, z: 25.76}
-  m_LocalScale: {x: 50, y: 50, z: 50}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 40371818}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &1050829796
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1050829794}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: e5eac8c8f49348f2b4eb435c40f6a79d, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::FogVolume
-  Density: 0.12
-  ScatteringAlbedo: {r: 0.92, g: 0.92, b: 0.92, a: 1}
---- !u!1 &1415076453
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 1415076454}
-  - component: {fileID: 1415076455}
-  m_Layer: 0
-  m_Name: Water Volume
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!4 &1415076454
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1415076453}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: -65, y: 1.278, z: 25.7}
-  m_LocalScale: {x: 50, y: 50, z: 50}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 40371818}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &1415076455
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1415076453}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 60163f929fe84e06a66eeaf2bdf9a83d, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::Water
-  Color:
-    serializedVersion: 2
-    rgba: 4294963114
-  Smoothness: 0.96
-  Opacity: 0.18
-  AbsorptionStrength: 0.22
-  RefractionIndex: 1.33
-  WaveAmplitude: 0.22
-  WaveScale: 0.55
-  WaveSpeed: 0.75
-  MarchSteps: 28
-  RefinementSteps: 5
 --- !u!1001 &2074999231
 PrefabInstance:
   m_ObjectHideFlags: 0

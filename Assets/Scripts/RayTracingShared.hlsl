@@ -3984,6 +3984,7 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
                 candidate.samplePosition = hit.position;
                 candidate.isEnvironment = 1;
                 float3 brdf = EvaluateMaterialBrdf(ray, hit, candidate.direction, materialPdf);
+                materialPdf = GetMaterialContinuationPdf(ray, hit, candidate.direction, allowPathGuide);
                 proposalPdf = branchPdf * candidate.environmentPdf;
                 unshadowed = GetSkyboxColor(candidate.direction) * _SkyboxLight.xyz * brdf
                     * saturate(dot(hit.normal, candidate.direction));
@@ -4041,6 +4042,7 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
                     candidate.direction = toLight / candidate.distance;
                 }
                 float3 materialResponse = EvaluateMaterialBrdf(ray, hit, candidate.direction, materialPdf);
+                materialPdf = GetMaterialContinuationPdf(ray, hit, candidate.direction, allowPathGuide);
                 float normalDotLight = saturate(dot(hit.normal, candidate.direction));
                 proposalPdf = branchPdf * selectionPdf;
                 if (candidate.light.type == LightTypeTriangle || candidate.light.type == LightTypeSunTriangle)
@@ -4553,8 +4555,12 @@ void RecordPathGuideObservation(float3 position, float3 normal, float3 direction
 
 bool IsPathGuideEligible(RayHit hit, bool allowPathGuide)
 {
-    return allowPathGuide && _PathGuideEnabled != 0 && !IsGlassMaterial(hit)
-        && GetBrdfSpecularProbability(hit) < 0.95f && GetGgxAlpha(hit) > 0.08f;
+    if (!allowPathGuide || _PathGuideEnabled == 0 || IsGlassMaterial(hit)) return false;
+
+    // Diffuse materials retain a diffuse continuation lobe even when their GGX lobe is smooth.
+    if (hit.materialType == MaterialDiffuse) return true;
+
+    return GetBrdfSpecularProbability(hit) < 0.95f && GetGgxAlpha(hit) > 0.08f;
 }
 
 float PathGuidePdf(float3 position, float3 normal, float3 direction);
@@ -4991,7 +4997,7 @@ ScatterResult CreateScatteredRay(Ray sourceRay, inout RayHit hit, int bounce, in
         return CreateScatterResult(scatteredRay, float3(1.0f, 1.0f, 1.0f), 1, MediumTransitionNone);
     }
 
-    BrdfSample brdfSample = SampleMaterialBrdf(sourceRay, hit, bounce > 0, rngState);
+    BrdfSample brdfSample = SampleMaterialBrdf(sourceRay, hit, true, rngState);
     scatteredRay.direction = brdfSample.direction;
     float offsetSign = dot(scatteredRay.direction, hit.geometricNormal) >= 0.0f ? 1.0f : -1.0f;
     scatteredRay.origin = hit.position + hit.geometricNormal * (0.001f * offsetSign);
