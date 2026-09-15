@@ -33,6 +33,8 @@ public sealed class SceneSettings
     public int AdaptiveGuidanceHistoryFrames = 2;
     public float AdaptiveLuminanceErrorWeight = -2.0f;
     public float AdaptiveSpatialDisagreementPriority = 4.0f;
+    public float AdaptiveGroupRmsScoreBlend = 0.0f;
+    public float AdaptiveExplorationShare = 0.0f;
     public int AdaptiveReclassificationInterval = 4;
     public float AdaptiveHighestBucketSampleRate = 3.0f;
     public int AdaptiveMaxPathsPerPixel = 4;

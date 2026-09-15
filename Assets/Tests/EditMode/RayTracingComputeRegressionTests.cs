@@ -212,7 +212,7 @@ namespace GPURayTracing.Tests
             string source = System.IO.File.ReadAllText(AdaptiveSchedulerShaderPath);
             Assert.That(shader.HasKernel("CSAdaptiveApplyBucketRemap"), Is.True);
             Assert.That(shader.HasKernel("ClearAdaptiveAllocationMetadata"), Is.True);
-            Assert.That(source, Does.Contain("AdaptiveGroupInfo[flatGroup] = uint4(0u, 0u, validPixels"));
+            Assert.That(source, Does.Contain("AdaptiveGroupInfo[flatGroup] = uint4(explorationAdmission ? 1u : 0u, serviceAge, validPixels"));
             Assert.That(source, Does.Not.Contain("CSAdaptiveCompactGroupWorkList"));
             Assert.That(source, Does.Not.Contain("AdaptiveRootWorkList"));
             Assert.That(source, Does.Not.Contain("AdaptiveWorkRootOffsets"));
@@ -398,6 +398,9 @@ namespace GPURayTracing.Tests
             Assert.That(allocation, Does.Contain("pow(max(0.25f, meanLuminance), _AdaptiveLuminanceErrorWeight)"));
             Assert.That(allocation, Does.Not.Contain("_AdaptiveNormalizePriorityByLuminance"));
             Assert.That(allocation, Does.Contain("_AdaptiveSpatialDisagreementPriority"));
+            Assert.That(allocation, Does.Contain("scoreSquaredSum"));
+            Assert.That(allocation, Does.Contain("_AdaptiveGroupRmsScoreBlend"));
+            Assert.That(allocation, Does.Contain("float rmsScore"));
             Assert.That(allocation, Does.Contain("disagreementSquaredSum"));
             Assert.That(allocation, Does.Contain("float averageSpp = pathCountSum / max(1u, validPixels)"));
             Assert.That(allocation, Does.Contain("float decay = min(1.0f"));
@@ -477,12 +480,21 @@ namespace GPURayTracing.Tests
             int attributeStart = shaderSource.LastIndexOf("[numthreads", start, StringComparison.Ordinal);
             int end = shaderSource.IndexOf("void CSAdaptiveDiagnostics", start, StringComparison.Ordinal);
             string remap = shaderSource.Substring(attributeStart, end - attributeStart);
-            Assert.That(remap, Does.Contain("[numthreads(8,8,1)]"));
+            Assert.That(remap, Does.Contain("[numthreads(1,1,1)]"));
             Assert.That(remap, Does.Contain("AdaptiveGroupBucket"));
             Assert.That(remap, Does.Contain("AdaptiveGroupExtraDemand"));
+            Assert.That(remap, Does.Contain("_AdaptiveExplorationShare"));
+            Assert.That(remap, Does.Contain("bucket < priorityBucketCount / 2u"));
+            Assert.That(remap, Does.Contain("float regularConditionalFraction = (fraction - explorationRate)"));
+            Assert.That(remap, Does.Contain("/ max(0.000001f, 1.0f - explorationRate)"));
+            Assert.That(remap, Does.Contain("_AdaptiveScheduleReclassified != 0"));
+            Assert.That(remap, Does.Contain("AdaptiveGroupState[flatGroup].y = bucket"));
+            Assert.That(remap, Does.Contain("AdaptiveGroupState[flatGroup].w = serviceAge"));
+            Assert.That(remap, Does.Contain("AdaptiveGroupInfo[flatGroup] = uint4(explorationAdmission ? 1u : 0u, serviceAge"));
+            Assert.That(shaderSource, Does.Contain("explorationCredit"));
+            Assert.That(shaderSource, Does.Contain("Hash(flatGroup ^ 0x9e3779b9u) & 65535u"));
             Assert.That(remap, Does.Contain("InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataAssignedPaths]"));
             Assert.That(remap, Does.Contain("InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataWorkItemCount], validPixels)"));
-            Assert.That(remap, Does.Contain("AdaptiveGroupInfo[flatGroup] = uint4(0u, 0u"));
             Assert.That(shaderSource, Does.Contain("uint GetAdaptiveTargetBucket"));
             Assert.That(shaderSource, Does.Contain("void CSAdaptiveApplyBucketRemap"));
             Assert.That(shaderSource, Does.Not.Contain("void CSAdaptiveAllocateGroupBuckets"));
@@ -688,7 +700,7 @@ namespace GPURayTracing.Tests
             string remap = shaderSource.Substring(remapStart, diagnosticsStart - remapStart);
 
             Assert.That(remap, Does.Contain("InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataWorkItemCount], validPixels)"));
-            Assert.That(remap, Does.Contain("AdaptiveGroupInfo[flatGroup] = uint4(0u, 0u"));
+            Assert.That(remap, Does.Contain("AdaptiveGroupInfo[flatGroup] = uint4(explorationAdmission ? 1u : 0u, serviceAge"));
             Assert.That(remap, Does.Contain("paths / validPixels"));
         }
 
@@ -1302,6 +1314,9 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("-rayTracingAdaptiveSamplingMinSamples"));
             Assert.That(source, Does.Contain("-rayTracingAdaptiveLuminanceErrorWeight"));
             Assert.That(source, Does.Contain("TryGetOptionalFloatArgument(\"-rayTracingAdaptiveLuminanceErrorWeight\", -3.0f, 3.0f"));
+            Assert.That(source, Does.Contain("-rayTracingAdaptiveGroupRmsScoreBlend"));
+            Assert.That(source, Does.Contain("-rayTracingAdaptiveExplorationShare"));
+            Assert.That(source, Does.Contain("TryGetOptionalFloatArgument(\"-rayTracingAdaptiveExplorationShare\", 0.0f, 0.5f"));
             Assert.That(source, Does.Contain("-rayTracingAdaptiveReclassificationInterval"));
             Assert.That(source, Does.Contain("-rayTracingAdaptiveHighestBucketSampleRate"));
             Assert.That(source, Does.Contain("-rayTracingAdaptiveMaxPathsPerPixel"));
@@ -2034,6 +2049,10 @@ namespace GPURayTracing.Tests
                 int changedLuminanceErrorWeightHash = (int)hashMethod.Invoke(manager, null);
                 managerType.GetField("adaptiveSpatialDisagreementPriority").SetValue(manager, 0.5f);
                 int changedSpatialDisagreementHash = (int)hashMethod.Invoke(manager, null);
+                managerType.GetField("adaptiveGroupRmsScoreBlend").SetValue(manager, 0.5f);
+                int changedRmsBlendHash = (int)hashMethod.Invoke(manager, null);
+                managerType.GetField("adaptiveExplorationShare").SetValue(manager, 0.05f);
+                int changedExplorationHash = (int)hashMethod.Invoke(manager, null);
                 managerType.GetField("adaptiveHighestBucketSampleRate").SetValue(manager, 4.0f);
                 int changedHighestRateHash = (int)hashMethod.Invoke(manager, null);
 
@@ -2044,7 +2063,9 @@ namespace GPURayTracing.Tests
                 Assert.That(changedIntervalHash, Is.Not.EqualTo(changedCoarseUpdateLimitHash));
                 Assert.That(changedLuminanceErrorWeightHash, Is.Not.EqualTo(changedIntervalHash));
                 Assert.That(changedSpatialDisagreementHash, Is.Not.EqualTo(changedLuminanceErrorWeightHash));
-                Assert.That(changedHighestRateHash, Is.Not.EqualTo(changedSpatialDisagreementHash));
+                Assert.That(changedRmsBlendHash, Is.Not.EqualTo(changedSpatialDisagreementHash));
+                Assert.That(changedExplorationHash, Is.Not.EqualTo(changedRmsBlendHash));
+                Assert.That(changedHighestRateHash, Is.Not.EqualTo(changedExplorationHash));
             }
             finally
             {

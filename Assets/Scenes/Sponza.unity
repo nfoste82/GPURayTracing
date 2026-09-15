@@ -228,7 +228,7 @@ MonoBehaviour:
   topLevelBvhMinObjectCount: 64
   shadowBvhMinObjectCount: 64
   shadowRandomness: 0.65
-  sobolDimensionLimit: 328
+  sobolDimensionLimit: 1
   samplingSeed: 1
   enablePathGuiding: 1
   pathGuidingMixtureWeight: 0.5
@@ -238,9 +238,11 @@ MonoBehaviour:
   adaptiveSamplingMinSamples: 2
   adaptiveLuminanceErrorWeight: -3
   adaptiveSpatialDisagreementPriority: 4
-  adaptiveReclassificationInterval: 4
-  adaptiveHighestBucketSampleRate: 3
-  adaptiveMaxPathsPerPixel: 3
+  adaptiveGroupRmsScoreBlend: 0.5
+  adaptiveExplorationShare: 0.5
+  adaptiveReclassificationInterval: 6
+  adaptiveHighestBucketSampleRate: 4
+  adaptiveMaxPathsPerPixel: 4
   enableAdaptiveBootstrap: 0
   adaptiveBootstrapGroupDivisor: 16
   adaptiveBootstrapFrames: 32
@@ -256,7 +258,7 @@ MonoBehaviour:
   _lightingManager:
     _lightSamplingStrategy: 2
     _lightSampleCount: 1
-    _initialRisCandidateCount: 2
+    _initialRisCandidateCount: 1
     _temporalRisEnabled: 0
     _temporalRisHistoryMCap: 1
     _spatialRisEnabled: 0
@@ -265,22 +267,22 @@ MonoBehaviour:
     _skyboxLightColor:
       serializedVersion: 2
       rgba: 4294967295
-  enableCaustics: 1
-  enableVolumetricFog: 1
+  enableCaustics: 0
+  enableVolumetricFog: 0
   fogDensityScale: 0.091
   fogScatteringScale: 0.241
   fogInScatteringIntensity: 10.23
   enableFogMultipleScattering: 0
   debugRenderMode: 0
   exposure: 4
-  enableGlare: 1
+  enableGlare: 0
   exportWithFxaa: 0
   exportWithSmaa: 0
   openImageAfterExport: 0
   glareThreshold: 1
   glareSoftKnee: 0.1
   glareIntensity: 1
-  fireflyClamp: 6
+  fireflyClamp: 20
   randomNoise: 0
   skyboxTexture: {fileID: 2800000, guid: 498101212922c43cb9800ac08f1737bd, type: 3}
   enableEnvironmentLighting: 1
@@ -576,7 +578,7 @@ PrefabInstance:
     - target: {fileID: 2971967063100379664, guid: 8ddca31243df445f4b72aa5a61e7d82a,
         type: 3}
       propertyPath: Smoothness
-      value: 0.35
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 2975147815424576458, guid: 8ddca31243df445f4b72aa5a61e7d82a,
         type: 3}
@@ -640,6 +642,11 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 3659768586090147360, guid: 8ddca31243df445f4b72aa5a61e7d82a,
         type: 3}
+      propertyPath: Smoothness
+      value: 0.5
+      objectReference: {fileID: 0}
+    - target: {fileID: 3659768586090147360, guid: 8ddca31243df445f4b72aa5a61e7d82a,
+        type: 3}
       propertyPath: NormalStrength
       value: 1.5
       objectReference: {fileID: 0}
@@ -657,6 +664,11 @@ PrefabInstance:
         type: 3}
       propertyPath: NormalStrength
       value: 1.5
+      objectReference: {fileID: 0}
+    - target: {fileID: 4635859291566111242, guid: 8ddca31243df445f4b72aa5a61e7d82a,
+        type: 3}
+      propertyPath: Smoothness
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 5458836729064338942, guid: 8ddca31243df445f4b72aa5a61e7d82a,
         type: 3}

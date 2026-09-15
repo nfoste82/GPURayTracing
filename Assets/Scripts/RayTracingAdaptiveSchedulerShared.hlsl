@@ -40,12 +40,15 @@ uint _AdaptiveGroupHeight;
 uint _AdaptiveGroupCount;
 int _AdaptiveCaptureDiagnostics;
 uint _AdaptiveScheduleRotation;
+int _AdaptiveScheduleReclassified;
 float _AdaptiveHighestBucketSampleRate;
 uint _AdaptiveBucketCount;
 uint _AdaptiveMaxPathsPerPixel;
 uint _AdaptiveSampleLayer;
 float _AdaptiveLuminanceErrorWeight;
 float _AdaptiveSpatialDisagreementPriority;
+float _AdaptiveGroupRmsScoreBlend;
+float _AdaptiveExplorationShare;
 int _UseAdaptiveBootstrapPriority;
 uint _AdaptiveBootstrapGroupDivisor;
 

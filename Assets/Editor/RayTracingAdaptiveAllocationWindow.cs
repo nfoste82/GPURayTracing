@@ -357,6 +357,10 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
                 new GUIContent("Luminance Error Weight"));
             EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveSpatialDisagreementPriority"),
                 new GUIContent("Early Spatial Disagreement Priority"));
+            EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveGroupRmsScoreBlend"),
+                new GUIContent("Group RMS Score Blend"));
+            EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveExplorationShare"),
+                new GUIContent("Lowest-Tier Exploration Share"));
             EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveReclassificationInterval"),
                 new GUIContent("Reclassification Interval"));
             EditorGUILayout.PropertyField(serializedManager.FindProperty("adaptiveHighestBucketSampleRate"),
@@ -567,6 +571,8 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
             $"adaptiveSamplingMinSamples={manager.adaptiveSamplingMinSamples}\n" +
             $"adaptiveLuminanceErrorWeight={manager.adaptiveLuminanceErrorWeight:R}\n" +
             $"adaptiveSpatialDisagreementPriority={manager.adaptiveSpatialDisagreementPriority:R}\n" +
+            $"adaptiveGroupRmsScoreBlend={manager.adaptiveGroupRmsScoreBlend:R}\n" +
+            $"adaptiveExplorationShare={manager.adaptiveExplorationShare:R}\n" +
             $"adaptiveReclassificationInterval={manager.adaptiveReclassificationInterval}\n" +
             $"adaptiveHighestBucketSampleRate={manager.adaptiveHighestBucketSampleRate:R}\n" +
             $"adaptiveMaxPathsPerPixel={manager.adaptiveMaxPathsPerPixel}\n" +

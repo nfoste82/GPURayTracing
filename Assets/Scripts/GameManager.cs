@@ -73,8 +73,7 @@ public class GameManager : MonoBehaviour
     [Tooltip("Prevents the denoiser from diffusing isolated HDR caustic candidates into neighboring receiver pixels. Higher values preserve only stronger local outliers.")]
     [Range(1.5f, 32.0f)]
     public float causticPreservationThreshold = 4.0f;
-
-    [Header("Quality settings (Higher quality -> Slower)")]
+    
     [Tooltip("Percentage of the camera viewport traced before bilinear reconstruction to the display resolution. Lower values reduce ray work but soften fine detail.")]
     [Range(5.0f, 100.0f)]
     public float renderResolutionPercent = 100.0f;
@@ -113,8 +112,7 @@ public class GameManager : MonoBehaviour
 
     [Range(0f, 1.5f)]
     public float shadowRandomness = 0.65f;
-
-    [Header("Path Sampler")]
+    
     [Tooltip("Number of camera and path dimensions using Burley-style shuffled, Owen-scrambled Sobol coordinates. The default covers camera plus the first two path bounces; higher dimensions use the faster unbiased hash fallback.")]
     [Range(1, SobolDirectionNumbers.MaximumDimensions)]
     public int sobolDimensionLimit = 328;
@@ -122,13 +120,14 @@ public class GameManager : MonoBehaviour
     [Tooltip("Deterministic seed for the per-pixel Owen scramble when Random Noise is disabled.")]
     [Min(1)]
     public int samplingSeed = 1;
-
-    [Header("Path Guiding (Experimental)")]
+    
     [Tooltip("Learns normal-relative indirect-light directions in a world-space grid. Disabled until validated.")]
     public bool enablePathGuiding = false;
+    
     [Range(0.0f, 1.0f)]
     [Tooltip("Fraction of eligible continuation samples drawn from the learned guide; the remainder use the existing BSDF sampler.")]
     public float pathGuidingMixtureWeight = 0.5f;
+    
     [Range(1, 1024)]
     [Tooltip("Minimum accumulated guide observations in a cell before guided sampling is allowed.")]
     public int pathGuidingMinimumSamples = 32;
@@ -147,6 +146,12 @@ public class GameManager : MonoBehaviour
 
     [Range(0.0f, 4.0f), Tooltip("Experimental: early-priority bonus from RGB disagreement within an 8x8 group. This is not a noise estimate; its weight decays as the group accumulates samples. 0 preserves the Welford-only scheduler.")]
     public float adaptiveSpatialDisagreementPriority = 4.0f;
+
+    [Range(0.0f, 1.0f), Tooltip("Experimental: blends mean group uncertainty toward RMS. RMS retains more signal from sparse difficult pixels without using unstable maxima.")]
+    public float adaptiveGroupRmsScoreBlend = 0.0f;
+
+    [Range(0.0f, 0.5f), Tooltip("Experimental: share of the lowest-tier fractional rate reserved for a deterministic group-level exploration heartbeat. It preserves the tier's expected path rate and uses no additional dispatches.")]
+    public float adaptiveExplorationShare = 0.0f;
 
     [Range(1, 8), Tooltip("Frames a compact adaptive schedule is reused before reprioritizing groups. Lower values react sooner but add scheduler overhead.")]
     public int adaptiveReclassificationInterval = 4;
@@ -174,8 +179,7 @@ public class GameManager : MonoBehaviour
     [HideInInspector] public float adaptiveGuidanceBrightnessPriority = 0.5f;
     [HideInInspector] public float adaptiveGuidanceDirectLightPriority = 0.5f;
     [HideInInspector] public float adaptiveGuidanceRoughnessPriority = 0.0f;
-
-    [Header("Parallax Mapping")]
+    
     [Range(0f, 90f)]
     [Tooltip("View angle from the surface normal where parallax uses its maximum strength. It interpolates each material's parallax strength at this angle or higher, down toward the material's parallax minimum strength at 0 degrees.")]
     public float parallaxMaximumStrengthAngle = 20f;
@@ -224,11 +228,7 @@ public class GameManager : MonoBehaviour
 
     [Tooltip("Redistributes bright HDR radiance into a camera/eye-like glare halo before exposure and ACES tone mapping.")]
     public bool enableGlare = false;
-
-    [Header("Image Export")]
-    [Tooltip("Applies fast approximate anti-aliasing to PNG exports only. This does not affect the live render.")]
-    public bool exportWithFxaa = false;
-
+    
     [Tooltip("Applies morphological anti-aliasing to PNG exports only. This does not affect the live render.")]
     public bool exportWithSmaa = false;
 
@@ -258,8 +258,7 @@ public class GameManager : MonoBehaviour
     private bool _preserveTemporalRisHistoryForNextNonAccumulatedFrame;
 
     public Texture skyboxTexture;
-
-    [Header("Environment Lighting")]
+    
     [Tooltip("Samples the skybox as an importance-sampled direct light. The HDRI texture must be a readable Texture2D.")]
     public bool enableEnvironmentLighting = true;
 
@@ -346,6 +345,8 @@ public class GameManager : MonoBehaviour
     public sealed class AdaptiveDiagnosticsData
     {
         public uint[] metadata;
+        public uint[] groupInfo;
+        public uint[] groupState;
         public uint[] workItemPixels;
         public uint[] workItemPathCounts;
         public float[] pathCounts;
@@ -689,6 +690,9 @@ public class GameManager : MonoBehaviour
     private static readonly int AdaptiveSampleLayer = Shader.PropertyToID("_AdaptiveSampleLayer");
     private static readonly int AdaptiveLuminanceErrorWeight = Shader.PropertyToID("_AdaptiveLuminanceErrorWeight");
     private static readonly int AdaptiveSpatialDisagreementPriority = Shader.PropertyToID("_AdaptiveSpatialDisagreementPriority");
+    private static readonly int AdaptiveGroupRmsScoreBlend = Shader.PropertyToID("_AdaptiveGroupRmsScoreBlend");
+    private static readonly int AdaptiveExplorationShare = Shader.PropertyToID("_AdaptiveExplorationShare");
+    private static readonly int AdaptiveScheduleReclassified = Shader.PropertyToID("_AdaptiveScheduleReclassified");
     private static readonly int AdaptiveGroupState = Shader.PropertyToID("AdaptiveGroupState");
     private static readonly int AdaptiveGroupInfo = Shader.PropertyToID("AdaptiveGroupInfo");
     private static readonly int AdaptiveGroupBucket = Shader.PropertyToID("AdaptiveGroupBucket");
@@ -771,6 +775,8 @@ public class GameManager : MonoBehaviour
         adaptiveGuidanceHistoryFrames = settings.AdaptiveGuidanceHistoryFrames;
         adaptiveLuminanceErrorWeight = settings.AdaptiveLuminanceErrorWeight;
         adaptiveSpatialDisagreementPriority = settings.AdaptiveSpatialDisagreementPriority;
+        adaptiveGroupRmsScoreBlend = settings.AdaptiveGroupRmsScoreBlend;
+        adaptiveExplorationShare = settings.AdaptiveExplorationShare;
         adaptiveReclassificationInterval = settings.AdaptiveReclassificationInterval;
         adaptiveHighestBucketSampleRate = settings.AdaptiveHighestBucketSampleRate;
         adaptiveMaxPathsPerPixel = settings.AdaptiveMaxPathsPerPixel;
@@ -1577,6 +1583,7 @@ public class GameManager : MonoBehaviour
         BindAdaptiveSchedulerResources(applyBucketRemapKernel);
         SetAdaptiveGroupDimensions(groupWidth, groupHeight);
         adaptiveSchedulerShader.SetInt("_AdaptiveScheduleRotation", _accumulatedFrameCount);
+        adaptiveSchedulerShader.SetInt(AdaptiveScheduleReclassified, reclassify ? 1 : 0);
         ComputeDispatch.Dispatch(adaptiveSchedulerShader, applyBucketRemapKernel, groupWidth, groupHeight, 1);
         if (_adaptiveCaptureDiagnostics)
         {
@@ -1742,15 +1749,17 @@ public class GameManager : MonoBehaviour
         DispatchAdaptiveDiagnostics();
         var metadataRequest = AsyncGPUReadback.Request(_adaptiveWorkListMetadataBuffer);
         var groupInfoRequest = AsyncGPUReadback.Request(_adaptiveGroupInfoBuffer);
+        var groupStateRequest = AsyncGPUReadback.Request(_adaptiveGroupStateBuffer);
         var stateRequest = AsyncGPUReadback.Request(_adaptiveSamplingStateTexture);
         var m2Request = AsyncGPUReadback.Request(_adaptiveSamplingM2Texture);
         var accumulationRequest = AsyncGPUReadback.Request(_accumulationTexture);
         metadataRequest.WaitForCompletion();
         groupInfoRequest.WaitForCompletion();
+        groupStateRequest.WaitForCompletion();
         stateRequest.WaitForCompletion();
         m2Request.WaitForCompletion();
         accumulationRequest.WaitForCompletion();
-        if (metadataRequest.hasError || groupInfoRequest.hasError || stateRequest.hasError || m2Request.hasError
+        if (metadataRequest.hasError || groupInfoRequest.hasError || groupStateRequest.hasError || stateRequest.hasError || m2Request.hasError
             || accumulationRequest.hasError)
         {
             throw new InvalidOperationException("Adaptive diagnostics GPU readback failed.");
@@ -1758,6 +1767,7 @@ public class GameManager : MonoBehaviour
 
         var metadata = metadataRequest.GetData<uint>();
         var groupInfo = groupInfoRequest.GetData<uint>();
+        var groupState = groupStateRequest.GetData<uint>();
         var state = stateRequest.GetData<Vector4>();
         var m2 = m2Request.GetData<Vector4>();
         var accumulation = accumulationRequest.GetData<Vector4>();
@@ -1787,6 +1797,8 @@ public class GameManager : MonoBehaviour
         return new AdaptiveDiagnosticsData
         {
             metadata = metadataCopy,
+            groupInfo = CopyReadback(groupInfo),
+            groupState = CopyReadback(groupState),
             workItemPixels = workItemPixels.ToArray(),
             workItemPathCounts = workItemPathCounts.ToArray(),
             pathCounts = pathCounts,
@@ -1802,6 +1814,13 @@ public class GameManager : MonoBehaviour
     private static Vector4[] CopyReadback(NativeArray<Vector4> source)
     {
         var copy = new Vector4[source.Length];
+        source.CopyTo(copy);
+        return copy;
+    }
+
+    private static uint[] CopyReadback(NativeArray<uint> source)
+    {
+        var copy = new uint[source.Length];
         source.CopyTo(copy);
         return copy;
     }
@@ -1848,6 +1867,8 @@ public class GameManager : MonoBehaviour
         targetShader.SetInt(AdaptiveSamplingMinSamples, Mathf.Clamp(adaptiveSamplingMinSamples, 1, 64));
         targetShader.SetFloat(AdaptiveLuminanceErrorWeight, Mathf.Clamp(adaptiveLuminanceErrorWeight, -3.0f, 3.0f));
         targetShader.SetFloat(AdaptiveSpatialDisagreementPriority, Mathf.Clamp(adaptiveSpatialDisagreementPriority, 0.0f, 4.0f));
+        targetShader.SetFloat(AdaptiveGroupRmsScoreBlend, Mathf.Clamp01(adaptiveGroupRmsScoreBlend));
+         targetShader.SetFloat(AdaptiveExplorationShare, Mathf.Clamp(adaptiveExplorationShare, 0.0f, 0.5f));
         targetShader.SetInt(AdaptiveCaptureDiagnostics, _adaptiveCaptureDiagnostics ? 1 : 0);
         targetShader.SetFloat(AdaptiveHighestBucketSampleRate, Mathf.Clamp(adaptiveHighestBucketSampleRate, 1.0f, 8.0f));
         targetShader.SetInt(AdaptiveBucketCount, AdaptiveBucketCountMaximum);
@@ -2605,7 +2626,7 @@ public class GameManager : MonoBehaviour
                 : _outputTexture;
             Graphics.Blit(currentOutput, presentation);
             var output = presentation;
-            if (exportWithFxaa || exportWithSmaa)
+            if (exportWithSmaa)
             {
                 antiAliasedPresentation = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32)
                 {
@@ -3904,6 +3925,8 @@ public class GameManager : MonoBehaviour
         targetShader.SetInt(SampleOffset, CalculateSampleOffset());
         targetShader.SetInt(AdaptiveSamplingMinSamples, Mathf.Clamp(adaptiveSamplingMinSamples, 1, 64));
         targetShader.SetFloat(AdaptiveLuminanceErrorWeight, Mathf.Clamp(adaptiveLuminanceErrorWeight, -3.0f, 3.0f));
+        targetShader.SetFloat(AdaptiveGroupRmsScoreBlend, Mathf.Clamp01(adaptiveGroupRmsScoreBlend));
+         targetShader.SetFloat(AdaptiveExplorationShare, Mathf.Clamp(adaptiveExplorationShare, 0.0f, 0.5f));
         targetShader.SetInt(AdaptiveCaptureDiagnostics, _adaptiveCaptureDiagnostics ? 1 : 0);
         targetShader.SetFloat(AdaptiveHighestBucketSampleRate, Mathf.Clamp(adaptiveHighestBucketSampleRate, 1.0f, 8.0f));
         targetShader.SetInt(AdaptiveBucketCount, AdaptiveBucketCountMaximum);
@@ -4048,6 +4071,8 @@ public class GameManager : MonoBehaviour
             hash = AddHash(hash, adaptiveGuidanceHistoryFrames);
             hash = AddHash(hash, adaptiveLuminanceErrorWeight);
             hash = AddHash(hash, adaptiveSpatialDisagreementPriority);
+            hash = AddHash(hash, adaptiveGroupRmsScoreBlend);
+            hash = AddHash(hash, adaptiveExplorationShare);
             hash = AddHash(hash, adaptiveReclassificationInterval);
             hash = AddHash(hash, adaptiveHighestBucketSampleRate);
             hash = AddHash(hash, adaptiveMaxPathsPerPixel);

@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "label": "sponza_adaptive_exploration_share_sweep_1440p_60s_instrumented",
+  "scenes": ["Assets/Scenes/Sponza.unity"],
+  "width": 2560,
+  "height": 1440,
+  "durationSeconds": 60.0,
+  "cooldownSeconds": 20.0,
+  "disableAdaptiveInstrumentation": false,
+  "generateVariantComparisonImages": false,
+  "requireReference": true,
+  "referenceRoot": "Assets/Editor/RayTracingSceneReferences",
+  "variants": [
+    {
+      "name": "explore50pct",
+      "overrides": [
+        { "path": "enableAdaptiveSampling", "value": "true" },
+        { "path": "enableAdaptiveBootstrap", "value": "false" },
+        { "path": "adaptiveGuidanceHistoryFrames", "value": "0" },
+        { "path": "adaptiveSamplingMinSamples", "value": "8" },
+        { "path": "adaptiveBootstrapGroupDivisor", "value": "1" },
+        { "path": "adaptiveLuminanceErrorWeight", "value": "-3" },
+        { "path": "adaptiveSpatialDisagreementPriority", "value": "4" },
+        { "path": "adaptiveGroupRmsScoreBlend", "value": "0.5" },
+        { "path": "adaptiveExplorationShare", "value": "0.5" },
+        { "path": "adaptiveReclassificationInterval", "value": "4" },
+        { "path": "adaptiveHighestBucketSampleRate", "value": "3" },
+        { "path": "adaptiveMaxPathsPerPixel", "value": "4" },
+        { "path": "useOwenScrambledSobol", "value": "true" },
+        { "path": "sobolDimensionLimit", "value": "328" },
+        { "path": "samplingSeed", "value": "1" },
+        { "path": "randomNoise", "value": "false" }
+      ]
+    }
+  ]
+}

@@ -204,6 +204,7 @@ void CSAdaptiveClassifyGroups(uint3 id : SV_DispatchThreadID, uint groupIndex : 
 
     uint validPixels = 0u;
     float scoreSum = 0.0f;
+    float scoreSquaredSum = 0.0f;
     float3 accumulationSum = 0.0f;
     float pathCountSum = 0.0f;
     bool groupBootstrap = false;
@@ -211,6 +212,7 @@ void CSAdaptiveClassifyGroups(uint3 id : SV_DispatchThreadID, uint groupIndex : 
     {
         validPixels += AdaptiveGroupSamples[reductionLane];
         scoreSum += AdaptiveGroupScore[reductionLane];
+        scoreSquaredSum += AdaptiveGroupScore[reductionLane] * AdaptiveGroupScore[reductionLane];
         accumulationSum += AdaptiveGroupAccumulation[reductionLane];
         pathCountSum += AdaptiveGroupPathCount[reductionLane];
         groupBootstrap = groupBootstrap || AdaptiveGroupBootstrap[reductionLane] != 0u;
@@ -222,6 +224,10 @@ void CSAdaptiveClassifyGroups(uint3 id : SV_DispatchThreadID, uint groupIndex : 
     if (!groupBootstrap)
     {
         float meanScore = scoreSum / max(1u, validPixels);
+        // RMS preserves more signal from sparse difficult pixels than a pure mean without the
+        // single-pixel instability of a maximum.
+        float rmsScore = sqrt(max(0.0f, scoreSquaredSum / max(1u, validPixels)));
+        meanScore = lerp(meanScore, rmsScore, _AdaptiveGroupRmsScoreBlend);
         // Spatial disagreement is a short-lived priority prior, not a noise estimate. It gives
         // early attention to uncertain groups but decays even when persistent scene contrast remains.
         if (_AdaptiveSpatialDisagreementPriority > 0.0f)
@@ -253,12 +259,21 @@ void CSAdaptiveClassifyGroups(uint3 id : SV_DispatchThreadID, uint groupIndex : 
     AdaptiveGroupBucket[flatGroup] = bucket;
     // ExtraDemand is the epoch-eligibility marker consumed by remap. Keep it nonzero for both
     // bootstrap and established groups; GroupState carries the separate bootstrap classification.
-    AdaptiveGroupState[flatGroup] = uint4(groupBootstrap ? 1u : 2u, bucket, 0u, 0u);
+    // y starts as the source bucket and is replaced with the stable target tier by the remap
+    // pass. z holds fractional exploration credit; w is the saturated age since this group was
+    // last served. Both are group-level state, so this policy adds no image-sized history.
+    uint4 previousGroupState = AdaptiveGroupState[flatGroup];
+    // Seed a unique fixed-point phase once after reset so eligible low-tier groups take turns
+    // instead of receiving their heartbeat in a single periodic burst.
+    uint explorationCredit = previousGroupState.x != 0u
+        ? previousGroupState.z : Hash(flatGroup ^ 0x9e3779b9u) & 65535u;
+    AdaptiveGroupState[flatGroup] = uint4(groupBootstrap ? 1u : 2u, bucket, explorationCredit,
+        previousGroupState.x != 0u ? previousGroupState.w : 0u);
     AdaptiveGroupExtraDemand[flatGroup] = validPixels;
     InterlockedAdd(AdaptiveRawBucketDemand[bucket], validPixels);
 }
 
-[numthreads(8,8,1)]
+[numthreads(1,1,1)]
 void CSAdaptiveApplyBucketRemap(uint3 id : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex,
     uint3 groupId : SV_GroupID)
 {
@@ -267,11 +282,18 @@ void CSAdaptiveApplyBucketRemap(uint3 id : SV_DispatchThreadID, uint groupIndex 
     Result.GetDimensions(width, height);
     uint2 logicalGroup = GetAdaptiveLogicalGroup(groupId.xy);
     uint flatGroup = logicalGroup.x + logicalGroup.y * _AdaptiveGroupWidth;
-    uint sourceBucket = AdaptiveGroupState[flatGroup].y;
+    uint sourceOrTargetBucket = AdaptiveGroupState[flatGroup].y;
     bool bootstrap = AdaptiveGroupState[flatGroup].x == 1u;
-    uint bucket = bootstrap ? _AdaptiveBucketCount - 1u : GetAdaptiveTargetBucket(sourceBucket, flatGroup);
+    // Target tiers are assigned when scores are classified, then remain stable while only
+    // fractional admission rotates. Re-randomizing a target tier every frame prevents a group
+    // heartbeat from measuring or bounding starvation for one stable low-tier population.
+    uint bucket = bootstrap ? _AdaptiveBucketCount - 1u
+        : (_AdaptiveScheduleReclassified != 0
+            ? GetAdaptiveTargetBucket(sourceOrTargetBucket, flatGroup)
+            : sourceOrTargetBucket);
     uint validPixels = min(8u, width - logicalGroup.x * 8u) * min(8u, height - logicalGroup.y * 8u);
     uint samples = (uint)max(1, _NumberOfPasses);
+    bool explorationAdmission = false;
     if (bootstrap)
     {
         // Bootstrap admission must rotate every rendered frame, not only when cached scores are
@@ -293,7 +315,31 @@ void CSAdaptiveApplyBucketRemap(uint3 id : SV_DispatchThreadID, uint groupIndex 
         // Use a separate sequence from tier selection so fractional-rate admission remains
         // unbiased after lower-rate tiers consume the lower part of the selection interval.
         float random = (float)Hash(flatGroup ^ (_AdaptiveScheduleRotation * 2891336453u)) / 4294967296.0f;
-        samples = min(_AdaptiveMaxPathsPerPixel, wholePaths + (random < fraction ? 1u : 0u));
+        samples = wholePaths;
+        // Reserve part of the lower-half tiers' fractional admission probability for a deterministic
+        // rotating heartbeat. The remaining random admission receives the residual probability,
+        // preserving the tier's expected sample rate while bounding how long cold groups go unseen.
+        uint priorityBucketCount = max(1u, _AdaptiveBucketCount - 1u);
+        bool useExploration = bucket < priorityBucketCount / 2u
+            && fraction > 0.0f && _AdaptiveExplorationShare > 0.0f;
+        if (useExploration)
+        {
+            float explorationRate = min(fraction, fraction * _AdaptiveExplorationShare);
+            uint creditIncrement = (uint)round(explorationRate * 65536.0f);
+            uint credit = AdaptiveGroupState[flatGroup].z + creditIncrement;
+            explorationAdmission = credit >= 65536u;
+            AdaptiveGroupState[flatGroup].z = explorationAdmission ? credit - 65536u : credit;
+            // The random trial occurs only after no heartbeat admission. Its conditional chance
+            // preserves the original total fractional admission rate exactly.
+            float regularConditionalFraction = (fraction - explorationRate)
+                / max(0.000001f, 1.0f - explorationRate);
+            samples += explorationAdmission || random < regularConditionalFraction ? 1u : 0u;
+        }
+        else
+        {
+            samples += random < fraction ? 1u : 0u;
+        }
+        samples = min(_AdaptiveMaxPathsPerPixel, samples);
     }
     uint paths = validPixels * samples;
     AdaptiveGroupBucket[flatGroup] = bucket;
@@ -307,7 +353,10 @@ void CSAdaptiveApplyBucketRemap(uint3 id : SV_DispatchThreadID, uint groupIndex 
         InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataBucketAdmittedPathsStart + bucket], paths);
         InterlockedAdd(AdaptiveWorkListMetadata[AdaptiveMetadataBucketBudgetStart + bucket], paths);
     }
-    AdaptiveGroupInfo[flatGroup] = uint4(0u, 0u, validPixels,
+    uint serviceAge = samples != 0u ? 0u : min(65535u, AdaptiveGroupState[flatGroup].w + 1u);
+    AdaptiveGroupState[flatGroup].y = bucket;
+    AdaptiveGroupState[flatGroup].w = serviceAge;
+    AdaptiveGroupInfo[flatGroup] = uint4(explorationAdmission ? 1u : 0u, serviceAge, validPixels,
         validPixels != 0u ? paths / validPixels : 0u);
 }
 

@@ -44,31 +44,51 @@ public sealed class GameManagerEditor : Editor
 
         DrawSection(manager, "Render Quality", true, () =>
         {
+            EditorGUILayout.LabelField("Quality settings (Higher quality -> Slower)", EditorStyles.boldLabel);
             DrawProperty("renderResolutionPercent", "Render Resolution (%)");
             DrawProperty("numberOfPasses");
             DrawProperty("numBounces");
             DrawProperty("shadowQuality");
+            
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Parallax Mapping", EditorStyles.boldLabel);
+            DrawProperty("parallaxMaximumStrengthAngle");
+            
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Shadows", EditorStyles.boldLabel);
+            DrawProperty("shadowRandomness", "Local Light Shadow Randomness");
+        });
+        
+        DrawSection(manager, "Render Settings", true, () =>
+        {
             DrawProperty("subpixelJitterScale");
             DrawProperty("enableFrameAccumulation");
-            DrawProperty("liveFrameIdlePercent", "Live Frame Idle (%)");
-            DrawProperty("liveFrameCooldownMilliseconds", "Live Frame Cooldown (ms)");
             DrawProperty("_singleFrame", "Render Paused View");
             DrawProperty("fireflyClamp");
             DrawProperty("randomNoise");
-            DrawProperty("parallaxMaximumStrengthAngle");
         });
+        
+        DrawSection(manager, "Performance Throttling", true, () =>
+        {
+            DrawProperty("liveFrameIdlePercent", "Live Frame Idle (%)");
+            DrawProperty("liveFrameCooldownMilliseconds", "Live Frame Cooldown (ms)");
+        });
+        
         DrawSection(manager, "Sampling and Accumulation", true, () =>
         {
             DrawSamplerSettings(manager);
-            DrawProperty("enablePathGuiding", "Path Guiding (Experimental)");
+            
+            EditorGUILayout.LabelField("Path Guiding", EditorStyles.boldLabel);
+            DrawProperty("enablePathGuiding", "Path Guiding");
             if (manager.enablePathGuiding)
             {
                 DrawProperty("pathGuidingMixtureWeight", "Path Guide Mixture Weight");
                 DrawProperty("pathGuidingMinimumSamples", "Path Guide Minimum Samples");
             }
-            DrawProperty("shadowRandomness", "Local Light Shadow Randomness");
-            DrawProperty("enableAdaptiveSampling", "Adaptive Sampling (Experimental)");
-            DrawProperty("recordEditorRun", "Record Editor Run");
+            
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Adaptive Sampling", EditorStyles.boldLabel);
+            DrawProperty("enableAdaptiveSampling", "Adaptive Sampling");
             if (manager.enableAdaptiveSampling)
             {
                 DrawProperty("enableAdaptiveBootstrap", "Enable Low-Resolution Bootstrap");
@@ -83,6 +103,8 @@ public sealed class GameManagerEditor : Editor
                     DrawProperty("adaptiveBootstrapGroupDivisor", "Fine Bootstrap Group Batches");
                 DrawProperty("adaptiveLuminanceErrorWeight", "Luminance Error Weight");
                 DrawProperty("adaptiveSpatialDisagreementPriority", "Early Spatial Disagreement Priority");
+                DrawProperty("adaptiveGroupRmsScoreBlend", "Group RMS Score Blend");
+                DrawProperty("adaptiveExplorationShare", "Lowest-Tier Exploration Share");
                 DrawProperty("adaptiveReclassificationInterval", "Reclassification Interval");
                 DrawProperty("adaptiveHighestBucketSampleRate", "Highest Bucket Sample Rate");
                 DrawProperty("adaptiveMaxPathsPerPixel", "Max Paths Per Pixel");
@@ -114,9 +136,29 @@ public sealed class GameManagerEditor : Editor
                 }
             }
             DrawLightingProperty("lightFalloffScale", "Local Light Falloff Scale");
+            
             DrawDirectionalLighting(manager);
+            
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Environmental Lighting", EditorStyles.boldLabel);
+            DrawLightingProperty("skyboxLightColor", "Skybox Light Color");
+            DrawProperty("skyboxTexture");
+            DrawProperty("enableEnvironmentLighting", "Enable Environment Lighting");
+            if (serializedObject.FindProperty("enableEnvironmentLighting").boolValue)
+            {
+                DrawProperty("environmentLightSampleCount", "Environment Light Sample Count");
+                DrawProperty("environmentHighlightThreshold", "Environment Highlight Threshold");
+                
+                if (serializedObject.FindProperty("environmentHighlightThreshold").floatValue > 0.0f)
+                {
+                    DrawProperty("environmentHighlightSoftKnee", "Environment Highlight Soft Knee");
+                    DrawProperty("environmentHighlightIntensity", "Environment Highlight Intensity");
+                }
+                DrawProperty("environmentImportanceWidth", "Environment Importance Width");
+                DrawProperty("environmentImportanceHeight", "Environment Importance Height");
+            }
         });
-        DrawSection(manager, "Image and Environment", true, () =>
+        DrawSection(manager, "Post-Processing", true, () =>
         {
             DrawProperty("exposure");
             DrawProperty("enableGlare", "HDR Glare");
@@ -125,21 +167,6 @@ public sealed class GameManagerEditor : Editor
                 DrawProperty("glareThreshold", "Glare Threshold");
                 DrawProperty("glareSoftKnee", "Glare Soft Knee");
                 DrawProperty("glareIntensity", "Glare Intensity");
-            }
-            DrawLightingProperty("skyboxLightColor", "Skybox Light Color");
-            DrawProperty("skyboxTexture");
-            DrawProperty("enableEnvironmentLighting", "Enable Environment Lighting");
-            if (serializedObject.FindProperty("enableEnvironmentLighting").boolValue)
-            {
-                DrawProperty("environmentLightSampleCount", "Environment Light Sample Count");
-                DrawProperty("environmentHighlightThreshold", "Environment Highlight Threshold");
-                if (serializedObject.FindProperty("environmentHighlightThreshold").floatValue > 0.0f)
-                {
-                    DrawProperty("environmentHighlightSoftKnee", "Environment Highlight Soft Knee");
-                    DrawProperty("environmentHighlightIntensity", "Environment Highlight Intensity");
-                }
-                DrawProperty("environmentImportanceWidth", "Environment Importance Width");
-                DrawProperty("environmentImportanceHeight", "Environment Importance Height");
             }
         });
         DrawSection(manager, "Camera", true, () => DrawCameraSettings(manager));
@@ -161,10 +188,9 @@ public sealed class GameManagerEditor : Editor
             DrawProperty("debugRenderMode", "Debug Render Mode");
             DrawProperty("profileStartup");
             DrawProperty("maxLightSamples");
-        });
-        DrawSection(manager, "Setup", true, () =>
-        {
-            DrawProperty("shader");
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Run Recording", EditorStyles.boldLabel);
+            DrawProperty("recordEditorRun", "Record Editor Run");
         });
 
         serializedObject.ApplyModifiedProperties();
@@ -215,6 +241,7 @@ public sealed class GameManagerEditor : Editor
         {
             DrawCameraProperty(cameraObject, "cameraFocusPosition");
             DrawCameraProperty(cameraObject, "cameraOrbitZoom");
+            DrawCameraProperty(cameraObject, "cameraOrbitZoomSpeed");
         }
         if (cameraManager.renderTextureCamera != null)
         {
@@ -324,12 +351,6 @@ public sealed class GameManagerEditor : Editor
             EditorGUILayout.PropertyField(temporalManager.FindPropertyRelative("temporalVarianceGuidedFiltering"));
         }
 
-        if (spatialManager.FindPropertyRelative("enabled").boolValue
-            || temporalManager.FindPropertyRelative("enabled").boolValue)
-        {
-            EditorGUILayout.Space();
-            DrawProperty("causticPreservationThreshold");
-        }
     }
 
     private void DrawVolumetricFog()
@@ -379,6 +400,7 @@ public sealed class GameManagerEditor : Editor
             EditorGUILayout.PropertyField(caustics.FindPropertyRelative("_gatherRadiusDecayRate"));
             EditorGUILayout.PropertyField(caustics.FindPropertyRelative("_intensity"));
         }
+        DrawProperty("causticPreservationThreshold");
     }
 
     private static void DrawTerrain(GameManager manager)
@@ -420,11 +442,7 @@ public sealed class GameManagerEditor : Editor
     {
         EditorGUILayout.LabelField("Path Sampler", EditorStyles.boldLabel);
         DrawProperty("sobolDimensionLimit", "Owen-Sobol Dimension Limit");
-        DrawProperty("samplingSeed", "Scramble Seed");
-        DrawProperty("randomNoise", "Randomize Seed Each Frame");
-        EditorGUILayout.HelpBox(
-            "Sobol uses Joe-Kuo direction numbers with Burley-style nested sample-index shuffling and independent Owen scrambling. The default limit of 328 covers camera and the first two path bounces; later bounces use the faster unbiased hash fallback. Randomizing the seed each frame trades deterministic progressive convergence for temporal variation.",
-            MessageType.None);
+        DrawProperty("samplingSeed", "Seed #");
         EditorGUILayout.Space(2.0f);
     }
 
@@ -531,32 +549,11 @@ public sealed class GameManagerEditor : Editor
 
     private void DrawImageExport(GameManager manager)
     {
-        var fxaa = serializedObject.FindProperty("exportWithFxaa");
         var smaa = serializedObject.FindProperty("exportWithSmaa");
-        EditorGUI.BeginChangeCheck();
-        var useFxaa = EditorGUILayout.ToggleLeft("FXAA (Fast Anti-Aliasing)", fxaa.boolValue);
-        if (EditorGUI.EndChangeCheck())
-        {
-            fxaa.boolValue = useFxaa;
-            if (useFxaa)
-            {
-                smaa.boolValue = false;
-            }
-        }
-
-        EditorGUI.BeginChangeCheck();
-        var useSmaa = EditorGUILayout.ToggleLeft("SMAA (Morphological Anti-Aliasing)", smaa.boolValue);
-        if (EditorGUI.EndChangeCheck())
-        {
-            smaa.boolValue = useSmaa;
-            if (useSmaa)
-            {
-                fxaa.boolValue = false;
-            }
-        }
+        EditorGUILayout.PropertyField(smaa, new GUIContent("SMAA (Morphological Anti-Aliasing)"));
 
         DrawProperty("openImageAfterExport", "Open Image After Saving");
-        EditorGUILayout.HelpBox("Anti-aliasing is applied only to exported PNGs; the live render is unchanged.", MessageType.None);
+        EditorGUILayout.HelpBox("SMAA is applied only to exported PNGs; the live render is unchanged.", MessageType.None);
         using (new EditorGUI.DisabledScope(!EditorApplication.isPlaying))
         {
             if (GUILayout.Button("Save Image"))
