@@ -30,21 +30,24 @@ The renderer currently ray traces spheres, emissive sphere and mesh lights, regi
 - Real-time compute-shader rendering driven through `RayTracingCameraRenderer.OnRenderImage()`, which calls `GameManager.RenderImage()`.
 - Dynamic sphere transforms and physics-driven sphere movement.
 - Registered triangle mesh objects through `RayTracingObject` + `RayMaterial` + `MeshFilter`.
-- Mesh UV/albedo texture sampling through a fixed-resolution texture array. This is currently mesh-only and does not include normal, roughness, opacity, or emission maps.
+- Mesh UV/albedo, metallic-roughness, normal, and parallax texture sampling through per-channel texture arrays; spheres also support albedo, normal, and parallax textures.
 - Editor-created ray-traced cube, pyramid, and dodecahedron primitives that remain visible in Scene view but hide their rasterized `MeshRenderer` in Play mode by default.
 - Scene-view previews for ray-traced sphere and light-sphere objects through gizmos and optional rasterized `RayObjectPreview` meshes.
 - Scene-view bounds/average-level preview for procedural water.
 - Optional Unity skybox preview synced from `GameManager.skyboxTexture` and tinted by `_skyboxLightColor`.
 - Emissive sphere and mesh lights.
 - Direct lighting with hard/soft shadow sampling.
-- Smoothness-controlled direct specular highlights. These are an approximate direct-light lobe rather than a fully consistent path-traced BRDF.
-- Selectable direct-light sampling strategy (all lights, uniform random, or importance-sampled) with a configurable per-hit light sample count. The importance-sampled path uses local RIS for eligible primary opaque direct-light events, with temporal RIS reuse available in the temporal path.
+- Opaque diffuse/specular BRDF evaluation, mixture-PDF calculation, GGX visible-normal (VNDF) specular sampling, and direct-light/continuation MIS. The T1 narrow-lobe GGX density repair is implemented with focused GPU BRDF/PDF and normal-incidence sampling-frequency coverage; broader acceptance remains pending, and MIS pairing and other estimator defects remain unresolved.
+- Selectable direct-light sampling strategy (all lights, uniform random, or importance-sampled) with a configurable per-hit light sample count. The importance-sampled path uses local RIS for eligible primary opaque direct-light events; experimental temporal/spatial RIS and path guiding have opt-in dry wavefront wrappers with runtime eligibility gates.
 - ACES filmic tone mapping with a configurable `exposure` control, applied to the final color (debug modes are left untone-mapped).
-- Transparent/glass objects with Snell refraction, distance-based RGB absorption, approximate sphere and closed-mesh entry/exit traversal, bounded interior-object detection, and bounded mesh total internal reflection.
+- Transparent/glass objects with Snell refraction, distance-based RGB absorption, a bounded medium stack, explicit sphere boundary events, and an approximate closed-mesh entry/exit shortcut with bounded interior-object detection and total internal reflection.
 - Colored shadows through transparent blockers.
-- Surface reflections with roughness approximated by randomized normals.
-- Depth of field with optional CPU-side autofocus. The aperture jitter is a hard-coded `0.005` world-space ray-origin offset in the shader and is not currently exposed as a configurable aperture.
+- Opaque rough reflections use GGX VNDF sampling; the water reflection branch still uses randomized normals.
+- Depth of field with configurable aperture radius, blade count/rotation, and anamorphic ratio, plus CPU-side autofocus and GPU click-to-focus/tracking.
 - Configurable samples per pixel via `numberOfPasses`.
+- Owen-scrambled Sobol sampling through a configurable dimension limit, with hash RNG fallback for later dimensions.
+- Fixed-8x8 adaptive scheduling with layered wavefront generation and per-pixel Welford accumulation. Adaptive allocation quality and correctness validation remain incomplete.
+- Spatial A-trous denoising and experimental temporal reconstruction; integration does not imply complete image-quality validation.
 - Configurable bounce count via `numBounces` / `_NumBounces`.
 - Optional top-level object BVH and separate shadow-blocker BVH, each controlled by runtime thresholds so small scenes can stay on cheaper flat loops.
 - One optional finite axis-aligned water volume with a procedural wavy top, flat sides/bottom, Fresnel reflection/refraction, and distance-based underwater absorption.
@@ -52,6 +55,6 @@ The renderer currently ray traces spheres, emissive sphere and mesh lights, regi
 
 ## Current Renderer Shape
 
-The renderer has been refactored into an iterative path tracing structure. `TracePath()` uses explicit `radiance`, `throughput`, `albedo`, and `emission` terms instead of a manually unrolled second/third-bounce color tree.
+`WavefrontPathTracingManager` dispatches generation, intersection, classification, direct-light work, shadow tracing/resolution, scattering, queue retirement, radiance resolve, and presentation stages. `WavefrontPathState` carries explicit radiance, throughput, medium, RNG, and previous-event PDF state. The monolithic `TracePath()`/`CSMain` route is retired, not a runtime fallback.
 
-The lighting model is still partly stylized. Direct lighting uses explicit stochastic light sampling each bounce, accumulates sampled light additively, and uses a clamped inverse-square-style falloff, but its direct specular response, transparent shadow tinting, and medium tracking are not yet part of a fully consistent physical BRDF/volume formulation. This is cleaner than the original layout, but it is not yet a fully physically based path tracer.
+The lighting model still includes artistic controls and approximations, particularly water reflections and mesh dielectric traversal. The active wavefront, sampling, and reuse implementations also have unresolved defects and incomplete validation. See [Renderer Sampling Audit And Repair Plan](27-renderer-sampling-audit-and-repair-plan.md) for current findings and repair gates; this overview records implementation, not proof that those defects are fixed.

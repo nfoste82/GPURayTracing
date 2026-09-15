@@ -1508,6 +1508,239 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void GgxT1_EvaluationMatchesDoubleAnalyticalBrdfAndPdf(
+            [Values(0.03f, 0.05f, 0.1f, 0.2f)] float roughness,
+            [Values(1.0f, 0.1f, 0.01f)] float normalDotView,
+            [Values(0.0f, 0.5f)] float metallic)
+        {
+            double alpha = GgxReferenceAlpha(roughness);
+            var view = new Vector3((float)Math.Sqrt(1.0 - (double)normalDotView * normalDotView), normalDotView, 0.0f);
+            // Probe the peak, sub-lobe widths, and the diffuse-dominated off-specular region.
+            foreach (double k in new[] { 0.0, 0.5, 1.0, 2.0, 16.0 })
+            {
+                double angle = 2.0 * Math.Atan(k * alpha);
+                var light = new Vector3(-view.x, (float)(view.y * Math.Cos(angle)), (float)(view.y * Math.Sin(angle)));
+                Vector4 actual = RunGgxProbe(roughness, metallic, view, light, 0, 1)[0];
+                GgxDoubleReference(view, light, alpha, metallic, out double d, out double pdf, out double r, out double g, out double b);
+                string label = $"roughness={roughness}, NdotV={normalDotView}, metallic={metallic}, k={k}";
+                double tolerance = normalDotView < 0.1f ? 0.005 : 0.0005;
+                AssertGgxClose(actual.w, pdf, tolerance, "PDF " + label);
+                AssertGgxClose(actual.x, r, tolerance, "BRDF R " + label);
+                AssertGgxClose(actual.y, g, tolerance, "BRDF G " + label);
+                AssertGgxClose(actual.z, b, tolerance, "BRDF B " + label);
+                if (normalDotView == 1.0f && k == 0.0)
+                {
+                    double f0 = 0.04 * (1.0 - metallic) + (double)0.8f * metallic;
+                    double diffuse = (1.0 - f0) * (double)0.8f * (1.0 - metallic) / Math.PI;
+                    double extractedD = 4.0 * (actual.x - diffuse) / f0;
+                    AssertGgxClose(extractedD, d, 0.0005, "D peak extracted from BRDF " + label);
+                    AssertGgxClose(extractedD, 1.0 / (Math.PI * alpha * alpha), 0.0005, "Analytical D peak " + label);
+                }
+            }
+
+            foreach (Vector3 light in new[] { Vector3.up, new Vector3(0.0f, 0.01f, (float)Math.Sqrt(1.0 - 0.01f * (double)0.01f)) })
+            {
+                Vector4 actual = RunGgxProbe(roughness, metallic, view, light, 0, 1)[0];
+                GgxDoubleReference(view, light, alpha, metallic, out _, out double pdf, out double r, out double g, out double b);
+                AssertGgxClose(actual.w, pdf, 0.0005, "Off-specular PDF");
+                AssertGgxClose(actual.x, r, 0.0005, "Off-specular BRDF R");
+                AssertGgxClose(actual.y, g, 0.0005, "Off-specular BRDF G");
+                AssertGgxClose(actual.z, b, 0.0005, "Off-specular BRDF B");
+            }
+        }
+
+        [Test]
+        public void GgxT1_SampledPdfMatchesIndependentDoubleDensity(
+            [Values(0.03f, 0.05f, 0.1f, 0.2f)] float roughness,
+            [Values(1.0f, 0.1f, 0.01f)] float normalDotView,
+            [Values(0.0f, 0.5f)] float metallic,
+            [Values(12345, 81723)] int seed)
+        {
+            const int attempts = 65536;
+            double alpha = GgxReferenceAlpha(roughness);
+            var view = new Vector3((float)Math.Sqrt(1.0 - (double)normalDotView * normalDotView), normalDotView, 0.0f);
+            Vector4[] results = RunGgxProbe(roughness, metallic, view, Vector3.zero, seed, attempts);
+            double maxRelativeError = 0.0;
+            int worstAttempt = -1;
+            int valid = 0;
+            for (int i = 0; i < attempts; i++)
+            {
+                Vector4 sample = results[2 * i];
+                Vector4 weight = results[2 * i + 1];
+                var direction = new Vector3(sample.x, sample.y, sample.z);
+                if (weight.w != 1.0f || !IsFinite(weight) || !IsFinite(sample) || Math.Abs(direction.sqrMagnitude - 1.0) > 0.00001)
+                    Assert.Fail($"Invalid sample record at attempt {i}, seed {seed}: {sample}");
+                // Null attempts have no solid-angle density; never condition the distribution on success.
+                if (sample.w == 0.0f)
+                {
+                    if (sample.y > 0.0f) Assert.Fail($"Unexpected above-surface null at attempt {i}, seed {seed}");
+                    Assert.That(weight, Is.EqualTo(new Vector4(0, 0, 0, 1)), "Null samples must carry zero throughput");
+                    continue;
+                }
+                if (sample.y <= 0.0f || sample.w < 0.0f)
+                    Assert.Fail($"Invalid positive-density direction at attempt {i}, seed {seed}: {sample}");
+                valid++;
+                GgxDoubleReference(view, direction, alpha, metallic, out _, out double pdf, out double r, out double g, out double b);
+                // T1 isolates D. The existing BRDF grazing-denominator clamp and low-PDF
+                // throughput gate remain separate transport defects, not an analytical reference.
+                if (sample.w > 1e-6f && 4.0 * normalDotView * direction.y > 1e-6)
+                {
+                    double tolerance = normalDotView < 0.1f ? 0.005 : 0.0005;
+                    double scale = direction.y / pdf;
+                    if (Math.Abs(weight.x - r * scale) > Math.Abs(r * scale) * tolerance + 1e-8 ||
+                        Math.Abs(weight.y - g * scale) > Math.Abs(g * scale) * tolerance + 1e-8 ||
+                        Math.Abs(weight.z - b * scale) > Math.Abs(b * scale) * tolerance + 1e-8)
+                        Assert.Fail($"Independent BRDF*cos/PDF weight mismatch at attempt {i}, seed {seed}: {weight}");
+                }
+                double error = Math.Abs(sample.w - pdf) / pdf;
+                if (error > maxRelativeError)
+                {
+                    maxRelativeError = error;
+                    worstAttempt = i;
+                }
+            }
+            Assert.That(valid, Is.GreaterThan(attempts / 2));
+            // Grazing half-vector reconstruction amplifies float direction roundoff.
+            Assert.That(maxRelativeError, Is.LessThanOrEqualTo(normalDotView < 0.1f ? 0.005 : 0.0005),
+                $"Independent mixed VNDF PDF, seed={seed}, worst attempt={worstAttempt}");
+        }
+
+        [Test]
+        public void GgxT1_NormalViewConeAndNullFrequenciesMatchAnalyticalMass(
+            [Values(0.03f, 0.05f, 0.1f, 0.2f)] float roughness,
+            [Values(0.0f, 0.5f)] float metallic,
+            [Values(12345, 81723)] int seed)
+        {
+            const int attempts = 65536;
+            double alpha = GgxReferenceAlpha(roughness);
+            double pSpec = 0.5 + 0.5 * metallic;
+            double[] angles = { 2.0 * Math.Atan(0.5 * alpha), 2.0 * Math.Atan(alpha), 2.0 * Math.Atan(2.0 * alpha), Math.PI / 2.0 };
+            var counts = new int[angles.Length + 1];
+            Vector4[] results = RunGgxProbe(roughness, metallic, Vector3.up, Vector3.zero, seed, attempts);
+            for (int i = 0; i < attempts; i++)
+            {
+                Vector4 sample = results[2 * i];
+                if (results[2 * i + 1].w != 1.0f || !IsFinite(sample) || sample.w < 0.0f)
+                    Assert.Fail($"Invalid frequency record at attempt {i}, seed {seed}: {sample}");
+                if (sample.w == 0.0f)
+                {
+                    counts[angles.Length]++;
+                    continue;
+                }
+                if (sample.y <= 0.0f) Assert.Fail($"Positive PDF below surface at attempt {i}, seed {seed}");
+                // atan2 retains the narrow cone angle even when float NdotL rounds to one.
+                double angle = Math.Atan2(Math.Sqrt((double)sample.x * sample.x + (double)sample.z * sample.z), sample.y);
+                for (int cone = 0; cone < angles.Length; cone++)
+                    if (angle <= angles[cone]) counts[cone]++;
+            }
+            for (int cone = 0; cone < counts.Length; cone++)
+            {
+                double probability = pSpec * alpha * alpha / (1.0 + alpha * alpha);
+                if (cone < angles.Length)
+                {
+                    double t = Math.Tan(angles[cone] / 2.0);
+                    double sine = Math.Sin(angles[cone]);
+                    probability = pSpec * t * t / (alpha * alpha + t * t) + (1.0 - pSpec) * sine * sine;
+                }
+                double expectedCount = attempts * probability;
+                // Binomial six sigma, plus two counts for discrete RNG/float boundary roundoff.
+                double tolerance = 6.0 * Math.Sqrt(attempts * probability * (1.0 - probability)) + 2.0;
+                Assert.That(counts[cone], Is.EqualTo(expectedCount).Within(tolerance),
+                    $"seed={seed}, cone={cone} (4=null), all {attempts} attempts included");
+            }
+        }
+
+        private static Vector4[] RunGgxProbe(float roughness, float metallic, Vector3 view, Vector3 light, int seed, int count)
+        {
+            if (!SystemInfo.supportsComputeShaders || SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
+                Assert.Ignore("GGX analytical probes require an active compute graphics device.");
+            ComputeShader asset = AssetDatabase.LoadAssetAtPath<ComputeShader>(RegressionProbeShaderPath);
+            Assert.That(asset, Is.Not.Null);
+            Assert.That(asset.HasKernel("CSGgxRegressionProbe"), Is.True, "Missing GGX kernel on a compute-capable backend.");
+            ComputeShader shader = UnityEngine.Object.Instantiate(asset);
+            try
+            {
+                using (var buffer = new ComputeBuffer(count * 2, sizeof(float) * 4))
+                using (var sobol = new ComputeBuffer(32, sizeof(uint)))
+                {
+                    int kernel = shader.FindKernel("CSGgxRegressionProbe");
+                    var results = new Vector4[count * 2];
+                    buffer.SetData(results);
+                    sobol.SetData(new uint[32]);
+                    shader.SetBuffer(kernel, "RegressionResults", buffer);
+                    shader.SetBuffer(kernel, "_SobolDirectionNumbers", sobol);
+                    shader.SetInt("_SobolDimensionLimit", 1);
+                    shader.SetInt("_Seed", seed);
+                    shader.SetInt("_GgxProbeSampleCount", count);
+                    shader.SetInt("_GgxProbeSample", count > 1 ? 1 : 0);
+                    shader.SetFloat("_GgxProbeSmoothness", 1.0f - roughness);
+                    shader.SetFloat("_GgxProbeMetallic", metallic);
+                    shader.SetVector("_GgxProbeView", view);
+                    shader.SetVector("_GgxProbeLight", light);
+                    shader.Dispatch(kernel, (count + 63) / 64, 1, 1);
+                    buffer.GetData(results);
+                    return results;
+                }
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(shader);
+            }
+        }
+
+        private static double GgxReferenceAlpha(float roughness)
+        {
+            float smoothness = 1.0f - roughness;
+            double effectiveRoughness = Math.Max((double)0.03f, (double)(1.0f - smoothness));
+            return effectiveRoughness * effectiveRoughness;
+        }
+
+        private static void GgxDoubleReference(Vector3 view, Vector3 light, double alpha, double metallic,
+            out double distribution, out double pdf, out double r, out double g, out double b)
+        {
+            // Independent double arithmetic: no shader outputs/helpers or float Vector3 math in the oracle.
+            double vLength = Math.Sqrt((double)view.x * view.x + (double)view.y * view.y + (double)view.z * view.z);
+            double vx = view.x / vLength, vy = view.y / vLength, vz = view.z / vLength;
+            double hx = vx + light.x, hy = vy + light.y, hz = vz + light.z;
+            double hLength = Math.Sqrt(hx * hx + hy * hy + hz * hz);
+            hx /= hLength;
+            hy /= hLength;
+            hz /= hLength;
+            double denominator = hx * hx + hz * hz + alpha * alpha * hy * hy;
+            distribution = alpha * alpha / (Math.PI * denominator * denominator);
+            double gView = 2.0 * vy / (vy + Math.Sqrt(vy * vy + alpha * alpha * (1.0 - vy * vy)));
+            double nl = light.y;
+            double gLight = 2.0 * nl / (nl + Math.Sqrt(nl * nl + alpha * alpha * (1.0 - nl * nl)));
+            // The VNDF reflection Jacobian cancels VdotH for unit incident/outgoing directions.
+            double pSpec = 0.5 + 0.5 * metallic;
+            pdf = pSpec * distribution * gView / (4.0 * vy) + (1.0 - pSpec) * nl / Math.PI;
+            double vh = Math.Min(1.0, Math.Max(0.0, vx * hx + vy * hy + vz * hz));
+            double schlick = Math.Pow(1.0 - vh, 5.0);
+            double specular = distribution * gView * gLight / (4.0 * vy * nl);
+            double Channel(double albedo)
+            {
+                double f0 = 0.04 * (1.0 - metallic) + albedo * metallic;
+                double fresnel = f0 + (1.0 - f0) * schlick;
+                return fresnel * specular + (1.0 - fresnel) * albedo * (1.0 - metallic) / Math.PI;
+            }
+            r = Channel((double)0.8f);
+            g = Channel((double)0.4f);
+            b = Channel((double)0.2f);
+        }
+
+        private static bool IsFinite(Vector4 value)
+        {
+            for (int i = 0; i < 4; i++)
+                if (float.IsNaN(value[i]) || float.IsInfinity(value[i])) return false;
+            return true;
+        }
+
+        private static void AssertGgxClose(double actual, double expected, double relativeTolerance, string label)
+        {
+            Assert.That(actual, Is.EqualTo(expected).Within(Math.Abs(expected) * relativeTolerance + 1e-8), label);
+        }
+
+        [Test]
         public void ProductionShader_ReflectionRefractionAndAbsorptionBaselines_AreStable()
         {
             if (!SystemInfo.supportsComputeShaders)

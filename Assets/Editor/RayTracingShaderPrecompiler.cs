@@ -91,7 +91,8 @@ public static class RayTracingShaderPrecompiler
     private static readonly ShaderAsset SpatialRisPrepass = new ShaderAsset("Spatial RIS Prepass", SpatialRisPrepassShaderPath, VariantSet.FogTerrain,
         "CSSpatialRisPrepass");
     private static readonly ShaderAsset Focus = new ShaderAsset("Focus", FocusShaderPath, VariantSet.Terrain, "CSFocusQuery");
-    private static readonly ShaderAsset RegressionProbe = new ShaderAsset("Regression Probe", RegressionProbeShaderPath, VariantSet.None, "CSRegressionProbe");
+    private static readonly ShaderAsset RegressionProbe = new ShaderAsset("Regression Probe", RegressionProbeShaderPath, VariantSet.None,
+        "CSRegressionProbe", "CSGgxRegressionProbe");
     private static readonly ShaderAsset[] RendererAssets = { Main, WavefrontWater, WavefrontFog, WavefrontWaterFog, WavefrontPathGuided, WavefrontRis, AdaptiveScheduler, Utility, Features, SpatialRisPrepass, Focus, RegressionProbe };
 
     [MenuItem("Tools/Ray Tracing/Precompile Compute Shader/Main Final Color/All Terrain Variants")]
@@ -324,6 +325,7 @@ public static class RayTracingShaderPrecompiler
 
     private static void BindResources(ComputeShader shader, int kernel, DummyResources r)
     {
+        shader.SetInt("_GgxProbeSampleCount", 0);
         shader.SetInt("_CausticsEnabled", 0); 
         shader.SetInt("_EnvironmentLightEnabled", 0); 
         shader.SetInt("_NumLights", 0);

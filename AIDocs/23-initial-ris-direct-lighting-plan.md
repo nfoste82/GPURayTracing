@@ -1,772 +1,241 @@
 # Initial RIS Direct-Lighting Design Record
 
-## Goal
+## Status And Ownership
 
-This document records the platform-neutral **initial resampled importance sampling (RIS)** estimator for direct lighting. Local RIS is part of the standard renderer path. Temporal and spatial reuse remain experimental, incomplete paths and are disabled by default because they are currently slower than local RIS and have not met the renderer's quality/performance promotion criteria.
+Reviewed against the active renderer on 2026-09-15. This is a design/evidence record, not an
+implementation or continuation plan. [Renderer Sampling Audit And Repair Plan](27-renderer-sampling-audit-and-repair-plan.md)
+is the authoritative active plan for sampling correctness and reuse repair. The former local-RIS
+implementation order, automatic-policy proposal, reuse replacement recipe, temporal tuning roadmap,
+and future-session prompt are superseded by that plan. No shader fixes are claimed by this review.
 
-The original milestone was local RIS only: one reservoir at one eligible shading point during one path evaluation. The renderer now also supports temporal RIS reuse in the supported temporal path. It remains portable across the project's Unity compute targets, including Metal. The HIPRT-Path-Tracer repository is GPL-3.0; use its algorithms as reference only, never copy its source.
+Local primary direct-light RIS is part of the standard renderer for eligible opaque
+`ImportanceSampled` hits. There is no public local-RIS enable/disable toggle. The existing
+`Lighting.InitialRisCandidateCount` control is clamped to 1-16 and defaults to 4; count 1 still runs
+the RIS technique, not the ordinary estimator. `AllLights` and `UniformRandom` retain their own
+estimators, and unsupported events and later bounces use ordinary direct lighting.
 
-## Current Status
+Temporal and spatial reuse are experimental, opt-in, default-off paths in the dry
+`RayTracingWavefrontRis.compute` wrapper. They have not passed broad mean-correctness or equal-time
+promotion gates. Their static, primary opaque, non-reactive, one-path-sample-per-pixel eligibility
+excludes water/fog, dynamic scenes, transmission, highly smooth receivers, adaptive tracing, and
+multi-pass dispatches. Spatial takes precedence when both flags are enabled: there is no combined
+spatiotemporal estimator and no final-spatial-result feedback into temporal history.
 
-Local primary direct-light RIS is enabled by default. Temporal and spatial reuse are experimental opt-in paths. Temporal ReSTIR-DI maintains a separate camera-reprojected ping-pong reservoir history for static, primary opaque, non-reactive receivers when rendering one path sample per pixel; spatial reuse reads neighboring reservoirs and currently takes precedence over temporal reuse rather than combining both paths. Both paths are incomplete and slower than local RIS in current measurements, so they are disabled by default. They remain deliberately restricted for dynamic scenes, fog, animated water, transmission, highly smooth receivers, adaptive tracing, and multi-sample-per-pixel dispatches. The ordinary direct-light estimator remains the fallback for unsupported materials/events and later bounces.
+## Architecture Constraints
 
-## Scope
+The active queue route is documented in [Wavefront Renderer Handoff](26-wavefront-renderer-handoff.md).
+`CSWavefrontTraceShadows` calls `GetLightHittingPoint()` in `Assets/Scripts/RayTracingShared.hlsl`.
+`SelectLightForDraw()` chooses global emitters; `SampleSingleLight()` evaluates the selected light,
+BRDF, visibility, and transparent shadow transmittance.
 
-In scope:
+- Preserve one inlined `SampleSingleLight()` call site in `GetLightHittingPoint()`. Duplicating the
+  shadow/BVH traversal previously caused extreme Metal compile times. Candidate selection is cheap;
+  only the selected local-RIS candidate reaches production visibility.
+- Preserve RGB contributions and transparent transmittance. Luminance controls reservoir selection
+  and normalization, not the final light color. Stored visibility is not current visibility.
+- Local RIS uses no persistent reservoir resources; experimental reuse owns separate buffers and
+  receiver features. Reuse must not silently replace the ordinary estimator for unsupported events.
+- Importance selection considers at most 128 global emitters. Omitted lights have zero probability,
+  so this cap is biased relative to the complete scene. RIS does not repair it.
+- Keep deterministic capture, settings/hash invalidation, and candidate/reuse metadata reproducible.
+  Adaptive comparisons require identical presets, bootstrap settings, and complete retired-path
+  accounting. Adaptive scheduling is a separate feature, not a workaround for estimator errors.
 
-- Primary-bounce opaque direct lighting only.
-- Current-frame local weighted reservoir; no persistent GPU resources.
-- Existing emissive-light and environment proposal paths where PDFs are available.
-- Inspector/capture candidate count and temporal-reuse state so the standard path can be benchmarked against fallback/reference variants.
-- Correctness tests and equal-work/equal-time convergence measurements.
+## Current Local Estimator
 
-Not in scope:
+`IsInitialRisEligible()` and the wavefront primary-bounce gate restrict RIS to the shared opaque
+BRDF path under `ImportanceSampled`. `GetLightHittingPoint()` draws
+`N = _InitialRisCandidateCount` fresh finite-light/environment candidates. When both proposal
+families exist, each branch has probability one half. Finite candidates select a global emitter
+and, for mesh lights, an area-CDF triangle and barycentric point. Environment candidates use the
+existing importance CDF. The analytic directional branch uses a cone convention, but production
+directional lights are currently uploaded as virtual sun triangles; that distinction and the
+zero-radius defect are covered in document 27. Sphere candidates use a receiver-facing disk through
+the light center.
 
-- Spatial reuse, ReSTIR GI, indirect resampling, visibility caching, light presampling, ReGIR, or light trees.
-- Adaptive-scheduler work. Adaptive sampling remains a separate, useful feature.
-- Glass/water transmission, fog-event, caustic, or later-bounce RIS.
-- New reservoir textures, G-buffer outputs, or motion vectors beyond the existing temporal path contract.
-
-## Existing Constraints
-
-Read `03-compute-shader-renderer.md`, `07-shader-lighting-and-materials.md`, `10-benchmarking-and-performance.md`, and `11-regression-testing.md` before editing.
-
-The current direct-light flow is in `RayTracingShared.hlsl`:
-
-- `GetLightHittingPoint()` selects finite and environment samples.
-- `SelectLightForDraw()` applies `AllLights`, `UniformRandom`, or `ImportanceSampled` selection.
-- `SampleSingleLight()` evaluates BRDF, visibility, transparent shadow transmittance, and the contribution.
-
-Keep **one inlined `SampleSingleLight()` call site** inside `GetLightHittingPoint()`. Adding another inlined light/shadow traversal path previously caused extreme Metal compilation times. Candidate generation and reservoir selection must be cheap helpers; only the selected candidate reaches the existing expensive call site.
-
-The renderer already has environment importance sampling, finite-emitter/BSDF MIS, a shared Lambert/GGX model, deterministic capture, and scene-light PDFs. Preserve the ordinary estimator as a fallback/reference when RIS is bypassed.
-
-## Adaptive Sampling
-
-Adaptive sampling is not being removed or redesigned by this task. It can be more efficient than adaptive-off when its settings suit a scene. The presently observed Dammertz configuration is slower than Welford, but that is a deferred tuning/scheduling issue, not a reason to disable the feature.
-
-Current adaptive startup uses the low-resolution bootstrap implemented in `GameManager` and `SceneSettings`:
-
-- `adaptiveBootstrapResolutionScale` runs normal `CSMain` at `0.125-0.5` resolution.
-- `adaptiveBootstrapFrames` controls bootstrap duration.
-- `adaptiveGuidanceHistoryFrames` controls approximate fine history from the upscaled bootstrap; `0` keeps fine accumulation unbiased and bootstrap display-only.
-
-Every RIS benchmark must be runnable with adaptive sampling off and on. For adaptive-on comparisons, fallback and RIS variants must use the exact same serialized or command-line adaptive preset, including bootstrap scale/frame count/history, priority mode, and scheduler settings. Count bootstrap paths in retired-path accounting and report the complete preset in capture metadata.
-
-## Public Controls
-
-Add the smallest setting set under `LightingManager`, mirrored through `SceneSettings`:
-
-```text
-initialRisCandidateCount        int, range 1-16, default 4
-```
-
-Upload both shader parameters and include them in:
-
-- Final-color accumulation invalidation hash.
-- Temporal-reconstruction/denoising state hash if it hashes direct-light settings.
-- Inspector, benchmark overlay, benchmark CSV, and capture metadata.
-- Generic `RayTracingSceneCapture -rayTracingExperiment` field/property overrides.
-
-RIS wraps the existing base proposal rather than adding a `LightSamplingStrategy` enum value:
+Each candidate stores light/triangle identity, sample position or direction, distance, environment
+PDF, triangle-selection probability, and `proposalPdf`. The target is luminance of the unshadowed
+RGB contribution, including the current explicit-light MIS factor for triangles/environment:
 
 ```text
-ImportanceSampled + RIS off: one ordinary selected-light estimate
-ImportanceSampled + RIS on: N local candidates, one selected visibility evaluation
-```
-
-RIS remains attached to `ImportanceSampled`. `AllLights` and `UniformRandom` retain their existing paths because their proposal PDFs and cost tradeoffs are distinct. The current 128-light importance cap is biased when exceeded; benchmark below that cap or against a later unbiased proposal distribution. RIS does not hide this limitation.
-
-## Estimator
-
-### Eligibility
-
-Use RIS only when all conditions hold:
-
-- Bounce is zero.
-- The hit is opaque and uses the existing shared opaque BRDF path.
-- The surface/path throughput is valid and nonzero.
-- The current base light strategy is `ImportanceSampled`.
-
-Use the current direct estimator unchanged for glass, water, fog events, unsupported/delta cases, later bounces, or invalid candidates. Enabling RIS must not remove lighting paths that the baseline supports.
-
-### Candidate Generation
-
-Generate `N = initialRisCandidateCount` candidates from the existing importance-sampled finite-light/environment proposal. Each candidate must retain enough information to evaluate it later:
-
-- Light index/type.
-- Sampled point or direction.
-- Full proposal PDF.
-- Any sampled shape/triangle data needed by the existing direct-light path.
-
-Do not add BSDF-hit-emitter candidates in the first milestone. Existing complementary BSDF MIS should remain correct and unchanged unless a derivation and focused test prove otherwise. Add BSDF candidates only as a separate future change.
-
-### Local Reservoir
-
-For candidate `y` at receiver `x`, calculate an unshadowed scalar target and weight:
-
-```text
-target(y) = luminance(unshadowed direct-light RGB contribution at x from y)
-weight(y) = target(y) / proposalPdf(y)
-```
-
-The unshadowed RGB contribution must use the same BRDF, light radiance, finite-light geometry conversion, and environment convention as the baseline. `proposalPdf` must include all selection decisions: global light selection, mesh-light triangle choice, shape-point sample, and environment-choice/distribution probabilities.
-
-Update the reservoir with weighted replacement:
-
-```text
-candidateCount += 1
+weight = target / proposalPdf
 weightSum += weight
-replace selected candidate with probability weight / weightSum
+select with probability weight / weightSum
+selected scale = weightSum / (N * selectedTarget)
 ```
 
-After candidates are processed, route only the selected candidate through the existing `SampleSingleLight()` call site. Multiply its unshadowed RGB value and production shadow transmittance by:
-
-```text
-weightSum / (candidateCount * selectedTarget)
-```
-
-Return zero for invalid, non-finite, zero-PDF, back-facing, or zero-target candidates. Guard all reservoir denominators/state against NaN and Inf. Use scalar luminance only for selection and normalization; preserve RGB for the final result.
-
-This is ordinary same-receiver local RIS. It needs no temporal/spatial correction factor because all candidates are drawn from known proposals at the same shading point.
-
-### Visibility And MIS
-
-Trace production visibility only for the selected candidate. Do not skip final visibility, reuse candidate visibility, or replace transparent-shadow transmittance with boolean occlusion.
-
-The complementary emissive-hit/environment MIS logic must remain consistent with the reservoir-selected proposal. A BSDF continuation that hits an emitter must be neither double-counted nor darkened by the RIS direct estimate.
-
-### Historical Implementation Blocker (2026-08-28)
-
-The live renderer confirms this condition blocks the proposed first milestone as currently specified:
-
-- `SampleSingleLight()` applies power-heuristic NEE/opaque-BRDF MIS to triangle and environment samples using the ordinary NEE proposal PDF.
-- `TracePathWithDirectLight()` applies the complementary power heuristic when an opaque BRDF continuation reaches an emissive triangle or the environment.
-- A local RIS reservoir resamples NEE candidates based on unshadowed targets, so its selected-sample distribution is no longer the ordinary NEE proposal used by the current terminal-hit MIS calculation.
-
-This was the blocker before the reservoir-aware estimator was implemented. The current renderer uses the validated reservoir-aware policy rather than treating a selected RIS candidate as an ordinary NEE sample.
-
-The historical resolution was to choose and validate one of these derivation paths:
-
-1. Derive the RIS-selected NEE density and use it consistently in both explicit-light and complementary BRDF-hit MIS weights, including the candidate count and reservoir normalization.
-2. Establish a separately validated multi-sample-reservoir MIS estimator for triangle and environment proposals.
-3. Narrow a first milestone to proposal families with no competing opaque-BRDF technique, only if that restricted estimator remains unbiased for the complete enabled light set and is explicitly approved.
-
-The future derivation needs deterministic CPU/GPU tests that compare high-sample mean radiance against the existing estimator for triangle-light, environment-only, and mixed sphere/mesh/environment scenes before any performance implementation.
-
-## Implementation Order
-
-1. Inspect the live direct-light/MIS helpers and find a minimal candidate record that does not duplicate the expensive call site.
-2. Preserve the controls, C# propagation, shader upload, hashes, inspector/overlay/capture metadata.
-3. Preserve local reservoir/candidate helpers with no shadow traversal and no persistent allocation.
-4. Route only the selected candidate to the current `SampleSingleLight()` call site and keep fallback behavior for ineligible paths.
-5. Maintain deterministic CPU/GPU reservoir tests: zero weight, one candidate, selected-first/last, normalization, non-finite rejection, and chromatic contribution preserved while selection target is luminance.
-6. Maintain a high-sample colored many-light image fixture: fallback and RIS variants must agree in mean radiance within reviewed tolerance.
-7. Add low-sample variance/convergence fixtures, Metal precompile validation, and capture experiments.
-8. Benchmark candidate counts `1`, `2`, `4`, and `8` as tuning variants around the default configuration.
-
-## Benchmark Plan
-
-`Benchmark_TemporalRisStress` is the focused static temporal fixture. It uses twelve small,
-alternating-color finite lights over a diffuse floor with opaque pillars that create direct-light
-visibility boundaries. It disables environment lighting, directional lighting, denoising, motion,
-and transmission so `temporal_ris_static_direct_light_fixed_work.json` can compare local RIS and
-temporal RIS at the same 200 accumulated samples. This is the acceptance fixture for temporal
-reuse; CornellBox remains a general stability check rather than a temporal-RIS quality benchmark.
-
-`Benchmark_TemporalRisStableDirectLight` separates selection coherence from visibility failure. It
-uses twenty varied finite lights over a large diffuse receiver with no environment, directional
-light, motion, transmission, denoising, or adaptive sampling. A single screen-right blocker creates
-a narrow controlled penumbra strip; the rest of the visible receiver remains unoccluded. This is the
-positive-control fixture: temporal reuse must show an early-frame benefit in its open region before
-visibility-aware changes are justified. It is not a replacement for `TemporalRisStress`, which
-remains the rejection/stability fixture.
-
-`temporal_ris_candidate_split_sweep_fixed_work.json` evaluates local candidate count independently
-from the temporal retained-history `M` cap. Each temporal capture writes
-`temporal_ris_diagnostics.json` beside its timing report. Inspect history acceptance/rejection,
-merge/selection rates, and mean retained/effective `M` before interpreting quality changes. The
-history cap defaults to one because larger visibility-unaware histories can create persistent
-finite-area-light penumbra clumps; it is a benchmark tuning control, not evidence that a larger
-value is safe by itself.
-
-Use `RayTracingSceneCapture -rayTracingExperiment` with a checked-in manifest. Create named variants differing only in:
-
-```text
-Lighting.EnableInitialDirectLightingRis = false/true
-Lighting.InitialRisCandidateCount = 1, 2, 4, 8
-```
-
-Use `Benchmark_ManyLights` plus an existing or new static fixture containing varied-size, varied-color sphere and mesh lights. Keep resolution, bounces, seed, base strategy, shadows, environment, caustics, fog, denoising, and render scale fixed per comparison.
-
-Run both:
-
-1. Equal retired-path/frame-budget capture: measures estimator quality independent of candidate-generation cost.
-2. Equal wall-clock-duration capture: measures interactive convergence, frame time, and retired paths.
-
-Repeat both with:
-
-- Adaptive sampling off.
-- Adaptive sampling on using an unchanged known-good scene preset, including its low-resolution bootstrap settings.
-
-Required acceptance evidence:
-
-- The ordinary fallback preserves its deterministic output and performance within measurement noise.
-- High-sample fallback/RIS variants agree in mean radiance, with no systematic energy or color shift.
-- At least one many-light fixture has lower error at equal work or equal time for a practical count.
-- RIS does not materially regress ordinary low-light-count scenes.
-- Instrumentation/code review shows one selected shadow evaluation, not N shadow rays per RIS candidate.
-- Metal shader compilation remains acceptable.
-
-## Diagnostics
-
-Add opt-in aggregate counters or isolated debug output for:
-
-- Eligible primary hits and invalid candidates.
-- Mean candidate count per eligible hit.
-- Selected finite/environment/directional type histogram.
-- Selected shadow queries per eligible hit.
-- Non-finite reservoir `weightSum`, selected target, or final normalization.
-
-Avoid permanent per-pixel debug resources in the final shader unless a measured debugging need justifies them.
-
-## Deferred Follow-Ups
-
-Remaining follow-ups after the now-standard local/temporal RIS path:
-
-1. Add BSDF-hit emissive/environment candidates with a separately validated RIS/MIS derivation.
-2. Replace the capped global importance scan with a portable unbiased light hierarchy/alias distribution.
-3. Add light presampling only if candidate selection is measured as a bottleneck.
-4. Extend temporal RIS coverage to additional eligible path/material classes after motion/history validation.
-5. Consider spatial reuse only after temporal/local results establish a need.
-
-## Experimental Spatial RIS
-
-An experimental, default-off spatial prototype now reads cardinal-neighbor fresh local reservoirs
-from the preceding completed frame using the temporal ping-pong resources. It is not same-frame
-spatial RIS: a correct same-frame implementation requires a local-reservoir prepass followed by a
-separate spatial resolve. The prototype validates receiver identity, relative depth (5 percent), and
-normal agreement (dot at least 0.9), re-evaluates each candidate at the current receiver, and
-performs production visibility only for the final selected candidate. It stores only fresh local
-reservoirs to prevent recursive spatial ancestry.
-
-On `TemporalRisStableDirectLight`, 200-frame fixed-work local-4 versus spatial-4 reduced RGB RMSE
-from 0.00734392 to 0.00715252 (2.61 percent), but cost 136.21 ms/frame versus 131.58 ms/frame
-(3.52 percent). The 45-second equal-time candidate sweep rejects reducing fresh candidates to make
-up this overhead: local-1 reached RGB RMSE 0.00810266 in 244 frames while spatial-1 reached
-0.02509391 in 223 frames; local-2 reached 0.00651741 in 305 frames while spatial-2 reached
-0.00970189 in 233 frames. This staged-neighbor prototype therefore has no viable equal-time
-configuration in the tested range. It was removed rather than tuned further.
-
-The replacement is an experimental same-frame design. `RayTracingSpatialRisPrepass.compute` traces
-the stochastic primary ray, builds the ordinary fresh local reservoir through the shared
-`GetLightHittingPoint()` candidate path, and writes the selected reservoir, post-candidate RNG
-state, and matching primary receiver features. `CSMain` reads only those immutable current-frame
-records, validates same-object/depth/normal neighbors, re-evaluates each source sample at the current
-receiver, and routes only the final selection to the existing `SampleSingleLight()` call. Normal
-denoiser features are refreshed after final color, so the prepass feature record matches its stochastic
-receiver exactly. Spatial mode disables temporal history merging rather than combining experimental
-reuse domains.
-
-The replacement has Metal precompile coverage but no runtime or convergence acceptance evidence.
-Do not promote it, update defaults, or claim a quality/performance benefit until local-versus-spatial
-fixed-work, equal-time, and high-sample mean comparisons pass.
-
-The CornellBox four-way fixed-work capture confirmed that enabling both temporal and spatial flags
-produces the same pixels as spatial-only by design: spatial reuse currently takes precedence and the
-renderer does not merge temporal history in spatial mode. The initial 200-frame result also rejected
-both reuse paths for this scene: local RIS RGB RMSE was 0.00735842, temporal RIS was 0.00757391, and
-spatial RIS was 0.00858836. Spatial diagnostics were all zero because the spatial resolve had not
-instrumented the shared reuse counters; this has been corrected. The same audit found that reused
-triangle and environment targets omitted the local RIS power-heuristic MIS factor during
-current-receiver re-evaluation. Reused candidates now apply the same target convention as fresh local
-candidates. Re-run the CornellBox and focused triangle/environment mean checks before interpreting
-the earlier quality result.
-
-That rerun populated the corrected spatial diagnostics but retained essentially the same ranking:
-local 0.00734088 RGB RMSE, temporal 0.00755635, and spatial 0.00858627. Spatial accepted 49.20
-percent of neighbor opportunities, selected a neighbor for 21.50 percent of eligible receivers, and
-represented mean effective M 9.85, so inactivity was ruled out. A further audit found that temporal
-and spatial reservoir replacement consumed the main path RNG after local candidate generation. This
-changed all later-bounce samples relative to local RIS and made a primary direct-light comparison
-needlessly noisy in a 12-bounce scene. Reuse replacement now uses a separate deterministic RNG stream
-while the main RNG remains at the post-local-candidate state. Re-run before drawing conclusions from
-the second CornellBox capture.
-
-Capture diagnostics now emit `spatial_ris_diagnostics.json` for spatial runs. The prior output was
-absent because the writer was gated exclusively on `TemporalRisEnabled`; spatial mode intentionally
-disables that flag. Spatial acceptance and merge rates use the number of eligible receiver-neighbor
-opportunities as their denominator, rather than eligible receivers alone.
-
-The post-RNG-isolation 100-frame capture in
-`TestCaptures/cornellbox_ris_reuse_fixed_work_3/CornellBox/variant_comparison.csv` still does not
-establish a reuse benefit. Local RIS reached RGB RMSE 0.01241675 at 258.42 ms/frame. Temporal RIS
-reached 0.01238808 at 262.89 ms/frame: 0.23 percent lower fixed-work error but 1.73 percent slower,
-so its tiny advantage is consumed at equal time and is too small to resolve without repeated trials.
-Spatial RIS reached 0.01293435 at 261.45 ms/frame: 4.17 percent higher error and 1.17 percent slower.
-The both-flags result again matched spatial-only. Temporal merged history for 51.77 percent of
-eligible receivers with mean effective M 2.63. Spatial merged 49.17 percent of neighbor
-opportunities and reached mean effective M 9.85. Reuse inactivity and main-path RNG perturbation are
-therefore ruled out as explanations for the spatial loss. One hundred frames are sufficient to
-reject the repeated, larger spatial regression, but not to distinguish the sub-percent temporal and
-local fixed-work difference confidently.
-
-## ReSTIR Architecture Audit
-
-The current experimental reuse paths are not a complete spatiotemporal ReSTIR DI implementation.
-The original 2020 ReSTIR paper and two independent implementations were reviewed after the third
-CornellBox capture:
-
-- Bitterli et al., `Spatiotemporal reservoir resampling for real-time ray tracing with dynamic
-  direct lighting`: https://benedikt-bitterli.me/restir/bitterli20restir.pdf
-- `TomClabault/HIPRT-Path-Tracer`, revision `d114ed0`: a production-oriented GPU implementation with
-  fused/separate temporal and spatial passes, visibility reuse, light presampling, and several modern
-  bias-correction schemes. It is GPL-3.0.
-- `MrMagnifico/cpp-restir`, revision `8e4f0ea`: a small CPU/Whitted teaching implementation of the
-  original paper's biased and Algorithm 6-style unbiased combinations. Its repository declares no
-  license and its source must not be copied.
-
-Use these references only to identify independently implementable concepts from the published
-algorithms. Never copy code, comments, naming, or structure from either repository.
-
-### Confirmed Architectural Gaps
-
-1. Temporal and spatial reuse are mutually exclusive here. Spatial takes precedence when both flags
-   are enabled, so `temporal_and_spatial_ris` is spatial-only. A normal separate-pass ReSTIR flow is
-   canonical generation, temporal combination, spatial combination, final shading, and persistence
-   of the final spatial result for the next frame. A fused implementation still combines current
-   canonical, temporal, and spatial domains in one estimator.
-2. Spatial mode never feeds its final result into temporal history. It therefore cannot build the
-   recursive spatiotemporal feedback loop used by the paper and both references.
-3. Spatial sampling uses four deterministic one-pixel cardinal neighbors in one pass. The paper uses
-   five random neighbors in a roughly 30-pixel radius and two passes for its biased mode. HIPRT DI
-   defaults to five randomized neighbors in a 16-pixel radius and one configurable pass.
-   `cpp-restir` defaults to five random neighbors, radius 10, and two immutable ping-pong passes.
-   Cardinal neighbors provide little proposal diversity and strongly correlated ancestry.
-4. Canonical reservoirs are propagated without visibility. The selected source can be occluded,
-   displace a useful sample during reuse, and consume the sole final visibility query before
-   producing zero. The paper evaluates canonical visibility before temporal/spatial propagation.
-   HIPRT enables canonical visibility reuse and visibility-aware bias correction by default and
-   restores visibility consistency before a spatial result is reused temporally or by a later pass.
-5. Reuse uses a basic target-ratio/nominal-M reservoir combination. It has no pairwise or defensive
-   multi-distribution correction, no explicit canonical defensive term, and no normalization based
-   on which receiver techniques could have produced the selected sample. HIPRT defaults to pairwise
-   MIS and supports `1/M`, `1/Z`, MIS-like, generalized balance, defensive pairwise, and ratio
-   formulations. The original paper explains that simple combination is biased when receiver PDFs
-   have differing support; naive `1/Z` correction can have extreme variance for near-zero PDFs.
-6. The local four-candidate reservoir enters reuse with represented M equal to four, and every
-   spatial source can contribute its full represented M. Mean effective M 9.85 did not improve
-   convergence, indicating nominal M is not independent sample count. HIPRT first normalizes four
-   light plus one BSDF candidate and then deliberately sets canonical M to one before reuse. Test a
-   completed local reservoir as one reuse observation rather than granting all represented local
-   candidates persistent confidence.
-7. The current temporal cap of one history candidate is intentionally conservative but cannot repair
-   the missing spatiotemporal pipeline or correction. Do not raise it in the current estimator. The
-   paper caps previous history at 20 times current M; `cpp-restir` demonstrates faster static
-   many-light convergence with larger caps; HIPRT instead collapses canonical M to one, uses pairwise
-   correction, and defaults to total M cap 3. Confidence semantics and normalization must be designed
-   together.
-8. Current initial RIS has light/environment proposals only. HIPRT uses four light candidates plus
-   one BSDF candidate. BSDF candidates may improve glossy, environment, and large-emitter coverage,
-   but must not be added until their reservoir-aware NEE/continuation-hit MIS pairing passes the
-   existing high-sample mean gates.
-9. The one inlined production `SampleSingleLight()` constraint protects Metal compile time, but a
-   faithful visibility-aware design requires additional visibility work. Put canonical visibility in
-   a separate compact kernel rather than duplicating shadow traversal in `CSMain`; profile the cost
-   before accepting the estimator.
-
-### Benchmark Interpretation
-
-The paper's large gains target direct lighting from thousands to millions of emitters and use 32
-initial candidates. HIPRT likewise targets many-light scenes. `cpp-restir` specifically replaces the
-ordinary CornellBox ceiling light with 512 rectangular lights in a `Cornell Nightclub` scene because
-the one-light box does not demonstrate ReSTIR's light-selection advantage. Its report observes that
-small spatial neighborhoods can converge faster when nearby receiver distributions agree, but also
-create blotches from correlation; the appropriate radius is scene dependent.
-
-CornellBox remains a useful bias, stability, overhead, and low-light-count regression scene. It is
-not the primary acceptance fixture for a large ReSTIR convergence claim: it has one dominant finite
-emitter plus environment lighting, local four-candidate importance sampling already finds the
-important proposal, visibility is a major residual variance source, and total 12-bounce RGB error is
-heavily influenced by indirect transport that primary ReSTIR DI cannot directly improve. Do not
-require a two-times whole-image CornellBox improvement. Require a material direct-light or
-equal-time benefit on a true many-light fixture first, then ensure CornellBox does not regress
-unacceptably.
-
-## Deferred Automatic Sampling Policy
-
-The renderer should eventually choose a suitable direct-light sampling mode automatically instead
-of requiring users to understand RIS candidate counts, reuse modes, and compatibility limits. This
-is a product-facing policy layer above the existing estimators, not a change to the mathematical
-local-RIS estimator or a reason to enable experimental reuse by default.
-
-### Intent
-
-The default scene experience should be "just run better": choose ordinary importance-sampled
-direct lighting when RIS has little proposal-selection variance to reduce, and choose local RIS
-when several finite/mesh-light proposals make one selected visibility evaluation worthwhile.
-Advanced/manual controls remain available for experiments, reproduction, and benchmarking.
-
-The initial policy must be deterministic, cheap, explainable, and conservative. It must not use
-per-frame trial-and-error tuning or silently alter a progressive accumulation once rendering has
-started.
-
-### First Policy Scope
-
-The first automatic policy chooses only between:
-
-```text
-ordinary importance-sampled direct lighting
-local primary direct-light RIS with four candidates
-```
-
-It must leave temporal/spatial reuse disabled. Spatial reuse remains experimental: it needs static
-opaque receivers, has known estimator architecture gaps, and has not met broad mean-correctness or
-equal-time acceptance gates. Automatic spatial selection is explicitly out of scope until those
-gates pass.
-
-### Proposed Deterministic Heuristic
-
-Use existing scene-light information before the first accumulation sample:
-
-```text
-ordinary importance sampling when:
-  - the direct proposal set is trivial (one finite/directional light, environment only, or
-    directional plus environment only), or
-  - final-color/local-RIS eligibility is unavailable.
-
-local RIS-4 when:
-  - ImportanceSampled lighting is active,
-  - final-color primary opaque direct-light sampling is eligible, and
-  - there are multiple independently selectable finite or mesh lights with meaningful selection
-    diversity (initial conservative threshold: at least four finite/mesh lights).
-```
-
-An environment is one proposal family, not evidence by itself that local RIS is beneficial. For
-example, a Sponza-like scene lit primarily by one directional light plus an environment has little
-direct-light selection uncertainty and substantial indirect transport; local RIS targets neither
-of those costs, so ordinary importance sampling should be selected.
-
-The policy must be evaluated before computing the accumulation-state hash and remain fixed until a
-scene/light/settings change invalidates accumulation. This avoids mixing unaccounted estimators in
-one progressive average. It must also report its resolved decision and concise reason, for example:
-
-```text
-Automatic lighting sampling: ordinary importance sampling
-Reason: directional light plus environment; insufficient finite-light proposal diversity for RIS.
-```
-
-or:
-
-```text
-Automatic lighting sampling: local RIS, 4 candidates
-Reason: 24 finite lights; reduces light-selection variance while retaining one visibility query.
-```
-
-### User Controls
-
-Replace feature-centric default UI over time with a small policy selector:
-
-```text
-Lighting Sampling: Automatic | Quality | Performance | Advanced
-```
-
-- `Automatic` is the default and applies the deterministic heuristic.
-- `Quality` may choose local RIS in more eligible many-light scenes, but still rejects trivial
-  light sets.
-- `Performance` remains ordinary importance sampling unless measured evidence supports a clearly
-  beneficial local-RIS threshold.
-- `Advanced` exposes explicit local candidate count and experimental temporal/spatial controls for
-  benchmark work. It must retain reproducible capture metadata and explicit override semantics.
-
-### Validation Before Implementation
-
-1. Add scene-light-policy unit tests for directional-only, environment-only, directional plus
-   environment, one finite light, mixed finite/environment, and many-light configurations.
-2. Capture equal-work and repeated randomized-order equal-time trials for local-off versus
-   local-RIS-4 on low-light-count, environment/directional, and many-light fixtures.
-3. Require the automatic choice to match the measured winner or choose ordinary sampling when the
-   result is inconclusive.
-4. Record the resolved mode and reason in benchmark/capture metadata and expose it read-only in
-   the overlay/inspector.
-5. Consider runtime direct-light variance, shadow-query cost, and receiver coherence only after the
-   deterministic scene-light policy is validated. These signals must not make unstable per-frame
-   mode changes.
-
-Add a static direct-light fixture with approximately 256-512 individually selectable varied finite
-lights, broad diffuse receivers, controlled occlusion, no environment/directional light, and no
-indirect-path ambiguity. Report first-bounce direct-light or region-isolated linear-HDR error in
-addition to complete-image error. Keep `Benchmark_TemporalRisStableDirectLight` as an open-receiver
-positive control and `Benchmark_TemporalRisStress` as the visibility/rejection control.
-
-### Reference Caveats
-
-HIPRT is the stronger architectural reference, but its defaults are not constants to transplant.
-Its canonical M=1, total cap 3, confidence weights, pairwise MIS, and visibility policy form one
-coupled estimator. Re-derive any equivalent for this renderer's proposal PDFs, finite-light
-conventions, transparent transmittance, and complementary BSDF-hit MIS.
-
-`cpp-restir` is useful because its simple code and report independently confirm temporal-then-spatial
-ordering, final-spatial-history feedback, randomized neighborhoods, multiple immutable spatial
-passes, and a 512-light acceptance scene. It is not a correctness oracle: it has no motion-vector
-reprojection; checked-in visibility options are off; it uses a simplified Phong Whitted renderer;
-its shared random generator is used inside an OpenMP loop; and its temporal clamp scales `wSum` with
-an apparent integer division that becomes zero whenever clamping is needed. Do not reproduce these
-implementation details.
-
-### Replacement Plan
-
-Do not spend further time tuning cardinal-neighbor count or raising history M in the current simple
-merge. Replace the experimental reuse architecture in ordered, separately validated stages:
-
-1. Add the 256-512-light direct-light benchmark and trusted high-sample local/off reference. Record
-   fixed-work, equal-time, direct-light-region error, mean radiance/color, and pass timings.
-2. Define a canonical reservoir record with selected light sample, stored source target, local RIS
-   normalization/UCW equivalent, confidence M, receiver features, and visibility state. Preserve
-   enough proposal information for finite, mesh-triangle, directional, and environment samples.
-3. Keep local candidate generation mathematically unchanged, but collapse each completed normalized
-   local reservoir to canonical reuse confidence M=1. Add synthetic/GPU tests proving this does not
-   alter local-only output or mean.
-4. Add a compact canonical visibility/transmittance pass. Fully occluded canonical reservoirs may be
-   invalidated for propagation only after high-sample mean tests confirm the selected estimator.
-   Preserve transparent shadow transmittance semantics; do not silently replace it with opaque
-   boolean visibility.
-5. Implement temporal combination of the current canonical reservoir with the previous final
-   spatiotemporal reservoir. Start with total M cap 3 and validated reprojection/receiver rejection.
-6. Implement one immutable spatial ping-pong pass over the temporal output using five randomized,
-   deterministic low-discrepancy neighbors in an initial 8-16 pixel radius. Include the canonical
-   center reservoir defensively. Preserve reproducibility across captures.
-7. Independently derive defensive pairwise weighting/normalization for this renderer. Account for
-   valid neighbor count/confidence and evaluate the selected/reused sample under the relevant source
-   and current receiver targets. Do not import HIPRT source. Add forced-selection synthetic tests and
-   high-sample triangle/environment/mixed production-image tests before performance tuning.
-8. Store the final visibility-consistent spatial output as next-frame temporal input. Track age or
-   ancestry and expose capture diagnostics for source domain, selected history/spatial neighbor,
-   valid-neighbor count, confidence M, visibility rejection, and effective sample autocorrelation.
-9. Evaluate one spatial pass first. Add a second ping-pong pass only if one pass is mean-correct and
-   improves equal-time direct-light convergence; re-establish visibility consistency before any
-   output is consumed by another pass or future frame.
-10. Add one BSDF canonical candidate only after the NEE/BSDF reservoir MIS derivation and existing
-    mean fixtures pass. Light presampling is deferred until candidate generation is measured as the
-    bottleneck in the large-light fixture.
-11. Preserve local RIS as the unchanged fallback and keep the new spatiotemporal path default-off
-    until it improves equal-time linear-HDR direct-light error, agrees in high-sample mean/color,
-    survives shadow/disocclusion review, and retains acceptable Metal compile/runtime cost.
-
-The first implementation milestone is therefore not “more neighbors.” It is a mathematically
-coherent canonical-observation pipeline:
-
-```text
-normalized local canonical reservoir (reuse M=1)
--> canonical visibility/transmittance
--> temporal merge with previous final reservoir (initial cap 3)
--> one randomized spatial ping-pong pass
--> defensive pairwise normalization
--> final visibility/shading
--> persist visibility-consistent final reservoir
-```
-
-## Temporal RIS Net-Benefit Roadmap
-
-Temporal RIS is disabled in production scene settings. The implemented reservoir reuse path remains
-experimental and opt-in until it passes the acceptance gates below.
-
-The candidate-split capture `temporal_ris_candidate_split_sweep_fixed_work_2` found local RIS
-superior to every tested temporal split on `Benchmark_TemporalRisStress`. The closest configuration,
-four fresh candidates plus one represented history candidate, was still 2.1 percent higher RGB RMSE
-and 3.2 percent slower than local four-candidate RIS. History acceptance was 99.17 percent, so this
-is not primarily a reprojection-availability failure. Quality worsened monotonically as history
-selection increased, which makes represented-history correlation and visibility discontinuities the
-leading hypotheses.
-
-The independent `temporal_ris_one_frame_trials` run confirms a limited instantaneous benefit under
-the current four-local-plus-one-history policy: at warm-up lengths 1, 2, 4, and 8, temporal RMSE was
-2.48 to 2.66 percent lower than local RIS across 32 seed-paired trials. It was also 8.53 to 13.56
-percent slower per measured frame. In contrast, the 200-frame static progressive capture lost from
-frame 2 onward and finished 2.71 percent higher RGB RMSE. The current history path is therefore
-active and useful as one additional selection observation, but it does not yet improve long static
-accumulation. Its 98.68 percent history acceptance, 97.76 percent merge rate, and 21.33 percent
-history-selection rate rule out simple reprojection unavailability as the main explanation.
-
-The stable-scene positive control reaches the same conclusion without image-wide visibility
-discontinuities. In `temporal_ris_stable_direct_light_fixed_work`, temporal RIS finished at RGB RMSE
-0.00765151 versus local RIS at 0.00733272: a 4.35-percent regression after 200 accumulated frames.
-It already loses at frame 2 (0.0678062 versus 0.0664890) and remains behind at frames 4, 8, 16, 32,
-64, and 128. Its apparent 0.50-percent lower average render time (120.45 ms versus 121.06 ms) is too
-small to treat as a benefit. The diagnostic counters show normal reuse: 98.85-percent history
-acceptance, 98.15-percent merge rate, 20.68-percent history-selection rate, and mean effective M
-of 4.951.
-
-The independent `temporal_ris_stable_direct_light_one_frame_trials` positive control does show the
-intended reset-frame effect. Across 32 paired seeds, temporal RMSE was lower by 2.74, 2.82, 2.86,
-and 2.83 percent at warm-ups 1, 2, 4, and 8 respectively. Measured-frame time was higher by 8.52,
-12.17, 9.15, and 12.25 percent. Temporal mean linear luminance was consistently about 0.21 to 0.23
-percent higher, so a temporal-on high-sample mean comparison remains required. The reference
-difference images show the controlled blocker/shadow region, but the progressive regression is also
-present across the broad open receiver. Visibility boundaries can amplify the issue, but they are
-not its sole cause.
-
-Treat the following as ordered gates. Do not tune a later stage to compensate for a failed earlier
-one.
-
-### 2. Correct The Benchmark Baseline
-
-1. Temporal reservoir history must be invalidated whenever progressive accumulation resets. This
-   includes capture setup, a new capture variant, renderer-state invalidation, render-size changes,
-   and any other operation that calls `GameManager.ResetFrameAccumulation()`.
-2. Each capture variant starts with empty temporal history. The capture's shader warm-up may compile
-   shaders, but cannot seed measured history after the following accumulation reset.
-3. Generate an explicitly temporal-off trusted reference for `TemporalRisStress`, preferably using
-   `AllLights` or a high-sample local RIS configuration. Reference metadata must record RIS state,
-   candidate count, history cap, light strategy, seed, relevant renderer settings, scene/settings
-   hash, source revision, and shader revision.
-4. Re-run the candidate split in normal and reverse variant orders. Results must not depend on order.
-
-### 3. Prove Mean Correctness
-
-Status: reservoir normalization is covered by the production GPU regression probe. It verifies local
-normalization, capped temporal target-ratio mass, local/history selected-target normalization, and
-zero/invalid history rejection through the same helpers used by `CSMain`. Raw-HDR production-image
-fixtures now compare ordinary NEE plus complementary continuation-hit contributions with local RIS
-counts 1, 2, 4, and 8 for mesh-triangle-only, environment-only, and mixed sphere/triangle/environment
-lighting. Triangle and environment fixtures use 1,024 samples per pixel with a two-percent per-RGB
-channel tolerance; the noisier mixed fixture uses 16,384 samples per pixel with a 3.5-percent
-tolerance. The mixed fixture exposed that continuation-hit MIS omitted the local RIS proposal branch
-probability; `TracePath()` now carries the preceding initial-RIS state and applies that branch PDF to
-triangle-light and sky-miss competing PDFs. The focused three-fixture run passes. Temporal-on
-production-image comparison remains required before this gate is complete.
-
-1. Add deterministic CPU/GPU checks for triangle-only, environment-only, and mixed
-   sphere/triangle/environment lighting.
-2. Compare explicit RIS NEE plus complementary BRDF-hit-emitter/environment contributions with a
-   trusted high-sample estimator for local counts 1, 2, 4, and 8, with temporal reuse disabled and
-   enabled.
-3. Derive or repair the reservoir-aware NEE/BRDF MIS pairing before temporal tuning. The current
-   explicit RIS path and continuation-hit MIS must be proven complementary; source-shape assertions
-   are insufficient.
-4. Add synthetic reservoir tests for stored selected target, target-ratio history mass, capped `M`,
-   forced local/history selection, and final normalization.
-
-### 4. Measure The Intended Benefit
-
-The checked-in `temporal_ris_one_frame_trials.json` runs this gate at 1024x1024 with 32
-deterministic seed-paired trials for warm-up lengths 1, 2, 4, and 8. For each trial it starts
-from empty temporal history, accumulates the configured warm-up frames, and measures exactly one
-non-accumulated frame against the trusted temporal-off reference. It writes per-trial RMSE, mean
-linear luminance, and measured render time to `temporal_ris_one_frame_trials.csv`, with sample
-means and unbiased variances in `temporal_ris_one_frame_summary.csv`.
-
-1. Run independent one-frame trials: empty history, a specified warm-up length, one measured
-   non-accumulated frame, and many fixed seeds. Report mean, variance, RMSE, and time.
-2. Separately run independent progressive sequences and report error at 1, 2, 4, 8, 16, 32, 64,
-   128, and 200 frames.
-3. Record lag autocorrelation and estimate effective sample size. A temporal estimator may improve
-   instantaneous low-SPP images while losing to independent local RIS in a long static average.
-4. If only the former wins, limit temporal reuse to reset/interactive presentation rather than the
-   static progressive path.
-5. Run `temporal_ris_stable_direct_light_fixed_work.json` and
-   `temporal_ris_stable_direct_light_one_frame_trials.json` using the
-   `TemporalRisStableDirectLight` reference. Compare the
-   open receiver and controlled penumbra strip separately with reference difference heatmaps.
-   If temporal reuse does not win in the open region, audit stored proposal density, target-ratio
-   mass, and final normalization before adding visibility-aware heuristics. If it wins only in the
-   open region, prioritize spatially localized visibility/selection diagnostics for the penumbra.
-
-Status: complete. The open-region positive control did not improve progressive convergence despite
-its reset-frame gain. Before visibility-aware heuristics, audit whether recursively stored history
-creates correlation that is not represented by its nominal capped M, then test previous-frame-only
-history and normalized-local-reservoir-as-one-observation variants.
-
-### 5. Limit History Persistence
-
-1. Test a previous-frame-only history variant against recursively accumulated history.
-2. Test storing a normalized local reservoir as one temporal observation rather than granting its
-   local candidate count persistent temporal confidence.
-3. Track reservoir age/ancestry and test short maximum ages of 1, 2, 4, and 8 frames.
-4. Tune to a bounded history-selection rate, not nominal `M`. Begin below the current harmful
-   21-percent rate of the four-local-plus-one-history configuration.
-5. Retain only variants that improve one-frame quality without losing equal-time progressive
-   convergence through excessive correlation.
-
-### 6. Add Visibility Awareness Conservatively
-
-1. Store the already-computed final visibility/transmittance result with the reservoir for
-   diagnostics. Never assume it remains current visibility.
-2. Measure history selection, visibility changes, age, and error around direct-light penumbrae.
-3. Test rejecting samples that were fully occluded when stored, with high-sample mean validation.
-4. Test conservative confidence reduction for aged samples and near-discontinuity reprojections.
-5. Only if those fail, prototype one current-receiver visibility test for history in a separate
-   compact path/kernel. Do not duplicate the inlined `SampleSingleLight()` shadow traversal in
-   `CSMain`.
-6. A two-reservoir defensive/pairwise correction is the maximum follow-up scope. Derive it
-   independently and preserve the current fresh reservoir as the canonical candidate.
-
-### 7. Tighten Reprojection Validation
-
-1. Compare exact same-pixel reuse, current matrix reprojection, and stricter world-space
-   plane-distance/normal validation.
-2. Add capture-only maps for source pixel, accepted/rejected history, receiver displacement,
-   history selection, visibility mismatch, and reservoir age.
-3. Consider a nearby-pixel search only after exact reprojection validation, because it can cross
-   direct-light visibility boundaries.
-4. Use `TemporalRisStableDirectLight` to distinguish a global history-selection problem from a
-   penumbra-local visibility problem before changing temporal confidence or history persistence.
-
-### 8. Optimize Only A Winning Estimator
-
-1. Use repeated equal-time captures with randomized order and cooldown.
-2. Report completed frames, fresh candidates, temporal selections, and final error, not only
-   nominal effective `M`.
-3. Profile feature generation, structured-buffer traffic, reprojection, and diagnostics separately.
-4. Disable capture diagnostics for final timing, retain one inlined production
-   `SampleSingleLight()` call site, and precompile/measure the Metal variant.
-
-### 9. Validate Across Scene Classes
-
-Require success on the temporal stress scene, an unoccluded many-light scene, a single area-light
-penumbra scene, environment-only, mixed triangle/environment, camera pan, disocclusion, CornellBox,
-and a low-light-count overhead check. Dynamic geometry, fog, animated water, transmission, adaptive
-sampling, and highly smooth receivers remain out of scope until static opaque reuse succeeds.
-
-### 10. Acceptance Evidence
-
-A candidate is acceptable only when it has lower equal-time linear-HDR error in its declared target
-mode, agrees in high-sample mean radiance and color with the trusted reference, creates no reviewed
-penumbra/disocclusion artifacts, and retains acceptable Metal compile/runtime cost. The ordinary
-local RIS fallback must remain unchanged.
-
-### 11. Reference Implementation Boundaries
-
-See the detailed ReSTIR Architecture Audit above. HIPRT-Path-Tracer is a useful GPL-3.0 algorithmic
-reference for normalized canonical observations, small confidence caps, temporal validation,
-visibility consistency, randomized spatial reuse, and pairwise correction. `cpp-restir` is an
-unlicensed teaching reference useful only as corroboration of the original paper's pass ordering and
-many-light test design. Do not copy source, comments, naming, or structure from either repository.
-Independently derive and implement every adopted algorithm from published material.
-
-### 12. Recommended Execution Sequence
-
-1. Complete the baseline/isolation work in section 2.
-2. Validate RIS/BRDF MIS mean correctness.
-3. Separate independent-frame variance from progressive convergence.
-4. Add age, autocorrelation, contribution, and visibility diagnostics.
-5. Test one-frame-only and collapsed-confidence temporal policies.
-6. Test age-decayed, low-selection-rate policies.
-7. Add stored-visibility diagnostics and reject previously occluded history experimentally.
-8. Escalate to a compact current-history visibility query only if justified.
-9. Consider a derived two-reservoir defensive correction only if simpler policies fail.
-10. Optimize only the first estimator that passes quality gates, then complete the scene matrix.
-
-## Compact Future-Session Prompt
-
-```text
-Read AGENTS.md and AIDocs/00-index.md. Continue only the remaining follow-up work in AIDocs/23-initial-ris-direct-lighting-plan.md. Local primary direct-light RIS is the standard/default path. Temporal and spatial RIS are experimental, opt-in paths and remain disabled by default because they are incomplete and slower than local RIS. Do not replace them with spatial ReSTIR GI, light presampling, light trees, or adaptive-scheduler changes without a separate design and validation plan.
-
-Preserve the existing initialRisCandidateCount, temporalRisEnabled, and spatialRisEnabled controls, their default-off behavior, shader upload, accumulation/history invalidation, inspector, benchmark metadata, and generic experiment overrides.
-
-The current temporal and spatial paths are not complete spatiotemporal ReSTIR: spatial suppresses temporal, uses one-pixel cardinal neighbors, has no canonical visibility reuse or pairwise correction, and does not persist final spatial output as temporal history. Do not tune neighbor count or raise history M in that estimator. Follow the ordered ReSTIR Architecture Audit replacement plan: add a 256-512-light direct-light fixture; normalize each completed local reservoir as one reuse observation; add a compact visibility/transmittance pass; merge previous final history then randomized spatial neighbors with independently derived defensive pairwise normalization; and persist the visibility-consistent final reservoir. Start with total M cap 3 and one five-neighbor 8-16-pixel spatial pass.
-
-For eligible bounce-0 opaque ImportanceSampled hits, preserve the existing local weighted reservoir and its unshadowed target/proposal convention. Keep one inlined SampleSingleLight call site in CSMain to avoid Metal compile explosion, using separate compact kernels for any additional visibility work. Preserve transparent transmittance and rigorously rederive current BSDF-hit MIS; stop if it cannot be proven non-double-counted.
-
-Maintain deterministic reservoir tests, colored-many-light energy fixtures, Metal precompile validation, temporal-history coverage, and checked-in RayTracingSceneCapture comparisons for candidate counts 1/2/4/8. Measure equal-work and equal-time convergence with adaptive off and on using unchanged presets. Use apply_patch, preserve unrelated work, and update this record with measured changes.
-```
+The local denominator retains the configured attempted candidate count even when a candidate has
+zero weight. Non-finite/non-positive weights cannot win. An empty eligible RIS reservoir produces
+zero direct contribution, not an ordinary-estimator retry. Production visibility is evaluated only
+for the selected candidate.
+
+### Measure And Approximation Caveat
+
+`proposalPdf` is **not a full shape-sample density**. For finite lights it stores branch probability
+times global emitter-selection probability; mesh triangle probability is compensated separately
+in the contribution. Area/facing/distance terms are folded into the renderer's light contribution,
+and triangle-selection and shape-to-solid-angle PDFs are applied separately for MIS. For environment
+samples, `proposalPdf` includes branch probability times the environment solid-angle density.
+
+The historical sphere falloff and receiver-facing disk, clamped triangle distance convention, and
+directional-light conventions are renderer approximations, not a uniform physical area-light
+measure. Same-receiver reservoir normalization can resample that existing integrand without making
+its conventions physically exact. Neither the stored field nor the reservoir-selected distribution
+should be described as a generally validated full-density, reservoir-aware MIS policy.
+
+## Experimental Reuse
+
+Temporal reuse camera-reprojects into ping-pong history, checks validity, object identity, relative
+depth, and normal agreement, then re-evaluates the selected source sample at the current receiver.
+The history cap defaults to one represented history candidate in addition to the fresh candidates.
+It scales retained weight mass with retained `M` and uses a target-ratio merge. Final visibility is
+deferred until after selection.
+
+The current same-frame spatial path uses `RayTracingSpatialRisPrepass.compute` to trace stochastic
+primary rays and write immutable local reservoirs, post-candidate RNG state, and receiver features.
+The wavefront resolve consumes the center and up to four one-pixel cardinal neighbors, with
+same-object, relative-depth (5 percent), and normal (dot at least 0.9) checks. It re-evaluates source
+samples and shades the final selection through the shared visibility call. Normal denoiser features
+are refreshed separately. The intended prepass/receiver match is not guaranteed under `randomNoise`
+because of the seed-binding defect below.
+
+### Open Correctness Findings (2026-09-15)
+
+These are unresolved findings, not implemented repairs. Ordering, derivation choices, and acceptance
+work belong to [document 27](27-renderer-sampling-audit-and-repair-plan.md).
+
+- **Missing empty temporal writes:** `StoreTemporalRisReservoir()` runs only after a valid selected
+  candidate. Misses, ineligible hits, and empty results do not consistently write empty next-history
+  slots, allowing old ping-pong contents to survive.
+- **Seed changes per bind:** `GameManager` draws a new `_Seed` for each shared shader binding when
+  `randomNoise` is enabled. Spatial prepass and wavefront generation can therefore trace different
+  stochastic receivers; restoring only post-candidate RNG state does not restore that contract.
+- **Zero-target reused M is omitted:** temporal and spatial merges increment effective candidate
+  count only for positive merged weight. A valid source observation whose current target is zero
+  loses its represented `M`, changing normalization through selection-dependent rejection.
+- **Support/domain correction is missing:** target-ratio/nominal-M combination alone does not account
+  for which receiver proposal domains could generate the selected sample. Source support, current
+  support, and defensive normalization have not been derived together.
+- **Source selection PDF enters current MIS:** re-evaluation retains source `proposalPdf`, although
+  finite-light importance selection depends on receiver position. It is not generally the current
+  receiver's competing NEE PDF.
+- **Continuation MIS uses ordinary counts/PDFs:** `CSWavefrontClassify` reconstructs competing PDFs
+  with `_EnvironmentLightSampleCount` or `GetLightPdfForHit()` and its ordinary all-light/count
+  behavior, then multiplies by the RIS branch probability. That is not generally the proposal used
+  by the RIS direct path. `previousInitialRisSampled` records successful selection/normalization,
+  not which technique was attempted, so an empty RIS outcome can change complementary weighting.
+- **Sphere disks are not reusable world emitter points:** the sampled disk faces the source
+  receiver. Reusing its world point at another receiver does not sample that receiver's disk domain;
+  merely reconstructing distance/direction does not supply a valid domain mapping or Jacobian.
+- **Temporal features do not describe the stochastic source receiver:** unjittered feature hits can
+  differ from the actual jittered/thin-lens path that wrote the reservoir. Identity/depth/normal
+  tests on those features do not prove a valid reservoir receiver match.
+- **No combined spatial+temporal path:** spatial suppresses temporal merging and does not persist
+  its final result as temporal input. Enabling both flags does not test spatiotemporal ReSTIR DI.
+
+Additional architectural limitations remain: canonical visibility is not evaluated before
+propagation, deterministic cardinal neighbors provide little proposal diversity, and nominal `M`
+is not an independent-sample count under correlated history. Larger caps, randomized neighborhoods,
+canonical `M=1`, BSDF candidates, or pairwise correction are possible design choices, not standalone
+validated fixes or constants to transplant from another renderer.
+
+## Historical Evidence
+
+The dates below identify the repository records containing these results, not a new execution.
+These captures predate the September wavefront integration and do not establish current-path parity.
+Prior helper/target/RNG changes are historical observations, not repairs made by this documentation
+update. Known current defects prevent treating these numbers as general estimator validation.
+
+### Local Mean Checks (Recorded 2026-08-31)
+
+The production GPU reservoir probe covered local normalization, capped temporal target-ratio mass,
+selected-target normalization, and zero/invalid history rejection. Raw-HDR fixtures compared
+ordinary NEE plus continuation hits with local counts 1, 2, 4, and 8. Triangle-only and
+environment-only used 1,024 spp with 2-percent per-channel tolerance; mixed sphere/triangle/environment
+used 16,384 spp with 3.5-percent tolerance. A focused three-fixture run was recorded as passing after
+adding the RIS branch probability to continuation PDFs. This limited result does not cover arbitrary
+light/sample counts, all-light fallbacks, empty reservoirs, reuse domains, or the current wavefront
+route. Temporal-on production-image mean comparison remained open.
+
+### Temporal Captures (Recorded 2026-08-31 To 2026-09-01)
+
+- `temporal_ris_candidate_split_sweep_fixed_work_2`, `Benchmark_TemporalRisStress`: local RIS beat
+  every temporal split. Four fresh plus one history candidate was 2.1 percent higher RGB RMSE and
+  3.2 percent slower than local-4, despite 99.17 percent history acceptance.
+- `temporal_ris_one_frame_trials`: across 32 paired seeds and warm-ups 1/2/4/8, temporal reset-frame
+  RMSE was 2.48-2.66 percent lower, but measured-frame cost was 8.53-13.56 percent higher. The
+  200-frame progressive run lost from frame 2 onward and ended 2.71 percent higher RMSE. Acceptance
+  was 98.68 percent, merge rate 97.76 percent, and history selection 21.33 percent.
+- `temporal_ris_stable_direct_light_fixed_work`: after 200 frames, temporal RMSE was 0.00765151
+  versus local 0.00733272 (4.35 percent worse). Frame-2 errors were 0.0678062 versus 0.0664890;
+  temporal remained behind at 4/8/16/32/64/128. Timings were 120.45 versus 121.06 ms/frame, an
+  inconclusive 0.50-percent difference. Acceptance was 98.85 percent, merge rate 98.15 percent,
+  history selection 20.68 percent, and mean effective M 4.951.
+- `temporal_ris_stable_direct_light_one_frame_trials`: reset-frame RMSE improved 2.74/2.82/2.86/2.83
+  percent at warm-ups 1/2/4/8, while frame cost increased 8.52/12.17/9.15/12.25 percent. Mean linear
+  luminance was about 0.21-0.23 percent higher. Progressive regression also affected the open
+  receiver, so visibility boundaries alone do not explain it.
+
+### Spatial And CornellBox Captures (Recorded 2026-09-01)
+
+The retired preceding-frame cardinal-neighbor prototype stored only fresh local reservoirs.
+On `TemporalRisStableDirectLight`, 200-frame local-4 versus spatial-4 RMSE was 0.00734392 versus
+0.00715252 (2.61 percent lower), at 131.58 versus 136.21 ms/frame (3.52 percent slower). Its
+45-second sweep rejected cheaper candidate configurations: local-1 reached 0.00810266 in 244 frames
+versus spatial-1 0.02509391 in 223; local-2 reached 0.00651741 in 305 versus spatial-2 0.00970189
+in 233. That prototype was replaced, not promoted.
+
+The replacement same-frame prepass received Metal precompile coverage, then CornellBox captures:
+
+| Capture | Local RGB RMSE | Temporal RGB RMSE | Spatial RGB RMSE | Qualification |
+| --- | --- | --- | --- | --- |
+| Initial, 200 frames | 0.00735842 | 0.00757391 | 0.00858836 | Spatial counters absent; reused triangle/environment targets omitted explicit-light MIS factor |
+| Target/counter rerun | 0.00734088 | 0.00755635 | 0.00858627 | Spatial acceptance 49.20%, neighbor selection 21.50%, mean effective M 9.85 |
+| Post reuse-RNG isolation, 100 frames | 0.01241675 | 0.01238808 | 0.01293435 | Local 258.42, temporal 262.89, spatial 261.45 ms/frame |
+
+The last capture is `TestCaptures/cornellbox_ris_reuse_fixed_work_3/CornellBox/variant_comparison.csv`.
+Temporal merged for 51.77 percent of eligible receivers with mean effective M 2.63; spatial merged
+49.17 percent of neighbor opportunities with mean effective M 9.85. Both flags matched spatial-only
+in all four-way comparisons. The temporal 0.23-percent fixed-work gain was too small to resolve
+without repeated trials and cost 1.73 percent more time; spatial was 4.17 percent worse and
+1.17 percent slower. Counters establish activity, not correctness. Reuse RNG isolation does not
+rule out the separate `randomNoise` per-bind seed defect identified in the current audit.
+
+Spatial captures now emit `spatial_ris_diagnostics.json`; temporal captures emit
+`temporal_ris_diagnostics.json`. Spatial acceptance/merge rates use eligible receiver-neighbor
+opportunities, not just eligible receivers.
+
+## Validation Boundaries
+
+`Benchmark_TemporalRisStress` has twelve alternating-color finite lights and visibility-boundary
+pillars. `Benchmark_TemporalRisStableDirectLight` has twenty varied finite lights, an open diffuse
+receiver, and one controlled blocker strip. Their isolated static direct-light settings make them
+useful rejection and positive controls. CornellBox is a bias/stability/overhead regression scene,
+not evidence of a many-light selection advantage: one dominant emitter and substantial indirect
+transport limit what primary DI reuse can improve.
+
+Open evidence gaps include trusted high-sample local/reuse mean and color comparisons under the
+active wavefront route; zero-target/support and receiver-domain cases; reset/history isolation;
+camera motion, disocclusion, jitter and depth of field; and repeated equal-work/equal-time trials.
+Independent reset-frame quality and long progressive convergence must be reported separately,
+including correlation/effective-sample-size diagnostics where relevant. Compile success, broad
+helper tests, nominal M, and manual smoke tests are not substitutes for those gates. Promotion
+requires measured equal-time linear-HDR benefit in a declared target mode without mean/color bias
+or unacceptable artifacts. Follow document 27 rather than the removed tuning sequences.
+
+## Reference Boundaries
+
+The architecture review recorded on 2026-09-01 consulted:
+
+- Bitterli et al., *Spatiotemporal reservoir resampling for real-time ray tracing with dynamic
+  direct lighting*: https://benedikt-bitterli.me/restir/bitterli20restir.pdf
+- `TomClabault/HIPRT-Path-Tracer`, revision `d114ed0`, GPL-3.0.
+- `MrMagnifico/cpp-restir`, revision `8e4f0ea`, no declared license.
+
+Use published algorithms as independently implementable references; do not copy repository source,
+comments, naming, or structure. HIPRT's canonical M=1, total cap 3, confidence weights, pairwise MIS,
+and visibility policy form a coupled estimator, not independent tuning recommendations. The CPU
+teaching implementation corroborates pass ordering and its 512-light Cornell Nightclub fixture,
+but lacks motion reprojection and has implementation caveats including shared OpenMP RNG and an
+apparent integer-division temporal-clamp issue. Neither repository is a correctness oracle for this
+renderer's approximate light measure, transparent transmittance, or continuation-hit MIS.

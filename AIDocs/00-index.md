@@ -20,16 +20,21 @@ Use this folder as focused context for LLM-assisted work on the Unity GPU ray tr
 - `14-svgf-implementation-plan.md`: Ordered GPU-native A-trous/SVGF implementation milestones, current status, validation criteria, diagnostics, and remaining denoising work.
 - `15-terrain-rendering.md`: GPU heightfield terrain data flow, acceleration structure, scene generation, rank-based layer weight painting, coverage reporting, and limitations.
 - `16-accessibility-and-onboarding.md`: Completed public-project onboarding work and remaining accessibility, diagnostics, gallery, quality-preset, testing, and platform-validation improvements.
-- `17-adaptive-sampling-continuation.md`: Adaptive-sampling handoff, benchmark evidence, paper-derived display-space confidence guidance, and the recommended fixed-budget GPU work-list architecture.
-- `18-adaptive-sampling-next-session-prompt.md`: Compact future-session prompt for implementing the remaining low-overhead statistical group scheduler.
-- `19-adaptive-scheduler-accounting-repair.md`: Reproduced bounded-service scheduler accounting failure, repair constraints, validation commands, and a focused future-session prompt.
-- `20-dammertz-adaptive-sampling-plan.md`: Fixed-8x8 Dammertz results, allocation diagnosis, next bounded-service experiment, validation criteria, and compact continuation prompt.
-- `21-adaptive-sampling-performance-plan.md`: Capture-only phase timing, root-list cost model, and the ordered adaptive runtime optimization plan.
-- `22-shader-compile-splitting-handoff.md`: Split-compute-asset compile-time work, measured Metal timings, the debug-kernel timeout, and a one-asset-at-a-time continuation workflow.
-- `23-initial-ris-direct-lighting-plan.md`: Initial local direct-light RIS design record, current implementation status, correctness constraints, and remaining follow-up work.
-- `24-welford-scheduler-recovery-plan.md`: Welford allocation recovery phases, Sponza evidence, diagnostics, controls, acceptance gates, and session-resume state.
-- `25-adaptive-trace-throughput-plan.md`: Welford-only layered trace optimization, measurement protocol, and follow-on runtime work.
-- `26-wavefront-renderer-handoff.md`: Active queue-driven renderer, current coverage, compile measurements, validation gates, and continuation work.
+- `17-adaptive-sampling-continuation.md`: Historical adaptive architecture experiments, benchmark evidence, and rejected approaches; superseded as a plan.
+- `18-adaptive-sampling-next-session-prompt.md`: Retired session-prompt redirect to the current sampling plan.
+- `19-adaptive-scheduler-accounting-repair.md`: Historical bounded-service accounting failure and evidence; superseded repair instructions removed.
+- `20-dammertz-adaptive-sampling-plan.md`: Historical fixed-8x8 Dammertz results and allocation diagnosis; not an active implementation plan.
+- `21-adaptive-sampling-performance-plan.md`: Historical root-list cost model and phase-timing evidence; not current throughput acceptance.
+- `22-shader-compile-splitting-handoff.md`: Split-compute compile history, measured Metal timings, and current targeted-asset compile guidance.
+- `23-initial-ris-direct-lighting-plan.md`: Current local/reused RIS design, approximation constraints, unresolved audit findings, and historical evidence.
+- `24-welford-scheduler-recovery-plan.md`: Historical Sponza Welford recovery experiments, candidate settings, and qualified quality/timing evidence.
+- `25-adaptive-trace-throughput-plan.md`: Historical layered/guarded/compact trace comparisons and rejected macrotile results.
+- `26-wavefront-renderer-handoff.md`: Active queue-driven architecture, historical compile measurements, and unresolved coverage boundaries.
+- `27-renderer-sampling-audit-and-repair-plan.md`: Authoritative current sampling audit, source-referenced findings, ordered repair phases, decisions, and acceptance protocol (2026-09-15).
+
+Document 27 supersedes the sampling continuation plans in documents 17-21 and 23-26. Historical
+records preserve useful evidence, not instructions to resume retired renderer implementations.
+Independent denoising, accessibility, terrain, and other future work remains in its focused docs.
 
 ## Fast Context Selection
 
@@ -49,9 +54,7 @@ Use this folder as focused context for LLM-assisted work on the Unity GPU ray tr
 - To change terrain layer textures, weights, or elevation/slope banding, read `15-terrain-rendering.md`; declare rules in rank/degree space via `TerrainLayerPainter` and verify with `Tools > Ray Tracing > Report Terrain Coverage`.
 - To regenerate generated scenes after changing generator code, use `Tools > Ray Tracing > Regenerate Scenes (Delete Existing Scenes)`; plain `Generate Scenes` skips scenes that already exist.
 - To continue reducing the public project's barrier to entry, read `16-accessibility-and-onboarding.md`.
-- To continue adaptive-sampling work, read `17-adaptive-sampling-continuation.md`, then `03-compute-shader-renderer.md`, `08-shader-debugging-and-randomness.md`, and `10-benchmarking-and-performance.md`.
-- To measure or reduce adaptive runtime overhead, read `21-adaptive-sampling-performance-plan.md` after `17-adaptive-sampling-continuation.md`.
-- To continue Welford scheduler recovery, read `24-welford-scheduler-recovery-plan.md` after `17-adaptive-sampling-continuation.md`.
-- To optimize adaptive path throughput, read `25-adaptive-trace-throughput-plan.md` after `21-adaptive-sampling-performance-plan.md`.
-- To continue the wavefront renderer migration, read `26-wavefront-renderer-handoff.md`, then `03-compute-shader-renderer.md`, `07-shader-lighting-and-materials.md`, `11-regression-testing.md`, and `10-benchmarking-and-performance.md`.
-- To change direct-light RIS or temporal RIS, read `23-initial-ris-direct-lighting-plan.md`, then `07-shader-lighting-and-materials.md`, `03-compute-shader-renderer.md`, `10-benchmarking-and-performance.md`, and `11-regression-testing.md`.
+- To investigate sampling correctness or convergence, start with `27-renderer-sampling-audit-and-repair-plan.md`; the first T1 GGX repair is implemented with focused GPU coverage, while broader T1 acceptance and the other repairs remain pending. Phase 1 is in progress, not complete.
+- To change adaptive allocation or throughput, read document 27, then `26-wavefront-renderer-handoff.md`, `08-shader-debugging-and-randomness.md`, and `10-benchmarking-and-performance.md`. Load historical documents 17-21/24-25 only for a specific experiment's evidence.
+- To change wavefront stages, read document 27 and `26-wavefront-renderer-handoff.md`, then the relevant shader and regression-testing documents. The migration is integrated, not a pending feature-porting plan.
+- To change local, temporal, or spatial RIS, read document 27, then `23-initial-ris-direct-lighting-plan.md`, `07-shader-lighting-and-materials.md`, `10-benchmarking-and-performance.md`, and `11-regression-testing.md`.

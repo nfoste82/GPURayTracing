@@ -2,10 +2,10 @@
 
 ## Purpose
 
-This document records the compile-time reduction work completed on August 25, 2026, the current
-Metal measurements, the remaining debug-kernel blocker, and the required low-disruption workflow
-for continuing. Read this before changing compute-asset boundaries or starting another cold shader
-compile.
+This document retains the August 25, 2026 compile-splitting evidence and describes targeted
+precompilation of the active wavefront assets. The old debug-kernel timeout is historical: that
+route is retired, not a current repair prerequisite. For current renderer/sampling defects and
+validation gates, use [Renderer Sampling Audit And Repair Plan](27-renderer-sampling-audit-and-repair-plan.md).
 
 ## Goal
 
@@ -20,6 +20,21 @@ retired after wavefront replacements landed. The active final-color assets are
 `RayTracingWavefront.compute`, `RayTracingWavefrontWater.compute`,
 `RayTracingWavefrontFog.compute`, and `RayTracingWavefrontWaterFog.compute`; image fixtures now
 dispatch the same queue pipeline. The historical layout and timings below are retained as context.
+
+`RayTracingWavefrontPathGuided.compute` and `RayTracingWavefrontRis.compute` are opt-in dry
+wrappers for path guiding and experimental temporal/spatial RIS. Adaptive sample layers use the
+same selected wavefront renderer, with scheduling in `RayTracingAdaptiveScheduler.compute`.
+Geometry diagnostics also use wavefront stages; there is no active `RayTracingDebug` asset.
+Features, focus queries, spatial RIS prepass, utility, regression probes, and caustics retain
+separate owning assets. Water/fog wrappers isolate volume code; terrain remains a keyword variant.
+
+`GameManager` loads these assets from `Resources` and binds scene parameters to their owning
+stages. `RayTracingShared.hlsl` owns shared intersection, material, lighting, medium, and RNG
+helpers; `RayTracingAdaptiveSchedulerShared.hlsl` isolates scheduler declarations from the tracer.
+Camera-side photon gathering runs in `RayTracingCaustics.compute` with a utility composite pass.
+See `26-wavefront-renderer-handoff.md` for stage order and dated wavefront compile evidence.
+
+## Historical Split Layout
 
 The former monolithic `Assets/Scripts/RayTracingCompute.compute` was split as follows:
 
@@ -37,41 +52,11 @@ RayTracingRegressionProbe.compute      CSRegressionProbe only; no variants
 RayTracingCaustics.compute             existing separate caustics kernels
 ```
 
-`GameManager` loads split assets from `Resources` using Unity object null checks, so old serialized
-scenes do not need manual inspector assignment. It dispatches final color, geometry diagnostics,
-features, focus queries, utility clears, and adaptive scheduler/trace work through their owning
-asset. `CameraManager.DispatchPendingFocusQuery` receives the focus asset with a callback that
-binds parameters to that same asset.
-
-`Assets/Scripts/RayTracingAdaptiveSchedulerShared.hlsl` contains adaptive-only declarations so the
-scheduler does not include the full tracer. `RayTracingShared.hlsl` remains shared by tracing,
-debug, feature, focus, regression, and caustics assets.
-
-The ordinary final-color asset compiles without water geometry, finite-volume, medium, absorption,
-or scatter code. `GameManager` selects `RayTracingWater.compute` and matching water-capable
-feature, focus, and adaptive-trace assets only while `HasWaterVolume` is true. This avoids adding
-a water keyword to the normal fog/terrain matrix.
-
-Fog final color is also isolated by asset rather than a keyword on the common megakernels.
-`GameManager` selects `RayTracingFog.compute` or `RayTracingWaterFog.compute` only while fog is
-active, so edits and cold compiles for the common surface and water paths do not include volumetric
-source. Companion feature and adaptive-trace assets retain their existing fog variants.
-
-The fog and surface branches in `TracePathWithDirectLight()` also converge before one production
-`GetLightHittingPoint()` call. Previously `GetFogDirectLight()` and `GetDirectLight()` called it
-with different compile-time constants, allowing Metal to specialize and inline two copies of the
-large light-selection and shadow-traversal graph inside the water + fog megakernel.
-
-Camera-side photon gathering is now isolated in `RayTracingCaustics.compute` as
-`CSCausticsFinalColor`, with a small utility composite pass. Final-color `CSMain` assets no longer
-compile `GatherCausticRadiance()` or its specular visibility loop. This preserves caustics for
-water/fog scenes without attaching the nested photon-grid traversal to the largest Metal kernel.
-
-The ordinary final-color asset also excludes experimental path-guiding and temporal/spatial RIS
-source entirely. `GameManager` selects their dedicated assets only while the corresponding
-experimental mode is runnable; unsupported water and adaptive combinations retain the production
-renderer. Owen-scrambled Sobol is always used up to the configurable dimension limit, with the
-existing hash RNG handling later dimensions.
+The split subsequently isolated water and fog into separate final-color assets and moved
+camera-side caustics gathering out of the megakernel. The fog and surface branches in the former
+`TracePathWithDirectLight()` converged before one `GetLightHittingPoint()` call to avoid duplicate
+inlining of the light-selection/shadow-traversal graph. These were compile-size reductions in the
+retired renderer, not descriptions of the current dispatch route.
 
 ### August 25, 2026 Water-Free Default Attempt
 
@@ -106,29 +91,12 @@ This is a 101.548 s (50.3%) reduction from the earlier 202.065 s no-fog/no-terra
 The successful retry log is `/tmp/raytracing-main-waterfree-fog0-terrain0-retry.log`; the CSV row
 has shader hash `5f64b696cad49fb384ea73d095a296bb`. No further variants or assets were compiled.
 
-## Main Compile Result
+## Historical Main Result
 
 The precompiler now records `shaderAsset` and `kernel` in
 `Library/RayTracingShaderCompileStats.csv`, retaining older rows and appending a V2 header before
-new-format rows. The command-line tool supports a single named asset:
-
-```sh
-/Applications/Unity/Hub/Editor/6000.3.18f1/Unity.app/Contents/MacOS/Unity \
-  -batchmode \
-  -projectPath /Users/nic.foster/Projects/GPURayTracing \
-  -executeMethod RayTracingShaderPrecompiler.PrecompileFromCommandLine \
-  -rayTracingColdShaderPrecompile \
-  -rayTracingPrecompileAsset RayTracingCompute \
-  -logFile /tmp/raytracing-main-compile.log
-```
-
-Accepted asset values are the compute asset basename, for example `RayTracingDebug`,
-`RayTracingFeatures`, `RayTracingFocus`, and
-`RayTracingAdaptiveScheduler`. Omit `-rayTracingColdShaderPrecompile` for a cache-preserving warm
-dispatch. Pass `-rayTracingPrecompileVariant fog=0;terrain=0` with one selected asset to compile
-one fog/terrain combination at a time; quote the value when invoking through a shell.
-`-rayTracingPrecompileAllVariants` deliberately compiles every renderer asset and must not be used
-during normal iteration.
+new-format rows. Current commands are listed under Precompiler Commands below; the asset names
+in this historical measurement table are retired.
 
 The first completed cold Metal matrix after the split on the Apple M3 Max was:
 
@@ -141,16 +109,17 @@ Assets/Scripts/RayTracingCompute.compute   CSMain  fog=1;terrain=1          544.
 Total                                                               1,436.018 s (23m 56s)
 ```
 
-This proves that fog is the dominant final-color compile cost, especially combined with terrain.
-The no-fog/no-terrain final-color path is about 202 seconds cold. This measurement is not directly
+In this historical matrix, fog dominated final-color compile cost, especially with terrain.
+The then-current no-fog/no-terrain final-color path took about 202 seconds cold. This is not an
+estimate for the active wavefront renderer. The measurement is not directly
 comparable to the earlier reported 8-minute aggregate because it was deliberately cold, compiled
 all four final-color combinations independently, and Unity compilation varies materially.
 
-## Debug Blocker
+## Historical Debug Timeout
 
-The `RayTracingDebug.compute` split fixed the asset boundary but did not reduce debug code
-complexity. Its `CSDebugMain` defines `DEBUG_RENDER 1` before including `RayTracingShared.hlsl` so
-the existing `GetDebugRenderColor()` implementation is compiled only in that asset.
+The former `RayTracingDebug.compute` split fixed the asset boundary but did not reduce debug code
+complexity. Its `CSDebugMain` defined `DEBUG_RENDER 1` before including `RayTracingShared.hlsl`
+so the then-current `GetDebugRenderColor()` implementation compiled only in that asset.
 
 A targeted cold compile of `RayTracingDebug` reached Unity's compiler task timeout twice:
 
@@ -166,18 +135,16 @@ Compiler timed out. This can happen with extremely complex shaders or when proce
 resources are limited. UNITY_SHADER_COMPILER_TASK_TIMEOUT_MINUTES can override the limit.
 ```
 
-Do not raise that timeout as the first response. The useful result is that `GetDebugRenderColor()`
-still inlines too much traversal, direct-light, and scattering logic for Metal. The next change
-should simplify or split the debug implementation, then compile **only** `RayTracingDebug` to
-validate it. Do not run the all-assets command until the targeted debug asset compiles.
+This recorded excessive traversal, lighting, and scattering inlining in the retired debug kernel.
+It is not a current blocker and does not gate active wavefront tests or compiles.
 
 ### August 25, 2026 Follow-up Attempt
 
 The unreachable legacy `TraceCausticPaths()` branch was removed from `GetDebugRenderColor()`.
-`DebugCaustics` already uses the dedicated `RayTracingCaustics.compute` `CSCausticsDebug` kernel
-when caustics are enabled, and is excluded from `UsesGeometryDebugShader()` otherwise. Removing
-the dead branch preserves the geometry diagnostic display semantics and their RNG sequence while
-excluding its full scatter/medium traversal path from `CSDebugMain`.
+At that time, `DebugCaustics` already used the dedicated `RayTracingCaustics.compute`
+`CSCausticsDebug` kernel when caustics were enabled and was excluded from
+`UsesGeometryDebugShader()` otherwise. The change removed the dead branch's full scatter/medium
+traversal path from `CSDebugMain` without intentionally changing geometry diagnostic semantics.
 
 The command-line precompiler now accepts `-rayTracingPrecompileVariant` for a single selected
 asset, allowing each fog/terrain combination to run in its own process. After `dotnet build
@@ -197,63 +164,59 @@ invalid for the attempted warm dispatch (`0 ms`). The precompiler log is
 ## Precompiler Commands
 
 Editor menus under `Tools > Ray Tracing > Precompile Compute Shader` provide one asset category
-at a time. Use individual final-color variants while iterating. The command-line equivalent is
-preferable for a cold timing because it keeps the editor usable.
+at a time. For the common dry path, choose `Main Final Color > Default (Fog Off, Terrain Off)`.
+Use one active asset and one variant per process while iterating; the tool dispatches that asset's
+registered kernels and records per-kernel timings. These commands are validation recipes, not new
+compile evidence from this documentation audit.
 
 ```sh
-# Default final-color only. Expected scale: about 3-4 minutes cold on the measured M3 Max.
+# Dry wavefront stages, terrain off. Preserves the existing shader cache.
 /Applications/Unity/Hub/Editor/6000.3.18f1/Unity.app/Contents/MacOS/Unity \
   -batchmode -projectPath /Users/nic.foster/Projects/GPURayTracing \
   -executeMethod RayTracingShaderPrecompiler.PrecompileFromCommandLine \
-  -rayTracingColdShaderPrecompile -rayTracingPrecompileAsset RayTracingCompute \
-  -logFile /tmp/raytracing-main.log
-
-# Debug asset only. Run after a debug-code change; currently expected to expose the timeout.
-/Applications/Unity/Hub/Editor/6000.3.18f1/Unity.app/Contents/MacOS/Unity \
-  -batchmode -projectPath /Users/nic.foster/Projects/GPURayTracing \
-  -executeMethod RayTracingShaderPrecompiler.PrecompileFromCommandLine \
-   -rayTracingColdShaderPrecompile -rayTracingPrecompileAsset RayTracingDebug \
-   -logFile /tmp/raytracing-debug.log
-
-# One debug variant only. Repeat as separate Unity processes to observe progress and isolate errors.
-/Applications/Unity/Hub/Editor/6000.3.18f1/Unity.app/Contents/MacOS/Unity \
-  -batchmode -projectPath /Users/nic.foster/Projects/GPURayTracing \
-  -executeMethod RayTracingShaderPrecompiler.PrecompileFromCommandLine \
-  -rayTracingColdShaderPrecompile -rayTracingPrecompileAsset RayTracingDebug \
+  -rayTracingPrecompileAsset RayTracingWavefront \
   -rayTracingPrecompileVariant 'fog=0;terrain=0' \
-  -logFile /tmp/raytracing-debug-fog0-terrain0.log
+  -logFile /tmp/raytracing-wavefront-surface.log
 
-# Adaptive trace only. Do not combine with other assets while debugging it.
+# Water wavefront stages, terrain off. Run separately when that wrapper needs validation.
 /Applications/Unity/Hub/Editor/6000.3.18f1/Unity.app/Contents/MacOS/Unity \
   -batchmode -projectPath /Users/nic.foster/Projects/GPURayTracing \
   -executeMethod RayTracingShaderPrecompiler.PrecompileFromCommandLine \
-  -rayTracingColdShaderPrecompile -rayTracingPrecompileAsset RayTracingAdaptiveScheduler \
-  -logFile /tmp/raytracing-adaptive-trace.log
+  -rayTracingPrecompileAsset RayTracingWavefrontWater \
+  -rayTracingPrecompileVariant 'fog=0;terrain=0' \
+  -logFile /tmp/raytracing-wavefront-water.log
+
+# Fog wavefront stages, terrain off. Fog is fixed on by this wrapper.
+/Applications/Unity/Hub/Editor/6000.3.18f1/Unity.app/Contents/MacOS/Unity \
+  -batchmode -projectPath /Users/nic.foster/Projects/GPURayTracing \
+  -executeMethod RayTracingShaderPrecompiler.PrecompileFromCommandLine \
+  -rayTracingPrecompileAsset RayTracingWavefrontFog \
+  -rayTracingPrecompileVariant 'fog=1;terrain=0' \
+  -logFile /tmp/raytracing-wavefront-fog.log
+
+# Adaptive scheduler only; adaptive tracing belongs to the selected wavefront asset.
+/Applications/Unity/Hub/Editor/6000.3.18f1/Unity.app/Contents/MacOS/Unity \
+  -batchmode -projectPath /Users/nic.foster/Projects/GPURayTracing \
+  -executeMethod RayTracingShaderPrecompiler.PrecompileFromCommandLine \
+  -rayTracingPrecompileAsset RayTracingAdaptiveScheduler \
+  -logFile /tmp/raytracing-adaptive-scheduler.log
 ```
+
+Use `RayTracingWavefrontWaterFog` with `fog=1;terrain=0` for water+fog. The opt-in dry wrappers
+`RayTracingWavefrontRis` and `RayTracingWavefrontPathGuided` accept `fog=0;terrain=0`.
+Set `terrain=1` for a terrain-enabled variant. Other accepted basenames include
+`RayTracingFeatures`, `RayTracingFocus`, `RayTracingSpatialRisPrepass`, `RayTracingUtility`, and
+`RayTracingRegressionProbe`. Add `-rayTracingColdShaderPrecompile` only when a deliberate cold
+measurement is needed; it clears the generated shader cache. Do not use
+`-rayTracingPrecompileAllVariants` during normal iteration. Inspect each log and CSV before
+starting another expensive compile, and do not use `-nographics` for GPU dispatch.
 
 When another Unity editor already has the project open, batchmode may be unable to acquire the
 project lock. Close that editor before a command-line compile. Do not use `-quit` for Test Runner
 jobs, but it is appropriate for the precompiler entry point because that method calls
 `EditorApplication.Exit` itself.
 
-## Remaining Work
-
-1. Refactor `GetDebugRenderColor()` in `RayTracingShared.hlsl` so `RayTracingDebug.compute` no
-   longer times out. Preserve displayed debug values and random sequence semantics. The likely
-   direction is separate small diagnostic kernels or a smaller set of helper paths rather than
-   one all-purpose debug function that carries direct lighting and full scattering variants.
-2. Compile only `RayTracingDebug` after each focused change. Stop after one cold attempt; inspect
-   the log and CSV before changing more code.
-3. Once the debug asset compiles, collect one cold timing for each asset class, one process at a
-   time: debug, adaptive trace, features, focus, scheduler, utility, regression probe. Do not
-   clear the shader cache between warm measurements.
-4. Run focused GPU parity and image regression tests only after the debug asset compiles. No full
-   test or all-assets precompile was completed in this session after the split.
-5. Consider fog-specific decomposition only after final-color and debug timing is understood.
-   Fog accounts for roughly 55% of the current four-variant final-color cold total. Do not return
-   fog or terrain to runtime branches; that previously caused a much larger common-kernel compile.
-
-## Verification State
+## Historical Verification
 
 Completed after the split:
 
@@ -264,5 +227,6 @@ dotnet build GPURayTracing.sln --no-restore    passed, 0 warnings and 0 errors
 The full cold all-assets timing command was intentionally stopped by the tool timeout after the
 four final-color variants completed. It did not validate later assets. The targeted debug command
 also exceeded the external tool timeout after Unity's own two 10-minute compiler-task timeouts.
-Do not describe the shader split as GPU regression-tested until the targeted compile and focused
-tests listed above complete.
+Those runs did not establish GPU regression parity. They also do not describe the validation
+state of the current wavefront pipeline. Current defects and required validation are tracked in
+document 27; historical compile success alone is not evidence that a sampling repair is correct.

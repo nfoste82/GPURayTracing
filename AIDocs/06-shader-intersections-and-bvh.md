@@ -1,6 +1,6 @@
 # Shader Intersections And BVH
 
-This document covers intersection flow and acceleration structures in `Assets/Scripts/RayTracingCompute.compute`.
+This document covers intersection flow and acceleration structures in `Assets/Scripts/RayTracingShared.hlsl`, used by the active `Assets/Resources/RayTracingWavefront*.compute` stages and companion feature, focus, regression, and caustics assets. The former monolithic `RayTracingCompute.compute` renderer is retired.
 
 ## Intersection Flow
 

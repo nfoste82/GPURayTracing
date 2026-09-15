@@ -1,6 +1,44 @@
 #pragma kernel CSRegressionProbe
+#pragma kernel CSGgxRegressionProbe
 #define WATER_ENABLED 1
 #include "../Scripts/RayTracingShared.hlsl"
+
+int _GgxProbeSampleCount;
+int _GgxProbeSample;
+float _GgxProbeSmoothness;
+float _GgxProbeMetallic;
+float3 _GgxProbeView;
+float3 _GgxProbeLight;
+
+[numthreads(64,1,1)]
+void CSGgxRegressionProbe(uint3 id : SV_DispatchThreadID)
+{
+    // The precompiler's default zero count must not touch its small dummy buffer.
+    if (id.x >= (uint)max(0, _GgxProbeSampleCount)) return;
+
+    RayHit hit = CreateRayHit();
+    hit.normal = float3(0.0f, 1.0f, 0.0f);
+    hit.geometricNormal = hit.normal;
+    hit.color = float3(0.8f, 0.4f, 0.2f);
+    hit.smoothness = _GgxProbeSmoothness;
+    hit.metallic = _GgxProbeMetallic;
+    Ray ray = CreateRay(float3(0.0f, 0.0f, 0.0f), -_GgxProbeView);
+    if (_GgxProbeSample != 0)
+    {
+        RngState rngState = CreateRngState(uint2(81u, 72u), id.x);
+        rngState.dimension = 10000u;
+        BrdfSample sample = SampleMaterialBrdf(ray, hit, false, rngState);
+        RegressionResults[2u * id.x] = float4(sample.direction, sample.pdf);
+        RegressionResults[2u * id.x + 1u] = float4(sample.weight, 1.0f);
+    }
+    else
+    {
+        float pdf;
+        float3 brdf = EvaluateMaterialBrdf(ray, hit, _GgxProbeLight, pdf);
+        RegressionResults[2u * id.x] = float4(brdf, pdf);
+        RegressionResults[2u * id.x + 1u] = float4(_GgxProbeLight, 1.0f);
+    }
+}
 
 [numthreads(1,1,1)]
 void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
@@ -162,7 +200,7 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     float obliqueNormalDotHalf = dot(normal, obliqueHalf);
     float obliqueViewDotHalf = dot(obliqueView, obliqueHalf);
     float obliqueAlpha = GetGgxAlpha(metalBrdfHit);
-    float obliqueDistribution = GgxDistribution(obliqueNormalDotHalf, obliqueAlpha);
+    float obliqueDistribution = GgxDistribution(normal, obliqueHalf, obliqueAlpha);
     float expectedVisiblePdf = obliqueDistribution * GgxSmithG1(obliqueNormalDotView, obliqueAlpha)
         * obliqueViewDotHalf / obliqueNormalDotView
         / (4.0f * dot(obliqueLight, obliqueHalf));

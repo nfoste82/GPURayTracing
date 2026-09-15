@@ -2929,11 +2929,14 @@ bool IsNearDeltaSpecular(RayHit hit)
     return GetBrdfSpecularProbability(hit) >= 1.0f && GetMetallicRoughness(hit).y <= 0.0301f;
 }
 
-float GgxDistribution(float normalDotHalf, float alpha)
+float GgxDistribution(float3 normal, float3 halfDirection, float alpha)
 {
-    float alphaSquared = alpha * alpha;
-    float denominator = normalDotHalf * normalDotHalf * (alphaSquared - 1.0f) + 1.0f;
-    return alphaSquared / max(PI * denominator * denominator, 1e-6f);
+    // Cross-product sin^2 avoids cancellation near N.H=1. The roughness floor keeps alpha positive.
+    float3 normalCrossHalf = cross(normal, halfDirection);
+    float alphaCosine = alpha * saturate(dot(normal, halfDirection));
+    float denominator = dot(normalCrossHalf, normalCrossHalf) + alphaCosine * alphaCosine;
+    float ratio = alpha / denominator;
+    return ratio * ratio * (1.0f / PI);
 }
 
 float GgxSmithG1(float normalDotDirection, float alpha)
@@ -3059,7 +3062,7 @@ float3 EvaluateMaterialBrdf(Ray ray, RayHit hit, float3 lightDirection, out floa
     float3 albedo = GetAlbedo(hit);
     float3 fresnel = FresnelSchlick(viewDotHalf, GetSurfaceF0(hit, albedo));
     float alpha = GetGgxAlpha(hit);
-    float distribution = GgxDistribution(normalDotHalf, alpha);
+    float distribution = GgxDistribution(normal, halfDirection, alpha);
     float geometry = GgxSmithG1(normalDotView, alpha) * GgxSmithG1(normalDotLight, alpha);
     float3 specular = fresnel * distribution * geometry /
         max(4.0f * normalDotView * normalDotLight, 1e-6f);

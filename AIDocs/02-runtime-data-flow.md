@@ -23,8 +23,8 @@ It prefers a `GameManager` in the parent hierarchy. If the object is a scene roo
 - If it has `RayMaterial` and `SphereCollider`, it becomes a ray-traced sphere in `_spheres` and `_sphereObjects`.
 - If it has `RayMaterial` and `MeshFilter`, but no `SphereCollider`, it becomes a triangle mesh in `_triangles`, `_meshInfos`, `_bvhNodes`, and `_meshObjects`.
 - If it has `RayLight` and `SphereCollider`, it becomes an emissive sphere light in `_lights` and `_lightObjects`, even when `RayObjectPreview` has added a Scene-view `MeshFilter`.
-- If it has `RayLight` and `MeshFilter`, but no `SphereCollider`, it becomes an emissive mesh light: its triangles are uploaded to `_triangles`, and each triangle also contributes an entry to `_lights` for direct-light sampling.
-- `RayDirectionalLight` registers directly with `GameManager` rather than through `PathTracingObject`. It uses the same parent-first, sole-manager fallback and parent-change handling. It adds an analytic directional entry to `_lights`, with transform-forward direction, HDR radiance, and angular cone radius; it has no scene geometry or BVH entry.
+- If it has `RayLight` and `MeshFilter`, but no `SphereCollider`, it becomes an emissive mesh light: its triangles are uploaded to `_triangles`, and one mesh-level entry in `_lights` references their range and area CDF for direct-light sampling.
+- `RayDirectionalLight` registers directly with `GameManager` rather than through `PathTracingObject`. It uses the same parent-first, sole-manager fallback and parent-change handling. Production upload adds two virtual `SunTriangle` light entries oriented from the transform-forward direction. They are sampling/photon emitters, not intersectable scene geometry; the analytic directional shader branch is not this upload path.
 
 Sphere objects and sphere lights require a `SphereCollider`. The collider center is transformed to world space for the ray-traced sphere position, and the collider radius is scaled by the largest absolute axis of the object's lossy scale for the ray-traced sphere radius. Mesh objects and mesh lights require a `MeshFilter`; the shared mesh triangles are transformed to world space, sorted into a per-mesh BVH, and uploaded with mesh and BVH node metadata.
 
@@ -44,20 +44,22 @@ Each render callback:
 4. Calls `UpdateTriangles()` to refresh registered mesh triangle data only if a cached mesh transform or material value changed.
 5. Calls `UpdateSceneBvhs()`, which delegates the general top-level and shadow-only structures to `SceneBvhManager`. They rebuild/upload only when object bounds or membership changed, or when their runtime threshold changed; static scenes retain the existing GPU trees.
 6. Computes center autofocus only when its inputs changed: camera pose, ray-traced scene data, water state, or `numberOfPasses`. Stable progressive-accumulation frames reuse the last target distance while retaining the existing smoothing behavior. Autofocus ignores ray-traced objects whose opacity is at or below `autoFocusTransparentOpacityThreshold` so focus can pass through mostly transparent glass. The search starts from a `numberOfPasses`-derived near distance (`12 - min(8, numberOfPasses * 1.75)`) rather than a fixed near plane, and very close hits (under `1.0`) are remapped by an additional close-focus modifier. With `enableClickToFocus`, a left click queues a one-thread `CSFocusQuery` dispatch against the production GPU intersection path. Unlike center autofocus, click-to-focus selects the first surface regardless of opacity, so glass can be selected directly. An asynchronous one-element readback returns the world-space hit on a later frame; successful selection disables center autofocus, converts the hit to camera-forward focal-plane distance, and resets accumulation. When `trackClickedFocusPoint` is enabled, the world-space hit is retained and its camera-forward focus distance is updated as the camera moves. If the point projects outside the camera viewport or behind the camera, the effective aperture radius temporarily becomes zero without changing the configured aperture mode; depth of field resumes when the point returns to the frustum. Tracking has no effect while `enableClickToFocus` is disabled.
-7. Selects accumulation policy. When temporal denoising is enabled and the camera changed beyond its temporal motion thresholds since the prior rendered frame, bounded temporal accumulation is used. Otherwise, final-color progressive accumulation can continue when enabled. The adaptive-sampling toggle remains as an experimental extension point, but no adaptive policy currently changes the uniform renderer. Temporal history remains updated while the still-image path is presented, ready for renewed camera movement. Progressive accumulation resets when the render size, camera matrices, focus distance, quality settings, random-noise setting, skybox texture/tint, sphere/light data, mesh object transforms/materials, or relevant object counts change. Debug render modes and `enableFrameAccumulation == false` disable progressive accumulation.
+7. Selects accumulation policy. When temporal denoising is enabled and the camera changed beyond its temporal motion thresholds since the prior rendered frame, bounded temporal accumulation is used. Otherwise, final-color progressive accumulation can continue when enabled. When `enableAdaptiveSampling` and `ShouldUseFrameAccumulation()` are both true, the fixed-8x8 scheduler allocates sample layers for wavefront generation; `CSWavefrontResolveAdaptive` updates per-pixel sample counts, HDR means, and Welford M2. Uniform sampling remains the fallback when adaptive eligibility is false. Temporal history remains updated while the still-image path is presented, ready for renewed camera movement. Progressive accumulation resets when the render size, camera matrices, focus distance, quality settings, random-noise setting, skybox texture/tint, sphere/light data, mesh object transforms/materials, or relevant object counts change. Debug render modes and `enableFrameAccumulation == false` disable progressive accumulation.
 8. Selects the active wavefront asset and its `CSWavefrontPresent` kernel.
 9. Calls `SetShaderParameters()` for each wavefront stage.
 10. When caustics and final-color frame accumulation are enabled, clears and rebuilds an independent fixed-size photon batch and spatial grid. Relevant scene changes also rebuild compact light/refractor and mesh-target CDF buffers; photon threads binary-search these distributions instead of scanning all scene candidates. Stable frames advance a caustic-only sequence index without invalidating HDR accumulation; relevant scene/settings changes reset both sequences. Without accumulation, the current batch remains fixed.
 11. Dispatches beauty through `UpdateTextureFromCompute()`, then runs the separate five-UAV `CSFeatures` kernel when spatial or temporal denoising needs stable primary features. This split keeps the main renderer and temporal kernels within Metal's eight-UAV limit.
 12. Increments `AccumulatedFrameCount` when accumulation is active.
-13. Marks the active debug/fog/terrain shader variant as warmed and clears the variant-warmup flag.
+13. Marks the active asset-family/fog/terrain shader variant as warmed and clears the variant-warmup flag.
 14. In single-frame mode, keeps dispatching at the reduced single-frame presentation rate. Final-color accumulation progressively refines an unchanged view and resets when the camera or scene changes.
 
 An on-demand wavefront-variant compile also happens in single-frame mode because render dispatch remains active.
 
+Adaptive scheduling and opt-in temporal/spatial RIS are integrated, not pending wavefront migrations. RIS reuse selects `RayTracingWavefrontRis` only for eligible one-pass, non-adaptive final-color rendering without water, fog, or unsupported dynamic state; spatial reuse also dispatches its prepass. Integration and existing smoke coverage do not establish estimator or image parity. See [Renderer Sampling Audit And Repair Plan](27-renderer-sampling-audit-and-repair-plan.md) for unresolved sampling, queue, history, and diagnostic findings.
+
 ### Shader Variant Warmup Deferral
 
-Before dispatch, `RenderImage()` computes a shader variant key from the selected renderer asset kind (final color, geometry diagnostics, or dedicated caustics), active fog state, and active terrain state. If that combination has not been compiled yet, the first dispatch would compile synchronously and freeze the main thread. On detection, `RenderImage()` sets `_pendingVariantWarmup`, re-blits the previous `_outputTexture`, and returns without the heavy dispatch. That extra frame lets `GameManager.OnGUI()` paint a centered "Compiling shader variant" notice; the next frame runs the stalling dispatch with the notice already on screen, then marks the combination warmed. See `10-benchmarking-and-performance.md` and `22-shader-compile-splitting-handoff.md`.
+Before dispatch, `RenderImage()` computes a shader variant key from the selected wavefront asset family (surface, water, fog, water+fog, RIS, or path-guided) or dedicated caustics diagnostics, plus active fog and terrain state. Geometry diagnostics use wavefront stages rather than the retired debug asset. If that combination has not been compiled yet, the first dispatch would compile synchronously and freeze the main thread. On detection, `RenderImage()` sets `_pendingVariantWarmup`, re-blits the previous presentation/output texture, and returns without the heavy dispatch. That extra frame lets `GameManager.OnGUI()` paint a centered "Compiling shader variant" notice; the next frame runs the stalling dispatch with the notice already on screen, then marks the combination warmed. See `10-benchmarking-and-performance.md` and `22-shader-compile-splitting-handoff.md`.
 
 After dispatch, it always calls:
 
@@ -69,20 +71,11 @@ Graphics.Blit(_outputTexture, dest);
 
 `_buffersNeedRebuilding` is set when objects register or unregister. `Update()` calls `RebuildBuffers()` when this flag is true.
 
-`RebuildBuffers()` releases and recreates the sphere buffer using stride `56`, matching the HLSL `Sphere` struct layout:
+`RebuildBuffers()` releases and recreates the sphere buffer using stride `92`, matching the HLSL `Sphere` struct and `Assets/Scripts/Mesh/Sphere.cs`. Besides position, color, emission, radius, smoothness, opacity, refraction, and material type, it carries specular/transmission controls and albedo/normal/parallax texture settings. Treat those code layouts as the field-order authority.
 
-- `float3 position`
-- `float3 color`
-- `float3 emission`
-- `float radius`
-- `float smoothness`
-- `float opacity`
-- `float refraction`
-- `int materialType`
+The separate light buffer uses stride `88`. Its `Light` layout stores position, emission, two triangle edges, radius, area, normal, type, and optional mesh-light triangle range/total area. Sphere lights and virtual sun triangles leave mesh fields unused. An emissive mesh contributes one global light record whose triangle range indexes a parallel area CDF. Production directional lights store virtual triangle geometry; only the analytic directional shader convention interprets `position` as travel direction and `radius` as angular radius.
 
-The separate light buffer uses stride `88`. Its `Light` layout stores position, emission, two triangle edges, radius, area, normal, type, and optional mesh-light triangle range/total area. Sphere lights and directional lights leave mesh fields unused. An emissive mesh contributes one global light record whose triangle range indexes a parallel area CDF; directional lights store travel direction in `position` and angular radius in `radius`.
-
-`RebuildBuffers()` also releases and recreates triangle, mesh-info, per-mesh BVH-node, and top-level BVH-node buffers. The triangle buffer uses stride `260`, matching the HLSL `MeshTriangle` struct layout. In addition to positions, geometric and interpolated normals, UVs, and the established material data, each triangle stores three imported tangents, a continuous metallic value, independent albedo/metallic-roughness/normal texture indices, normal-map strength, UV scale/rotation, the smooth-normal flag, and its emissive light identity.
+`RebuildBuffers()` also releases and recreates triangle, mesh-info, per-mesh BVH-node, and top-level BVH-node buffers. The triangle buffer uses stride `268`, matching the HLSL `MeshTriangle` struct layout. In addition to positions, geometric and interpolated normals, UVs, and the established material data, each triangle stores three imported tangents, a continuous metallic value, independent albedo/metallic-roughness/normal texture indices, normal-map strength, UV scale/rotation, the smooth-normal flag, and its emissive light identity.
 
 - `float3 vertex0`
 - `float3 vertex1`
@@ -130,7 +123,7 @@ On `Start()`, `GameManager` ensures that the generic benchmark runner and live p
 - `_CameraInverseProjection`
 - `_SkyboxLight`
 - `_Seed`
-- `_SobolDirectionNumbers`, `_UseOwenScrambledSobol`, and `_SobolDimensionLimit`
+- `_SobolDirectionNumbers` and `_SobolDimensionLimit`; Sobol is active through that limit, with hash fallback afterward.
 - `_SampleOffset`
 - `_NumberOfPasses`
 - `_NumBounces`
@@ -156,11 +149,11 @@ On `Start()`, `GameManager` ensures that the generic benchmark runner and live p
 - `_TopLevelBvhNodes`
 - `_ShadowBvhNodes`
 
-`_Seed` is uploaded as an integer. When `randomNoise` is enabled, C# uploads a new random seed (`Random.Range(1, int.MaxValue)`) each rendered frame. When `randomNoise` is disabled, C# uploads the fixed literal value `1` every frame for stable deterministic sampling.
+`_Seed` is uploaded as an integer. When `randomNoise` is enabled, shader parameter binding draws a random seed (`Random.Range(1, int.MaxValue)`). Otherwise it uses `samplingSeed` or the capture override, clamped to at least `1`. Because wavefront stages bind parameters separately, this is not a guarantee of one shared random seed per frame; see document 27 for the stage-seeding audit finding.
 
 When frame accumulation is active, `_SampleOffset` advances by `AccumulatedFrameCount * numberOfPasses` so deterministic sampling still generates new samples across accumulated frames. `_AccumulatedFrameCount` tells the shader how many previous HDR final-color frames are stored in `AccumulationResult`. Accumulation is applied before exposure/tone mapping, and debug render modes are not accumulated.
 
-`SetShaderParameters()` binds common scene values to the selected compute asset. Final color and geometry diagnostics are separate assets; the debug asset defines `DEBUG_RENDER` locally rather than switching a keyword on the final-color asset. Fog is enabled only when the registered volume is active, while TerrainManager independently toggles `TERRAIN_ENABLED` when terrain resources are available. Photon caustics remain runtime-controlled through `_CausticsEnabled`; CPU photon-map allocation and dispatch remain gated by the caustics setting. See `22-shader-compile-splitting-handoff.md` for current split-asset limitations.
+`SetShaderParameters()` binds common scene values to each selected stage's compute asset. Final color and geometry diagnostics share the active wavefront pipeline. Water and fog select dedicated wavefront wrappers, while TerrainManager independently toggles `TERRAIN_ENABLED` when terrain resources are available. Camera-side caustics gathering uses `RayTracingCaustics.compute` and a separate composite pass; photon allocation and dispatch remain gated by the caustics setting. See `22-shader-compile-splitting-handoff.md` for asset ownership and historical compile evidence.
 
 `SetShaderParameters()` also logs a one-time warning when `lightSamplingStrategy == ImportanceSampled` and the active light count exceeds `MaxImportanceLights` (`128`), since lights beyond that count are dropped from importance weighting in the shader. The C# `MaxImportanceLights` constant must stay in sync with the shader's `MaxImportanceLights`.
 

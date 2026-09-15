@@ -1,6 +1,6 @@
 # Compute Shader Renderer
 
-The renderer lives in `Assets/Resources/RayTracingWavefront.compute`, with shared declarations and helpers in `Assets/Scripts/RayTracingShared.hlsl`. Its queue stages use small fixed thread groups and GPU-generated indirect dispatches. Caustics generation and gather-only debugging are isolated in `Assets/Resources/RayTracingCaustics.compute`; both assets consume the shared scene/intersection/material code.
+The active renderer lives in `Assets/Resources/RayTracingWavefront.compute` and its feature wrappers, with shared declarations and helpers in `Assets/Scripts/RayTracingShared.hlsl`. `WavefrontPathTracingManager` dispatches its queue stages using small fixed thread groups and GPU-generated indirect dispatches; legacy `TracePath()`/`CSMain` do not own runtime rendering. Caustics generation and gather-only debugging are isolated in `Assets/Resources/RayTracingCaustics.compute`; both assets consume the shared scene/intersection/material code. See `26-wavefront-renderer-handoff.md` for stage ownership and `27-renderer-sampling-audit-and-repair-plan.md` for the authoritative correctness repair plan.
 
 ## GPU Inputs
 
@@ -105,7 +105,7 @@ The scene also uploads a top-level BVH over ray-traced spheres, emissive light s
 
 `RayHit` stores hit position, object position/radius, normal, emission, color, distance, smoothness, opacity, transparent travel distance, refraction index, material type, mesh index, and sphere object index.
 
-`MediumIdentity` distinguishes air, sphere, mesh, and water media by both type and object identity, and stores IOR/opacity/absorption color. `TracePath()` carries a fixed-capacity stack with implicit air, initializes water for rays that start underwater, and updates it only for transmitted boundary crossings. Matching exits reveal the parent medium; overflow and unmatched exits set explicit stack status bits. Every traveled segment receives absorption from the active medium before its hit is shaded. Refraction and path-selection Fresnel use the current medium as the source and the entered medium or revealed parent as the target, including nested water/glass transitions.
+`MediumIdentity` distinguishes air, sphere, mesh, and water media by both type and object identity, and stores IOR/opacity/absorption color. `WavefrontPathState` carries a fixed-capacity stack with implicit air, initialized with containing water and translucent spheres, and updates it only for transmitted boundary crossings. Matching exits reveal the parent medium; overflow and unmatched exits set explicit stack status bits. Every traveled segment receives absorption from the active medium before its hit is shaded. Refraction and path-selection Fresnel use the current medium as the source and the entered medium or revealed parent as the target, including nested water/glass transitions.
 
 ## Ray Generation
 
@@ -139,9 +139,9 @@ It samples a configurable circular or polygonal aperture in camera right/up spac
 
 ## Core Path Tracing Loop
 
-`TracePath()` is the main iterative renderer.
+The active loop is split across wavefront intersection, classification, direct-light/shadow, scatter, and resolve kernels. The host repeats queue stages up to `_NumBounces` times and retires survivors; this is not yet a correct per-path depth gate when mesh scattering consumes multiple bounces in one iteration.
 
-It maintains:
+Persistent `WavefrontPathState` and each bounce's `RayHit` provide:
 
 - `radiance`: accumulated light returned to the camera.
 - `throughput`: accumulated material/tint/energy carried by the current path.
@@ -151,11 +151,11 @@ It maintains:
 
 Per bounce:
 
-1. Trace the ray with `GetNearestIntersection()` and sample a fog free-flight distance over the bounded ray segment. A fog event before the surface receives shadowed direct lighting through an isotropic phase function, scatters in a uniform direction, consumes the bounce, and continues without shading the surface.
+1. Trace the ray with `GetNearestIntersection()` and sample a fog free-flight distance over the bounded ray segment. A fog event before the surface receives shadowed direct lighting through an isotropic phase function. Single scattering terminates there; multiple scattering samples a uniform direction and continues without shading the surface.
 2. Attenuate `throughput` for the actual finite distance traveled through the stack's active medium. Water segments stop at the nearest wavy-top, side, or bottom boundary; air is neutral and finite glass sky misses do not use infinite distance.
 3. If it hits sky, add `throughput * skyColor` and stop.
-4. If it hits a light, add `throughput * emission` and stop.
-5. Sample direct light if the path throughput is above `MinDirectLightThroughput`. Eligible primary opaque events use the local RIS reservoir over the configured candidate set and evaluate visibility for the selected candidate; unsupported events and later bounces retain the ordinary direct-light path. `EvaluateMaterialBrdf()` evaluates the same Lambert/GGX material model used to sample opaque continuation rays. Explicit-light and opaque BRDF samples use the renderer's reservoir-aware/power-heuristic MIS policy when both can discover the same emitter.
+4. If it hits a light, add `throughput * emission` and stop. Sky and emitter classification apply the current continuation MIS weights where enabled.
+5. Sample direct light if the path throughput is above `MinDirectLightThroughput`. Eligible primary opaque `ImportanceSampled` events use the local RIS reservoir over the configured candidate set and evaluate visibility for the selected candidate; unsupported events and later bounces retain the ordinary direct-light path. `EvaluateMaterialBrdf()` shares Lambert/GGX evaluation with opaque continuation sampling. Local RIS is integrated, but the GGX PDF and explicit/continuation MIS pairing are not globally validated; see document 27 rather than treating the current weights as a correctness guarantee.
 6. Add direct contribution: `throughput * directLight`.
 7. Create the next ray using the hit material type.
 8. Update `throughput` with the scatter attenuation.
@@ -168,7 +168,7 @@ Material scattering currently supports:
 
 - `Diffuse`: mixes cosine-weighted Lambert and GGX continuation samples and weights throughput by `brdf * abs(N dot L) / pdf`.
 - `Metal`: samples a GGX reflection lobe using albedo as Fresnel F0 and the same evaluation used for direct highlights.
-- `Glass`: uses IOR-derived Schlick Fresnel reflectance to choose reflection versus approximate transmission independently of opacity. Water retains its separate opacity-scaled surface behavior. Fresnel and Snell calculations use source/target IORs from the path medium stack. Transmitted paths are filtered by distance-based absorption. For spheres, the transmitted path refracts into the sphere, checks the bounded internal segment before the sphere exit for any closer scene object, and only refracts back out when no interior/interpenetrating hit is found. For mesh triangles, it uses an approximate closed-mesh entry/exit path that refracts into the mesh, finds the nearest exit triangle with the same `meshIndex`, then checks the top-level scene traversal for any closer object inside that bounded internal segment. If an interior object is found, tracing continues inside the transparent object; otherwise the ray refracts back out and continues from the exit point.
+- `Glass`: uses the material's `Specular` minimum plus IOR-derived Schlick Fresnel reflectance, with `Transmission` controlling the remaining transmission chance independently of opacity. Water retains its separate opacity-scaled surface behavior. Fresnel and Snell calculations use source/target IORs from the path medium stack. Transmitted paths are filtered by distance-based absorption. Spheres use explicit entry and exit path events: normal scene traversal finds enclosed objects or the rear boundary, which independently selects reflection or transmission. There is no sphere entry-to-exit shortcut. Mesh triangles retain an approximate closed-mesh entry/exit helper that searches same-mesh exits, checks for closer interior objects, and handles bounded internal reflection.
 
 Note: the glass/refraction path is selected by `IsGlassMaterial(hit)`, which returns true when `materialType == Glass` **or** when `hit.opacity < 1.0`. A `Diffuse` or `Metal` object with opacity below `1` therefore takes the glass transmission/Fresnel path regardless of its declared material type.
 

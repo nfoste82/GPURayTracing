@@ -19,9 +19,12 @@ Full disclosure that LLMs were used to assist during the later work on this proj
 * glTF/GLB import support, including automatic conversion of base-color, metallic-roughness, normal, and transmission/IOR material data into ray-traced materials.
 
 ## Experimental/Incomplete features:
+* Adaptive sampling
 * Temporal denoising
 * Spatial and temporal RIS
 * Support for Unity terrains with multi-texture splatting
+
+These paths are integrated, but correctness and image-quality validation remain incomplete. See the [renderer sampling audit and repair plan](AIDocs/27-renderer-sampling-audit-and-repair-plan.md) for unresolved defects and validation gates; feature availability does not mean those findings are fixed.
 
 ## Missing, future considerations:
 * Spectral refractions (different wavelengths of light refract differently), current lighting system does not handle wavelengths
@@ -73,11 +76,11 @@ Note: These video were rendered offline, at around 45-75 seconds per frame.
 1. Install Unity `6000.3.18f1` through Unity Hub.
 2. Open this repository as a Unity project and wait for package import to complete.
 3. Run `Tools > Ray Tracing > Generate Getting Started Scene`, then open `Assets/Scenes/Generated/GettingStarted.unity`.
-4. Run `Tools > Ray Tracing > Precompile Compute Shader` before entering Play mode. See the first-run note below before continuing.
+4. Run `Tools > Ray Tracing > Precompile Compute Shader > Main Final Color > Default (Fog Off, Terrain Off)` before entering Play mode. See the first-run note below before continuing.
 5. Enter Play mode and view the **Game** tab. The Getting Started scene opens the **Ray Tracing Controls** panel, which keeps renderer settings available while you inspect other objects.
 
 > [!WARNING]
-> **The first compute-shader compilation can take several minutes.** Unity may appear to be frozen or show a spinning cursor while it compiles synchronously. Historical measurements on an Apple M3 Max range from 3-5 minutes for a cold compile, with a recent enlarged shader superset reaching approximately 12 minutes before feature variants were isolated. `Tools > Ray Tracing > Precompile Compute Shader` warms the eight common debug/fog/terrain combinations; subsequent runs are normally much faster unless the shader or its variants change.
+> **The first compute-shader compilation can take several minutes.** Unity may appear frozen while it compiles shaders. When changing settings or scenes you may run into more shader compilation for those features.
 
 The project has been tested on macOS. It requires a Unity editor session with compute-shader support; GPU rendering and GPU tests cannot run with a Null graphics device such as `-nographics`.
 

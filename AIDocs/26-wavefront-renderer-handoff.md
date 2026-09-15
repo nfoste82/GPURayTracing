@@ -2,13 +2,21 @@
 
 ## Status
 
-**Current phase: queue-driven surface, water, fog, and water+fog renderers are active for final
-color. Surface, water, fog, water+fog, and dry-terrain routes are compiled; the user manually
-smoke-tested water, fog, water+fog, and terrain. Fog and terrain image parity remain pending.
-Adaptive scheduling uses the existing fixed-8x8 scheduler with layered wavefront generation and resolve.
-Path guiding and temporal/spatial RIS use opt-in dry wavefront wrappers. Basic first-hit normals, albedo, emission, hit-distance, BVH,
-terrain-cell, and glass-scatter diagnostics are available from stored wavefront hits; direct-light,
-throughput, and bounce-count diagnostics use opt-in wavefront buffers.**
+Reviewed against current code on 2026-09-15. Queue-driven surface, water, fog, and water+fog
+renderers are active for final color. Surface, water, fog, water+fog, and terrain have user-reported
+manual smoke coverage, not deterministic image parity. Dated compile evidence and its limits are
+recorded below. Adaptive scheduling uses the existing fixed-8x8 scheduler with layered wavefront
+generation and resolve. Path guiding and temporal/spatial RIS already use opt-in dry wavefront
+wrappers; their integration is not remaining migration work.
+
+Debug modes are wired, but `_WavefrontHits` is overwritten every bounce. Final presentation does
+not reliably show first-hit diagnostics and can suppress separately stored diagnostics on a terminal
+sky hit. Final-bounce MIS and per-path depth enforcement also remain unresolved.
+
+This document retains architecture and historical evidence, not an active migration sequence.
+[Renderer Sampling Audit And Repair Plan](27-renderer-sampling-audit-and-repair-plan.md) is the
+authoritative active sampling repair plan. The former ordered migration tasks and continuation
+prompt are superseded. No shader fixes or new validation runs are claimed by this review.
 
 The user explicitly chose not to preserve `CSMain` as a runtime fallback. Use Git history if old
 behavior must be consulted. Do not restore an old path merely as a fallback during this migration.
@@ -51,8 +59,9 @@ only current keyword variant.
 
 ## Implemented Pipeline
 
-There is one persistent `WavefrontPathState` per pixel. Queues contain indices rather than copying
-the full state and its expanded medium stack.
+There is one persistent `WavefrontPathState` per pixel/sample layer. Ordinary camera passes reuse
+the per-pixel slots; adaptive layers have distinct indices. Queues contain indices rather than
+copying the full state and its expanded medium stack.
 
 ```text
 CSWavefrontClearFrame
@@ -67,26 +76,32 @@ for each camera pass:
     CSWavefrontClearShadowQueue
     CSWavefrontDirectLight
     CSWavefrontTraceShadows
+    optionally record direct-light path-guide observations
     CSWavefrontResolveShadowWork
+    rebuild indirect args for the current path queue
     CSWavefrontScatter
     build indirect args for next queue
     CSWavefrontCopyNextQueue
     CSWavefrontPublishNextQueue
-  retire paths still active at the maximum bounce
+  retire paths still active after the host bounce loop
   resolve completed paths
+  optionally record terminal path-guide observations
 
+resolve adaptive layers in deterministic per-pixel sample order, when enabled
 CSWavefrontPresent
 ```
 
 The explicit counter buffer holds current, next, completed, and shadow-work counts. Queue stages
 use GPU-generated indirect arguments and `ComputeDispatch.DispatchIndirect`. Retirement after the
-fixed host-side bounce loop is intentional: it accounts for all camera paths at the former maximum
-bounce limit instead of silently dropping survivors.
+fixed host-side bounce loop accounts for surviving camera paths rather than silently dropping them.
+It does not prove correct terminal MIS or enforce each path's own consumed-bounce budget; see the
+open findings below.
 
 `WavefrontPathState` carries current ray, radiance, throughput, full `MediumStack`, semantic
 `RngState`, pixel/bounce identity, and the prior surface/PDF/direct-light/RIS/near-delta/soft-shadow
-fields needed for complementary sky and emitter MIS. `RayHit` is stored after intersection rather
-than recomputed.
+fields used for complementary sky and emitter MIS. Their presence does not establish that the MIS
+pairing is correct. `RayHit` is stored after every intersection and reused by the stages of that
+bounce; it is not a preserved primary-hit record.
 
 Current C# buffer strides must match the HLSL layouts:
 
@@ -129,7 +144,7 @@ materialization remain in the trace kernel to preserve the shared estimator's si
 `SampleSingleLight` call site while moving the expensive shadow-BVH code out of the direct-light
 kernel.
 
-The dry default targeted cold Metal compile passed on the M3 Max:
+The dry default targeted cold Metal compile recorded on 2026-09-09 passed on the M3 Max:
 
 ```text
 CSWavefrontDirectLight:       42 ms
@@ -171,7 +186,7 @@ loads, serializes, dispatches, or precompiles those assets. Adaptive sampling no
 active wavefront final-color shader; path guiding and RIS select their wavefront wrappers directly.
 Historical assets and measurements remain available in repository history.
 
-## Unsupported Or Bypassed
+## Coverage Limits
 
 - **Adaptive sampling:** uses the existing fixed-8x8 scheduler. Each admitted sample layer runs the
   queue pipeline, then wavefront resolve updates the persistent Welford state and HDR accumulation.
@@ -182,11 +197,12 @@ Historical assets and measurements remain available in repository history.
   and spatial-prepass resources. Local initial RIS remains active in every wavefront route.
 - **Path guiding:** available only through the opt-in dry `RayTracingWavefrontPathGuided` wrapper.
   It uses a separate per-pixel guide-state buffer while enabled, preserving the 352-byte path state.
-- `Normals`, `Albedo`, `Emission`, `HitDistance`, `AccelerationStructures`, `TerrainCells`, and
-  `GlassScatter` use first-hit wavefront state. `DirectLight` uses the stored first-bounce
-  next-event estimate; `Throughput` and `BounceCount` use state captured at path completion. The
-  direct-light and path-diagnostic buffers are allocated only while their modes are active; do not
-  add diagnostic fields to `WavefrontPathState` or revive the monolithic debug tracer.
+- `Normals`, `Albedo`, `Emission`, `HitDistance`, `AccelerationStructures`, and `TerrainCells`
+  read the final contents of `_WavefrontHits`, not reliably the first hit. `GlassScatter` has a
+  bounce-zero diagnostic record, `DirectLight` a first-bounce next-event estimate, and `Throughput`
+  and `BounceCount` completion records, but final presentation can mask these on a sky hit. These
+  are current correctness gaps, not validated first-hit modes. Dedicated diagnostic buffers are
+  opt-in; preserve that isolation and do not revive the monolithic debug tracer.
 - **Per-candidate shadow queues:** the queue is currently one work item per path. Direct-light
   candidate generation and individual light samples remain materialized inside the shadow stage.
 
@@ -212,7 +228,7 @@ estimator with fog shadow attenuation. Single scattering completes the path afte
 multiple scattering samples an isotropic continuation, resets surface MIS state, and requeues the
 path. The dry and water variants remain free of fog branches.
 
-The dry fog wrapper cold-compiled successfully on the M3 Max:
+The dry fog wrapper cold compile recorded on 2026-09-09 succeeded on the M3 Max:
 
 ```text
 CSWavefrontDirectLight: 34.099 s
@@ -220,9 +236,10 @@ CSWavefrontScatter:      9.745 s
 Total:                  46.974 s
 ```
 
-Log: `/tmp/raytracing-wavefront-fog-compile.log`. The water+fog wrapper reached its direct-light
-kernel (`91.359 s`) but was still compiling when the 120-second command timeout elapsed; do not
-claim that combined variant validated until it completes in a standalone Unity session.
+Log: `/tmp/raytracing-wavefront-fog-compile.log`. In that recorded attempt, the water+fog wrapper
+reached its direct-light kernel (`91.359 s`) but was still compiling when the 120-second command
+timeout elapsed. Later user-reported combined-water/fog smoke coverage is not a completed targeted
+cold-compile timing or deterministic image-parity result.
 
 ## Terrain Integration
 
@@ -232,7 +249,7 @@ masks, and buffers each time `WavefrontPathTracingManager` binds a queue-stage k
 the same terrain implementation available to the dry, water, fog, and water+fog wrappers without
 adding separate terrain asset-selection logic.
 
-The dry terrain variant cold-compiled successfully on the M3 Max:
+The dry terrain cold compile recorded on 2026-09-09 succeeded on the M3 Max:
 
 ```text
 CSWavefrontIntersect:    9.943 s
@@ -243,15 +260,17 @@ Total:                  77.339 s
 
 The compile completed all 13 wavefront kernels. Metal reported the existing terrain texture
 sampling integer-modulus performance warnings in `RayTracingShared.hlsl`; it reported no errors.
-Log: `/tmp/raytracing-wavefront-terrain-compile.log`. A structural regression test locks the
-keyword declaration and per-stage terrain binding. Run the generated Terrain scene manually and
-capture image parity before claiming visual terrain parity; then compile/test terrain-on water,
-fog, and water+fog variants as their combinations are needed.
+Log: `/tmp/raytracing-wavefront-terrain-compile.log`. A structural regression test covers the
+keyword declaration and per-stage terrain binding. Terrain has since been manually smoke-tested;
+deterministic terrain image parity and terrain-on water/fog/water+fog combination coverage remain
+unresolved.
 
 ## Compile Results
 
-All timings below are targeted cold Metal compiles of **only** `RayTracingWavefront`, default
-`fog=0;terrain=0`, on the Apple M3 Max. No legacy all-assets compile was run.
+The following historical timings were recorded on 2026-09-09 on the Apple M3 Max. The surface
+measurements target **only** `RayTracingWavefront`, default `fog=0;terrain=0`; the separately labeled
+water result targets its wrapper. No legacy all-assets compile was run. These earlier stage layouts
+and kernel counts are not new measurements of the current integrated wrappers.
 
 Before splitting the original shade stage:
 
@@ -304,7 +323,7 @@ Do not use `-rayTracingPrecompileAllVariants`; it selects unrelated assets and c
 
 ## Validation State
 
-Completed:
+Historical completion record (2026-09-09; subsequent manual coverage recorded through 2026-09-11):
 
 ```text
 dotnet build GPURayTracing.sln --no-restore
@@ -317,7 +336,7 @@ Manual visual smoke test
 passed for the user-tested material, texture, reflection, refraction, and caustic cases
 ```
 
-Still required:
+Unresolved validation gaps, not an ordered implementation plan:
 
 1. Run EditMode tests without `-nographics` so GPU probes execute.
 2. Recapture and review deterministic image-fixture baselines after the full-wavefront dispatch conversion.
@@ -330,56 +349,41 @@ Still required:
 6. Terrain manually smoke-tested; capture deterministic terrain image parity.
 7. Compile/test terrain-on water, fog, and water+fog variants as their combinations are needed.
 
-## Ordered Remaining Work
+Material/volume parity still includes opaque and transparent blockers, nested water/glass,
+underwater cameras, finite water exits, segment attenuation, bounded-fog probes, light shafts, and
+caustics. Adaptive integration still needs scheduler/heatmap, deterministic sample-count, and image
+validation. Dry experimental wrappers still need production-path correctness and quality evidence;
+having integrated them is not acceptance.
 
-### 1. Validate And Refine Shadow Work
+## Open Correctness Findings
 
-The path-level shadow queue has compiled successfully. Manually validate opaque and transparent
-blockers, environment, sphere/mesh/directional lights, initial RIS, primary soft shadows, water,
-and fog. Add queue-accounting and deterministic image fixtures before splitting one path's light
-candidates into separate shadow work items; retain a single inlined `SampleSingleLight` call site
-unless the estimator is deliberately decomposed.
+The 2026-09-15 code review identified the following unresolved behavior. Sampling repair priorities
+and acceptance gates belong to [document 27](27-renderer-sampling-audit-and-repair-plan.md), with RIS
+architecture/evidence retained in [document 23](23-initial-ris-direct-lighting-plan.md).
 
-### 2. Validate Water
+- **First-hit debug presentation is wrong:** `CSWavefrontIntersect` overwrites `_WavefrontHits`
+  on every active bounce, and `CSWavefrontPresent` reads that last hit for first-surface modes.
+  A secondary surface or terminal sky therefore replaces the intended primary receiver. Its
+  `DidHitSky` branch also precedes the stored direct-light, throughput, bounce-count, and
+  glass-scatter branches, masking valid dedicated records when the last hit is sky.
+- **Final-bounce MIS loses the competing technique:** explicit triangle/environment direct light
+  is still downweighted against a continuation at the last permitted event, but survivors are
+  retired after the host loop without classifying the newly scattered ray. The complementary
+  terminal contribution is unavailable. Completion accounting alone does not correct this bias.
+- **Per-path depth is not enforced by host iteration count:** scatter advances `path.bounce` by
+  `scatter.bouncesConsumed`; mesh transmission/internal reflection can consume multiple bounces
+  in one host iteration. Paths are nevertheless requeued without a corresponding exhausted-depth
+  gate, so the fixed host loop is not the per-path transport-depth limit.
+- **RIS metadata/PDF pairing is incomplete:** continuation-hit code uses ordinary environment/light
+  counts and all-light PDF reconstruction with a RIS branch multiplier, while its RIS flag records
+  successful selection rather than the attempted technique. Empty outcomes and non-default counts
+  are not generally complementary to the explicit RIS estimator.
+- **Reuse lifecycle and receiver domains remain unsafe:** missing empty temporal writes, per-bind
+  random seeds, omitted zero-target represented M, missing support/domain correction, source PDFs
+  used at different receivers, receiver-facing sphere disks, and unjittered temporal features are
+  detailed in document 23. Spatial precedence means both flags still select spatial-only, not a
+  combined spatiotemporal estimator.
 
-`RayTracingWavefrontWater.compute` now defines `WATER_ENABLED` before including the shared
-wavefront stages, and `GameManager` selects it only while `HasWaterVolume`. Water globals bind to
-all stages. Compile its default and terrain variants, then run the existing water, nested
-water/glass, underwater-camera, finite side/bottom exit, segment attenuation, and caustic fixtures.
-
-### 3. Validate Terrain And Fog
-
-The dry terrain keyword variant compiles. Manually validate the generated Terrain scene's
-heightfield intersection, painted layer albedo, normal maps, masks, and shadows, then capture a
-deterministic wavefront image fixture. Compile the water, fog, and water+fog terrain permutations
-when validating those combinations.
-
-Run bounded-fog GPU probes and deterministic light-shaft image fixtures against the wavefront
-assets. Compile both terrain variants and let the combined water+fog default compile finish without
-the command timeout. Move fog light-segment attenuation into the shadow stage after shadow queues
-exist. Do not return fog to the common surface shader.
-
-### 4. Debug, Adaptive, And Experiments
-
-Build first-hit debug modes from `RayHit` and throughput/bounce/direct-light diagnostics from path
-records; do not recreate `GetDebugRenderColor`. Integrate adaptive only after surface parity and
-benchmarking, preserving per-pixel sample index and Welford accounting. Port temporal/spatial RIS
-and path guiding separately after direct-light/shadow work is queue-based.
-
-## Continuation Prompt
-
-```text
-Continue the GPURayTracing wavefront migration. Read AIDocs/26-wavefront-renderer-handoff.md,
-AIDocs/03-compute-shader-renderer.md, AIDocs/07-shader-lighting-and-materials.md,
-AIDocs/11-regression-testing.md, and AIDocs/10-benchmarking-and-performance.md.
-
-The active final-color route is Resources/RayTracingWavefront.compute, dispatched by
-Assets/Scripts/WavefrontPathTracingManager.cs. Do not restore CSMain as a runtime fallback and do
-not run all-assets shader precompile. A path-level ShadowWorkItem queue is active:
-CSWavefrontDirectLight enqueues active paths, CSWavefrontTraceShadows owns GetLightHittingPoint,
-and CSWavefrontResolveShadowWork applies radiance before scatter. The dry default cold compile is
-33.066 s on the M3 Max with the 23.505 s expensive kernel isolated in CSWavefrontTraceShadows.
-Next: manually validate shadow behavior, add queue/accounting and deterministic image fixtures,
-then decide whether per-candidate work items are worth the estimator decomposition. Build and
-compile only RayTracingWavefront fog=0;terrain=0 after focused changes.
-```
+No fixes for these findings are implemented by this documentation change. Manual surface smoke
+coverage and historical shader/build success must not be reported as broad renderer parity or
+general reservoir-aware MIS validation.

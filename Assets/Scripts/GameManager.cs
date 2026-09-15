@@ -248,8 +248,8 @@ public class GameManager : MonoBehaviour
     public float glareIntensity = 1.0f;
 
     [Tooltip("Maximum HDR luminance of one path sample before averaging. Lower positive values clamp fireflies more strongly; 0 disables the clamp.")]
-    [Range(0.0f, 20.0f)]
-    public float fireflyClamp = 1.0f;
+    [Range(0.0f, 50.0f)]
+    public float fireflyClamp = 0.0f;
 
     public bool randomNoise = false;
 
