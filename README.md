@@ -14,7 +14,7 @@ Full disclosure that LLMs were used to assist during the later work on this proj
 * Animated procedural water with reflection, refraction, caustics, and underwater RGB absorption
 * Depth of field, variable camera aperture, different aperture types, ability to focus on a point in the scene even while camera is in motion
 * Frame accumulation, debug views, and example scenes
-* Spatial denoising (basic hand-rolled, not machine-learned denoising)
+* Edge-aware A-trous Spatial Denoising (not machine-learned denoising)
 * ACES filmic tone mapping with configurable exposure and optional firefly luminance clamping
 * glTF/GLB import support, including automatic conversion of base-color, metallic-roughness, normal, and transmission/IOR material data into ray-traced materials.
 
