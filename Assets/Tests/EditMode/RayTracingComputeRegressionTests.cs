@@ -419,6 +419,19 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void NonAdaptiveWavefront_ReusesPerPixelPathStorageAcrossPasses()
+        {
+            string wavefrontSource = System.IO.File.ReadAllText(WavefrontShaderPath);
+            int generateStart = wavefrontSource.IndexOf("void CSWavefrontGenerate", StringComparison.Ordinal);
+            int dispatchArgsStart = wavefrontSource.IndexOf("void CSWavefrontBuildDispatchArgs", generateStart, StringComparison.Ordinal);
+            string generate = wavefrontSource.Substring(generateStart, dispatchArgsStart - generateStart);
+
+            Assert.That(generate, Does.Contain("uint pathIndex = pixel.x + pixel.y * width;"));
+            Assert.That(generate, Does.Contain("if (_WavefrontAdaptiveSampling != 0)\n        pathIndex += sampleLayer * _WavefrontPixelCapacity;"));
+            Assert.That(generate, Does.Not.Contain("pixel.y * width + sampleLayer"));
+        }
+
+        [Test]
         public void AdaptiveBootstrap_UsesTheWavefrontRenderer()
         {
             string managerSource = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
@@ -2780,6 +2793,28 @@ namespace GPURayTracing.Tests
             Assert.That(causticsSource, Does.Contain("#define CAUSTICS_KERNELS 1"));
             Assert.That(sharedSource, Does.Contain("#if defined(CAUSTICS_KERNELS)\nbool IsCausticReceiver"));
             Assert.That(sharedSource, Does.Not.Contain("radiance += throughput * GatherCausticRadiance(hit)"));
+        }
+
+        [Test]
+        public void VisibleCaustics_ContinueOnlyThroughSmoothMetalReflections()
+        {
+            string sharedSource = System.IO.File.ReadAllText("Assets/Scripts/RayTracingShared.hlsl");
+            int reflectorStart = sharedSource.IndexOf("bool IsCausticReflector", StringComparison.Ordinal);
+            int reflectorEnd = sharedSource.IndexOf("float3 GatherCausticRadiance", reflectorStart, StringComparison.Ordinal);
+            int visibilityStart = sharedSource.IndexOf("float3 TraceVisibleCausticRadiance", StringComparison.Ordinal);
+            int visibilityEnd = sharedSource.IndexOf("float3 ClampFirefly", visibilityStart, StringComparison.Ordinal);
+
+            Assert.That(reflectorStart, Is.GreaterThanOrEqualTo(0));
+            Assert.That(reflectorEnd, Is.GreaterThan(reflectorStart));
+            Assert.That(visibilityStart, Is.GreaterThanOrEqualTo(0));
+            Assert.That(visibilityEnd, Is.GreaterThan(visibilityStart));
+
+            string reflector = sharedSource.Substring(reflectorStart, reflectorEnd - reflectorStart);
+            string visibility = sharedSource.Substring(visibilityStart, visibilityEnd - visibilityStart);
+            Assert.That(reflector, Does.Contain("hit.materialType == MaterialMetal"));
+            Assert.That(reflector, Does.Contain("GetMetallicRoughness(hit).y <= 0.20f"));
+            Assert.That(visibility, Does.Contain("!IsGlassMaterial(hit) && !IsCausticReflector(hit)"));
+            Assert.That(visibility, Does.Contain("CreateScatteredRay(ray, hit"));
         }
 
         [Test]

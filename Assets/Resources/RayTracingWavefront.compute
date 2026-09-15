@@ -183,7 +183,9 @@ void CSWavefrontGenerate(uint3 id : SV_DispatchThreadID)
         ray.direction = normalize(focalPoint - ray.origin);
     }
 
-    uint pathIndex = pixel.x + pixel.y * width + sampleLayer * _WavefrontPixelCapacity;
+    uint pathIndex = pixel.x + pixel.y * width;
+    if (_WavefrontAdaptiveSampling != 0)
+        pathIndex += sampleLayer * _WavefrontPixelCapacity;
     WavefrontPathState path;
     path.ray = ray;
     path.radiance = 0.0f;

@@ -7,7 +7,7 @@ The renderer provides optional photon-mapped caustics for focused refracted and 
 - Sphere, triangle, and directional light photon emission.
 - Glass spheres and closed glass meshes, including reflection, transmission, absorption, and bounded multi-event transport.
 - Finite procedural water, including nested water/glass paths.
-- Opaque diffuse receivers visible through ordinary camera paths and after specular water/glass boundaries.
+- Opaque diffuse receivers visible through ordinary camera paths, specular water/glass boundaries, and smooth metal reflections (roughness at most `0.20`).
 - A dedicated `Caustics` debug mode that dispatches the gather-only `CSCausticsDebug` kernel.
 
 ## Pipeline
@@ -21,7 +21,7 @@ ClearCausticGrid
 BuildCausticGrid
 
 CSCausticsFinalColor or CSCausticsDebug:
-    Trace camera path
+    Trace camera path through glass/water and smooth metal boundaries
     Gather nearby receiver-facing photons at diffuse hits
 CompositeCaustics:
     Add photon radiance to final-color beauty

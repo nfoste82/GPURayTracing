@@ -4,34 +4,30 @@ Full disclosure that LLMs were used to assist during the later work on this proj
 
 ## Features:
 * GPU compute-shader path tracing for spheres and triangle meshes
+* Wavefront architecture helps reduce compile times when stacking features (like water, fog, terrain, caustics)
 * Emissive sphere and mesh lights with direct-light, environment lighting
 * Resampled importance sampling, multi-importance sampling, Smith-GGX importance sampling, and Owen-Sobol scrambling
 * Surface reflections (configurable smoothness of surfaces), diffuse indirect lighting, directional lighting, and multiple ray bounces
 * Reflection/refraction, distance-based absorption, and colored transparent shadows
 * Photon-mapped caustics
-* Mesh UV/albedo/metallic/normal texturing
+* Mesh UV/albedo/metallic/normal/displacement texturing
 * Animated procedural water with reflection, refraction, caustics, and underwater RGB absorption
 * Depth of field, variable camera aperture, different aperture types, ability to focus on a point in the scene even while camera is in motion
 * Frame accumulation, debug views, and example scenes
 * Spatial denoising (basic hand-rolled, not machine-learned denoising)
 * ACES filmic tone mapping with configurable exposure and optional firefly luminance clamping
-* Normal and parallax mapping
 * glTF/GLB import support, including automatic conversion of base-color, metallic-roughness, normal, and transmission/IOR material data into ray-traced materials.
-* Support for Unity terrains with multi-texture splatting
 
 ## Experimental/Incomplete features:
 * Temporal denoising
-* Adaptive sampling
 * Spatial and temporal RIS
-* Homogenious fog
-* Terrain
+* Support for Unity terrains with multi-texture splatting
 
 ## Missing, future considerations:
 * Spectral refractions (different wavelengths of light refract differently), current lighting system does not handle wavelengths
 * Machine-learning-based upscaling and denoising
 * Heterogeneous fog
 * Subsurface scattering
-* Shader compilation speedups, compilation takes a long time currently
 
 Depending on the scene and quality, and your hardware, your frame rate may vary by quite a bit. Real-time can look decent on the right hardware with the right scene and settings. Some features like water, caustics, or large polygonal meshes are too expensive to look good in real-time currently.
 

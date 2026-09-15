@@ -5040,6 +5040,12 @@ bool IsCausticReceiver(RayHit hit)
     return !DidHitSky(hit) && !DidHitLight(hit) && hit.materialType == MaterialDiffuse && hit.opacity >= 1.0f;
 }
 
+bool IsCausticReflector(RayHit hit)
+{
+    // Rough reflections spread the photon estimate over too many pixels to converge cheaply.
+    return hit.materialType == MaterialMetal && GetMetallicRoughness(hit).y <= 0.20f;
+}
+
 float3 GatherCausticRadiance(RayHit hit)
 {
     if (!IsCausticReceiver(hit) || _CausticPhotonAttemptCount <= 0 || _CausticGatherRadius <= 0.0f)
@@ -5117,8 +5123,8 @@ float3 TraceVisibleCausticRadiance(Ray ray, inout RngState rngState)
             return throughput * GatherCausticRadiance(hit);
         }
 
-        // Photon radiance is visible through specular boundaries, but not after an opaque bounce.
-        if (!IsGlassMaterial(hit))
+        // Photon radiance remains visible through transmissive boundaries and smooth metals only.
+        if (!IsGlassMaterial(hit) && !IsCausticReflector(hit))
         {
             return float3(0.0f, 0.0f, 0.0f);
         }
