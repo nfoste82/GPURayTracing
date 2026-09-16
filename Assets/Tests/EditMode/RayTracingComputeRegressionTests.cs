@@ -2182,6 +2182,45 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void GameManager_CausticSeedRebuildsPhotonMapWithoutResettingCompatibleAccumulation()
+        {
+            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+            Assert.That(managerType, Is.Not.Null, "Could not load GameManager from Assembly-CSharp");
+
+            var gameObject = new GameObject("Caustic Seed State Hash Test");
+            var cameraObject = new GameObject("Caustic Seed State Hash Camera");
+            try
+            {
+                Component manager = gameObject.AddComponent(managerType);
+                Camera camera = cameraObject.AddComponent<Camera>();
+                Component cameraManager = gameObject.GetComponent(Type.GetType("CameraManager, Assembly-CSharp"));
+                cameraManager.GetType().GetField("renderTextureCamera").SetValue(cameraManager, camera);
+                managerType.GetField("enableCaustics").SetValue(manager, true);
+
+                MethodInfo accumulationHash = managerType.GetMethod("CalculateAccumulationStateHash", BindingFlags.NonPublic | BindingFlags.Instance);
+                MethodInfo photonHash = managerType.GetMethod("CalculatePhotonStateHash", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.That(accumulationHash, Is.Not.Null);
+                Assert.That(photonHash, Is.Not.Null);
+                int initialAccumulationHash = (int)accumulationHash.Invoke(manager, null);
+                int initialPhotonHash = (int)photonHash.Invoke(manager, new object[] { true });
+
+                object caustics = managerType.GetProperty("Caustics").GetValue(manager);
+                PropertyInfo seed = caustics.GetType().GetProperty("Seed");
+                seed.SetValue(caustics, 2);
+
+                Assert.That(accumulationHash.Invoke(manager, null), Is.EqualTo(initialAccumulationHash),
+                    "Changing an unbiased caustic photon seed must preserve compatible SPPM accumulation.");
+                Assert.That(photonHash.Invoke(manager, new object[] { true }), Is.Not.EqualTo(initialPhotonHash),
+                    "Changing the caustic seed must still trigger a photon-map rebuild.");
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(gameObject);
+                UnityEngine.Object.DestroyImmediate(cameraObject);
+            }
+        }
+
+        [Test]
         public void GameManager_AccumulationStateHash_DoesNotResetWhenPathGuideMixtureChanges()
         {
             Type managerType = Type.GetType("GameManager, Assembly-CSharp");
@@ -3019,6 +3058,55 @@ namespace GPURayTracing.Tests
             Assert.That(waterTarget, Does.Not.Contain("CausticSequenceSample"));
         }
 
+        [TestCase(3u, 4u)]
+        [TestCase(5u, 6u)]
+        [TestCase(7u, 8u)]
+        public void CausticSurfaceSamples_HaveBroadJointCoverage(uint firstDimension, uint secondDimension)
+        {
+            const int gridSize = 16;
+            const int sampleCount = 4096;
+            var occupied = new bool[gridSize * gridSize];
+            int occupiedCount = 0;
+
+            for (uint photonIndex = 0; photonIndex < sampleCount; photonIndex++)
+            {
+                float first = CausticDecorrelatedSample(photonIndex, firstDimension, 1u, 0u);
+                float second = CausticDecorrelatedSample(photonIndex, secondDimension, 1u, 0u);
+                int cell = Mathf.Min((int)(first * gridSize), gridSize - 1)
+                           + gridSize * Mathf.Min((int)(second * gridSize), gridSize - 1);
+                if (occupied[cell]) continue;
+                occupied[cell] = true;
+                occupiedCount++;
+            }
+
+            Assert.That(occupiedCount, Is.GreaterThanOrEqualTo(240),
+                "Paired photon coordinates must cover the 2D domain rather than an affine bit-reversal lattice.");
+        }
+
+        [Test]
+        public void CausticPhotonTracing_UsesDecorrelatedSpatialSamplesAndFirstHitOwnership()
+        {
+            string source = System.IO.File.ReadAllText("Assets/Scripts/RayTracingCausticsKernels.hlsl");
+            int start = source.IndexOf("void TraceCausticPhotons", StringComparison.Ordinal);
+            int end = source.IndexOf("void BuildCausticGrid", start, StringComparison.Ordinal);
+            Assert.That(start, Is.GreaterThanOrEqualTo(0));
+            Assert.That(end, Is.GreaterThan(start));
+            string trace = source.Substring(start, end - start);
+
+            Assert.That(trace, Does.Contain("CausticDecorrelatedSample(id.x, 3u)"));
+            Assert.That(trace, Does.Contain("CausticDecorrelatedSample(id.x, 4u)"));
+            Assert.That(trace, Does.Contain("CausticDecorrelatedSample(id.x, 5u)"));
+            Assert.That(trace, Does.Contain("CausticDecorrelatedSample(id.x, 6u)"));
+            Assert.That(trace, Does.Contain("CausticDecorrelatedSample(id.x, 7u)"));
+            Assert.That(trace, Does.Contain("CausticDecorrelatedSample(id.x, 8u)"));
+            Assert.That(trace, Does.Contain("RayHit refractorHit = GetNearestIntersection(photonRay)"));
+            Assert.That(trace, Does.Contain("refractorHit.objectIndex == refractorIndex"));
+            Assert.That(trace, Does.Contain("refractorHit.meshIndex == _Meshes[refractorMeshIndex].meshIndex"));
+            Assert.That(trace, Does.Contain("IsWaterMaterial(refractorHit)"));
+            Assert.That(trace, Does.Not.Contain("IntersectSphere(photonRay, refractorHit"));
+            Assert.That(trace, Does.Not.Contain("IntersectMeshBvh(photonRay, refractorHit"));
+        }
+
         [TestCase("Caustics", true, true, true, true)]
         [TestCase("Caustics", true, false, true, false)]
         [TestCase("Caustics", true, true, false, false)]
@@ -3182,9 +3270,52 @@ namespace GPURayTracing.Tests
             string update = source.Substring(start, end - start);
             Assert.That(update, Does.Contain("effectiveNewPhotons = alpha * batchGather.photonCount"));
             Assert.That(update, Does.Contain("updatedRadius = max(0.001f, radius * sqrt(radiusRatio))"));
-            Assert.That(update, Does.Contain("updatedFlux = (state.rgb + batchGather.flux * _CausticIntensity) * radiusRatio"));
+            Assert.That(update, Does.Contain("actualRadiusRatio = updatedRadius * updatedRadius"));
+            Assert.That(update, Does.Contain("updatedFlux = (state.rgb + batchGather.flux * _CausticIntensity) * actualRadiusRatio"));
             Assert.That(update, Does.Contain("CausticSppmPhotonCount[pixel] = updatedCount"));
             Assert.That(source, Does.Contain("color = UpdateCausticSppm(id.xy, batchGather)"));
+        }
+
+        [Test]
+        public void CausticSppm_RadiusFloorPreservesFluxWhenAreaCannotShrink()
+        {
+            const float minimumRadius = 0.001f;
+            const float previousFlux = 3.0f;
+            const float batchFlux = 2.0f;
+            const float previousCount = 1000.0f;
+            const float batchCount = 100.0f;
+            const float alpha = 0.05f;
+
+            float countRatio = (previousCount + alpha * batchCount) / (previousCount + batchCount);
+            float updatedRadius = Mathf.Max(minimumRadius, minimumRadius * Mathf.Sqrt(countRatio));
+            float actualAreaRatio = updatedRadius * updatedRadius / (minimumRadius * minimumRadius);
+            float updatedFlux = (previousFlux + batchFlux) * actualAreaRatio;
+
+            Assert.That(updatedRadius, Is.EqualTo(minimumRadius));
+            Assert.That(actualAreaRatio, Is.EqualTo(1.0f).Within(1e-6f));
+            Assert.That(updatedFlux, Is.EqualTo(previousFlux + batchFlux).Within(1e-6f));
+            Assert.That((previousFlux + batchFlux) * countRatio, Is.LessThan(updatedFlux),
+                "The unclamped count ratio would discard flux after radius reduction has stopped.");
+        }
+
+        [Test]
+        public void CausticGatherKernels_ShareCameraFilterAndLensSampling()
+        {
+            string source = System.IO.File.ReadAllText("Assets/Scripts/RayTracingCausticsKernels.hlsl");
+            int helperStart = source.IndexOf("Ray CreateCausticCameraRay", StringComparison.Ordinal);
+            int helperEnd = source.IndexOf("float GetCausticSppmRadius", helperStart, StringComparison.Ordinal);
+            string helper = source.Substring(helperStart, helperEnd - helperStart);
+            Assert.That(helper, Does.Contain("SetRngDimension(rngState, SampleDimensionLens)"));
+            Assert.That(helper, Does.Contain("SampleAperture(rngState)"));
+
+            int debugStart = source.IndexOf("void CSCausticsDebug", StringComparison.Ordinal);
+            int finalStart = source.IndexOf("void CSCausticsFinalColor", debugStart, StringComparison.Ordinal);
+            string debug = source.Substring(debugStart, finalStart - debugStart);
+            string final = source.Substring(finalStart);
+            Assert.That(debug, Does.Contain("if (_UseTemporalJitter != 0) uv += _FrameJitterNdc"));
+            Assert.That(final, Does.Contain("if (_UseTemporalJitter != 0) uv += _FrameJitterNdc"));
+            Assert.That(debug, Does.Contain("CreateCausticCameraRay(uv, rngState)"));
+            Assert.That(final, Does.Contain("CreateCausticCameraRay(uv, rngState)"));
         }
 
         [Test]
@@ -3284,6 +3415,25 @@ namespace GPURayTracing.Tests
             uint sum = 0;
             foreach (uint value in values) sum += value;
             return sum;
+        }
+
+        private static float CausticDecorrelatedSample(uint photonIndex, uint dimension, uint seed, uint frameIndex)
+        {
+            uint bits = ShaderHash(seed
+                                   ^ unchecked(frameIndex * 2246822519u)
+                                   ^ unchecked(photonIndex * 747796405u)
+                                   ^ unchecked(dimension * 2891336453u));
+            return Mathf.Min((bits + 0.5f) * 2.3283064365386963e-10f, 0.99999994f);
+        }
+
+        private static uint ShaderHash(uint value)
+        {
+            value ^= value >> 16;
+            value = unchecked(value * 0x7feb352du);
+            value ^= value >> 15;
+            value = unchecked(value * 0x846ca68bu);
+            value ^= value >> 16;
+            return value;
         }
 
         private static void AssertVector(Vector4 actual, Vector4 expected, string label, float tolerance = Epsilon)

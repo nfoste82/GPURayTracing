@@ -2192,6 +2192,7 @@ public class GameManager : MonoBehaviour
         }
 
         var stateHash = CalculatePhotonStateHash();
+        var accumulationCompatibleStateHash = CalculatePhotonStateHash(includeSeed: false);
         var stateChanged = !_causticsManager.HasPhotonStateHash || stateHash != _causticsManager.PhotonStateHash;
         if (stateChanged)
         {
@@ -2204,9 +2205,15 @@ public class GameManager : MonoBehaviour
         {
             _causticsManager.UploadSamplingDistribution();
             _causticsManager.PhotonStateHash = stateHash;
+            var accumulationStateChanged = !_causticsManager.HasPhotonStateHash
+                || accumulationCompatibleStateHash != _causticsManager.AccumulationCompatiblePhotonStateHash;
+            _causticsManager.AccumulationCompatiblePhotonStateHash = accumulationCompatibleStateHash;
             _causticsManager.HasPhotonStateHash = true;
             _causticsManager.FrameIndex = 0;
-            ResetFrameAccumulation();
+            if (accumulationStateChanged)
+            {
+                ResetFrameAccumulation();
+            }
         }
         else if (!ShouldUseFrameAccumulation())
         {
@@ -2469,11 +2476,11 @@ public class GameManager : MonoBehaviour
             _preserveTemporalRisHistoryForNextNonAccumulatedFrame = false;
         }
 
-        // Reset the sequence before emission; photon-state changes can also reset accumulation.
+        // Reset the sequence before emission; seed-only map changes preserve compatible SPPM history.
         UpdateCausticPhotonMap();
         if (frame.useFrameAccumulation)
         {
-            // Photon-state changes are folded into the accumulation hash during the update.
+            // The seed-independent compatible state is folded into the accumulation hash during the update.
             // Record the post-update value so a rebuild does not force a redundant reset next frame.
             _accumulationStateHash = CalculateAccumulationStateHash();
             _hasAccumulationStateHash = true;
@@ -4166,11 +4173,11 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    private int CalculatePhotonStateHash()
+    private int CalculatePhotonStateHash(bool includeSeed = true)
     {
         unchecked
         {
-            var hash = _causticsManager.CalculatePhotonStateHash(17);
+            var hash = _causticsManager.CalculatePhotonStateHash(17, includeSeed);
             hash = AddHash(hash, numBounces);
             hash = AddHash(hash, _spheres.Count);
             for (var i = 0; i < _spheres.Count; i++)

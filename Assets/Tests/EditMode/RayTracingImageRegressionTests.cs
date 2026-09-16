@@ -1033,6 +1033,23 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void CausticPhotonGeneration_OpaqueFirstHitBlocksTargetedRefractor()
+        {
+            SphereData[] spheres =
+            {
+                CreateCausticSpheres()[0],
+                Sphere(new Vector3(0.0f, 4.1f, 2.5f), Vector3.one, 1.0f, 0.0f, 1.0f, 1.0f, 0)
+            };
+
+            CausticPhotonData[] photons = GenerateCausticPhotons(
+                spheres, CreateCausticLights(), new CausticOptions { photonCount = 4096 }, out uint[] metadata);
+
+            Assert.That(metadata[2], Is.EqualTo(4096u), "attempted photon count");
+            Assert.That(photons, Is.Empty,
+                "Targeted emission must not bypass an opaque object in front of the selected glass sphere.");
+        }
+
+        [Test]
         public void CausticPhotonGeneration_MultiEventSphereTransport_UsesBounceBudget()
         {
             SphereData[] spheres = CreateCausticSpheres();
@@ -1256,12 +1273,12 @@ namespace GPURayTracing.Tests
 
         private static readonly Vector4[] SphereCausticBaseline =
         {
-            new Vector4(0.00213937f, 0.00203934f, 0.00182888f, 1.0f),
+            new Vector4(0.00113207f, 0.00107896f, 0.00096750f, 1.0f),
             new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
             new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
             new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
-            new Vector4(0.0f, 0.0f, 0.0f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
-            new Vector4(1.99927400f, 1.90710400f, 1.71108700f, 1.0f)
+            new Vector4(0.00003519f, 0.00003343f, 0.00002991f, 1.0f), new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
+            new Vector4(0.97939190f, 0.93394320f, 0.83777110f, 1.0f)
         };
 
         private static SphereData Sphere(Vector3 position, Vector3 color, float radius, float smoothness, float opacity, float refraction, int materialType)

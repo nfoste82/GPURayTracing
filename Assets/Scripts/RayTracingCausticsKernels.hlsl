@@ -237,8 +237,8 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
     float emissionAreaScale = 1.0f;
     if (light.type == LightTypeTriangle || light.type == LightTypeSunTriangle)
     {
-        float r1 = CausticSequenceSample(id.x, 3u);
-        float r2 = CausticSequenceSample(id.x, 4u);
+        float r1 = CausticDecorrelatedSample(id.x, 3u);
+        float r2 = CausticDecorrelatedSample(id.x, 4u);
         if (r1 + r2 > 1.0f)
         {
             r1 = 1.0f - r1;
@@ -287,8 +287,8 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
     if (refractorMeshIndex >= 0)
     {
         MeshTriangle targetTriangle = _Triangles[refractorTriangleIndex];
-        float sampleU = CausticSequenceSample(id.x, 5u);
-        float sampleV = CausticSequenceSample(id.x, 6u);
+        float sampleU = CausticDecorrelatedSample(id.x, 5u);
+        float sampleV = CausticDecorrelatedSample(id.x, 6u);
         if (sampleU + sampleV > 1.0f)
         {
             sampleU = 1.0f - sampleU;
@@ -349,9 +349,9 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
     float3 coneAxis = toRefractor / distanceToRefractor;
     float sinThetaMax = refractorIndex >= 0 ? saturate(refractorRadius / distanceToRefractor) : 0.0f;
     float cosThetaMax = sqrt(max(0.0f, 1.0f - sinThetaMax * sinThetaMax));
-    float cosTheta = lerp(1.0f, cosThetaMax, CausticSequenceSample(id.x, 7u));
+    float cosTheta = lerp(1.0f, cosThetaMax, CausticDecorrelatedSample(id.x, 7u));
     float sinTheta = sqrt(max(0.0f, 1.0f - cosTheta * cosTheta));
-    float phi = 2.0f * PI * CausticSequenceSample(id.x, 8u);
+    float phi = 2.0f * PI * CausticDecorrelatedSample(id.x, 8u);
     float3 tangent;
     float3 bitangent;
     CreateBasisFromNormal(coneAxis, tangent, bitangent);
@@ -365,36 +365,19 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
         return;
     }
     Ray photonRay = CreateRay(emissionPosition + photonDirection * max(0.001f, emitterRadius), photonDirection);
-    RayHit refractorHit = CreateRayHit();
-    if (isDirectionalSun)
-    {
-        refractorHit = GetNearestIntersection(photonRay);
-    }
-    else if (refractorIndex >= 0)
-    {
-        IntersectSphere(photonRay, refractorHit, _Spheres[refractorIndex], refractorIndex);
-    }
-    else if (refractorMeshIndex >= 0)
-    {
-        IntersectMeshBvh(photonRay, refractorHit, _Meshes[refractorMeshIndex]);
-        float targetTolerance = max(0.002f, distanceToRefractor * 1e-5f);
-        if (!DidHitSky(refractorHit)
-            && length(refractorHit.position - refractorPosition) > targetTolerance)
-        {
-            return;
-        }
-    }
-    else
-    {
-        IntersectWater(photonRay, refractorHit);
-        // The sampled wave point is exact, while IntersectWater locates it with bounded marching
-        // and refinement. A fixed position tolerance rejects photons in march-aligned bands.
-        if (!IsWaterMaterial(refractorHit))
-        {
-            return;
-        }
-    }
+    RayHit refractorHit = GetNearestIntersection(photonRay);
     if (DidHitSky(refractorHit))
+    {
+        return;
+    }
+    // A pair owns only launches whose first scene boundary is its selected refractor. This keeps
+    // blockers and enclosing media in transport without overlapping target proposals.
+    bool hitSelectedTarget = refractorIndex >= 0
+        ? refractorHit.objectIndex == refractorIndex
+        : refractorMeshIndex >= 0
+            ? refractorHit.meshIndex == _Meshes[refractorMeshIndex].meshIndex
+            : IsWaterMaterial(refractorHit);
+    if (!hitSelectedTarget)
     {
         return;
     }
@@ -414,17 +397,10 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
     }
     float selectionScale = inverseDirectionalPdf * emissionAreaScale * emitterCosine
         / max(1e-8f, targetPair.selectionProbability);
-    // Targeting only chooses an efficient emission direction. When water is a target, start at the
-    // actual nearest boundary so an enclosing water volume is crossed before an interior refractor.
-    RayHit firstTransportHit = refractorHit;
-    if (targetPair.refractorType == 2)
-    {
-        firstTransportHit = GetNearestIntersection(photonRay);
-    }
     CausticPhoton photon;
     if (!TraceCausticPhotonTransport(
         photonRay,
-        firstTransportHit,
+        refractorHit,
         light.emission * selectionScale,
         rngState,
         photon))
@@ -476,6 +452,26 @@ RWTexture2D<float> CausticSppmPhotonCount;
 int _UseCausticSppm;
 float _CausticSppmAlpha;
 
+Ray CreateCausticCameraRay(float2 uv, inout RngState rngState)
+{
+    Ray ray = CreateCameraRay(uv);
+    SetRngDimension(rngState, SampleDimensionLens);
+    if (_ApertureRadius <= 0.0f)
+    {
+        return ray;
+    }
+
+    float3 cameraForward = normalize(mul(_CameraToWorld, float4(0.0f, 0.0f, -1.0f, 0.0f)).xyz);
+    float focusRayDistance = _FocalDistance / max(0.0001f, dot(ray.direction, cameraForward));
+    float3 focalPoint = ray.origin + ray.direction * focusRayDistance;
+    float2 apertureSample = SampleAperture(rngState) * _ApertureRadius;
+    float3 cameraRight = normalize(mul(_CameraToWorld, float4(1.0f, 0.0f, 0.0f, 0.0f)).xyz);
+    float3 cameraUp = normalize(mul(_CameraToWorld, float4(0.0f, 1.0f, 0.0f, 0.0f)).xyz);
+    ray.origin += cameraRight * apertureSample.x + cameraUp * apertureSample.y;
+    ray.direction = normalize(focalPoint - ray.origin);
+    return ray;
+}
+
 float GetCausticSppmRadius(uint2 pixel)
 {
     float storedRadius = CausticSppmState[pixel].a;
@@ -494,7 +490,8 @@ float3 UpdateCausticSppm(uint2 pixel, CausticGather batchGather)
         ? updatedCount / max(1e-6f, photonCount + batchGather.photonCount)
         : 1.0f;
     float updatedRadius = max(0.001f, radius * sqrt(radiusRatio));
-    float3 updatedFlux = (state.rgb + batchGather.flux * _CausticIntensity) * radiusRatio;
+    float actualRadiusRatio = updatedRadius * updatedRadius / max(1e-6f, radius * radius);
+    float3 updatedFlux = (state.rgb + batchGather.flux * _CausticIntensity) * actualRadiusRatio;
 
     CausticSppmState[pixel] = float4(updatedFlux, updatedRadius);
     CausticSppmPhotonCount[pixel] = updatedCount;
@@ -529,23 +526,8 @@ void CSCausticsDebug(uint3 id : SV_DispatchThreadID)
             pixelJitter = (pixelJitter - 0.5f) * _SubpixelJitterScale + 0.5f;
         }
         float2 uv = ((id.xy + pixelJitter) / float2(width, height)) * 2.0f - 1.0f;
-        Ray ray = CreateCameraRay(uv);
-        if (_ApertureRadius > 0.0f)
-        {
-            SetRngDimension(rngState, SampleDimensionLens);
-            float3 cameraForward = normalize(mul(_CameraToWorld, float4(0.0f, 0.0f, -1.0f, 0.0f)).xyz);
-            float focusRayDistance = _FocalDistance / max(0.0001f, dot(ray.direction, cameraForward));
-            float3 focalPoint = ray.origin + ray.direction * focusRayDistance;
-            float2 apertureSample = SampleAperture(rngState) * _ApertureRadius;
-            float3 cameraRight = normalize(mul(_CameraToWorld, float4(1.0f, 0.0f, 0.0f, 0.0f)).xyz);
-            float3 cameraUp = normalize(mul(_CameraToWorld, float4(0.0f, 1.0f, 0.0f, 0.0f)).xyz);
-            ray.origin += cameraRight * apertureSample.x + cameraUp * apertureSample.y;
-            ray.direction = normalize(focalPoint - ray.origin);
-        }
-        else
-        {
-            SetRngDimension(rngState, SampleDimensionLens);
-        }
+        if (_UseTemporalJitter != 0) uv += _FrameJitterNdc;
+        Ray ray = CreateCausticCameraRay(uv, rngState);
         if (_UseCausticSppm != 0)
         {
             CausticGather gather = TraceVisibleCausticFlux(ray, gatherRadius, rngState);
@@ -592,7 +574,8 @@ void CSCausticsFinalColor(uint3 id : SV_DispatchThreadID)
             pixelJitter = (pixelJitter - 0.5f) * _SubpixelJitterScale + 0.5f;
         }
         float2 uv = ((id.xy + pixelJitter) / float2(width, height)) * 2.0f - 1.0f;
-        Ray ray = CreateCameraRay(uv);
+        if (_UseTemporalJitter != 0) uv += _FrameJitterNdc;
+        Ray ray = CreateCausticCameraRay(uv, rngState);
         if (_UseCausticSppm != 0)
         {
             CausticGather gather = TraceVisibleCausticFlux(ray, gatherRadius, rngState);

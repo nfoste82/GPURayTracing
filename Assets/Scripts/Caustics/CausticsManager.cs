@@ -71,6 +71,7 @@ namespace PathTracing.Caustics
         internal int GridOutOfBoundsCountValue;
         internal int GridPhotonCountValue;
         internal int PhotonStateHash;
+        internal int AccumulationCompatiblePhotonStateHash;
         internal bool HasPhotonStateHash;
         internal int FrameIndex;
         internal bool PreviousEnabled;
@@ -226,15 +227,18 @@ namespace PathTracing.Caustics
             maximumWeight = Mathf.Max(maximumWeight, weight);
         }
 
-        internal int CalculatePhotonStateHash(int hash)
+        internal int CalculatePhotonStateHash(int hash, bool includeSeed = true)
         {
             unchecked
             {
-                hash = GameManager.AddHash(hash, 7); // Per-pixel SPPM estimator version.
+                hash = GameManager.AddHash(hash, 8); // Photon sampler, visibility, and SPPM estimator version.
                 hash = GameManager.AddHash(hash, PhotonCount);
                 hash = GameManager.AddHash(hash, GatherRadius);
                 hash = GameManager.AddHash(hash, GatherRadiusDecayRate);
-                hash = GameManager.AddHash(hash, Seed);
+                if (includeSeed)
+                {
+                    hash = GameManager.AddHash(hash, Seed);
+                }
                 return hash;
             }
         }
@@ -249,9 +253,8 @@ namespace PathTracing.Caustics
             hash = GameManager.AddHash(hash, PhotonCount);
             hash = GameManager.AddHash(hash, GatherRadius);
             hash = GameManager.AddHash(hash, GatherRadiusDecayRate);
-            hash = GameManager.AddHash(hash, Seed);
             hash = GameManager.AddHash(hash, Intensity);
-            return GameManager.AddHash(hash, PhotonStateHash);
+            return GameManager.AddHash(hash, AccumulationCompatiblePhotonStateHash);
         }
 
         internal void SetShaderParameters(ComputeShader shader, int kernelHandle, int maxBounces)
@@ -446,6 +449,7 @@ namespace PathTracing.Caustics
             GridCellCountValue = 0;
             GridPhotonCountValue = 0;
             GridOutOfBoundsCountValue = 0;
+            AccumulationCompatiblePhotonStateHash = 0;
             HasPhotonStateHash = false;
             FrameIndex = 0;
         }

@@ -33,6 +33,8 @@ Camera, lens, resolution, mode, scene, lighting, material, and caustic-setting c
 
 For a batch with `M` accepted photons, historical effective count `N`, radius `R`, flux `tau`, and SPPM alpha `a`, the update is `N' = N + aM`, `R' = R sqrt(N' / (N + M))`, and `tau' = (tau + Phi) R'^2 / R^2`. Radiance divides `tau'` by `PI R'^2` and all photon attempts emitted across the accumulated iterations. Zero-hit batches preserve flux, count, and radius while the total-emission normalization continues to advance. `SPPM Radius Reduction` maps from zero (alpha one, fixed radius) to one (small alpha, aggressive shrinkage); its existing serialized field remains `GatherRadiusDecayRate`. Radius has a `0.001` floor. The grid uses the initial radius, so all smaller per-pixel searches remain covered.
 
+The radius-floor update uses the actual clamped `R'^2 / R^2` area ratio. Once a pixel reaches the floor, new photon flux continues accumulating without the artificial energy loss that would result from applying the unclamped count ratio.
+
 `CSCausticsDebug` displays raw linear SPPM radiance without denoising or tone mapping. Final-color caustics use the same estimator before their separate beauty composite. Camera passes in one photon iteration are averaged before a single per-pixel recurrence, avoiding multiple updates from the same photon map.
 
 Final-color `CSMain` never compiles camera-side photon gathering. When caustics are enabled, `GameManager` dispatches `CSCausticsFinalColor`, maintains its matching progressive accumulation, and then runs the small `CompositeCaustics` utility kernel. Disabled rendering does not allocate the scene photon map or dispatch these kernels. Caustic photon target-distribution helpers still compile only for `TraceCausticPhotons`.
@@ -46,6 +48,8 @@ not update that frame.
 ## Sampling And Estimation
 
 Photon attempts use a deterministic seed plus a progressive photon-frame index. CPU-built distributions compact eligible light/refractor pairs, weighted by approximate useful flux. Glass-mesh targets use an area-weighted triangle CDF; the selected triangle probability is included in the area-to-solid-angle PDF conversion.
+
+Two-dimensional emitter, refractor-surface, and sphere-cone coordinates use independently hashed dimensions rather than paired affine bit-reversal dimensions. This avoids batch-scale spatial lattices that can leave large portions of an area emitter or glass triangle unsampled. Targeted launches are accepted only when the selected refractor is the actual nearest scene boundary, so opaque blockers and nearer refractors are not bypassed.
 
 Photon power includes emitter power, selection PDFs, emission PDFs, Fresnel branch probability, transmission throughput, and glass/water absorption. The gather uses a normalized Epanechnikov disk kernel:
 
@@ -76,7 +80,7 @@ The benchmark overlay reports grid-cell count, indexed photons, out-of-bounds ph
 - `causticSeed`
 - `causticIntensity`
 
-The current manager API exposes the seed as `GameManager.Caustics.Seed`. In **Ray Tracing Controls > Caustics > Photon Seed**, changing the serialized seed rebuilds the map and resets accumulation. It is independent of the camera/path sampler seed and `Random Noise`; a fixed photon seed still produces fresh deterministic batches during accumulation.
+The current manager API exposes the seed as `GameManager.Caustics.Seed`. In **Ray Tracing Controls > Caustics > Photon Seed**, changing the serialized seed rebuilds the map and restarts its photon sequence, but preserves compatible SPPM accumulation. It is independent of the camera/path sampler seed and `Random Noise`; a fixed photon seed still produces fresh deterministic batches during accumulation.
 
 Photon resources and the map rebuild when relevant emitter, refractor, receiver, material, geometry, photon-count, radius, seed, or algorithm state changes. Animated water rebuilds the map as its wave phase changes. Exposure, tone mapping, depth of field, and camera transforms do not invalidate the map.
 
