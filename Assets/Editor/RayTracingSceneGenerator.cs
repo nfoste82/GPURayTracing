@@ -1880,7 +1880,7 @@ public static class RayTracingSceneGenerator
         AddPrimitiveMesh(context.Root, "Back Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, roomHeight * 0.5f, roomCenterZ + roomDepth * 0.5f), Vector3.zero, new Vector3(roomWidth, roomHeight, wallThickness), new Color32(198, 196, 180, 255), RayMaterial.MaterialType.Diffuse, 0.12f, 1.0f);
         AddPrimitiveMesh(context.Root, "Left Red Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-roomWidth * 0.5f, roomHeight * 0.5f, roomCenterZ), Vector3.zero, new Vector3(wallThickness, roomHeight, roomDepth), new Color32(220, 42, 32, 255), RayMaterial.MaterialType.Diffuse, 0.08f, 1.0f);
         AddPrimitiveMesh(context.Root, "Right Green Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(roomWidth * 0.5f, roomHeight * 0.5f, roomCenterZ), Vector3.zero, new Vector3(wallThickness, roomHeight, roomDepth), new Color32(45, 205, 42, 255), RayMaterial.MaterialType.Diffuse, 0.08f, 1.0f);
-        AddMeshLight(context.Root, "Ceiling Area Light", CreateHorizontalQuadMesh("Demofox Ceiling Area Light", 2.8f, roomDepth * 0.5f, 1.0f, 1.0f), new Vector3(0.0f, roomHeight - wallThickness + 0.012f, roomDepth * 0.5f), Vector3.zero, Vector3.one, Color.white);
+        AddMeshLight(context.Root, "Ceiling Area Light", CreateHorizontalQuadMesh("Demofox Ceiling Area Light", 2.8f, roomDepth * 0.5f, 1.0f, 1.0f), new Vector3(0.0f, roomHeight - wallThickness + 0.012f, roomDepth * 0.5f), Vector3.zero, Vector3.one, Color.white, 1.5f);
 
         float[] roughnessSteps = { 1.0f, 0.75f, 0.5f, 0.25f, 0.0f };
         var smallSphereRadius = 0.48f;
@@ -2127,7 +2127,8 @@ public static class RayTracingSceneGenerator
             SkyboxLightColor = Color.black,
             DirectionalLightIntensity = 0.0f,
             TopLevelBvhMinObjectCount = 0,
-            ShadowBvhMinObjectCount = 0
+            ShadowBvhMinObjectCount = 0,
+            TemporalRisEnabled = true,
         });
 
         AddFloor(context.Root, Vector2.zero, new Vector2(14.0f, 14.0f), 0.25f, new Color32(204, 204, 204, 255), "Diffuse Receiver");
@@ -2174,8 +2175,9 @@ public static class RayTracingSceneGenerator
             EnableCaustics = false,
             CameraApertureMode = CameraApertureMode.Pinhole,
             LightFalloffScale = 0.035f,
+            LightSamplingStrategy = LightSamplingStrategy.AllLights,
             Exposure = 1.0f,
-            FireflyClamp = 30.0f,
+            FireflyClamp = 50.0f,
             SkyboxLightColor = Color.white,
             EnvironmentHighlightThreshold = 1.0f,
             EnvironmentHighlightSoftKnee = 0.215f,
@@ -2229,12 +2231,15 @@ public static class RayTracingSceneGenerator
             ShadowQuality = 0,
             CameraFocalDistance = 10.0f,
             LightFalloffScale = 0.035f,
+            InitialRisCandidateCount = 2,
+            SubpixelJitterScale = 1.1f,
             Exposure = 1.25f,
             SobolDimensionLimit = 1,
-            SkyboxLightColor = new Color32(8, 8, 8, 255),
+            SkyboxLightColor = new Color32(0, 0, 0, 255),
             TopLevelBvhMinObjectCount = 1024,
             ShadowBvhMinObjectCount = 1024,
             DirectionalLightIntensity = 0f,
+            EnableEnvironmentLighting = false,
         });
 
         AddRayMesh(context.Root, "Back Stone Wall", CreateQuadMesh("Back Stone Wall", 12.0f, 3.0f, 6.0f, 1.5f), new Vector3(0.0f, 1.5f, 7.0f), Vector3.zero, Vector3.one, Color.white, RayMaterial.MaterialType.Diffuse, 0.18f, 1.0f, 1.0f, albedoTexture: wallTexture);

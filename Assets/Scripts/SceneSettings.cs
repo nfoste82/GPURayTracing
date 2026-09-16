@@ -1,6 +1,5 @@
 using PathTracing.Camera;
 using PathTracing.Lighting;
-using PathTracing.Sampling;
 using UnityEngine;
 
 public sealed class SceneSettings
