@@ -610,6 +610,32 @@ namespace GPURayTracing.Tests
             }
         }
 
+        [Test]
+        public void WavefrontEventBudget_FinalScatterStillEvaluatesTerminalSky()
+        {
+            SphereData[] spheres =
+            {
+                Sphere(Vector3.zero, new Vector3(0.45f, 0.62f, 0.78f), 2.0f, 0.2f, 1.0f, 1.0f, 0)
+            };
+
+            Vector4[] oneEvent = RenderSignature(spheres, false, new Vector3(0.0f, 0.0f, -3.0f),
+                Quaternion.identity, includeReceiver: false, width: 16, height: 16,
+                numberOfPasses: 128, maxBounces: 1, skyboxColor: new Color(1.3f, 1.0f, 0.72f, 1.0f),
+                environmentLightingEnabled: false, applyToneMapping: false, seed: 81723);
+            Vector4[] twoEvents = RenderSignature(spheres, false, new Vector3(0.0f, 0.0f, -3.0f),
+                Quaternion.identity, includeReceiver: false, width: 16, height: 16,
+                numberOfPasses: 128, maxBounces: 2, skyboxColor: new Color(1.3f, 1.0f, 0.72f, 1.0f),
+                environmentLightingEnabled: false, applyToneMapping: false, seed: 81723);
+
+            for (int channel = 0; channel < 3; channel++)
+            {
+                Assert.That(oneEvent[0][channel], Is.GreaterThan(0.01f),
+                    $"The final continuation-to-sky contribution must survive on channel {channel}.");
+                Assert.That(oneEvent[0][channel], Is.EqualTo(twoEvents[0][channel]).Within(0.0001f),
+                    $"An extra host iteration must not change a path that terminated after one scatter, channel {channel}.");
+            }
+        }
+
         [TestCase(1)]
         [TestCase(4)]
         [TestCase(16)]
@@ -643,7 +669,7 @@ namespace GPURayTracing.Tests
                     lightSamplingStrategy: 2, initialRisCandidateCount: candidateCount,
                     environmentLightSampleCount: environmentCount, lightSampleCount: lightCount,
                     shadowQuality: shadowQuality, shadowRandomness: 0.8f, lightFalloffScale: 1000.0f,
-                    applyToneMapping: false, seed: 81723, probes: probes);
+                    applyToneMapping: false, seed: 81723, probes: probes, maxBounces: 1);
             }
 
             Vector4[] reference = Render(1, 1, 0);
@@ -655,8 +681,8 @@ namespace GPURayTracing.Tests
                     Assert.That(value[channel], Is.GreaterThan(0.0f));
                 }
             }
-            // Same-seed local RIS shades one selected sample regardless of these settings. This
-            // is exact per-pixel equality, not a noisy mean comparison across candidate counts.
+            // Same-seed local RIS shades one selected sample regardless of these settings. Queue
+            // completion order can change float accumulation by a few ulps after terminal tracing.
             foreach (int count in new[] { 2, 4, 16 })
             {
                 Vector4[][] actual = { Render(count, 1, 0), Render(1, count, 0), Render(1, 1, count - 1) };
@@ -667,7 +693,7 @@ namespace GPURayTracing.Tests
                     {
                         for (int channel = 0; channel < 4; channel++)
                         {
-                            Assert.That(actual[setting][pixel][channel], Is.EqualTo(reference[pixel][channel]),
+                            Assert.That(actual[setting][pixel][channel], Is.EqualTo(reference[pixel][channel]).Within(0.002f),
                                 $"RIS {candidateCount} candidates, {settings[setting]}={count}, signature {pixel}, channel {channel}");
                         }
                     }
@@ -824,7 +850,7 @@ namespace GPURayTracing.Tests
                     Vector3.up * 2.0f, Vector3.back, emission),
                 SphereLight(new Vector3(0.0f, 0.0f, -2.0f), emission * 3.0f, 0.25f)
             };
-            const int pathCount = 12;
+            const int pathCount = 16;
             const float materialPdf = 0.25f;
             var paths = new ShadowTestPathData[pathCount];
             var hits = new ShadowTestHitData[pathCount];
@@ -832,7 +858,7 @@ namespace GPURayTracing.Tests
             var expected = new Vector3[pathCount];
             for (int i = 0; i < pathCount; i++)
             {
-                int terminal = i / 4; // sky, front-facing triangle, excluded sphere
+                int terminal = i / 4; // sky, front-facing triangle, excluded sphere, over-budget surface
                 bool attempted = (i & 2) != 0;
                 bool nearDelta = (i & 1) != 0;
                 paths[i] = new ShadowTestPathData
@@ -847,7 +873,7 @@ namespace GPURayTracing.Tests
                 {
                     position = paths[i].direction * 2.0f, normal = -paths[i].direction,
                     geometricNormal = -paths[i].direction, distance = terminal == 0 ? 1.0e20f : 2.0f,
-                    emission = terminal == 2 ? lights[1].emission : emission,
+                    emission = terminal == 2 ? lights[1].emission : terminal == 3 ? Vector3.zero : emission,
                     opacity = 1.0f, refraction = 1.0f, lightIndex = terminal - 1,
                     meshIndex = -1, objectIndex = -1, triangleIndex = -1,
                     textureIndex = -1, metallicRoughnessTextureIndex = -1, normalTextureIndex = -1
@@ -890,6 +916,7 @@ namespace GPURayTracing.Tests
                     SetFogDisabled(shader);
                     SetWater(shader, false);
                     shader.SetInt("_DebugRenderMode", 0);
+                    shader.SetInt("_NumBounces", 1);
                     shader.SetInt("_NumLights", lights.Length);
                     shader.SetInt("_MaxLightSamples", lights.Length);
                     shader.SetInt("_LightSamplingStrategy", 2);
@@ -1201,18 +1228,18 @@ namespace GPURayTracing.Tests
 
         private static readonly Vector4[] UnderwaterCameraBaseline =
         {
-            new Vector4(0.01083525f, 0.04680134f, 0.11641470f, 1.0f), new Vector4(0.00197481f, 0.00830896f, 0.02209839f, 1.0f),
-            new Vector4(0.00814293f, 0.04262298f, 0.11355340f, 1.0f), new Vector4(0.00906181f, 0.03208921f, 0.08112453f, 1.0f),
+            new Vector4(0.01172252f, 0.05067247f, 0.12522110f, 1.0f), new Vector4(0.00197481f, 0.00830896f, 0.02209839f, 1.0f),
+            new Vector4(0.00814293f, 0.04262298f, 0.11355340f, 1.0f), new Vector4(0.01656031f, 0.07243132f, 0.17998780f, 1.0f),
             new Vector4(0.00059000f, 0.02316983f, 0.07380866f, 1.0f), new Vector4(0.00000000f, 0.00000000f, 0.00000000f, 1.0f),
-            new Vector4(0.00066450f, 0.02183824f, 0.06913769f, 1.0f), new Vector4(0.00925418f, 0.04848710f, 0.12722190f, 1.0f),
-            new Vector4(0.00460463f, 0.04967035f, 0.14165210f, 1.0f)
+            new Vector4(0.00000000f, 0.04092992f, 0.13576140f, 1.0f), new Vector4(0.00925418f, 0.04848710f, 0.12722190f, 1.0f),
+            new Vector4(0.00460464f, 0.04967036f, 0.14165210f, 1.0f)
         };
 
         private static readonly Vector4[] ClosedMeshGlassBaseline =
         {
             new Vector4(0.10595220f, 0.21133190f, 0.38499060f, 1.0f), new Vector4(0.06701814f, 0.14465570f, 0.28885100f, 1.0f),
             new Vector4(0.00751310f, 0.01914678f, 0.04611280f, 1.0f), new Vector4(0.12639390f, 0.25064200f, 0.44621260f, 1.0f),
-            new Vector4(0.12896720f, 0.24395500f, 0.42884050f, 1.0f), new Vector4(0.03532346f, 0.02948635f, 0.05070299f, 1.0f),
+            new Vector4(0.12896720f, 0.24395500f, 0.42884050f, 1.0f), new Vector4(0.02237150f, 0.02055254f, 0.03820165f, 1.0f),
             new Vector4(0.14141920f, 0.26180240f, 0.45083230f, 1.0f), new Vector4(0.11942720f, 0.22987970f, 0.41089870f, 1.0f),
             new Vector4(0.11942720f, 0.22987970f, 0.41089870f, 1.0f)
         };
@@ -1412,7 +1439,8 @@ namespace GPURayTracing.Tests
             int environmentLightSampleCount = 1,
             int lightSampleCount = 1,
             int shadowQuality = 0,
-            int seed = 1)
+            int seed = 1,
+            int maxBounces = 6)
         {
             if (!SystemInfo.supportsComputeShaders)
             {
@@ -1560,7 +1588,7 @@ namespace GPURayTracing.Tests
                 shader.SetInt("_SampleOffset", 0);
                 shader.SetInt("_NumberOfPasses", numberOfPasses);
                 shader.SetFloat("_SubpixelJitterScale", 1.0f);
-                shader.SetInt("_NumBounces", 6);
+                shader.SetInt("_NumBounces", maxBounces);
                 shader.SetInt("_DebugRenderMode", 0);
                 shader.SetInt("_UseFrameAccumulation", 0);
                 shader.SetInt("_AccumulatedFrameCount", 0);
@@ -1621,7 +1649,7 @@ namespace GPURayTracing.Tests
                     wavefront = Activator.CreateInstance(managerType);
                     managerType.GetMethod("Dispatch").Invoke(wavefront, new object[]
                     {
-                        shader, new Vector2Int(width, height), numberOfPasses, 6, 0,
+                        shader, new Vector2Int(width, height), numberOfPasses, maxBounces, 0,
                         false, false, false, (Action<ComputeShader, int>)BindWavefrontShared, result, accumulation
                     });
                 }

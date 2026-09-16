@@ -341,6 +341,14 @@ void CSWavefrontClassify(uint3 id : SV_DispatchThreadID)
         return;
     }
 
+    if (path.bounce >= _NumBounces)
+    {
+        path.active = 0;
+        _WavefrontPaths[pathIndex] = path;
+        EnqueueCompleted(pathIndex);
+        return;
+    }
+
     _WavefrontPaths[pathIndex] = path;
 }
 

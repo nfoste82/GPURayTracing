@@ -11,7 +11,8 @@ wrappers; their integration is not remaining migration work.
 
 Debug modes are wired, but `_WavefrontHits` is overwritten every bounce. Final presentation does
 not reliably show first-hit diagnostics and can suppress separately stored diagnostics on a terminal
-sky hit. Final-bounce MIS and per-path depth enforcement also remain unresolved.
+sky hit. Final-bounce MIS and per-path depth enforcement were repaired after this review; see
+document 27 for current evidence.
 
 This document retains architecture and historical evidence, not an active migration sequence.
 [Renderer Sampling Audit And Repair Plan](27-renderer-sampling-audit-and-repair-plan.md) is the
@@ -69,7 +70,7 @@ CSWavefrontClearFrame
 for each camera pass:
   CSWavefrontClearQueues
   CSWavefrontGenerate
-  repeat _NumBounces times:
+  repeat up to _NumBounces full scatter stages:
     build indirect args for current queue
     CSWavefrontIntersect
     CSWavefrontClassify
@@ -83,7 +84,8 @@ for each camera pass:
     build indirect args for next queue
     CSWavefrontCopyNextQueue
     CSWavefrontPublishNextQueue
-  retire paths still active after the host bounce loop
+  intersect and classify once more for terminal sky/emitter radiance
+  retire remaining exhausted non-emissive paths
   resolve completed paths
   optionally record terminal path-guide observations
 
@@ -92,10 +94,10 @@ CSWavefrontPresent
 ```
 
 The explicit counter buffer holds current, next, completed, and shadow-work counts. Queue stages
-use GPU-generated indirect arguments and `ComputeDispatch.DispatchIndirect`. Retirement after the
-fixed host-side bounce loop accounts for surviving camera paths rather than silently dropping them.
-It does not prove correct terminal MIS or enforce each path's own consumed-bounce budget; see the
-open findings below.
+use GPU-generated indirect arguments and `ComputeDispatch.DispatchIndirect`. The terminal-only pass
+applies continuation MIS to sky/emitter hits and classification retires non-emissive paths at their
+own consumed-event budget. Mesh helpers that consume multiple events can therefore exhaust depth
+before the fixed host loop does.
 
 `WavefrontPathState` carries current ray, radiance, throughput, full `MediumStack`, semantic
 `RngState`, pixel/bounce identity, and the prior surface/PDF/direct-light/RIS/near-delta/soft-shadow
@@ -366,14 +368,6 @@ architecture/evidence retained in [document 23](23-initial-ris-direct-lighting-p
   A secondary surface or terminal sky therefore replaces the intended primary receiver. Its
   `DidHitSky` branch also precedes the stored direct-light, throughput, bounce-count, and
   glass-scatter branches, masking valid dedicated records when the last hit is sky.
-- **Final-bounce MIS loses the competing technique:** explicit triangle/environment direct light
-  is still downweighted against a continuation at the last permitted event, but survivors are
-  retired after the host loop without classifying the newly scattered ray. The complementary
-  terminal contribution is unavailable. Completion accounting alone does not correct this bias.
-- **Per-path depth is not enforced by host iteration count:** scatter advances `path.bounce` by
-  `scatter.bouncesConsumed`; mesh transmission/internal reflection can consume multiple bounces
-  in one host iteration. Paths are nevertheless requeued without a corresponding exhausted-depth
-  gate, so the fixed host loop is not the per-path transport-depth limit.
 - **RIS metadata/PDF pairing is incomplete:** continuation-hit code uses ordinary environment/light
   counts and all-light PDF reconstruction with a RIS branch multiplier, while its RIS flag records
   successful selection rather than the attempted technique. Empty outcomes and non-default counts

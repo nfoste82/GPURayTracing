@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace PathTracing
@@ -10,6 +11,27 @@ namespace PathTracing
         private const int PathStateStride = 352;
         private const int HitRecordStride = 144;
         private const int ThreadCount = 64;
+
+        private static readonly int WavefrontAdaptiveSampling = Shader.PropertyToID("_WavefrontAdaptiveSampling");
+        private static readonly int AdaptiveSampleLayer = Shader.PropertyToID("_AdaptiveSampleLayer");
+        private static readonly int WavefrontPassIndex = Shader.PropertyToID("_WavefrontPassIndex");
+        private static readonly int WavefrontThreadsPerGroup = Shader.PropertyToID("_WavefrontThreadsPerGroup");
+        private static readonly int WavefrontPaths = Shader.PropertyToID("_WavefrontPaths");
+        private static readonly int WavefrontHits = Shader.PropertyToID("_WavefrontHits");
+        private static readonly int WavefrontCurrentQueue = Shader.PropertyToID("_WavefrontCurrentQueue");
+        private static readonly int WavefrontNextQueue = Shader.PropertyToID("_WavefrontNextQueue");
+        private static readonly int WavefrontCompletedQueue = Shader.PropertyToID("_WavefrontCompletedQueue");
+        private static readonly int WavefrontShadowWork = Shader.PropertyToID("_WavefrontShadowWork");
+        private static readonly int WavefrontFirstDirectLight = Shader.PropertyToID("_WavefrontFirstDirectLight");
+        private static readonly int WavefrontPathDiagnostics = Shader.PropertyToID("_WavefrontPathDiagnostics");
+        private static readonly int WavefrontPathGuideStates = Shader.PropertyToID("_WavefrontPathGuideStates");
+        private static readonly int WavefrontCounters = Shader.PropertyToID("_WavefrontCounters");
+        private static readonly int WavefrontDispatchArgs = Shader.PropertyToID("_WavefrontDispatchArgs");
+        private static readonly int WavefrontAdaptiveRadiance = Shader.PropertyToID("_WavefrontAdaptiveRadiance");
+        private static readonly int WavefrontPixelCapacity = Shader.PropertyToID("_WavefrontPixelCapacity");
+        private static readonly int WavefrontFrameResult = Shader.PropertyToID("_WavefrontFrameResult");
+        private static readonly int Result = Shader.PropertyToID("Result");
+        private static readonly int AccumulationResult = Shader.PropertyToID("AccumulationResult");
 
         private ComputeBuffer _paths;
         private ComputeBuffer _hits;
@@ -29,6 +51,53 @@ namespace PathTracing
         private RenderTexture _frameResult;
         private int _capacity;
         private int _pixelCapacity;
+        private readonly Dictionary<ComputeShader, Kernels> _kernelsByShader = new Dictionary<ComputeShader, Kernels>();
+
+        private sealed class Kernels
+        {
+            public readonly int ClearFrame;
+            public readonly int ClearQueues;
+            public readonly int Generate;
+            public readonly int BuildDispatchArgs;
+            public readonly int Intersect;
+            public readonly int Classify;
+            public readonly int DirectLight;
+            public readonly int ClearShadowQueue;
+            public readonly int TraceShadows;
+            public readonly int RecordDirectLightGuides;
+            public readonly int ResolveShadowWork;
+            public readonly int Scatter;
+            public readonly int CopyNextQueue;
+            public readonly int PublishNextQueue;
+            public readonly int RetireCurrentQueue;
+            public readonly int Resolve;
+            public readonly int RecordPathGuides;
+            public readonly int ResolveAdaptive;
+            public readonly int Present;
+
+            public Kernels(ComputeShader shader)
+            {
+                ClearFrame = shader.FindKernel("CSWavefrontClearFrame");
+                ClearQueues = shader.FindKernel("CSWavefrontClearQueues");
+                Generate = shader.FindKernel("CSWavefrontGenerate");
+                BuildDispatchArgs = shader.FindKernel("CSWavefrontBuildDispatchArgs");
+                Intersect = shader.FindKernel("CSWavefrontIntersect");
+                Classify = shader.FindKernel("CSWavefrontClassify");
+                DirectLight = shader.FindKernel("CSWavefrontDirectLight");
+                ClearShadowQueue = shader.FindKernel("CSWavefrontClearShadowQueue");
+                TraceShadows = shader.FindKernel("CSWavefrontTraceShadows");
+                RecordDirectLightGuides = shader.FindKernel("CSWavefrontRecordDirectLightGuides");
+                ResolveShadowWork = shader.FindKernel("CSWavefrontResolveShadowWork");
+                Scatter = shader.FindKernel("CSWavefrontScatter");
+                CopyNextQueue = shader.FindKernel("CSWavefrontCopyNextQueue");
+                PublishNextQueue = shader.FindKernel("CSWavefrontPublishNextQueue");
+                RetireCurrentQueue = shader.FindKernel("CSWavefrontRetireCurrentQueue");
+                Resolve = shader.FindKernel("CSWavefrontResolve");
+                RecordPathGuides = shader.FindKernel("CSWavefrontRecordPathGuides");
+                ResolveAdaptive = shader.FindKernel("CSWavefrontResolveAdaptive");
+                Present = shader.FindKernel("CSWavefrontPresent");
+            }
+        }
 
         public void EnsureResources(Vector2Int size, int adaptiveLayers = 0)
         {
@@ -82,77 +151,77 @@ namespace PathTracing
                 _pathGuideStates.Release();
                 _pathGuideStates = null;
             }
-            int clearFrame = shader.FindKernel("CSWavefrontClearFrame");
-            Bind(shader, clearFrame, output, accumulation);
-            bindShared(shader, clearFrame);
-            ComputeDispatch.Dispatch(shader, clearFrame, Mathf.CeilToInt(size.x / 4.0f), Mathf.CeilToInt(size.y / 4.0f), 1);
-
-            int clearQueues = shader.FindKernel("CSWavefrontClearQueues");
-            int generate = shader.FindKernel("CSWavefrontGenerate");
-            int buildDispatchArgs = shader.FindKernel("CSWavefrontBuildDispatchArgs");
-            int intersect = shader.FindKernel("CSWavefrontIntersect");
-            int classify = shader.FindKernel("CSWavefrontClassify");
-            int directLight = shader.FindKernel("CSWavefrontDirectLight");
-            int clearShadowQueue = shader.FindKernel("CSWavefrontClearShadowQueue");
-            int traceShadows = shader.FindKernel("CSWavefrontTraceShadows");
-            int recordDirectLightGuides = shader.FindKernel("CSWavefrontRecordDirectLightGuides");
-            int resolveShadowWork = shader.FindKernel("CSWavefrontResolveShadowWork");
-            int scatter = shader.FindKernel("CSWavefrontScatter");
-            int copyNextQueue = shader.FindKernel("CSWavefrontCopyNextQueue");
-            int publishNextQueue = shader.FindKernel("CSWavefrontPublishNextQueue");
-            int retireCurrentQueue = shader.FindKernel("CSWavefrontRetireCurrentQueue");
-            int resolve = shader.FindKernel("CSWavefrontResolve");
-            int recordPathGuides = shader.FindKernel("CSWavefrontRecordPathGuides");
-            int resolveAdaptive = shader.FindKernel("CSWavefrontResolveAdaptive");
-            int present = shader.FindKernel("CSWavefrontPresent");
+            Kernels kernels = GetKernels(shader);
+            Bind(shader, kernels.ClearFrame, output, accumulation);
+            bindShared(shader, kernels.ClearFrame);
+            ComputeDispatch.Dispatch(shader, kernels.ClearFrame, Mathf.CeilToInt(size.x / 4.0f), Mathf.CeilToInt(size.y / 4.0f), 1);
 
             int pathPasses = adaptiveLayers > 0 ? 1 : Mathf.Max(1, passes);
             for (int pass = 0; pass < pathPasses; pass++)
             {
-                shader.SetInt("_WavefrontAdaptiveSampling", adaptiveLayers > 0 ? 1 : 0);
-                shader.SetInt("_AdaptiveSampleLayer", pass);
-                BindAndDispatch(shader, clearQueues, bindShared, output, accumulation, 1, 1, 1, pass);
-                BindAndDispatch(shader, generate, bindShared, output, accumulation,
+                shader.SetInt(WavefrontAdaptiveSampling, adaptiveLayers > 0 ? 1 : 0);
+                shader.SetInt(AdaptiveSampleLayer, pass);
+
+                BindAndDispatch(shader, kernels.ClearQueues, bindShared, output, accumulation, 1, 1, 1, pass);
+                BindAndDispatch(shader, kernels.Generate, bindShared, output, accumulation,
                     Mathf.CeilToInt(size.x * Mathf.Max(1, adaptiveLayers) / 4.0f), Mathf.CeilToInt(size.y / 4.0f), 1, pass);
 
                 for (int bounce = 0; bounce < Mathf.Max(1, bounces); bounce++)
                 {
-                    BuildQueueDispatch(shader, buildDispatchArgs, bindShared, output, accumulation, 0, ThreadCount);
-                    BindAndDispatchIndirect(shader, intersect, bindShared, output, accumulation);
-                    BuildQueueDispatch(shader, buildDispatchArgs, bindShared, output, accumulation, 0, 4);
-                    BindAndDispatchIndirect(shader, classify, bindShared, output, accumulation);
-                    BindAndDispatch(shader, clearShadowQueue, bindShared, output, accumulation, 1, 1, 1, 0);
-                    BindAndDispatchIndirect(shader, directLight, bindShared, output, accumulation);
-                    BuildQueueDispatch(shader, buildDispatchArgs, bindShared, output, accumulation, 3, 4);
-                    BindAndDispatchIndirect(shader, traceShadows, bindShared, output, accumulation);
+                    BuildQueueDispatch(shader, kernels.BuildDispatchArgs, bindShared, output, accumulation, 0, ThreadCount);
+                    BindAndDispatchIndirect(shader, kernels.Intersect, bindShared, output, accumulation);
+
+                    BuildQueueDispatch(shader, kernels.BuildDispatchArgs, bindShared, output, accumulation, 0, 4);
+                    BindAndDispatchIndirect(shader, kernels.Classify, bindShared, output, accumulation);
+
+                    BindAndDispatch(shader, kernels.ClearShadowQueue, bindShared, output, accumulation, 1, 1, 1, 0);
+                    BindAndDispatchIndirect(shader, kernels.DirectLight, bindShared, output, accumulation);
+
+                    BuildQueueDispatch(shader, kernels.BuildDispatchArgs, bindShared, output, accumulation, 3, 4);
+                    BindAndDispatchIndirect(shader, kernels.TraceShadows, bindShared, output, accumulation);
+
                     if (usePathGuiding)
-                        BindAndDispatchIndirect(shader, recordDirectLightGuides, bindShared, output, accumulation);
-                    BindAndDispatchIndirect(shader, resolveShadowWork, bindShared, output, accumulation);
+                        BindAndDispatchIndirect(shader, kernels.RecordDirectLightGuides, bindShared, output, accumulation);
+
+                    BindAndDispatchIndirect(shader, kernels.ResolveShadowWork, bindShared, output, accumulation);
+
                     // Shadow dispatches overwrite the indirect arguments with the shadow-work count.
                     // Scatter must still process every current path, not only paths with direct light.
-                    BuildQueueDispatch(shader, buildDispatchArgs, bindShared, output, accumulation, 0, 4);
-                    BindAndDispatchIndirect(shader, scatter, bindShared, output, accumulation);
-                    BuildQueueDispatch(shader, buildDispatchArgs, bindShared, output, accumulation, 1, ThreadCount);
-                    BindAndDispatchIndirect(shader, copyNextQueue, bindShared, output, accumulation);
-                    BindAndDispatch(shader, publishNextQueue, bindShared, output, accumulation, 1, 1, 1, 0);
+                    BuildQueueDispatch(shader, kernels.BuildDispatchArgs, bindShared, output, accumulation, 0, 4);
+                    BindAndDispatchIndirect(shader, kernels.Scatter, bindShared, output, accumulation);
+
+                    BuildQueueDispatch(shader, kernels.BuildDispatchArgs, bindShared, output, accumulation, 1, ThreadCount);
+                    BindAndDispatchIndirect(shader, kernels.CopyNextQueue, bindShared, output, accumulation);
+
+                    BindAndDispatch(shader, kernels.PublishNextQueue, bindShared, output, accumulation, 1, 1, 1, 0);
                 }
 
-                BuildQueueDispatch(shader, buildDispatchArgs, bindShared, output, accumulation, 0, ThreadCount);
-                BindAndDispatchIndirect(shader, retireCurrentQueue, bindShared, output, accumulation);
-                BuildQueueDispatch(shader, buildDispatchArgs, bindShared, output, accumulation, 2, ThreadCount);
-                BindAndDispatchIndirect(shader, resolve, bindShared, output, accumulation);
+                // Evaluate sky or emitter radiance reached by the final allowed scatter.
+                BuildQueueDispatch(shader, kernels.BuildDispatchArgs, bindShared, output, accumulation, 0, ThreadCount);
+                BindAndDispatchIndirect(shader, kernels.Intersect, bindShared, output, accumulation);
+
+                BuildQueueDispatch(shader, kernels.BuildDispatchArgs, bindShared, output, accumulation, 0, 4);
+                BindAndDispatchIndirect(shader, kernels.Classify, bindShared, output, accumulation);
+
+                BuildQueueDispatch(shader, kernels.BuildDispatchArgs, bindShared, output, accumulation, 0, ThreadCount);
+                BindAndDispatchIndirect(shader, kernels.RetireCurrentQueue, bindShared, output, accumulation);
+
+                BuildQueueDispatch(shader, kernels.BuildDispatchArgs, bindShared, output, accumulation, 2, ThreadCount);
+                BindAndDispatchIndirect(shader, kernels.Resolve, bindShared, output, accumulation);
+
                 if (usePathGuiding)
-                    BindAndDispatchIndirect(shader, recordPathGuides, bindShared, output, accumulation);
+                    BindAndDispatchIndirect(shader, kernels.RecordPathGuides, bindShared, output, accumulation);
             }
 
             if (adaptiveLayers > 0)
             {
-                BindAndDispatch(shader, resolveAdaptive, bindShared, output, accumulation,
+                BindAndDispatch(shader, kernels.ResolveAdaptive, bindShared, output, accumulation,
                     Mathf.CeilToInt(size.x / 4.0f), Mathf.CeilToInt(size.y / 4.0f), 1, 0);
             }
 
-            shader.SetInt("_WavefrontAdaptiveSampling", adaptiveLayers > 0 ? 1 : 0);
-            BindAndDispatch(shader, present, bindShared, output, accumulation,
+            shader.SetInt(WavefrontAdaptiveSampling, adaptiveLayers > 0 ? 1 : 0);
+
+            BindAndDispatch(shader, kernels.Present, bindShared, output, accumulation,
                 Mathf.CeilToInt(size.x / 4.0f), Mathf.CeilToInt(size.y / 4.0f), 1, 0);
         }
 
@@ -160,7 +229,7 @@ namespace PathTracing
             RenderTexture output, RenderTexture accumulation, int x, int y, int z, int passIndex)
         {
             Bind(shader, kernel, output, accumulation);
-            shader.SetInt("_WavefrontPassIndex", passIndex);
+            shader.SetInt(WavefrontPassIndex, passIndex);
             bindShared(shader, kernel);
             ComputeDispatch.Dispatch(shader, kernel, x, y, z);
         }
@@ -169,8 +238,8 @@ namespace PathTracing
             RenderTexture output, RenderTexture accumulation, int queueSelector, int threadsPerGroup)
         {
             Bind(shader, kernel, output, accumulation);
-            shader.SetInt("_WavefrontPassIndex", queueSelector);
-            shader.SetInt("_WavefrontThreadsPerGroup", threadsPerGroup);
+            shader.SetInt(WavefrontPassIndex, queueSelector);
+            shader.SetInt(WavefrontThreadsPerGroup, threadsPerGroup);
             bindShared(shader, kernel);
             ComputeDispatch.Dispatch(shader, kernel, 1, 1, 1);
         }
@@ -185,22 +254,32 @@ namespace PathTracing
 
         private void Bind(ComputeShader shader, int kernel, RenderTexture output, RenderTexture accumulation)
         {
-            shader.SetBuffer(kernel, "_WavefrontPaths", _paths);
-            shader.SetBuffer(kernel, "_WavefrontHits", _hits);
-            shader.SetBuffer(kernel, "_WavefrontCurrentQueue", _currentQueue);
-            shader.SetBuffer(kernel, "_WavefrontNextQueue", _nextQueue);
-            shader.SetBuffer(kernel, "_WavefrontCompletedQueue", _completedQueue);
-            shader.SetBuffer(kernel, "_WavefrontShadowWork", _shadowWork);
-            shader.SetBuffer(kernel, "_WavefrontFirstDirectLight", _firstDirectLight ?? _emptyFirstDirectLight);
-            shader.SetBuffer(kernel, "_WavefrontPathDiagnostics", _pathDiagnostics ?? (_emptyPathDiagnostics ??= new ComputeBuffer(1, sizeof(float) * 7)));
-            shader.SetBuffer(kernel, "_WavefrontPathGuideStates", _pathGuideStates ?? (_emptyPathGuideStates ??= new ComputeBuffer(1, sizeof(float) * 10)));
-            shader.SetBuffer(kernel, "_WavefrontCounters", _counters);
-            shader.SetBuffer(kernel, "_WavefrontDispatchArgs", _dispatchArguments);
-            shader.SetBuffer(kernel, "_WavefrontAdaptiveRadiance", _adaptiveRadiance);
-            shader.SetInt("_WavefrontPixelCapacity", _pixelCapacity);
-            shader.SetTexture(kernel, "_WavefrontFrameResult", _frameResult);
-            shader.SetTexture(kernel, "Result", output);
-            shader.SetTexture(kernel, "AccumulationResult", accumulation);
+            shader.SetBuffer(kernel, WavefrontPaths, _paths);
+            shader.SetBuffer(kernel, WavefrontHits, _hits);
+            shader.SetBuffer(kernel, WavefrontCurrentQueue, _currentQueue);
+            shader.SetBuffer(kernel, WavefrontNextQueue, _nextQueue);
+            shader.SetBuffer(kernel, WavefrontCompletedQueue, _completedQueue);
+            shader.SetBuffer(kernel, WavefrontShadowWork, _shadowWork);
+            shader.SetBuffer(kernel, WavefrontFirstDirectLight, _firstDirectLight ?? _emptyFirstDirectLight);
+            shader.SetBuffer(kernel, WavefrontPathDiagnostics, _pathDiagnostics ?? (_emptyPathDiagnostics ??= new ComputeBuffer(1, sizeof(float) * 7)));
+            shader.SetBuffer(kernel, WavefrontPathGuideStates, _pathGuideStates ?? (_emptyPathGuideStates ??= new ComputeBuffer(1, sizeof(float) * 10)));
+            shader.SetBuffer(kernel, WavefrontCounters, _counters);
+            shader.SetBuffer(kernel, WavefrontDispatchArgs, _dispatchArguments);
+            shader.SetBuffer(kernel, WavefrontAdaptiveRadiance, _adaptiveRadiance);
+            shader.SetInt(WavefrontPixelCapacity, _pixelCapacity);
+            shader.SetTexture(kernel, WavefrontFrameResult, _frameResult);
+            shader.SetTexture(kernel, Result, output);
+            shader.SetTexture(kernel, AccumulationResult, accumulation);
+        }
+
+        private Kernels GetKernels(ComputeShader shader)
+        {
+            if (!_kernelsByShader.TryGetValue(shader, out Kernels kernels))
+            {
+                kernels = new Kernels(shader);
+                _kernelsByShader.Add(shader, kernels);
+            }
+            return kernels;
         }
 
         public void ReleaseResources()

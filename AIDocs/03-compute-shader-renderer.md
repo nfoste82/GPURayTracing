@@ -17,7 +17,8 @@ Important shader globals:
 - `_SubpixelJitterScale`: width of the random primary-ray pixel filter. `1` samples the full pixel footprint; values above `1` intentionally extend into neighboring pixels and blur the image.
 - `_UseFrameAccumulation`, `_AccumulatedFrameCount`, `_SampleOffset`: control progressive final-color accumulation and advance deterministic sample indices across frames. The sample sequence also advances when accumulation is disabled, so animated scenes do not repeat the same stochastic samples every frame.
 - `GameManager.enableAdaptiveSampling`: experimental static-final-color progressive path. It schedules full-resolution pixels in independent `8x8` groups at a configurable cadence. Linear-RGB Welford standard-error scores map groups into 16 global urgency buckets. The 15 non-bootstrap tiers span reciprocal sample-rate endpoints; lower-rate tiers contain more groups using inverse-rate weights plus a uniform normalization term, preserving one expected path per pixel. Each admitted layer runs the same wavefront queue stages and updates per-pixel accumulation once.
-- `_NumBounces`: maximum wavefront scatter iterations.
+- `_NumBounces`: maximum scatter-event count per path. Mesh helpers can consume multiple events in
+  one host iteration; a terminal-only trace after the budget evaluates sky or emitter radiance.
 - `_DebugRenderMode`: selects final path-traced color or a debug visualization.
 - `_ShadowQuality`: soft-shadow sample budget control. Bounce-0 direct lighting takes `max(1, _ShadowQuality + 1)` stochastic area-light samples per light.
 - `_ShadowRandomness`: area-light sampling radius multiplier for soft shadow samples.
@@ -139,7 +140,7 @@ It samples a configurable circular or polygonal aperture in camera right/up spac
 
 ## Core Path Tracing Loop
 
-The active loop is split across wavefront intersection, classification, direct-light/shadow, scatter, and resolve kernels. The host repeats queue stages up to `_NumBounces` times and retires survivors; this is not yet a correct per-path depth gate when mesh scattering consumes multiple bounces in one iteration.
+The active loop is split across wavefront intersection, classification, direct-light/shadow, scatter, and resolve kernels. The host repeats full queue stages up to `_NumBounces` times, then performs one terminal-only intersection/classification. Classification retires non-emissive paths at their per-path event budget, including paths whose mesh scatter consumed multiple events internally.
 
 Persistent `WavefrontPathState` and each bounce's `RayHit` provide:
 
@@ -161,6 +162,9 @@ Per bounce:
 8. Update `throughput` with the scatter attenuation.
 9. Stop early when throughput is effectively black.
 10. Starting after the first few bounces, apply Russian roulette termination and scale surviving throughput by survival probability.
+
+After the last allowed scatter, one extra trace evaluates only sky or emissive hits with the existing
+continuation MIS weight. A non-emissive hit retires without direct lighting or another scatter.
 
 Before frame accumulation, `ClampFirefly()` optionally caps each sample by luminance; `FireflyClamp = 0` disables that cap. The Demofox HDR-reference fixtures disable it so a bright area-light reflection is not reduced to the same radiance as the skybox before ACES tone mapping.
 

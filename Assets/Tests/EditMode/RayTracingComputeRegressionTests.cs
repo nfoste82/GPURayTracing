@@ -849,21 +849,54 @@ namespace GPURayTracing.Tests
             Assert.That(wavefront, Does.Contain("EnqueueShadowWork(pathIndex)"));
             Assert.That(wavefront, Does.Contain("float3 directLight = GetLightHittingPoint("));
             Assert.That(manager, Does.Contain("new ComputeBuffer(4, sizeof(uint))"));
-            Assert.That(manager, Does.Contain("shader.SetBuffer(kernel, \"_WavefrontShadowWork\", _shadowWork)"));
-            Assert.That(manager, Does.Contain("BindAndDispatchIndirect(shader, traceShadows"));
-            Assert.That(manager, Does.Contain("BindAndDispatchIndirect(shader, resolveShadowWork"));
-            Assert.That(manager.IndexOf("BindAndDispatch(shader, clearShadowQueue", StringComparison.Ordinal),
-                Is.LessThan(manager.IndexOf("BindAndDispatchIndirect(shader, directLight", StringComparison.Ordinal)));
-            Assert.That(manager.IndexOf("BindAndDispatchIndirect(shader, traceShadows", StringComparison.Ordinal),
-                Is.LessThan(manager.IndexOf("BindAndDispatchIndirect(shader, scatter", StringComparison.Ordinal)));
-            int resolveShadowIndex = manager.IndexOf("BindAndDispatchIndirect(shader, resolveShadowWork", StringComparison.Ordinal);
-            int scatterDispatchArgumentsIndex = manager.IndexOf("BuildQueueDispatch(shader, buildDispatchArgs, bindShared, output, accumulation, 0, 4)",
+            Assert.That(manager, Does.Contain("shader.SetBuffer(kernel, WavefrontShadowWork, _shadowWork)"));
+            Assert.That(manager, Does.Contain("BindAndDispatchIndirect(shader, kernels.TraceShadows"));
+            Assert.That(manager, Does.Contain("BindAndDispatchIndirect(shader, kernels.ResolveShadowWork"));
+            Assert.That(manager.IndexOf("BindAndDispatch(shader, kernels.ClearShadowQueue", StringComparison.Ordinal),
+                Is.LessThan(manager.IndexOf("BindAndDispatchIndirect(shader, kernels.DirectLight", StringComparison.Ordinal)));
+            Assert.That(manager.IndexOf("BindAndDispatchIndirect(shader, kernels.TraceShadows", StringComparison.Ordinal),
+                Is.LessThan(manager.IndexOf("BindAndDispatchIndirect(shader, kernels.Scatter", StringComparison.Ordinal)));
+            int resolveShadowIndex = manager.IndexOf("BindAndDispatchIndirect(shader, kernels.ResolveShadowWork", StringComparison.Ordinal);
+            int scatterDispatchArgumentsIndex = manager.IndexOf("BuildQueueDispatch(shader, kernels.BuildDispatchArgs, bindShared, output, accumulation, 0, 4)",
                 resolveShadowIndex, StringComparison.Ordinal);
             Assert.That(scatterDispatchArgumentsIndex, Is.GreaterThan(resolveShadowIndex));
             Assert.That(scatterDispatchArgumentsIndex,
-                Is.LessThan(manager.IndexOf("BindAndDispatchIndirect(shader, scatter", StringComparison.Ordinal)));
+                Is.LessThan(manager.IndexOf("BindAndDispatchIndirect(shader, kernels.Scatter", StringComparison.Ordinal)));
             Assert.That(precompiler, Does.Contain("CSWavefrontTraceShadows"));
             Assert.That(precompiler, Does.Contain("CSWavefrontResolveShadowWork"));
+        }
+
+        [Test]
+        public void WavefrontFinalColor_CachesStageKernelsAndPropertyIds()
+        {
+            string manager = System.IO.File.ReadAllText("Assets/Scripts/WavefrontPathTracingManager.cs");
+
+            Assert.That(manager, Does.Contain("private readonly Dictionary<ComputeShader, Kernels> _kernelsByShader"));
+            Assert.That(manager, Does.Contain("private Kernels GetKernels(ComputeShader shader)"));
+            Assert.That(manager, Does.Contain("Kernels kernels = GetKernels(shader)"));
+            Assert.That(manager, Does.Contain("private static readonly int WavefrontPaths = Shader.PropertyToID(\"_WavefrontPaths\")"));
+            Assert.That(manager, Does.Contain("shader.SetBuffer(kernel, WavefrontPaths, _paths)"));
+            Assert.That(manager, Does.Not.Contain("shader.SetBuffer(kernel, \"_WavefrontPaths\", _paths)"));
+        }
+
+        [Test]
+        public void WavefrontEventBudget_RunsTerminalClassificationWithoutAnotherScatter()
+        {
+            string wavefront = System.IO.File.ReadAllText("Assets/Resources/RayTracingWavefront.compute");
+            string manager = System.IO.File.ReadAllText("Assets/Scripts/WavefrontPathTracingManager.cs");
+
+            Assert.That(wavefront, Does.Contain("if (path.bounce >= _NumBounces)"));
+            Assert.That(manager, Does.Contain("// Evaluate sky or emitter radiance reached by the final allowed scatter."));
+            int loopEnd = manager.IndexOf("// Evaluate sky or emitter radiance reached by the final allowed scatter.", StringComparison.Ordinal);
+            int terminalIntersect = manager.IndexOf("BindAndDispatchIndirect(shader, kernels.Intersect", loopEnd, StringComparison.Ordinal);
+            int terminalClassify = manager.IndexOf("BindAndDispatchIndirect(shader, kernels.Classify", terminalIntersect, StringComparison.Ordinal);
+            int retire = manager.IndexOf("BindAndDispatchIndirect(shader, kernels.RetireCurrentQueue", terminalClassify, StringComparison.Ordinal);
+            Assert.That(terminalIntersect, Is.GreaterThan(loopEnd));
+            Assert.That(terminalClassify, Is.GreaterThan(terminalIntersect));
+            Assert.That(retire, Is.GreaterThan(terminalClassify));
+            string terminalPass = manager.Substring(loopEnd, retire - loopEnd);
+            Assert.That(terminalPass, Does.Not.Contain("BindAndDispatchIndirect(shader, kernels.Scatter"),
+                "The terminal pass must not create another transport event.");
         }
 
         [Test]

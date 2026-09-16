@@ -6,8 +6,9 @@ Audit date: **2026-09-15**. Audit source revision: `7c557cd5548c112c38d6955248dc
 This is the **authoritative active plan** for renderer sampling correctness, adaptive allocation,
 RIS reuse, and their convergence/performance validation. The first T1 GGX repair is now implemented
 with focused GPU coverage; broader T1 acceptance remains pending. T2 and local R5 MIS consistency
-are now repaired with focused production-GPU coverage. Phase 1 is in progress, not complete.
-Phase 0 and Phases 2-4 remain pending; T3/T7 are next within Phase 1.
+are now repaired with focused production-GPU coverage. T3/T7 terminal-event and per-path depth
+handling are also repaired with focused production-GPU coverage. Phase 1 is in progress, not
+complete. Phase 0 and Phases 2-4 remain pending; S1/S2/S3 are next within Phase 1.
 
 The review inspected the active wavefront shaders, shared transport/sampling helpers, C# lifecycle,
 adaptive scheduler, tests, and existing capture reports. No new Unity tests, compiles, or captures
@@ -44,7 +45,7 @@ Sound foundations worth preserving:
 ## Finding Register
 
 This register preserves findings and source references at the historical audit revision above,
-not a claim that every row still describes current code. T1/T2/local R5 are marked repaired below; subsequent
+not a claim that every row still describes current code. T1/T2/T3/T7/local R5 are marked repaired below; subsequent
 implementation evidence and remaining gates are recorded in Repair Progress.
 
 Priority **P1** means correctness/safety or a prerequisite for trustworthy acceptance. **P2** means
@@ -57,11 +58,11 @@ statistical magnitudes require measurement even where the underlying code behavi
 | --- | --- | --- | --- |
 | T1 | P1 | **Repaired (first repair; broader acceptance pending).** At the audit revision, `GgxDistribution` floored the entire squared denominator at `1e-6`, clipping smooth lobes and reporting a PDF different from the VNDF sampler. At roughness 0.03, the analytic normal-incidence D was about 392,975 versus 0.81 implemented. Pure-metal f/pdf cancellation could conceal this; mixture sampling and MIS did not generally cancel it. See Repair Progress for the current implementation and focused evidence. | [Shared:2932-2936](../Assets/Scripts/RayTracingShared.hlsl#L2932), `EvaluateMaterialBrdf` at 3039-3079 |
 | T2 | P1 | **Repaired; focused acceptance below.** At audit, environment NEE used `H(q,p)` while continuation used `H(p,n*q)`. For n > 1 these were not complementary; at n=4 and p=q their sum was about 0.559. | [Shared:3664-3671](../Assets/Scripts/RayTracingShared.hlsl#L3664), [Wavefront:308-315](../Assets/Resources/RayTracingWavefront.compute#L308) |
-| T3 | P1 | Final-event NEE competes with a BSDF continuation that is retired without evaluating sky/emitter hits. The missing complementary contribution causes energy loss. | [Manager:118-143](../Assets/Scripts/WavefrontPathTracingManager.cs#L118), [Wavefront:525-535](../Assets/Resources/RayTracingWavefront.compute#L525) |
+| T3 | P1 | **Repaired; focused acceptance below.** At audit, final-event NEE competed with a BSDF continuation that was retired without evaluating sky/emitter hits. The missing complementary contribution caused energy loss. | [Manager:118-143](../Assets/Scripts/WavefrontPathTracingManager.cs#L118), [Wavefront:525-535](../Assets/Resources/RayTracingWavefront.compute#L525) |
 | T4 | P1 | Triangle NEE uses clamped artistic distance/falloff scaling while emitter hits return unscaled emission. The techniques integrate different functions; complementary MIS weights cannot reconcile them. A back-facing triangle with zero shape PDF also falls into the sphere/point fallback. | [Shared:3689-3718](../Assets/Scripts/RayTracingShared.hlsl#L3689), [Wavefront:325-338](../Assets/Resources/RayTracingWavefront.compute#L325) |
 | T5 | P1 | Dielectric direct-light MIS uses an opaque-style GGX reflection PDF, but glass/water continuation samples different approximate distributions and reports material PDF zero. Delta and rough dielectric transport need distinct, coherent sample/evaluate/PDF contracts. | [Shared:3039-3081](../Assets/Scripts/RayTracingShared.hlsl#L3039), `GetMaterialContinuationPdf`, `CreateScatteredRay` at 4632-4997 |
 | T6 | P1 | The mesh-glass shortcut refracts through the exit whenever Snell permits, without exit Fresnel reflection. The internally consumed segment also bypasses ordinary wavefront fog events. | [Shared:4853-4926](../Assets/Scripts/RayTracingShared.hlsl#L4853) |
-| T7 | P1 | Mesh scattering can consume multiple events, but requeueing never checks the updated per-path bounce count. The host counts queue iterations instead, allowing paths past their event budget. | [Wavefront:473-503](../Assets/Resources/RayTracingWavefront.compute#L473) |
+| T7 | P1 | **Repaired; focused acceptance below.** At audit, mesh scattering could consume multiple events, but requeueing never checked the updated per-path bounce count. The host counted queue iterations instead, allowing paths past their event budget. | [Wavefront:473-503](../Assets/Resources/RayTracingWavefront.compute#L473) |
 | T8 | P1/P2 | Production directional lights become virtual sun triangles. Zero angular radius gives zero area and zero RIS target; the ordinary fallback has a different energy convention. Nonzero sun samples receive triangle MIS despite no matching renderable virtual emitter. | [LightingManager:544-582](../Assets/Scripts/Lighting/LightingManager.cs#L544), [Shared:2976-2981](../Assets/Scripts/RayTracingShared.hlsl#L2976), 3691-3718, 4050-4067 |
 | T9 | P2 | Multiple-scattering fog uses direct lighting with competing phase PDF zero, then adds phase-sampled emitter hits without complementary MIS. This double-counts overlapping finite-emitter connections. | [Shared:3679-3684](../Assets/Scripts/RayTracingShared.hlsl#L3679), [Wavefront:447-456](../Assets/Resources/RayTracingWavefront.compute#L447) |
 | T10 | P2 | Initial medium construction includes water/spheres, not containing closed meshes. Cameras or shadow origins inside mesh glass can start in the wrong medium. Opaque normal-mapped reflection also checks shading rather than geometric hemisphere, allowing below-surface rays. | [Shared:845-944](../Assets/Scripts/RayTracingShared.hlsl#L845), 3039-3048, 4755-4765, 5000-5003 |
@@ -204,9 +205,34 @@ Artifacts: `/var/folders/hk/2wk9yqf564g4c39vrly7dgd80000gq/T/opencode/mis-t2-r5-
 The initial post-edit run caught a missing HLSL forward declaration; it was fixed before the passing
 verified/final runs and wrapper compiles.
 
+### T3 / T7: Terminal Events And Per-Path Depth Implemented
+
+- `_NumBounces` is the maximum number of scatter events. After the final allowed scatter, the host
+  performs one terminal-only intersection and classification pass. Sky and mesh-emitter hits contribute
+  with existing complementary MIS metadata; non-emissive surfaces retire without NEE or another scatter.
+- `CSWavefrontClassify` retires surviving nonterminal paths whose `path.bounce` reached the budget.
+  Mesh transmission/internal reflection advances this value by `bouncesConsumed`, so multi-event paths
+  can no longer exceed configured depth merely because host iterations remain. Fog multiple scattering
+  uses the same gate on its next classification.
+- Before repair, four focused cases failed: a one-scatter sky fixture returned zero, two local-RIS
+  terminal batches left exhausted surface paths active, and the host contract had no terminal pass.
+  The final focused Metal set passed 10/10 with no skips, including local-RIS terminal MIS, one-event
+  versus two-event sky agreement, underwater terminal radiance, and closed-mesh depth.
+- Two reviewed image baselines changed intentionally. The underwater fixture gained missing terminal
+  sky radiance. One closed-mesh-glass probe became darker because internally consumed events can no
+  longer shade a later surface. An unrelated unstable caustic debug baseline was not changed.
+- Targeted Metal precompiles completed all 19 dispatches for dry, water, fog, water+fog, RIS reuse,
+  and guided terrain-off wavefront assets with no shader errors. The extra terminal intersection has
+  runtime cost proportional to final queue occupancy and should be measured, not removed without
+  equivalent semantics.
+- Remaining gates include terrain permutations, broader bounce-count sequences and finite-emitter
+  terminal means, and runtime fog/guiding/reuse validation. S1/S2/S3 RNG consistency are next.
+
+Artifacts: `/var/folders/hk/2wk9yqf564g4c39vrly7dgd80000gq/T/opencode/t3-t7-*`.
+
 ## Ordered Repair Plan
 
-Phase 1 is in progress with first T1 and T2/local R5 repairs implemented; remaining gates and all other
+Phase 1 is in progress with first T1, T2/local R5, and T3/T7 repairs implemented; remaining gates and all other
 phases are pending. Keep fixes small and independently reviewable. Add a failing analytical or
 production-path fixture before changing behavior where feasible; do not loosen baselines merely to
 pass. Work may proceed in independent branches, but later acceptance depends on earlier gates.
@@ -236,8 +262,8 @@ fail accounting. A/A and reversed partial-override experiments must resolve to i
    Complete the remaining T1 acceptance gates in Repair Progress; do not treat this as phase completion.
 2. T2/local R5 attempted-technique metadata, MIS partitions, proposal probabilities, and counts are
    repaired. Focused counts 1/2/4/16 and empty-RIS coverage pass; broader acceptance remains above.
-3. Resolve T3/T7 with a defined event-depth convention: direct-only last event or an extra terminal
-   sky/emitter check. Enforce per-path depth, not just host queue iteration count.
+3. T3/T7 use `_NumBounces` as a scatter-event budget plus one terminal sky/emitter check. Exhausted
+   non-emissive paths retire in classify, enforcing per-path depth after multi-event scattering.
 4. Repair S1/S2/S3: unique pixel identity, bounded semantic coordinate addressing with a separately
    domain-separated overflow stream, and one bound seed per frame. Fixed progressive captures retain
    one scramble across frames. Test prepass/main ray and RNG parity with aperture on/off.
