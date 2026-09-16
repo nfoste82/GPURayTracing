@@ -25,12 +25,14 @@ Available modes and intended semantics (subject to the presentation defects abov
 - `HitDistance`: first-hit distance divided by `25`, clamped to grayscale `[0, 1]`; sky renders white.
 - `AccelerationStructures`: visualizes whether the top-level and shadow BVHs are active. The wavefront route derives this from stored first hits and current BVH globals: first-hit surfaces encode top-level activity in red and shadow-BVH activity in green, with blue used to distinguish glass/mesh/non-mesh hits. Sky shows BVH node-count intensity.
 - `GlassScatter`: first-hit glass scattering diagnostic. Non-glass surfaces render as dim albedo for context. Glass pixels render red when the sampled reflection branch is chosen and blue when it transmits; green is the Schlick Fresnel reflectance probability, and blue intensity is the opacity-derived material transmission amount.
-- `Caustics`: isolates currently discoverable caustic transport. It suppresses direct lighting and returns emissive radiance only for stochastic camera paths that hit a diffuse receiver, subsequently scatter from glass or water, and then reach an emitter. Black output is expected until one of these rare paths is sampled; use high `numberOfPasses` when diagnosing the current estimator.
+- `Caustics`: with caustics enabled, dispatches the dedicated photon-gather kernel, showing raw linear caustic radiance without denoising or tone mapping. `Enable Frame Accumulation` runs SPPM over fresh photon batches while the view/scene is static; turn it off to inspect a fixed map. Camera movement discards per-pixel SPPM state but keeps valid world-space photon data. Use `Render Paused View` for animated water. `Photon Seed` is under the Caustics controls and is independent of the camera sampling seed. Without caustics enabled, this is not a photon-map diagnostic.
 - `RawBeauty`: linear HDR beauty before exposure and tone mapping. This remains the existing accumulated radiance when frame accumulation is enabled.
 - `FeatureNormal`, `FeatureAlbedo`, `FeatureDepth`, `FeatureIdentity`, and `FeatureValidity`: stable, unjittered primary-hit reconstruction features. Depth uses the existing `HitDistance` display range, identity uses a deterministic hash color, and sky pixels are invalid.
 - `TerrainCells`: terrain-only diagnostic for the coarse acceleration-cell coordinate. The wavefront route derives it from the stored terrain first hit. Red and green show the fractional X/Z coordinate within a cell; blue highlights cell boundaries. Use it to compare a suspected terrain artifact with the acceleration grid. It renders black for non-terrain hits and sky.
 
 Wavefront debug modes still use camera/depth-of-field jitter, but presentation reads the last stored path/hit rather than averaging diagnostic values across passes. Increasing `numberOfPasses` is not currently a reliable debug-noise reduction control.
+
+The dedicated photon `Caustics` debug kernel is an exception: it averages camera passes within each photon batch and applies one SPPM update per progressive frame. Mode changes reset history so its photon-only radiance cannot mix with final-color beauty.
 
 ## Randomness
 

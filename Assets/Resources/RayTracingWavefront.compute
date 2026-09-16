@@ -36,7 +36,7 @@ struct WavefrontPathState
     int bounce;
     int active;
     int previousDirectLightSampled;
-    int previousInitialRisSampled;
+    int previousInitialRisAttempted;
     int previousNearDeltaSpecular;
     int previousSoftShadows;
     int volumeEvent;
@@ -198,7 +198,7 @@ void CSWavefrontGenerate(uint3 id : SV_DispatchThreadID)
     path.bounce = 0;
     path.active = 1;
     path.previousDirectLightSampled = 0;
-    path.previousInitialRisSampled = 0;
+    path.previousInitialRisAttempted = 0;
     path.previousNearDeltaSpecular = 0;
     path.previousSoftShadows = 0;
     path.volumeEvent = 0;
@@ -307,11 +307,9 @@ void CSWavefrontClassify(uint3 id : SV_DispatchThreadID)
         float misWeight = 1.0f;
         if (path.previousDirectLightSampled != 0 && path.previousMaterialPdf > 0.0f && _EnvironmentLightEnabled != 0)
         {
-            float environmentPdf = GetEnvironmentPdf(path.ray.direction);
-            if (environmentPdf > 0.0f)
+            float directPdf = GetEnvironmentDirectPdf(path.ray.direction, path.previousInitialRisAttempted != 0);
+            if (directPdf > 0.0f)
             {
-                float directPdf = _EnvironmentLightSampleCount * environmentPdf;
-                if (path.previousInitialRisSampled != 0) directPdf *= GetInitialRisProposalBranchPdf();
                 misWeight = PowerHeuristic(path.previousMaterialPdf, directPdf);
             }
         }
@@ -325,13 +323,14 @@ void CSWavefrontClassify(uint3 id : SV_DispatchThreadID)
     if (DidHitLight(hit))
     {
         float misWeight = 1.0f;
-        if (path.previousDirectLightSampled != 0 && path.previousNearDeltaSpecular == 0 && path.previousMaterialPdf > 0.0f)
+        if (path.previousDirectLightSampled != 0 && path.previousMaterialPdf > 0.0f
+            && (path.previousNearDeltaSpecular == 0 || path.previousInitialRisAttempted != 0))
         {
             int lightSampleCount;
-            float lightPdf = GetLightPdfForHit(path.previousSurfacePosition, hit, path.previousSoftShadows != 0, lightSampleCount);
+            float lightPdf = GetLightPdfForHit(path.previousSurfacePosition, hit, path.previousSoftShadows != 0,
+                path.previousInitialRisAttempted != 0, lightSampleCount);
             if (lightPdf > 0.0f)
             {
-                if (path.previousInitialRisSampled != 0) lightPdf *= GetInitialRisProposalBranchPdf();
                 misWeight = PowerHeuristic(path.previousMaterialPdf, lightSampleCount * lightPdf);
             }
         }
@@ -355,7 +354,7 @@ void CSWavefrontDirectLight(uint3 id : SV_DispatchThreadID)
     if (!ShouldSampleDirectLight(path.throughput))
     {
         path.previousDirectLightSampled = 0;
-        path.previousInitialRisSampled = 0;
+        path.previousInitialRisAttempted = 0;
         path.previousSoftShadows = 0;
         _WavefrontPaths[pathIndex] = path;
         return;
@@ -398,7 +397,8 @@ void CSWavefrontTraceShadows(uint3 id : SV_DispatchThreadID)
     if (_DebugRenderMode == DebugDirectLight && path.bounce == 0)
         _WavefrontFirstDirectLight[work.pathIndex] = directLight;
     path.previousDirectLightSampled = 1;
-    path.previousInitialRisSampled = sampledInitialRis ? 1 : 0;
+    // An empty reservoir is still an attempted RIS technique, not ordinary NEE or no NEE.
+    path.previousInitialRisAttempted = useInitialRis ? 1 : 0;
     path.previousSoftShadows = softShadows ? 1 : 0;
     _WavefrontPaths[work.pathIndex] = path;
     _WavefrontShadowWork[id.x] = work;
@@ -451,7 +451,7 @@ void CSWavefrontScatter(uint3 id : SV_DispatchThreadID)
         path.bounce++;
         path.previousMaterialPdf = 0.0f;
         path.previousDirectLightSampled = 0;
-        path.previousInitialRisSampled = 0;
+        path.previousInitialRisAttempted = 0;
         path.previousNearDeltaSpecular = 0;
         path.previousSoftShadows = 0;
         path.volumeEvent = 0;
@@ -573,11 +573,9 @@ void CSWavefrontRecordPathGuides(uint3 id : SV_DispatchThreadID)
     {
         if (path.previousDirectLightSampled != 0 && path.previousMaterialPdf > 0.0f && _EnvironmentLightEnabled != 0)
         {
-            float environmentPdf = GetEnvironmentPdf(path.ray.direction);
-            if (environmentPdf > 0.0f)
+            float directPdf = GetEnvironmentDirectPdf(path.ray.direction, path.previousInitialRisAttempted != 0);
+            if (directPdf > 0.0f)
             {
-                float directPdf = _EnvironmentLightSampleCount * environmentPdf;
-                if (path.previousInitialRisSampled != 0) directPdf *= GetInitialRisProposalBranchPdf();
                 misWeight = PowerHeuristic(path.previousMaterialPdf, directPdf);
             }
         }
@@ -585,13 +583,14 @@ void CSWavefrontRecordPathGuides(uint3 id : SV_DispatchThreadID)
     }
     else if (DidHitLight(hit))
     {
-        if (path.previousDirectLightSampled != 0 && path.previousNearDeltaSpecular == 0 && path.previousMaterialPdf > 0.0f)
+        if (path.previousDirectLightSampled != 0 && path.previousMaterialPdf > 0.0f
+            && (path.previousNearDeltaSpecular == 0 || path.previousInitialRisAttempted != 0))
         {
             int lightSampleCount;
-            float lightPdf = GetLightPdfForHit(path.previousSurfacePosition, hit, path.previousSoftShadows != 0, lightSampleCount);
+            float lightPdf = GetLightPdfForHit(path.previousSurfacePosition, hit, path.previousSoftShadows != 0,
+                path.previousInitialRisAttempted != 0, lightSampleCount);
             if (lightPdf > 0.0f)
             {
-                if (path.previousInitialRisSampled != 0) lightPdf *= GetInitialRisProposalBranchPdf();
                 misWeight = PowerHeuristic(path.previousMaterialPdf, lightSampleCount * lightPdf);
             }
         }

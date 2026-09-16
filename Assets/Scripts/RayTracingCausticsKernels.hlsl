@@ -470,6 +470,40 @@ void BuildCausticGrid(uint3 id : SV_DispatchThreadID)
     _CausticPhotonNext[id.x] = previousHead;
     InterlockedAdd(_CausticPhotonMetadata[5], 1);
 }
+
+RWTexture2D<float4> CausticSppmState;
+RWTexture2D<float> CausticSppmPhotonCount;
+int _UseCausticSppm;
+float _CausticSppmAlpha;
+
+float GetCausticSppmRadius(uint2 pixel)
+{
+    float storedRadius = CausticSppmState[pixel].a;
+    return storedRadius > 0.0f ? storedRadius : _CausticGatherRadius;
+}
+
+float3 UpdateCausticSppm(uint2 pixel, CausticGather batchGather)
+{
+    float4 state = CausticSppmState[pixel];
+    float radius = state.a > 0.0f ? state.a : _CausticGatherRadius;
+    float photonCount = CausticSppmPhotonCount[pixel];
+    float alpha = clamp(_CausticSppmAlpha, 0.05f, 1.0f);
+    float effectiveNewPhotons = alpha * batchGather.photonCount;
+    float updatedCount = photonCount + effectiveNewPhotons;
+    float radiusRatio = batchGather.photonCount > 0.0f
+        ? updatedCount / max(1e-6f, photonCount + batchGather.photonCount)
+        : 1.0f;
+    float updatedRadius = max(0.001f, radius * sqrt(radiusRatio));
+    float3 updatedFlux = (state.rgb + batchGather.flux * _CausticIntensity) * radiusRatio;
+
+    CausticSppmState[pixel] = float4(updatedFlux, updatedRadius);
+    CausticSppmPhotonCount[pixel] = updatedCount;
+
+    float emittedPhotonCount = max(1.0f,
+        (max(0, _AccumulatedFrameCount) + 1.0f) * _CausticPhotonAttemptCount);
+    return updatedFlux / max(1e-6f, emittedPhotonCount * PI * updatedRadius * updatedRadius);
+}
+
 [numthreads(8,4,1)]
 void CSCausticsDebug(uint3 id : SV_DispatchThreadID)
 {
@@ -480,6 +514,8 @@ void CSCausticsDebug(uint3 id : SV_DispatchThreadID)
         return;
     }
 
+    float gatherRadius = _UseCausticSppm != 0 ? GetCausticSppmRadius(id.xy) : _CausticGatherRadius;
+    CausticGather batchGather = CreateEmptyCausticGather();
     float3 result = 0.0f;
     [loop]
     for (int i = 0; i < _NumberOfPasses; i++)
@@ -510,14 +546,27 @@ void CSCausticsDebug(uint3 id : SV_DispatchThreadID)
         {
             SetRngDimension(rngState, SampleDimensionLens);
         }
-        result += TraceVisibleCausticRadiance(ray, rngState);
+        if (_UseCausticSppm != 0)
+        {
+            CausticGather gather = TraceVisibleCausticFlux(ray, gatherRadius, rngState);
+            batchGather.flux += gather.flux;
+            batchGather.photonCount += gather.photonCount;
+        }
+        else
+        {
+            result += TraceVisibleCausticRadiance(ray, rngState);
+        }
     }
-    Result[id.xy] = float4(result / max(1, _NumberOfPasses), 1.0f);
+    batchGather.flux /= max(1, _NumberOfPasses);
+    batchGather.photonCount /= max(1, _NumberOfPasses);
+    float3 color = result / max(1, _NumberOfPasses);
+    if (_UseCausticSppm != 0)
+    {
+        color = UpdateCausticSppm(id.xy, batchGather);
+        AccumulationResult[id.xy] = float4(color, 1.0f);
+    }
+    Result[id.xy] = float4(color, 1.0f);
 }
-
-RWTexture2D<float4> CausticAccumulation;
-int _UseCausticAccumulation;
-int _CausticAccumulatedFrameCount;
 
 [numthreads(8,4,1)]
 void CSCausticsFinalColor(uint3 id : SV_DispatchThreadID)
@@ -529,6 +578,8 @@ void CSCausticsFinalColor(uint3 id : SV_DispatchThreadID)
         return;
     }
 
+    float gatherRadius = _UseCausticSppm != 0 ? GetCausticSppmRadius(id.xy) : _CausticGatherRadius;
+    CausticGather batchGather = CreateEmptyCausticGather();
     float3 result = 0.0f;
     [loop]
     for (int i = 0; i < _NumberOfPasses; i++)
@@ -541,18 +592,25 @@ void CSCausticsFinalColor(uint3 id : SV_DispatchThreadID)
             pixelJitter = (pixelJitter - 0.5f) * _SubpixelJitterScale + 0.5f;
         }
         float2 uv = ((id.xy + pixelJitter) / float2(width, height)) * 2.0f - 1.0f;
-        result += TraceVisibleCausticRadiance(CreateCameraRay(uv), rngState);
+        Ray ray = CreateCameraRay(uv);
+        if (_UseCausticSppm != 0)
+        {
+            CausticGather gather = TraceVisibleCausticFlux(ray, gatherRadius, rngState);
+            batchGather.flux += gather.flux;
+            batchGather.photonCount += gather.photonCount;
+        }
+        else
+        {
+            result += TraceVisibleCausticRadiance(ray, rngState);
+        }
     }
 
+    batchGather.flux /= max(1, _NumberOfPasses);
+    batchGather.photonCount /= max(1, _NumberOfPasses);
     float3 color = result / max(1, _NumberOfPasses);
-    if (_UseCausticAccumulation != 0)
+    if (_UseCausticSppm != 0)
     {
-        float previousCount = max(0, _CausticAccumulatedFrameCount);
-        if (previousCount > 0.0f)
-        {
-            color = (CausticAccumulation[id.xy].rgb * previousCount + color) / (previousCount + 1.0f);
-        }
-        CausticAccumulation[id.xy] = float4(color, 1.0f);
+        color = UpdateCausticSppm(id.xy, batchGather);
     }
     Result[id.xy] = float4(color, 1.0f);
 }

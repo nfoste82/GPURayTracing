@@ -22,6 +22,7 @@ namespace PathTracing.Caustics
         private static readonly int CausticSeed = Shader.PropertyToID("_CausticSeed");
         private static readonly int CausticFrameIndex = Shader.PropertyToID("_CausticFrameIndex");
         private static readonly int CausticGatherRadius = Shader.PropertyToID("_CausticGatherRadius");
+        private static readonly int CausticSppmAlpha = Shader.PropertyToID("_CausticSppmAlpha");
         private static readonly int CausticIntensity = Shader.PropertyToID("_CausticIntensity");
         private static readonly int CausticGridMin = Shader.PropertyToID("_CausticGridMin");
         private static readonly int CausticGridCellSize = Shader.PropertyToID("_CausticGridCellSize");
@@ -37,14 +38,14 @@ namespace PathTracing.Caustics
         private readonly int[] _gridDimensions = new int[3];
 
         [SerializeField, Range(64, 2097252)]
-        [Tooltip("Photon attempts traced for each rendered frame. Independent batches are averaged by final-color frame accumulation.")]
+        [Tooltip("Photon attempts per batch. SPPM incorporates a fresh batch per accumulated frame; without accumulation, a static scene reuses its photon map.")]
         private int _photonCount = 131072;
 
         [SerializeField, Range(0.001f, 0.3f)]
         private float _gatherRadius = 0.025f;
 
         [SerializeField, Range(0.0f, 1.0f)]
-        [Tooltip("Progressively shrinks the gather radius during frame accumulation. Zero keeps the starting radius.")]
+        [Tooltip("SPPM radius reduction strength. Zero preserves the starting radius; one shrinks most aggressively as photons accumulate.")]
         private float _gatherRadiusDecayRate = 0.35f;
 
         [SerializeField, HideInInspector]
@@ -56,7 +57,7 @@ namespace PathTracing.Caustics
         public int PhotonCount { get => _photonCount; set => _photonCount = value; }
         public float GatherRadius { get => _gatherRadius; set => _gatherRadius = value; }
         public float GatherRadiusDecayRate { get => _gatherRadiusDecayRate; set => _gatherRadiusDecayRate = value; }
-        public float EffectiveGatherRadius => CalculateEffectiveGatherRadius(Mathf.Max(0, FrameIndex - 1));
+        public float EffectiveGatherRadius => GatherRadius;
         public int Seed { get => _seed; set => _seed = value; }
         public float Intensity { get => _intensity; set => _intensity = value; }
 
@@ -229,7 +230,7 @@ namespace PathTracing.Caustics
         {
             unchecked
             {
-                hash = GameManager.AddHash(hash, 6); // Progressive photon-map radius schedule version.
+                hash = GameManager.AddHash(hash, 7); // Per-pixel SPPM estimator version.
                 hash = GameManager.AddHash(hash, PhotonCount);
                 hash = GameManager.AddHash(hash, GatherRadius);
                 hash = GameManager.AddHash(hash, GatherRadiusDecayRate);
@@ -265,7 +266,8 @@ namespace PathTracing.Caustics
             shader.SetInt(CausticMaxBounces, Mathf.Clamp(maxBounces, 1, 16));
             shader.SetInt(CausticSeed, Seed);
             shader.SetInt(CausticFrameIndex, FrameIndex);
-            shader.SetFloat(CausticGatherRadius, EffectiveGatherRadius);
+            shader.SetFloat(CausticGatherRadius, Mathf.Max(MinimumGatherRadius, GatherRadius));
+            shader.SetFloat(CausticSppmAlpha, 1.0f - Mathf.Clamp01(GatherRadiusDecayRate));
             shader.SetFloat(CausticIntensity, Mathf.Max(0.0f, Intensity));
             shader.SetVector(CausticGridMin, GridMin);
             shader.SetFloat(CausticGridCellSize, GridCellSize);
@@ -278,18 +280,6 @@ namespace PathTracing.Caustics
             SetBuffer(shader, kernelHandle, CausticPhotonNext, PhotonNextBuffer ?? _dummyPhotonNextBuffer);
             SetBuffer(shader, kernelHandle, CausticTargetPairs, TargetPairBuffer ?? _dummyTargetPairBuffer);
             SetBuffer(shader, kernelHandle, CausticTargetTriangles, TargetTriangleBuffer ?? _dummyTargetTriangleBuffer);
-        }
-
-        internal void ResetProgressiveRadius()
-        {
-            FrameIndex = 0;
-        }
-
-        private float CalculateEffectiveGatherRadius(int frameIndex)
-        {
-            float iteration = Mathf.Max(1.0f, frameIndex + 1.0f);
-            float exponent = 0.5f * Mathf.Clamp01(GatherRadiusDecayRate);
-            return Mathf.Max(MinimumGatherRadius, GatherRadius / Mathf.Pow(iteration, exponent));
         }
 
         internal void BindBuffers(ComputeShader shader, int kernelHandle)

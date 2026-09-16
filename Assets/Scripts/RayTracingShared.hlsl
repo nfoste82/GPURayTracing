@@ -3669,7 +3669,7 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
             float materialPdf = GetMaterialContinuationPdf(ray, hit, ptToOffset, allowPathGuide);
             float misWeight = useRisCandidate ? risCandidate.risScale * environmentPdf
                 * PowerHeuristic(risCandidate.proposalPdf, materialPdf)
-                : PowerHeuristic(environmentPdf, materialPdf);
+                : PowerHeuristic(lightTechniqueSampleCount * environmentPdf, materialPdf);
             lightTotal += GetSkyboxColor(ptToOffset) * _SkyboxLight.xyz * shadowTransmittance
                 * brdf * rayNormalDot * misWeight / environmentPdf;
             continue;
@@ -4294,7 +4294,17 @@ float GetInitialRisProposalBranchPdf()
     return proposalCount > 0 ? 1.0f / proposalCount : 0.0f;
 }
 
-float GetLightPdfForHit(float3 shadingPosition, RayHit lightHit, bool softShadows, out int sampleCount)
+float GetEnvironmentPdf(float3 direction);
+
+float GetEnvironmentDirectPdf(float3 direction, bool initialRisAttempted)
+{
+    float countOrBranch = initialRisAttempted ? GetInitialRisProposalBranchPdf()
+        : (float)max(1, _EnvironmentLightSampleCount);
+    return countOrBranch * GetEnvironmentPdf(direction);
+}
+
+float GetLightPdfForHit(float3 shadingPosition, RayHit lightHit, bool softShadows,
+    bool initialRisAttempted, out int sampleCount)
 {
     sampleCount = 0;
     int lightCount = _NumLights;
@@ -4315,7 +4325,14 @@ float GetLightPdfForHit(float3 shadingPosition, RayHit lightHit, bool softShadow
         _LightSamplingStrategy != LightSamplingUniformRandom &&
         _LightSamplingStrategy != LightSamplingImportance;
     int drawCount = lightCount;
-    if (!sampleAllLights)
+    if (initialRisAttempted)
+    {
+        // Local RIS resamples a fixed one-proposal MIS integrand. Neither candidate count nor
+        // ordinary light/shadow budgets change that partition, even when the reservoir is empty.
+        sampleAllLights = false;
+        drawCount = 1;
+    }
+    else if (!sampleAllLights)
     {
         int requested = clamp(_LightSampleCount, 1, lightCount);
         sampleAllLights = requested >= lightCount;
@@ -4323,8 +4340,9 @@ float GetLightPdfForHit(float3 shadingPosition, RayHit lightHit, bool softShadow
     }
 
     int samplesPerLight = softShadows ? max(1, _ShadowQuality + 1) : 1;
-    sampleCount = samplesPerLight * (sampleAllLights ? 1 : drawCount);
+    sampleCount = initialRisAttempted ? 1 : samplesPerLight * (sampleAllLights ? 1 : drawCount);
     float selectionPdf = GetLightSelectionPdf(lightHit.lightIndex, lightCount, sampleAllLights, shadingPosition);
+    if (initialRisAttempted) selectionPdf *= GetInitialRisProposalBranchPdf();
     Light light = _Lights[lightHit.lightIndex];
     if (light.type == LightTypeMesh)
     {
@@ -5049,17 +5067,32 @@ bool IsCausticReflector(RayHit hit)
     return hit.materialType == MaterialMetal && GetMetallicRoughness(hit).y <= 0.20f;
 }
 
-float3 GatherCausticRadiance(RayHit hit)
+struct CausticGather
 {
-    if (!IsCausticReceiver(hit) || _CausticPhotonAttemptCount <= 0 || _CausticGatherRadius <= 0.0f)
+    float3 flux;
+    float photonCount;
+};
+
+CausticGather CreateEmptyCausticGather()
+{
+    CausticGather gather;
+    gather.flux = 0.0f;
+    gather.photonCount = 0.0f;
+    return gather;
+}
+
+CausticGather GatherCausticFlux(RayHit hit, float gatherRadius)
+{
+    CausticGather gather = CreateEmptyCausticGather();
+    if (!IsCausticReceiver(hit) || _CausticPhotonAttemptCount <= 0 || gatherRadius <= 0.0f)
     {
-        return float3(0.0f, 0.0f, 0.0f);
+        return gather;
     }
 
-    float radiusSquared = _CausticGatherRadius * _CausticGatherRadius;
+    float radiusSquared = gatherRadius * gatherRadius;
     float3 photonPower = float3(0.0f, 0.0f, 0.0f);
     int3 centerCell = (int3)floor((hit.position - _CausticGridMin) / _CausticGridCellSize);
-    int cellRadius = max(1, (int)ceil(_CausticGatherRadius / _CausticGridCellSize));
+    int cellRadius = max(1, (int)ceil(gatherRadius / _CausticGridCellSize));
 
     [loop]
     for (int z = -cellRadius; z <= cellRadius; z++)
@@ -5088,6 +5121,7 @@ float3 GatherCausticRadiance(RayHit hit)
                     {
                         float kernelWeight = 2.0f * (1.0f - distanceSquared / radiusSquared);
                         photonPower += photon.power * kernelWeight;
+                        gather.photonCount += 1.0f;
                     }
                     photonIndex = _CausticPhotonNext[photonIndex];
                 }
@@ -5095,11 +5129,11 @@ float3 GatherCausticRadiance(RayHit hit)
         }
     }
 
-    float normalization = max(1.0f, _CausticPhotonAttemptCount * PI * radiusSquared);
-    return photonPower * GetAlbedo(hit) * (_CausticIntensity / normalization);
+    gather.flux = photonPower * GetAlbedo(hit);
+    return gather;
 }
 
-float3 TraceVisibleCausticRadiance(Ray ray, inout RngState rngState)
+CausticGather TraceVisibleCausticFlux(Ray ray, float gatherRadius, inout RngState rngState)
 {
     float3 throughput = float3(1.0f, 1.0f, 1.0f);
     MediumStack mediumStack = CreateMediumStack(ray.origin);
@@ -5117,19 +5151,21 @@ float3 TraceVisibleCausticRadiance(Ray ray, inout RngState rngState)
 #endif
         if (!HasPathEnergy(throughput) || DidHitSky(hit) || DidHitLight(hit))
         {
-            return float3(0.0f, 0.0f, 0.0f);
+            return CreateEmptyCausticGather();
         }
         ApplyFiniteMediumExitAfterSegment(mediumStack, ray, hit);
 
         if (IsCausticReceiver(hit))
         {
-            return throughput * GatherCausticRadiance(hit);
+            CausticGather gather = GatherCausticFlux(hit, gatherRadius);
+            gather.flux *= throughput;
+            return gather;
         }
 
         // Photon radiance remains visible through transmissive boundaries and smooth metals only.
         if (!IsGlassMaterial(hit) && !IsCausticReflector(hit))
         {
-            return float3(0.0f, 0.0f, 0.0f);
+            return CreateEmptyCausticGather();
         }
 
         int remainingBounces = _NumBounces - bounce;
@@ -5140,7 +5176,15 @@ float3 TraceVisibleCausticRadiance(Ray ray, inout RngState rngState)
         bounce += scatter.bouncesConsumed - 1;
     }
 
-    return float3(0.0f, 0.0f, 0.0f);
+    return CreateEmptyCausticGather();
+}
+
+float3 TraceVisibleCausticRadiance(Ray ray, inout RngState rngState)
+{
+    CausticGather gather = TraceVisibleCausticFlux(ray, _CausticGatherRadius, rngState);
+    float radiusSquared = _CausticGatherRadius * _CausticGatherRadius;
+    float normalization = max(1.0f, _CausticPhotonAttemptCount * PI * radiusSquared);
+    return gather.flux * (_CausticIntensity / normalization);
 }
 #endif
 

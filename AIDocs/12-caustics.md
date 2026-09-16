@@ -27,9 +27,13 @@ CompositeCaustics:
     Add photon radiance to final-color beauty
 ```
 
-Static final-color rendering with frame accumulation advances an independent photon sequence for each rendered batch and averages the complete estimates. Without accumulation, the current photon batch remains fixed. Caustic state changes reset both final-color accumulation and the photon sequence; camera-only changes do not rebuild the photon map.
+Static final-color rendering and the dedicated `Caustics` debug view use stochastic progressive photon mapping (SPPM) when frame accumulation is enabled. Each accumulated frame supplies a fresh photon batch to persistent per-pixel flux, effective-photon-count, and gather-radius state. Without accumulation, the current photon batch remains a fixed-map diagnostic. Live animated water disables accumulation; use `Render Paused View` to freeze simulation while refining it.
 
-`Gather Radius Decay Rate` optionally reduces the effective gather radius over accumulated photon batches: `r_n = max(0.001, r_initial / n^(0.5 * decayRate))`. Its default of zero retains a fixed radius. The `CausticsManager.MinimumGatherRadius` constant defines the `0.001` floor, and decay stops there. The spatial grid remains sized from the starting radius, so it covers every later, smaller search radius. Any frame-accumulation reset restarts the sequence at the configured starting radius.
+Camera, lens, resolution, mode, scene, lighting, material, and caustic-setting changes discard the pixel-space SPPM state. Camera-only changes do not invalidate the world-space photon map or light-side target distribution: the current photon batch is reused once for the new view before photon sequence advancement resumes. Transport-affecting changes rebuild the map and rewind its deterministic sequence.
+
+For a batch with `M` accepted photons, historical effective count `N`, radius `R`, flux `tau`, and SPPM alpha `a`, the update is `N' = N + aM`, `R' = R sqrt(N' / (N + M))`, and `tau' = (tau + Phi) R'^2 / R^2`. Radiance divides `tau'` by `PI R'^2` and all photon attempts emitted across the accumulated iterations. Zero-hit batches preserve flux, count, and radius while the total-emission normalization continues to advance. `SPPM Radius Reduction` maps from zero (alpha one, fixed radius) to one (small alpha, aggressive shrinkage); its existing serialized field remains `GatherRadiusDecayRate`. Radius has a `0.001` floor. The grid uses the initial radius, so all smaller per-pixel searches remain covered.
+
+`CSCausticsDebug` displays raw linear SPPM radiance without denoising or tone mapping. Final-color caustics use the same estimator before their separate beauty composite. Camera passes in one photon iteration are averaged before a single per-pixel recurrence, avoiding multiple updates from the same photon map.
 
 Final-color `CSMain` never compiles camera-side photon gathering. When caustics are enabled, `GameManager` dispatches `CSCausticsFinalColor`, maintains its matching progressive accumulation, and then runs the small `CompositeCaustics` utility kernel. Disabled rendering does not allocate the scene photon map or dispatch these kernels. Caustic photon target-distribution helpers still compile only for `TraceCausticPhotons`.
 
@@ -71,6 +75,8 @@ The benchmark overlay reports grid-cell count, indexed photons, out-of-bounds ph
 - `causticGatherRadius`
 - `causticSeed`
 - `causticIntensity`
+
+The current manager API exposes the seed as `GameManager.Caustics.Seed`. In **Ray Tracing Controls > Caustics > Photon Seed**, changing the serialized seed rebuilds the map and resets accumulation. It is independent of the camera/path sampler seed and `Random Noise`; a fixed photon seed still produces fresh deterministic batches during accumulation.
 
 Photon resources and the map rebuild when relevant emitter, refractor, receiver, material, geometry, photon-count, radius, seed, or algorithm state changes. Animated water rebuilds the map as its wave phase changes. Exposure, tone mapping, depth of field, and camera transforms do not invalidate the map.
 

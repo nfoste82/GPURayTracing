@@ -15,6 +15,56 @@ namespace GPURayTracing.Tests
         private const int ImageSize = 32;
         private const float SignatureTolerance = 0.002f;
 
+        // RayTracingWavefront.compute: Ray(24) + radiance/throughput(24) +
+        // MediumStack(8 * 28 + 8 = 232) + RngState(20) = 300 bytes before previous-hit data.
+        // Unlisted fields remain zero; the attempted flag replaces the old sampled flag in place.
+        [StructLayout(LayoutKind.Explicit, Size = 352)]
+        private struct ShadowTestPathData
+        {
+            [FieldOffset(0)] public Vector3 origin;
+            [FieldOffset(12)] public Vector3 direction;
+            [FieldOffset(24)] public Vector3 radiance;
+            [FieldOffset(36)] public Vector3 throughput;
+            [FieldOffset(288)] public uint scramble;
+            [FieldOffset(292)] public uint fallback;
+            [FieldOffset(300)] public Vector3 previousSurfacePosition;
+            [FieldOffset(312)] public float previousMaterialPdf;
+            [FieldOffset(324)] public int bounce;
+            [FieldOffset(328)] public int active;
+            [FieldOffset(332)] public int previousDirectLightSampled;
+            [FieldOffset(336)] public int previousInitialRisAttempted;
+            [FieldOffset(340)] public int previousNearDeltaSpecular;
+            [FieldOffset(344)] public int previousSoftShadows;
+        }
+
+        // RayTracingShared.hlsl RayHit: six float3s, eight floats, three ints, float2, five ints.
+        [StructLayout(LayoutKind.Explicit, Size = 144)]
+        private struct ShadowTestHitData
+        {
+            [FieldOffset(0)] public Vector3 position;
+            [FieldOffset(24)] public Vector3 normal;
+            [FieldOffset(36)] public Vector3 geometricNormal;
+            [FieldOffset(48)] public Vector3 emission;
+            [FieldOffset(60)] public Vector3 color;
+            [FieldOffset(76)] public float distance;
+            [FieldOffset(88)] public float opacity;
+            [FieldOffset(92)] public float refraction;
+            [FieldOffset(108)] public int meshIndex;
+            [FieldOffset(112)] public int objectIndex;
+            [FieldOffset(124)] public int textureIndex;
+            [FieldOffset(128)] public int metallicRoughnessTextureIndex;
+            [FieldOffset(132)] public int normalTextureIndex;
+            [FieldOffset(136)] public int lightIndex;
+            [FieldOffset(140)] public int triangleIndex;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ShadowTestWorkData
+        {
+            public uint pathIndex;
+            public Vector3 directLight;
+        }
+
         [StructLayout(LayoutKind.Sequential)]
         private struct SphereData
         {
@@ -499,6 +549,394 @@ namespace GPURayTracing.Tests
             }
         }
 
+        [Test]
+        public void OrdinaryEnvironment_MisSampleCounts_MultiSeedHdrMeanMatchesBsdfOnly()
+        {
+            SphereData[] spheres =
+            {
+                Sphere(Vector3.zero, new Vector3(0.45f, 0.62f, 0.78f), 2.0f, 0.2f, 1.0f, 1.0f, 0)
+            };
+            int[] seeds = { 1, 81723, 12345 };
+            // Zero denotes BSDF-only, not a zero-sample NEE technique.
+            int[] counts = { 0, 1, 2, 4, 16 };
+            var means = new Vector4[counts.Length];
+            for (int configuration = 0; configuration < counts.Length; configuration++)
+            {
+                var seedMeans = new Vector4[seeds.Length];
+                int seedIndex = 0;
+                foreach (int seed in seeds)
+                {
+                    // The sphere's 41.8-degree angular radius covers the entire 48-degree square
+                    // view, including jitter. Convex opaque geometry has no interreflection: a
+                    // surviving scatter reaches sky at event two, well before the six-event cutoff.
+                    // The manager CPU-loops passes and all bounce dispatches even at tiny resolutions.
+                    Vector4 mean = RenderSignature(spheres, false, new Vector3(0.0f, 0.0f, -3.0f),
+                        Quaternion.identity, includeReceiver: false, width: 16, height: 16,
+                        numberOfPasses: 256, skyboxColor: new Color(1.3f, 1.0f, 0.72f, 1.0f),
+                        environmentLightingEnabled: counts[configuration] != 0,
+                        environmentLightSampleCount: Mathf.Max(1, counts[configuration]),
+                        lightSamplingStrategy: 0, applyToneMapping: false, seed: seed)[0];
+                    for (int channel = 0; channel < 3; channel++)
+                    {
+                        Assert.That(float.IsNaN(mean[channel]) || float.IsInfinity(mean[channel]), Is.False);
+                        Assert.That(mean[channel], Is.GreaterThan(0.01f), "The shaded HDR mean must be nonzero.");
+                    }
+                    TestContext.WriteLine($"Environment count {counts[configuration]}, seed {seed}: {mean.ToString("F8")}");
+                    seedMeans[seedIndex++] = mean;
+                    means[configuration] += mean / seeds.Length;
+                }
+                for (int channel = 0; channel < 3; channel++)
+                {
+                    float squaredDeviations = 0.0f;
+                    foreach (Vector4 mean in seedMeans)
+                    {
+                        float deviation = mean[channel] - means[configuration][channel];
+                        squaredDeviations += deviation * deviation;
+                    }
+                    float standardError = Mathf.Sqrt(squaredDeviations / (seeds.Length * (seeds.Length - 1)));
+                    TestContext.WriteLine($"Environment count {counts[configuration]}, channel {channel}: " +
+                        $"mean {means[configuration][channel]:F8}, seed-mean SE {standardError:F8}");
+                }
+            }
+
+            // Each mean aggregates 196,608 camera paths over three independent seeds. The constant
+            // sky and rough opaque BRDF avoid rare bright events; the 2% MC budget includes noise
+            // in both estimators, but rejects the tens-of-percent T2 loss. Logged seed-mean SEs
+            // diagnose uncertainty without widening the acceptance threshold to fit a noisy run.
+            for (int configuration = 1; configuration < counts.Length; configuration++)
+            {
+                AssertMeanRadianceMatches(new[] { means[0] }, new[] { means[configuration] }, 0.02f,
+                    $"ordinary environment MIS sample count {counts[configuration]} vs BSDF-only, seeds 1/81723/12345");
+            }
+        }
+
+        [TestCase(1)]
+        [TestCase(4)]
+        [TestCase(16)]
+        public void InitialRis_MisSampleCounts_IgnoredOrdinarySettingsPreserveExactHdr(int candidateCount)
+        {
+            CreateEmissiveQuad(out MeshTriangleData[] triangles, out MeshInfoData[] meshes,
+                out BvhNodeData[] bvhNodes, out LightData[] lights, true);
+            Array.Resize(ref lights, 2);
+            // Unequal finite proposals make the ordinary count=1 versus count>=2 all-lights
+            // threshold observable in mesh-emitter continuation PDFs.
+            lights[1] = SphereLight(new Vector3(-2.0f, 2.6f, -0.8f), new Vector3(3.0f, 1.2f, 0.5f), 0.35f);
+            const int size = 8;
+            var probes = new float[size * size, 2];
+            for (int y = 0; y < size; y++)
+            {
+                for (int x = 0; x < size; x++)
+                {
+                    probes[y * size + x, 0] = (x + 0.5f) / size;
+                    probes[y * size + x, 1] = (y + 0.5f) / size;
+                }
+            }
+
+            Vector4[] Render(int environmentCount, int lightCount, int shadowQuality)
+            {
+                // Only a diffuse plane is visible: continuation hits sky or an emitter, never a
+                // second shaded surface where ordinary counts would legitimately affect NEE.
+                return RenderSignature(Array.Empty<SphereData>(), false, new Vector3(0.0f, 1.6f, -1.5f),
+                    Quaternion.Euler(60.0f, 0.0f, 0.0f), triangles, meshes, bvhNodes, lights,
+                    width: size, height: size, numberOfPasses: 32, receiverSmoothness: 0.2f,
+                    skyboxColor: new Color(0.24f, 0.30f, 0.36f, 1.0f), environmentLightingEnabled: true,
+                    lightSamplingStrategy: 2, initialRisCandidateCount: candidateCount,
+                    environmentLightSampleCount: environmentCount, lightSampleCount: lightCount,
+                    shadowQuality: shadowQuality, shadowRandomness: 0.8f, lightFalloffScale: 1000.0f,
+                    applyToneMapping: false, seed: 81723, probes: probes);
+            }
+
+            Vector4[] reference = Render(1, 1, 0);
+            foreach (Vector4 value in reference)
+            {
+                for (int channel = 0; channel < 3; channel++)
+                {
+                    Assert.That(float.IsNaN(value[channel]) || float.IsInfinity(value[channel]), Is.False);
+                    Assert.That(value[channel], Is.GreaterThan(0.0f));
+                }
+            }
+            // Same-seed local RIS shades one selected sample regardless of these settings. This
+            // is exact per-pixel equality, not a noisy mean comparison across candidate counts.
+            foreach (int count in new[] { 2, 4, 16 })
+            {
+                Vector4[][] actual = { Render(count, 1, 0), Render(1, count, 0), Render(1, 1, count - 1) };
+                string[] settings = { "environment samples", "light samples", "shadow samples (quality + 1)" };
+                for (int setting = 0; setting < actual.Length; setting++)
+                {
+                    for (int pixel = 0; pixel < reference.Length; pixel++)
+                    {
+                        for (int channel = 0; channel < 4; channel++)
+                        {
+                            Assert.That(actual[setting][pixel][channel], Is.EqualTo(reference[pixel][channel]),
+                                $"RIS {candidateCount} candidates, {settings[setting]}={count}, signature {pixel}, channel {channel}");
+                        }
+                    }
+                }
+            }
+        }
+
+        [TestCase(1)]
+        [TestCase(2)]
+        [TestCase(4)]
+        [TestCase(16)]
+        public void InitialRis_MisSampleCounts_EmptyReservoirRecordsAttemptOnlyAtPrimaryBounce(int candidateCount)
+        {
+            if (!SystemInfo.supportsComputeShaders)
+            {
+                Assert.Ignore("Compute shaders are not supported by the active graphics device.");
+            }
+            ComputeShader asset = AssetDatabase.LoadAssetAtPath<ComputeShader>(WavefrontShaderPath);
+            Assert.That(asset, Is.Not.Null);
+            const string kernelName = "CSWavefrontTraceShadows";
+            if (!asset.HasKernel(kernelName))
+            {
+                Assert.Ignore($"The active graphics device did not compile {kernelName}. Run without -nographics.");
+            }
+
+            Assert.That(Marshal.SizeOf<ShadowTestPathData>(), Is.EqualTo(352));
+            Assert.That(Marshal.SizeOf<ShadowTestHitData>(), Is.EqualTo(144));
+            Assert.That(Marshal.SizeOf<ShadowTestWorkData>(), Is.EqualTo(16));
+            var paths = new ShadowTestPathData[2];
+            var hits = new ShadowTestHitData[2];
+            var work = new ShadowTestWorkData[2];
+            for (int i = 0; i < paths.Length; i++)
+            {
+                paths[i] = new ShadowTestPathData
+                {
+                    origin = Vector3.up, direction = Vector3.down, throughput = Vector3.one,
+                    scramble = 81723u, fallback = 12345u, bounce = i, active = 1,
+                    previousDirectLightSampled = -1, previousInitialRisAttempted = -1
+                };
+                hits[i] = new ShadowTestHitData
+                {
+                    normal = Vector3.up, geometricNormal = Vector3.up, color = Vector3.one,
+                    distance = 1.0f, opacity = 1.0f, refraction = 1.0f,
+                    meshIndex = -1, objectIndex = -1, textureIndex = -1,
+                    metallicRoughnessTextureIndex = -1, normalTextureIndex = -1,
+                    lightIndex = -1, triangleIndex = -1
+                };
+                work[i] = new ShadowTestWorkData { pathIndex = (uint)i, directLight = Vector3.one };
+            }
+
+            // Every point on this sphere (and its sampled facing disk) lies below the hit at zero.
+            // Thus NdotL < 0 for every candidate, not just for this seed: the reservoir stays empty.
+            var lights = new[] { SphereLight(new Vector3(0.0f, -2.0f, 0.0f), Vector3.one * 8.0f, 0.25f) };
+            ComputeShader shader = UnityEngine.Object.Instantiate(asset);
+            Texture2DArray textures = CreateMeshTextureArray();
+            try
+            {
+                using (ComputeBuffer pathBuffer = CreateBuffer(paths, 352))
+                using (ComputeBuffer hitBuffer = CreateBuffer(hits, 144))
+                using (ComputeBuffer workBuffer = CreateBuffer(work, 16))
+                using (ComputeBuffer counters = CreateBuffer(new uint[] { 0, 0, 0, 2 }, sizeof(uint)))
+                using (ComputeBuffer firstDirectLight = CreateBuffer(new Vector3[2], 12))
+                using (ComputeBuffer lightBuffer = CreateBuffer(lights, 88))
+                using (ComputeBuffer spheres = CreateDummyBuffer(92))
+                using (ComputeBuffer triangles = CreateDummyBuffer(268))
+                using (ComputeBuffer nodes = CreateDummyBuffer(48))
+                using (ComputeBuffer scalar = CreateDummyBuffer(4))
+                {
+                    int kernel = shader.FindKernel(kernelName);
+                    shader.DisableKeyword("TERRAIN_ENABLED");
+                    SetFogDisabled(shader);
+                    SetWater(shader, false);
+                    shader.SetInt("_CausticsEnabled", 0);
+                    shader.SetInt("_DebugRenderMode", 0);
+                    shader.SetInt("_NumLights", 1);
+                    shader.SetInt("_MaxLightSamples", 1);
+                    shader.SetInt("_NumSpheres", 0);
+                    shader.SetInt("_NumTriangles", 0);
+                    shader.SetInt("_NumMeshes", 0);
+                    shader.SetInt("_NumTopLevelBvhNodes", 0);
+                    shader.SetInt("_NumShadowBvhNodes", 0);
+                    shader.SetInt("_HasTransparentShadowBlockers", 0);
+                    shader.SetInt("_EnvironmentLightEnabled", 0);
+                    shader.SetInt("_EnvironmentCdfWidth", 1);
+                    shader.SetInt("_EnvironmentCdfHeight", 1);
+                    shader.SetInt("_EnvironmentLightSampleCount", 1);
+                    shader.SetInt("_LightSamplingStrategy", 2);
+                    shader.SetInt("_LightSampleCount", 1);
+                    shader.SetInt("_InitialRisCandidateCount", candidateCount);
+                    shader.SetInt("_ShadowQuality", 0);
+                    shader.SetFloat("_ShadowRandomness", 0.8f);
+                    shader.SetFloat("_LightFalloffScale", 0.16f);
+                    shader.SetInt("_PathGuideEnabled", 0);
+                    shader.SetInt("_SobolDimensionLimit", 0);
+                    shader.SetBuffer(kernel, "_WavefrontPaths", pathBuffer);
+                    shader.SetBuffer(kernel, "_WavefrontHits", hitBuffer);
+                    shader.SetBuffer(kernel, "_WavefrontShadowWork", workBuffer);
+                    shader.SetBuffer(kernel, "_WavefrontCounters", counters);
+                    shader.SetBuffer(kernel, "_WavefrontFirstDirectLight", firstDirectLight);
+                    shader.SetBuffer(kernel, "_Lights", lightBuffer);
+                    shader.SetBuffer(kernel, "_Spheres", spheres);
+                    shader.SetBuffer(kernel, "_Triangles", triangles);
+                    foreach (string name in new[] { "_Meshes", "_BvhNodes", "_TopLevelBvhNodes", "_ShadowBvhNodes" })
+                        shader.SetBuffer(kernel, name, nodes);
+                    foreach (string name in new[] { "_EnvironmentConditionalCdf", "_EnvironmentMarginalCdf",
+                        "_MeshLightTriangleCdf", "_SobolDirectionNumbers", "_PathGuideTraining", "_PathGuideCdf",
+                        "_PathGuideObservationCounts" })
+                        shader.SetBuffer(kernel, name, scalar);
+                    shader.SetTexture(kernel, "_SkyboxTexture", Texture2D.blackTexture);
+                    foreach (string name in new[] { "_MeshAlbedoTextures", "_MeshMetallicRoughnessTextures",
+                        "_MeshNormalTextures", "_MeshParallaxTextures" })
+                        shader.SetTexture(kernel, name, textures);
+
+                    // Exercise the production kernel, including its path-state writeback. Sentinels
+                    // ensure an undispatched lane cannot masquerade as a zero-contribution result.
+                    shader.Dispatch(kernel, 1, 1, 1);
+                    pathBuffer.GetData(paths);
+                    workBuffer.GetData(work);
+                    for (int i = 0; i < paths.Length; i++)
+                    {
+                        for (int channel = 0; channel < 3; channel++)
+                            Assert.That(work[i].directLight[channel], Is.EqualTo(0.0f), $"bounce {i}, channel {channel}");
+                        Assert.That(paths[i].previousDirectLightSampled, Is.EqualTo(1), $"bounce {i} was processed");
+                        Assert.That(paths[i].previousInitialRisAttempted, Is.EqualTo(i == 0 ? 1 : 0),
+                            $"{candidateCount} zero-weight candidates, bounce {i}: record the attempted primary " +
+                            "technique, not selection success; ordinary continuation must clear the flag.");
+                    }
+                }
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(textures);
+                UnityEngine.Object.DestroyImmediate(shader);
+            }
+        }
+
+        [TestCase(1, 0)]
+        [TestCase(16, 3)]
+        public void InitialRis_MisSampleCounts_ClassifyConsumesAttemptIncludingEmptyAndNearDelta(
+            int lightSampleCount, int shadowQuality)
+        {
+            if (!SystemInfo.supportsComputeShaders)
+                Assert.Ignore("Compute shaders are not supported by the active graphics device.");
+            ComputeShader asset = AssetDatabase.LoadAssetAtPath<ComputeShader>(WavefrontShaderPath);
+            Assert.That(asset, Is.Not.Null);
+            const string kernelName = "CSWavefrontClassify";
+            if (!asset.HasKernel(kernelName))
+                Assert.Ignore($"The active graphics device did not compile {kernelName}. Run without -nographics.");
+
+            Vector3 emission = new Vector3(1.0f, 0.5f, 0.25f);
+            LightData[] lights =
+            {
+                TriangleLight(new Vector3(-1.0f, -1.0f, 2.0f), Vector3.right * 2.0f,
+                    Vector3.up * 2.0f, Vector3.back, emission),
+                SphereLight(new Vector3(0.0f, 0.0f, -2.0f), emission * 3.0f, 0.25f)
+            };
+            const int pathCount = 12;
+            const float materialPdf = 0.25f;
+            var paths = new ShadowTestPathData[pathCount];
+            var hits = new ShadowTestHitData[pathCount];
+            var queue = new uint[pathCount];
+            var expected = new Vector3[pathCount];
+            for (int i = 0; i < pathCount; i++)
+            {
+                int terminal = i / 4; // sky, front-facing triangle, excluded sphere
+                bool attempted = (i & 2) != 0;
+                bool nearDelta = (i & 1) != 0;
+                paths[i] = new ShadowTestPathData
+                {
+                    direction = terminal == 2 ? Vector3.back : Vector3.forward,
+                    throughput = Vector3.one, active = 1, bounce = 1,
+                    previousSurfacePosition = Vector3.zero, previousMaterialPdf = materialPdf,
+                    previousDirectLightSampled = 1, previousInitialRisAttempted = attempted ? 1 : 0,
+                    previousNearDeltaSpecular = nearDelta ? 1 : 0, previousSoftShadows = 1
+                };
+                hits[i] = new ShadowTestHitData
+                {
+                    position = paths[i].direction * 2.0f, normal = -paths[i].direction,
+                    geometricNormal = -paths[i].direction, distance = terminal == 0 ? 1.0e20f : 2.0f,
+                    emission = terminal == 2 ? lights[1].emission : emission,
+                    opacity = 1.0f, refraction = 1.0f, lightIndex = terminal - 1,
+                    meshIndex = -1, objectIndex = -1, triangleIndex = -1,
+                    textureIndex = -1, metallicRoughnessTextureIndex = -1, normalTextureIndex = -1
+                };
+                queue[i] = (uint)i;
+
+                // Both importance falloffs saturate to one: weights 1 and 3 give P(triangle)=1/4.
+                // Front-facing triangle shape PDF = distance^2 / area = 4/2. Local RIS uses one
+                // proposal with finite/environment branch probability 1/2, even for near-delta.
+                double directPdf = 0.0;
+                if (terminal == 0)
+                    directPdf = (attempted ? 0.5 : 16.0) / (2.0 * Math.PI * Math.PI); // 1x1 CDF, equator
+                else if (terminal == 1 && (attempted || !nearDelta))
+                    directPdf = attempted ? 0.5 * 0.25 * 2.0
+                        : (lightSampleCount >= 2 ? 1.0 : 0.25) * 2.0 * (shadowQuality + 1);
+                double weight = materialPdf * materialPdf / (materialPdf * materialPdf + directPdf * directPdf);
+                expected[i] = hits[i].emission * (float)weight;
+            }
+
+            // Isolated classify contract: inject the attempted bit, with no selected reservoir or
+            // direct-light contribution. This models consumption after an empty outcome; the
+            // separate TraceShadows regression verifies its producer. No scene changes mid-path.
+            ComputeShader shader = UnityEngine.Object.Instantiate(asset);
+            Texture2D sky = CreateSolidTexture(new Color(emission.x, emission.y, emission.z, 1.0f));
+            Texture2DArray textures = CreateMeshTextureArray();
+            try
+            {
+                using (ComputeBuffer pathBuffer = CreateBuffer(paths, 352))
+                using (ComputeBuffer hitBuffer = CreateBuffer(hits, 144))
+                using (ComputeBuffer currentQueue = CreateBuffer(queue, 4))
+                using (ComputeBuffer completedQueue = CreateBuffer(new uint[pathCount], 4))
+                using (ComputeBuffer counters = CreateBuffer(new uint[] { pathCount, 0, 0, 0 }, 4))
+                using (ComputeBuffer diagnostics = new ComputeBuffer(pathCount, 28))
+                using (ComputeBuffer lightBuffer = CreateBuffer(lights, 88))
+                using (ComputeBuffer triangles = CreateDummyBuffer(268))
+                using (ComputeBuffer scalar = CreateBuffer(new[] { 1.0f }, 4))
+                {
+                    int kernel = shader.FindKernel(kernelName);
+                    shader.DisableKeyword("TERRAIN_ENABLED");
+                    SetFogDisabled(shader);
+                    SetWater(shader, false);
+                    shader.SetInt("_DebugRenderMode", 0);
+                    shader.SetInt("_NumLights", lights.Length);
+                    shader.SetInt("_MaxLightSamples", lights.Length);
+                    shader.SetInt("_LightSamplingStrategy", 2);
+                    shader.SetInt("_LightSampleCount", lightSampleCount);
+                    shader.SetInt("_ShadowQuality", shadowQuality);
+                    shader.SetFloat("_LightFalloffScale", 0.16f);
+                    shader.SetInt("_EnvironmentLightEnabled", 1);
+                    shader.SetInt("_EnvironmentLightSampleCount", 16);
+                    shader.SetInt("_EnvironmentCdfWidth", 1);
+                    shader.SetInt("_EnvironmentCdfHeight", 1);
+                    shader.SetFloat("_EnvironmentHighlightIntensity", 0.0f);
+                    shader.SetVector("_SkyboxLight", Vector4.one);
+                    shader.SetBuffer(kernel, "_WavefrontPaths", pathBuffer);
+                    shader.SetBuffer(kernel, "_WavefrontHits", hitBuffer);
+                    shader.SetBuffer(kernel, "_WavefrontCurrentQueue", currentQueue);
+                    shader.SetBuffer(kernel, "_WavefrontCompletedQueue", completedQueue);
+                    shader.SetBuffer(kernel, "_WavefrontCounters", counters);
+                    shader.SetBuffer(kernel, "_WavefrontPathDiagnostics", diagnostics);
+                    shader.SetBuffer(kernel, "_Lights", lightBuffer);
+                    shader.SetBuffer(kernel, "_Triangles", triangles);
+                    shader.SetBuffer(kernel, "_EnvironmentConditionalCdf", scalar);
+                    shader.SetBuffer(kernel, "_EnvironmentMarginalCdf", scalar);
+                    shader.SetBuffer(kernel, "_SobolDirectionNumbers", scalar);
+                    shader.SetTexture(kernel, "_SkyboxTexture", sky);
+                    shader.SetTexture(kernel, "_MeshAlbedoTextures", textures);
+                    shader.Dispatch(kernel, pathCount / 4, 1, 1);
+                    pathBuffer.GetData(paths);
+                    var counts = new uint[4];
+                    counters.GetData(counts);
+                    Assert.That(counts[2], Is.EqualTo((uint)pathCount), "every terminal path must retire");
+                    for (int i = 0; i < pathCount; i++)
+                    {
+                        Assert.That(paths[i].active, Is.Zero);
+                        for (int channel = 0; channel < 3; channel++)
+                            Assert.That(paths[i].radiance[channel], Is.EqualTo(expected[i][channel]).Within(0.00001f),
+                                $"terminal {i / 4}, attempted {(i & 2) != 0}, near-delta {(i & 1) != 0}, channel {channel}");
+                    }
+                }
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(textures);
+                UnityEngine.Object.DestroyImmediate(sky);
+                UnityEngine.Object.DestroyImmediate(shader);
+            }
+        }
+
         [TestCase(0)]
         [TestCase(1)]
         [TestCase(2)]
@@ -953,7 +1391,11 @@ namespace GPURayTracing.Tests
             int lightSamplingStrategy = 0,
             int initialRisCandidateCount = 1,
             bool applyToneMapping = true,
-            bool environmentLightingEnabled = false)
+            bool environmentLightingEnabled = false,
+            int environmentLightSampleCount = 1,
+            int lightSampleCount = 1,
+            int shadowQuality = 0,
+            int seed = 1)
         {
             if (!SystemInfo.supportsComputeShaders)
             {
@@ -981,6 +1423,7 @@ namespace GPURayTracing.Tests
             lights = lights ?? Array.Empty<LightData>();
             var result = CreateRenderTexture(width, height, RenderTextureFormat.ARGBFloat);
             var accumulation = CreateRenderTexture(width, height, RenderTextureFormat.ARGBFloat);
+            var causticSppmPhotonCount = CreateRenderTexture(width, height, RenderTextureFormat.RFloat);
             var beauty = CreateRenderTexture(width, height, RenderTextureFormat.ARGBFloat);
             var featureNormal = CreateRenderTexture(width, height, RenderTextureFormat.ARGBHalf);
             var featureAlbedo = CreateRenderTexture(width, height, RenderTextureFormat.ARGBHalf);
@@ -1046,6 +1489,9 @@ namespace GPURayTracing.Tests
                 }
                 shader.SetTexture(kernel, "Result", result);
                 shader.SetTexture(kernel, "AccumulationResult", accumulation);
+                shader.SetTexture(kernel, "CausticSppmState", accumulation);
+                shader.SetTexture(kernel, "CausticSppmPhotonCount", causticSppmPhotonCount);
+                shader.SetInt("_UseCausticSppm", 0);
                 shader.SetTexture(kernel, "Beauty", beauty);
                 shader.SetTexture(kernel, "_SkyboxTexture", skybox);
                 shader.SetTexture(kernel, "_MeshAlbedoTextures", meshTextures);
@@ -1053,7 +1499,7 @@ namespace GPURayTracing.Tests
                 shader.SetTexture(kernel, "_MeshNormalTextures", meshNormalTextures);
                 shader.SetTexture(kernel, "_MeshParallaxTextures", meshParallaxTextures);
                 shader.SetInt("_EnvironmentLightEnabled", environmentLightingEnabled ? 1 : 0);
-                shader.SetInt("_EnvironmentLightSampleCount", 1);
+                shader.SetInt("_EnvironmentLightSampleCount", environmentLightSampleCount);
                 shader.SetFloat("_EnvironmentHighlightThreshold", 0.0f);
                 shader.SetFloat("_EnvironmentHighlightSoftKnee", 0.0f);
                 shader.SetFloat("_EnvironmentHighlightIntensity", 0.0f);
@@ -1092,7 +1538,7 @@ namespace GPURayTracing.Tests
                 shader.SetVector("_FrameJitterNdc", Vector4.zero);
                 shader.SetInt("_UseTemporalJitter", 0);
                 shader.SetVector("_SkyboxLight", Vector4.one);
-                shader.SetInt("_Seed", 1);
+                shader.SetInt("_Seed", seed);
                 shader.SetInt("_SobolDimensionLimit", 1);
                 shader.SetInt("_SampleOffset", 0);
                 shader.SetInt("_NumberOfPasses", numberOfPasses);
@@ -1103,9 +1549,9 @@ namespace GPURayTracing.Tests
                 shader.SetInt("_AccumulatedFrameCount", 0);
                 shader.SetInt("_MaxLightSamples", lights.Length);
                 shader.SetInt("_LightSamplingStrategy", lightSamplingStrategy);
-                shader.SetInt("_LightSampleCount", 1);
+                shader.SetInt("_LightSampleCount", lightSampleCount);
                 shader.SetInt("_InitialRisCandidateCount", initialRisCandidateCount);
-                shader.SetInt("_ShadowQuality", 0);
+                shader.SetInt("_ShadowQuality", shadowQuality);
                 shader.SetFloat("_ShadowRandomness", shadowRandomness);
                 shader.SetFloat("_LightFalloffScale", lightFalloffScale);
                 shader.SetFloat("_FocalDistance", 100.0f);
@@ -1216,6 +1662,7 @@ namespace GPURayTracing.Tests
                 causticTargetTriangleBuffer.Release();
                 result.Release();
                 accumulation.Release();
+                causticSppmPhotonCount.Release();
                 beauty.Release();
                 featureNormal.Release();
                 featureAlbedo.Release();

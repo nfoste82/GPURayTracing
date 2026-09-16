@@ -5,9 +5,9 @@
 Audit date: **2026-09-15**. Audit source revision: `7c557cd5548c112c38d6955248dc0bd446b1a033`.
 This is the **authoritative active plan** for renderer sampling correctness, adaptive allocation,
 RIS reuse, and their convergence/performance validation. The first T1 GGX repair is now implemented
-with focused GPU coverage; broader T1 acceptance remains pending. Phase 1 is in progress, not
-complete. Phase 0 and Phases 2-4 remain pending; T2/R5 are next within Phase 1. This update changes
-documentation only and records the separately implemented repair.
+with focused GPU coverage; broader T1 acceptance remains pending. T2 and local R5 MIS consistency
+are now repaired with focused production-GPU coverage. Phase 1 is in progress, not complete.
+Phase 0 and Phases 2-4 remain pending; T3/T7 are next within Phase 1.
 
 The review inspected the active wavefront shaders, shared transport/sampling helpers, C# lifecycle,
 adaptive scheduler, tests, and existing capture reports. No new Unity tests, compiles, or captures
@@ -44,7 +44,7 @@ Sound foundations worth preserving:
 ## Finding Register
 
 This register preserves findings and source references at the historical audit revision above,
-not a claim that every row still describes current code. T1 is marked repaired below; subsequent
+not a claim that every row still describes current code. T1/T2/local R5 are marked repaired below; subsequent
 implementation evidence and remaining gates are recorded in Repair Progress.
 
 Priority **P1** means correctness/safety or a prerequisite for trustworthy acceptance. **P2** means
@@ -56,7 +56,7 @@ statistical magnitudes require measurement even where the underlying code behavi
 | ID | Priority | Finding And Impact | Source At Audit Revision |
 | --- | --- | --- | --- |
 | T1 | P1 | **Repaired (first repair; broader acceptance pending).** At the audit revision, `GgxDistribution` floored the entire squared denominator at `1e-6`, clipping smooth lobes and reporting a PDF different from the VNDF sampler. At roughness 0.03, the analytic normal-incidence D was about 392,975 versus 0.81 implemented. Pure-metal f/pdf cancellation could conceal this; mixture sampling and MIS did not generally cancel it. See Repair Progress for the current implementation and focused evidence. | [Shared:2932-2936](../Assets/Scripts/RayTracingShared.hlsl#L2932), `EvaluateMaterialBrdf` at 3039-3079 |
-| T2 | P1 | Environment NEE uses `H(q,p)` while continuation uses `H(p,n*q)`. For n > 1 these are not complementary; at n=4 and p=q their sum is about 0.559. | [Shared:3664-3671](../Assets/Scripts/RayTracingShared.hlsl#L3664), [Wavefront:308-315](../Assets/Resources/RayTracingWavefront.compute#L308) |
+| T2 | P1 | **Repaired; focused acceptance below.** At audit, environment NEE used `H(q,p)` while continuation used `H(p,n*q)`. For n > 1 these were not complementary; at n=4 and p=q their sum was about 0.559. | [Shared:3664-3671](../Assets/Scripts/RayTracingShared.hlsl#L3664), [Wavefront:308-315](../Assets/Resources/RayTracingWavefront.compute#L308) |
 | T3 | P1 | Final-event NEE competes with a BSDF continuation that is retired without evaluating sky/emitter hits. The missing complementary contribution causes energy loss. | [Manager:118-143](../Assets/Scripts/WavefrontPathTracingManager.cs#L118), [Wavefront:525-535](../Assets/Resources/RayTracingWavefront.compute#L525) |
 | T4 | P1 | Triangle NEE uses clamped artistic distance/falloff scaling while emitter hits return unscaled emission. The techniques integrate different functions; complementary MIS weights cannot reconcile them. A back-facing triangle with zero shape PDF also falls into the sphere/point fallback. | [Shared:3689-3718](../Assets/Scripts/RayTracingShared.hlsl#L3689), [Wavefront:325-338](../Assets/Resources/RayTracingWavefront.compute#L325) |
 | T5 | P1 | Dielectric direct-light MIS uses an opaque-style GGX reflection PDF, but glass/water continuation samples different approximate distributions and reports material PDF zero. Delta and rough dielectric transport need distinct, coherent sample/evaluate/PDF contracts. | [Shared:3039-3081](../Assets/Scripts/RayTracingShared.hlsl#L3039), `GetMaterialContinuationPdf`, `CreateScatteredRay` at 4632-4997 |
@@ -83,7 +83,7 @@ statistical magnitudes require measurement even where the underlying code behavi
 | R2 | P1 | Reused M is added only for positive merged weights; empty source observations disappear. Normalization depends on whether the source happened to produce a useful sample. | [Shared:4111-4129](../Assets/Scripts/RayTracingShared.hlsl#L4111), 4169-4192 |
 | R3 | P1 | Target-ratio merging with nominal M does not establish common support across receivers. A source with zero target on part of the center's contributing domain cannot represent that part. Feature similarity is not a support proof. | [Shared:3266-3278](../Assets/Scripts/RayTracingShared.hlsl#L3266), `GetTemporalRisMergedWeight` at 3446-3454 |
 | R4 | P1 | Reused target/final MIS retains source `proposalPdf`, but continuation computes receiver-dependent light importance at the current surface. Source reservoir interpretation and current integrand partition must be separate. | [Shared:3221-3225](../Assets/Scripts/RayTracingShared.hlsl#L3221), 3361-3393, 4322-4344 |
-| R5 | P1 | Local RIS shades one sample but continuation uses ordinary light/shadow/environment counts and can switch to all-lights PDF=1. Its RIS flag records selection success rather than the attempted technique. Nondefault counts and empty reservoirs break complementary weighting. | [Shared:4233-4248](../Assets/Scripts/RayTracingShared.hlsl#L4233), 4311-4324; [Wavefront:400-402](../Assets/Resources/RayTracingWavefront.compute#L400) |
+| R5 | P1 | **Repaired for local RIS; reuse remains unvalidated.** At audit, continuation used ordinary light/shadow/environment counts and could switch to all-lights PDF=1. Its RIS flag recorded selection success rather than the attempted technique. Nondefault counts and empty reservoirs broke complementary weighting. | [Shared:4233-4248](../Assets/Scripts/RayTracingShared.hlsl#L4233), 4311-4324; [Wavefront:400-402](../Assets/Resources/RayTracingWavefront.compute#L400) |
 | R6 | P1 | Sphere proposals are receiver-facing disks, not fixed emitter-surface points. Retaining their world-space sample across receivers changes the integration domain. | [Shared:4032-4036](../Assets/Scripts/RayTracingShared.hlsl#L4032), 3193-3199, 3375-3393 |
 | R7 | P2 | Temporal validation features come from an unjittered pinhole trace, not necessarily the stochastic receiver that wrote the reservoir. Depth checks compare ray distances, not a complete receiver reprojection contract. | [Shared:5222-5245](../Assets/Scripts/RayTracingShared.hlsl#L5222), 3162-3183; [TemporalRisManager:140-143](../Assets/Scripts/Lighting/TemporalRisManager.cs#L140) |
 | R8 | P2 | Nonprogressive/moving-camera resets often invalidate temporal reuse each frame, paying overhead without useful history. Temporal resources are not released by GameManager destruction; allocation includes both modes even if only one is used. | [GameManager:2450-2453](../Assets/Scripts/GameManager.cs#L2450), 1971-1977, 1281-1339; [TemporalRisManager:60-75](../Assets/Scripts/Lighting/TemporalRisManager.cs#L60) |
@@ -164,15 +164,49 @@ architectures. Do not restore them or transplant their timings to the current la
 - Remaining T1 gates: grazing sampling-frequency integration, white-furnace and raw-HDR mean
   acceptance, and relevant water/fog/RIS/guiding wrapper compiles. Focused density/PDF coverage does
   not establish general estimator correctness or full Phase 1 completion.
-- T2/R5 are next within Phase 1. No triangle-light or glass policy change is made or authorized by
+- T2/local R5 have since been repaired below. No triangle-light or glass policy change is made or authorized by
   this repair; the appearance decision below remains open.
 
 Local verification artifacts are under `/var/folders/hk/2wk9yqf564g4c39vrly7dgd80000gq/T/opencode/`:
 `ggx-t1-before.xml`, `ggx-t1-verified.xml`, and `ggx-t1-wavefront.log`. No image signatures were changed.
 
+### T2 / Local R5: MIS Consistency Implemented
+
+- Ordinary environment NEE now uses `H(n*q,p)` paired with continuation `H(p,n*q)`, with the
+  same count clamped to at least one. Local RIS retains its fixed one-proposal partition:
+  `q = branch * environmentPdf` or `branch * emitterSelection * triangleSelection * shapePdf`.
+  Reservoir candidate count affects normalization/variance, not this MIS partition.
+- Continuation records `previousInitialRisAttempted` even for empty reservoirs, reconstructs local
+  receiver importance without the ordinary all-lights fallback, and ignores ordinary environment,
+  light, and shadow counts for local MIS. Path layout remains 352 bytes. Classify and guide-training
+  terminal weights use the same policy. Near-delta opaque local RIS retains complementary emitter
+  weighting because its GGX proposal is finite-width; ordinary bypass and sphere exclusion remain.
+- Eight new count/empty cases failed before the repair. Final focused Metal run passed 13/13 with
+  no skips: ten new cases, two existing local mean tests, and the single-shadow-call-site check.
+  Environment counts `1/2/4/16` use three seeds (`1/81723/12345`), 256 spp at 16x16, no clamp or
+  tone mapping, on isolated convex opaque geometry. Combined RGB means differ from BSDF-only by
+  at most 0.13%; seed-mean standard errors are recorded, with an unchanged 2% test tolerance.
+- Local candidates `1/4/16` give exact full-pixel HDR invariance when independently varying ordinary
+  environment/light/shadow counts `1/2/4/16` in a mixed mesh/sphere/environment fixture. Forced empty
+  candidates `1/2/4/16` verify production shadow-stage metadata and primary/later-bounce gating.
+  Isolated classify checks cover sky/triangle/sphere weights, unequal emitter importance, all-lights
+  thresholds, empty-result metadata consumption, and near-delta flags.
+- Targeted Metal precompiles completed all 19 dispatches each for dry, water, fog, water+fog,
+  RIS reuse, and guided wavefront assets with terrain off. Spatial prepass completed four dispatches
+  and regression probe two. Prepass integer-modulus and probe division-by-zero warnings point to
+  unchanged shader lines. No full-suite or image-baseline update was performed.
+- Remaining gates: broader multi-seed finite/mixed-light mean acceptance on physically matched
+  integrands, guided/reuse runtime validation, and terrain permutations. These checks do not repair
+  T3 terminal truncation, T4 artistic triangle falloff, low-PDF/throughput cutoffs, or reuse R1-R4/R6.
+  Temporal/spatial reuse stays experimental/default-off. T3/T7 are the next Phase 1 repair.
+
+Artifacts: `/var/folders/hk/2wk9yqf564g4c39vrly7dgd80000gq/T/opencode/mis-t2-r5-*`.
+The initial post-edit run caught a missing HLSL forward declaration; it was fixed before the passing
+verified/final runs and wrapper compiles.
+
 ## Ordered Repair Plan
 
-Phase 1 is in progress with the first T1 repair implemented; its remaining gates and all other
+Phase 1 is in progress with first T1 and T2/local R5 repairs implemented; remaining gates and all other
 phases are pending. Keep fixes small and independently reviewable. Add a failing analytical or
 production-path fixture before changing behavior where feasible; do not loosen baselines merely to
 pass. Work may proceed in independent branches, but later acceptance depends on earlier gates.
@@ -200,8 +234,8 @@ fail accounting. A/A and reversed partial-override experiments must resolve to i
 1. T1's first stable GGX repair and focused analytic BRDF/PDF checks at roughness
    0.03/0.05/0.1/0.2, normal/grazing views, and mixed diffuse/specular materials are implemented.
    Complete the remaining T1 acceptance gates in Repair Progress; do not treat this as phase completion.
-2. Next, repair T2 and R5: carry attempted-technique metadata and use consistent current MIS partitions,
-   proposal probabilities, and counts. Test environment/light counts 1/2/4/16 and empty RIS outcomes.
+2. T2/local R5 attempted-technique metadata, MIS partitions, proposal probabilities, and counts are
+   repaired. Focused counts 1/2/4/16 and empty-RIS coverage pass; broader acceptance remains above.
 3. Resolve T3/T7 with a defined event-depth convention: direct-only last event or an extra terminal
    sky/emitter check. Enforce per-path depth, not just host queue iteration count.
 4. Repair S1/S2/S3: unique pixel identity, bounded semantic coordinate addressing with a separately

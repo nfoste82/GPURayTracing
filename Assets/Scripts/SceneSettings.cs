@@ -33,8 +33,8 @@ public sealed class SceneSettings
     public int AdaptiveGuidanceHistoryFrames = 2;
     public float AdaptiveLuminanceErrorWeight = -2.0f;
     public float AdaptiveSpatialDisagreementPriority = 4.0f;
-    public float AdaptiveGroupRmsScoreBlend = 0.0f;
-    public float AdaptiveExplorationShare = 0.0f;
+    public float AdaptiveGroupRmsScoreBlend = 0.5f;
+    public float AdaptiveExplorationShare = 0.5f;
     public int AdaptiveReclassificationInterval = 4;
     public float AdaptiveHighestBucketSampleRate = 3.0f;
     public int AdaptiveMaxPathsPerPixel = 4;
@@ -84,7 +84,7 @@ public sealed class SceneSettings
     public float CameraMovementSpeed = 3.0f;
     public float LightFalloffScale = 0.08f;
     public float Exposure = 1.0f;
-    public float FireflyClamp = 0.0f; // 0 (none), 1 (fully clamped), the higher the number past 1 the brighter the values are allowed to be
+    public float FireflyClamp = 35.0f; // 0 (none), 1 (fully clamped), the higher the number past 1 the brighter the values are allowed to be
     public bool RandomNoise = false;
     public Color32 SkyboxLightColor = new (95, 95, 105, 255);
     

@@ -2919,12 +2919,22 @@ namespace GPURayTracing.Tests
                     enableRandomWrite = true
                 };
                 causticsImage.Create();
+                var causticSppmPhotonCount = new RenderTexture(256, 256, 0, RenderTextureFormat.RFloat)
+                {
+                    enableRandomWrite = true
+                };
+                causticSppmPhotonCount.Create();
                 try
                 {
                     managerType.GetMethod("SetShaderParameters", BindingFlags.Instance | BindingFlags.NonPublic,
                             null, new[] { typeof(ComputeShader), typeof(int) }, null)
                         .Invoke(manager, new object[] { causticsShader, gatherKernel });
                     causticsShader.SetTexture(gatherKernel, "Result", causticsImage);
+                    causticsShader.SetTexture(gatherKernel, "AccumulationResult", causticsImage);
+                    causticsShader.SetTexture(gatherKernel, "CausticSppmState", causticsImage);
+                    causticsShader.SetTexture(gatherKernel, "CausticSppmPhotonCount", causticSppmPhotonCount);
+                    causticsShader.SetInt("_UseCausticSppm", 0);
+                    causticsShader.SetInt("_UseFrameAccumulation", 0);
                     causticsShader.SetInt("_NumberOfPasses", 1);
                     causticsShader.Dispatch(gatherKernel, 32, 64, 1);
 
@@ -2947,6 +2957,7 @@ namespace GPURayTracing.Tests
                 }
                 finally
                 {
+                    causticSppmPhotonCount.Release();
                     causticsImage.Release();
                 }
 
@@ -3008,6 +3019,198 @@ namespace GPURayTracing.Tests
             Assert.That(waterTarget, Does.Not.Contain("CausticSequenceSample"));
         }
 
+        [TestCase("Caustics", true, true, true, true)]
+        [TestCase("Caustics", true, false, true, false)]
+        [TestCase("Caustics", true, true, false, false)]
+        [TestCase("Caustics", true, false, false, false)]
+        [TestCase("Caustics", false, true, true, false)]
+        [TestCase("FinalColor", true, false, false, true)]
+        [TestCase("FinalColor", false, false, false, false)]
+        [TestCase("Normals", true, true, true, false)]
+        public void GameManager_FrameAccumulation_RequiresEnabledCausticsAndShaderForDebug(
+            string mode, bool accumulationEnabled, bool causticsEnabled, bool hasShader, bool expected)
+        {
+            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+            Assert.That(managerType, Is.Not.Null);
+            var gameObject = new GameObject("Caustics Accumulation Gating Test");
+            try
+            {
+                Component manager = gameObject.AddComponent(managerType);
+                Camera camera = gameObject.AddComponent<Camera>();
+                Component cameraManager = gameObject.GetComponent(Type.GetType("CameraManager, Assembly-CSharp"));
+                cameraManager.GetType().GetField("renderTextureCamera").SetValue(cameraManager, camera);
+                object temporal = managerType.GetField("_temporalDenoisingManager", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(manager);
+                temporal.GetType().GetMethod("Initialize").Invoke(temporal, new object[] { manager });
+
+                FieldInfo modeField = managerType.GetField("debugRenderMode");
+                modeField.SetValue(manager, Enum.Parse(modeField.FieldType, mode));
+                managerType.GetField("enableFrameAccumulation").SetValue(manager, accumulationEnabled);
+                managerType.GetField("enableCaustics").SetValue(manager, causticsEnabled);
+                ComputeShader shader = hasShader
+                    ? AssetDatabase.LoadAssetAtPath<ComputeShader>("Assets/Resources/RayTracingCaustics.compute") : null;
+                if (hasShader) Assert.That(shader, Is.Not.Null);
+                managerType.GetField("causticsShader").SetValue(manager, shader);
+
+                MethodInfo shouldAccumulate = managerType.GetMethod("ShouldUseFrameAccumulation", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.That(shouldAccumulate, Is.Not.Null);
+                Assert.That(shouldAccumulate.Invoke(manager, null), Is.EqualTo(expected));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(gameObject);
+            }
+        }
+
+        [TestCase(true, true)]
+        [TestCase(true, false)]
+        [TestCase(false, true)]
+        [TestCase(false, false)]
+        public void GameManager_FinalizeRenderFrame_CountsAccumulatedFramesIncludingCausticsDebug(
+            bool useFrameAccumulation, bool dedicatedDebug)
+        {
+            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+            Assert.That(managerType, Is.Not.Null);
+            var gameObject = new GameObject("Caustics Frame Count Test");
+            try
+            {
+                Component manager = gameObject.AddComponent(managerType);
+                Camera camera = gameObject.AddComponent<Camera>();
+                Component cameraManager = gameObject.GetComponent(Type.GetType("CameraManager, Assembly-CSharp"));
+                cameraManager.GetType().GetField("renderTextureCamera").SetValue(cameraManager, camera);
+                object temporal = managerType.GetField("_temporalDenoisingManager", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(manager);
+                temporal.GetType().GetMethod("Initialize").Invoke(temporal, new object[] { manager });
+                managerType.GetField("enablePathGuiding").SetValue(manager, false);
+                FieldInfo modeField = managerType.GetField("debugRenderMode");
+                modeField.SetValue(manager, Enum.Parse(modeField.FieldType, dedicatedDebug ? "Caustics" : "FinalColor"));
+
+                Type frameType = managerType.GetNestedType("RenderFrame", BindingFlags.NonPublic);
+                Assert.That(frameType, Is.Not.Null);
+                object frame = Activator.CreateInstance(frameType);
+                frameType.GetField("useFrameAccumulation").SetValue(frame, useFrameAccumulation);
+                frameType.GetField("useDedicatedCausticsDebugKernel").SetValue(frame, dedicatedDebug);
+                MethodInfo finalize = managerType.GetMethod("FinalizeRenderFrame", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.That(finalize, Is.Not.Null);
+                FieldInfo accumulatedCount = managerType.GetField("_accumulatedFrameCount", BindingFlags.NonPublic | BindingFlags.Instance);
+                FieldInfo renderedCount = managerType.GetField("_renderedFrameCount", BindingFlags.NonPublic | BindingFlags.Instance);
+                accumulatedCount.SetValue(manager, 7);
+                renderedCount.SetValue(manager, 11L);
+
+                var arguments = new[] { frame };
+                for (int i = 1; i <= 2; i++)
+                {
+                    finalize.Invoke(manager, arguments);
+                    Assert.That(accumulatedCount.GetValue(manager), Is.EqualTo(7 + (useFrameAccumulation ? i : 0)));
+                    Assert.That(renderedCount.GetValue(manager), Is.EqualTo(11L + i));
+                }
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(gameObject);
+            }
+        }
+
+        [Test]
+        public void GameManager_AccumulationStateHash_DistinguishesCausticsDebugFromFinalColor()
+        {
+            Type managerType = Type.GetType("GameManager, Assembly-CSharp");
+            Assert.That(managerType, Is.Not.Null);
+            var gameObject = new GameObject("Caustics Mode State Hash Test");
+            try
+            {
+                Component manager = gameObject.AddComponent(managerType);
+                Camera camera = gameObject.AddComponent<Camera>();
+                Component cameraManager = gameObject.GetComponent(Type.GetType("CameraManager, Assembly-CSharp"));
+                cameraManager.GetType().GetField("renderTextureCamera").SetValue(cameraManager, camera);
+                managerType.GetField("enableCaustics").SetValue(manager, true);
+                FieldInfo modeField = managerType.GetField("debugRenderMode");
+                MethodInfo hash = managerType.GetMethod("CalculateAccumulationStateHash", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.That(hash, Is.Not.Null);
+
+                modeField.SetValue(manager, Enum.Parse(modeField.FieldType, "FinalColor"));
+                int finalColorHash = (int)hash.Invoke(manager, null);
+                modeField.SetValue(manager, Enum.Parse(modeField.FieldType, "Caustics"));
+                Assert.That(hash.Invoke(manager, null), Is.Not.EqualTo(finalColorHash),
+                    "Beauty and gather-only radiance must not share progressive history.");
+                modeField.SetValue(manager, Enum.Parse(modeField.FieldType, "FinalColor"));
+                Assert.That(hash.Invoke(manager, null), Is.EqualTo(finalColorHash),
+                    "The mode must affect the state hash without mutating other renderer state.");
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(gameObject);
+            }
+        }
+
+        [Test]
+        public void GameManager_PrepareRenderFrame_ResetsBeforePhotonMapAndRecordsHashAfterward()
+        {
+            string source = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+            int start = source.IndexOf("private void PrepareRenderFrame(", StringComparison.Ordinal);
+            Assert.That(start, Is.GreaterThanOrEqualTo(0));
+            int end = source.IndexOf("private void DispatchRenderFrame(", start, StringComparison.Ordinal);
+            Assert.That(end, Is.GreaterThan(start));
+            string prepare = source.Substring(start, end - start);
+
+            int previous = -1;
+            foreach (string fragment in new[]
+            {
+                "frame.useFrameAccumulation = ShouldUseFrameAccumulation()",
+                "CalculateAccumulationStateHash()",
+                "if (!_hasAccumulationStateHash || accumulationStateHash != _accumulationStateHash)",
+                "ResetFrameAccumulation();",
+                "ResetFrameAccumulation(!_preserveTemporalRisHistoryForNextNonAccumulatedFrame, false);",
+                "UpdateCausticPhotonMap();",
+                "_accumulationStateHash = CalculateAccumulationStateHash();",
+                "_hasAccumulationStateHash = true;"
+            })
+            {
+                int position = prepare.IndexOf(fragment, StringComparison.Ordinal);
+                Assert.That(position, Is.GreaterThan(previous),
+                    $"Expected {fragment} after the preceding preparation step; photon-map resets must not invalidate the newly recorded hash.");
+                previous = position;
+            }
+        }
+
+        [Test]
+        public void CausticsDebugMode_UsesPersistentSppmFluxRadiusAndPhotonCount()
+        {
+            string source = System.IO.File.ReadAllText("Assets/Scripts/RayTracingCausticsKernels.hlsl");
+            int start = source.IndexOf("float3 UpdateCausticSppm(", StringComparison.Ordinal);
+            Assert.That(start, Is.GreaterThanOrEqualTo(0));
+            int end = source.IndexOf("void CSCausticsDebug(", start, StringComparison.Ordinal);
+            Assert.That(end, Is.GreaterThan(start));
+            string update = source.Substring(start, end - start);
+            Assert.That(update, Does.Contain("effectiveNewPhotons = alpha * batchGather.photonCount"));
+            Assert.That(update, Does.Contain("updatedRadius = max(0.001f, radius * sqrt(radiusRatio))"));
+            Assert.That(update, Does.Contain("updatedFlux = (state.rgb + batchGather.flux * _CausticIntensity) * radiusRatio"));
+            Assert.That(update, Does.Contain("CausticSppmPhotonCount[pixel] = updatedCount"));
+            Assert.That(source, Does.Contain("color = UpdateCausticSppm(id.xy, batchGather)"));
+        }
+
+        [Test]
+        public void CausticsDebugMode_BindsSharedAccumulatorBeforeDispatch()
+        {
+            string source = System.IO.File.ReadAllText("Assets/Scripts/GameManager.cs");
+            int start = source.IndexOf("private void UpdateTextureFromCompute(", StringComparison.Ordinal);
+            Assert.That(start, Is.GreaterThanOrEqualTo(0));
+            int end = source.IndexOf("private void DispatchAdaptiveSampling(", start, StringComparison.Ordinal);
+            Assert.That(end, Is.GreaterThan(start));
+            string update = source.Substring(start, end - start);
+            int binding = update.IndexOf("targetShader.SetTexture(kernelHandle, AccumulationResult, _accumulationTexture);", StringComparison.Ordinal);
+            Assert.That(binding, Is.GreaterThanOrEqualTo(0));
+            Assert.That(update.IndexOf("ComputeDispatch.Dispatch(targetShader, kernelHandle,", StringComparison.Ordinal),
+                Is.GreaterThan(binding));
+
+            start = source.IndexOf("private void BindShaderCameraAndRendererSamplingParameters(", StringComparison.Ordinal);
+            Assert.That(start, Is.GreaterThanOrEqualTo(0));
+            end = source.IndexOf("private void EnsurePathGuidingResources(", start, StringComparison.Ordinal);
+            Assert.That(end, Is.GreaterThan(start));
+            string sampling = source.Substring(start, end - start);
+            Assert.That(sampling, Does.Contain("targetShader.SetInt(UseFrameAccumulation, ShouldUseFrameAccumulation() ? 1 : 0)"));
+            Assert.That(sampling, Does.Contain("targetShader.SetInt(FrameCount, _accumulatedFrameCount)"));
+            Assert.That(source, Does.Contain("BindCausticSppmState(frame.kernelHandle)"));
+        }
+
         [Test]
         public void CausticsDebugMode_UsesDedicatedGatherKernelWithoutDebugVariant()
         {
@@ -3033,8 +3236,8 @@ namespace GPURayTracing.Tests
         {
             string sharedSource = System.IO.File.ReadAllText("Assets/Scripts/RayTracingShared.hlsl");
             int reflectorStart = sharedSource.IndexOf("bool IsCausticReflector", StringComparison.Ordinal);
-            int reflectorEnd = sharedSource.IndexOf("float3 GatherCausticRadiance", reflectorStart, StringComparison.Ordinal);
-            int visibilityStart = sharedSource.IndexOf("float3 TraceVisibleCausticRadiance", StringComparison.Ordinal);
+            int reflectorEnd = sharedSource.IndexOf("struct CausticGather", reflectorStart, StringComparison.Ordinal);
+            int visibilityStart = sharedSource.IndexOf("CausticGather TraceVisibleCausticFlux", StringComparison.Ordinal);
             int visibilityEnd = sharedSource.IndexOf("float3 ClampFirefly", visibilityStart, StringComparison.Ordinal);
 
             Assert.That(reflectorStart, Is.GreaterThanOrEqualTo(0));

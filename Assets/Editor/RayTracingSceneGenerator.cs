@@ -210,7 +210,6 @@ public static class RayTracingSceneGenerator
             CameraFocalDistance = 52.6f,
             CameraApertureMode = CameraApertureMode.LensRadius,
             CameraApertureRadius = 0.12f,
-            FireflyClamp = 16.0f,
             GlareIntensity = 0.65f,
         });
 
@@ -331,6 +330,8 @@ public static class RayTracingSceneGenerator
             SkyboxLightColor = new Color32(70, 70, 70, 255),
             GlareIntensity = 2.3f,
             GlareSoftKnee = 0.15f,
+            AdaptiveHighestBucketSampleRate = 4f,
+            TemporalRisEnabled = true,
         });
         
         AddFloor(context.Root, new Vector2(0.0f, 5.0f), new Vector2(18.0f, 24.0f), 0.32f, new Color32(204, 204, 204, 255), "Display Floor");
@@ -398,8 +399,6 @@ public static class RayTracingSceneGenerator
             CameraOrbitZoom = Vector3.Distance(MaterialBallRoomCameraPosition, MaterialBallRoomFocusPosition),
             FieldOfView = 45.0f,
             NumBounces = 10,
-            Exposure = 1.0f,
-            FireflyClamp = 8.0f,
             // The material-ball room contains its own calibrated mesh area lights.
             LightFalloffScale = 0.005f,
             SkyboxLightColor = new Color32(0, 0, 0, 255),
@@ -522,7 +521,6 @@ public static class RayTracingSceneGenerator
             DirectionalLightRotation = new Vector3(20.0f, -47.7f, 0.0f),
             DirectionalLightAngularRadius = 5.0f,
             EnableCaustics = false,
-            FireflyClamp = 8f,
         });
         
         var defaultCheckerGray = AssetDatabase.GetBuiltinExtraResource<Texture2D>(DefaultCheckerGrayTexturePath);
@@ -632,7 +630,6 @@ public static class RayTracingSceneGenerator
             SkyboxLightColor = new Color32(0, 0, 0, 255), 
             CameraFocalDistance = 15.0f,
             FieldOfView = 30.0f,
-            FireflyClamp = 8f,
             DirectionalLightIntensity = 2.0f,
             DirectionalLightRotation = new Vector3(90.0f, 0.0f, 0.0f),
             DirectionalLightAngularRadius = 0.82f   
@@ -735,7 +732,6 @@ public static class RayTracingSceneGenerator
             CameraAnamorphicRatio = 1.0f,
             DirectionalLightIntensity = 0.0f,
             SkyboxLightColor = new Color32(0, 0, 0, 255),
-            FireflyClamp = 0.0f,
             TopLevelBvhMinObjectCount = 0,
             ShadowBvhMinObjectCount = 0
         });
@@ -1418,6 +1414,7 @@ public static class RayTracingSceneGenerator
             TopLevelBvhMinObjectCount = 1024, 
             ShadowBvhMinObjectCount = 1024,
             DirectionalLightAngularRadius = 1.61f,
+            DirectionalLightIntensity = 2.0f,
             EnableCaustics = true,
             CausticIntensity = 0.16f,
             EnableSpatialDenoising = true,
@@ -1495,15 +1492,14 @@ public static class RayTracingSceneGenerator
             NumBounces = 16, 
             ShadowQuality = 0,
             CameraFocalDistance = 12.0f, 
-            FireflyClamp = 0.0f,
             EnableCaustics = true, 
             CausticPhotonCount = 262144,
-            CausticGatherRadius = 0.025f,
-            CausticGatherRadiusDecayRate = 0.35f,
+            CausticGatherRadius = 0.015f,
+            CausticGatherRadiusDecayRate = 0.15f,
             CausticIntensity = 1f,
             EnableSpatialDenoising = true,
             DenoiserIterations = 1,
-            DenoiserLuminanceSigma = 0.02f,
+            DenoiserLuminanceSigma = 0.09f,
             TopLevelBvhMinObjectCount = 1024, 
             ShadowBvhMinObjectCount = 1024,
             LightSamplingStrategy = LightSamplingStrategy.ImportanceSampled, 
@@ -1558,14 +1554,16 @@ public static class RayTracingSceneGenerator
             ShadowQuality = 0,
             CameraFocalDistance = 12.0f, 
             LightFalloffScale = 0.012f, 
-            FireflyClamp = 8.0f,
             EnableCaustics = true, 
             CausticPhotonCount = 65536, 
-            CausticGatherRadius = 0.28f,
+            CausticGatherRadius = 0.0312f,
+            CausticGatherRadiusDecayRate = 0.35f,
+            CausticIntensity = 2f,
             TopLevelBvhMinObjectCount = 1024, 
             ShadowBvhMinObjectCount = 1024,
             LightSamplingStrategy = LightSamplingStrategy.AllLights, 
-            SkyboxLightColor = new Color32(2, 2, 3, 255)
+            SkyboxLightColor = new Color32(2, 2, 3, 255),
+            DirectionalLightIntensity = 0f
         });
 
         AddPrimitiveMesh(context.Root, "Matte Caustic Receiver", 
@@ -1577,19 +1575,19 @@ public static class RayTracingSceneGenerator
         AddMeshLight(context.Root, "Triangle Caustic Light", 
             CreateHorizontalTriangleMesh("Triangle Caustic Light", 2.8f, 1.8f), 
             new Vector3(0.0f, 6.8f, 2.5f), Vector3.zero, Vector3.one,
-            new Color32(255, 244, 218, 255));
+            new Color32(255, 244, 218, 255), 2f);
         
         AddSphere(context.Root, "Clear Glass Sphere", 
-            new Vector3(0.0f, 1.32f, 2.5f), 1.3f, 
+            new Vector3(0.0f, 4.0f, 2.0f), 1.3f, 
             new Color32(238, 248, 255, 255), 
             RayMaterial.MaterialType.Glass, 
-            1.0f, 0.04f, 1.52f);
+            1.0f, 0.1f, 1.5f, 0f, 0.912f);
         
         AddSphere(context.Root, "Diffuse Scale Reference", 
-            new Vector3(2.6f, 0.45f, 6.2f), 0.45f, 
+            new Vector3(2.6f, 0.45f, 2.5f), 0.45f, 
             new Color32(185, 78, 52, 255), 
             RayMaterial.MaterialType.Diffuse, 
-            0.08f);
+            0.0f);
         
         Save(context.Scene, sceneName);
     }
@@ -1645,7 +1643,6 @@ public static class RayTracingSceneGenerator
             ShadowQuality = 0,
             LightFalloffScale = 0.021f, 
             Exposure = 1.5f,
-            FireflyClamp = 8f,
             DirectionalLightIntensity = 1f, 
             DirectionalLightAngularRadius = 1.02f,
             DirectionalLightRotation = new Vector3(90.0f, -30.0f, 0.0f),
@@ -1805,6 +1802,9 @@ public static class RayTracingSceneGenerator
             SkyboxLightColor = new Color32(0, 0, 0, 255),
             DirectionalLightIntensity = 0.0f,
             EnableCaustics = false,
+            FireflyClamp = 50f,
+            LightSamplingStrategy = LightSamplingStrategy.AllLights,
+            SubpixelJitterScale = 1.1f,
         });
 
         const float roomWidth = 6.0f;
@@ -1999,17 +1999,19 @@ public static class RayTracingSceneGenerator
             SceneName = sceneName, 
             CameraPosition = new Vector3(0.0f, 4.15f, -11.87f), 
             CameraEuler = new Vector3(3.0f, 0.0f, 0.0f),
-            NumBounces = 10, 
+            NumBounces = 5, 
             ShadowQuality = 0,
             CameraFocalDistance = 16.0f, 
             LightFalloffScale = 0.175f,
-            FireflyClamp = 8.0f,
             TopLevelBvhMinObjectCount = 0, 
             ShadowBvhMinObjectCount = 0,
             SkyboxLightColor = new Color32(255, 245, 223, 255), 
             CameraApertureMode = CameraApertureMode.Pinhole,
             FieldOfView = 33.6f,
             DirectionalLightIntensity = 0.0f,
+            CausticGatherRadius = 0.09f,
+            CausticGatherRadiusDecayRate = 0.35f,
+            CausticIntensity = 0.15f,
         });
 
         const float stageWidth = 19.0f;
@@ -2088,7 +2090,7 @@ public static class RayTracingSceneGenerator
         AddPrimitiveMesh(context.Root, "Right Red Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(roomWidth * 0.5f, roomHeight * 0.5f, roomCenterZ), Vector3.zero, new Vector3(0.04f, roomHeight, roomDepth), new Color32(230, 38, 20, 255), RayMaterial.MaterialType.Diffuse, 0.5f, 1.0f);
         AddPrimitiveMesh(context.Root, "Back Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, roomHeight * 0.5f, backZ), Vector3.zero, new Vector3(roomWidth, roomHeight, 0.04f), new Color32(232, 230, 220, 255), RayMaterial.MaterialType.Diffuse, 0.5f, 1.0f);
 
-        AddMeshLight(context.Root, "Rectangular Ceiling Light", CreateHorizontalQuadMesh("Rectangular Ceiling Light", 1.25f, 0.72f, 1.0f, 1.0f), new Vector3(0.0f, roomHeight - 0.021f, 0.7f), Vector3.zero, new Vector3(1.25f, 1.25f, 1.25f), new Color32(255, 255, 255, 255));
+        AddMeshLight(context.Root, "Rectangular Ceiling Light", CreateHorizontalQuadMesh("Rectangular Ceiling Light", 1.25f, 0.72f, 1.0f, 1.0f), new Vector3(0.0f, roomHeight - 0.021f, 0.7f), Vector3.zero, new Vector3(1.25f, 1.25f, 1.25f), new Color32(255, 255, 255, 255), 2.0f);
 
         var dragon = AddRayMesh(context.Root, "Stanford Dragon", dragonMesh, new Vector3(0.0f, 0.0f, 0.0f), new Vector3(0.0f, 148.0f, 0.0f), new Vector3(3.0f, 3.0f, 3.0f), Color.white, RayMaterial.MaterialType.Diffuse, 0.75f, 1.0f, 1.0f);
         dragon.GetComponent<RayMaterial>().InterpolateNormals = true;
@@ -2167,20 +2169,22 @@ public static class RayTracingSceneGenerator
             CameraPosition = new Vector3(-1.505f, 1.616f, 1.322f) * sceneScale,
             CameraEuler = new Vector3(21f, 129.24f, 0.0f),
             NumberOfPasses = 1,
-            NumBounces = 8,
+            NumBounces = 6,
             ShadowQuality = 0,
             EnableCaustics = false,
             CameraApertureMode = CameraApertureMode.Pinhole,
             LightFalloffScale = 0.035f,
-            Exposure = 1.2f,
-            FireflyClamp = 8.0f,
+            Exposure = 1.0f,
+            FireflyClamp = 30.0f,
             SkyboxLightColor = Color.white,
             EnvironmentHighlightThreshold = 1.0f,
             EnvironmentHighlightSoftKnee = 0.215f,
-            EnvironmentHighlightIntensity = 4.2f,
+            EnvironmentHighlightIntensity = 14f,
             DirectionalLightIntensity = 0.0f,
             TopLevelBvhMinObjectCount = 0,
-            ShadowBvhMinObjectCount = 0
+            ShadowBvhMinObjectCount = 0,
+            SobolDimensionLimit = 1,
+            EnableAdaptiveSampling = false,
         });
 
         ConfigureReadableEnvironmentTexture(AutumnFieldSkyboxPath);

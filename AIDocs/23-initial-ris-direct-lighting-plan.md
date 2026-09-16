@@ -101,7 +101,7 @@ because of the seed-binding defect below.
 
 ### Open Correctness Findings (2026-09-15)
 
-These are unresolved findings, not implemented repairs. Ordering, derivation choices, and acceptance
+These findings remain unresolved except the explicitly marked local T2/R5 repair. Ordering, derivation choices, and acceptance
 work belong to [document 27](27-renderer-sampling-audit-and-repair-plan.md).
 
 - **Missing empty temporal writes:** `StoreTemporalRisReservoir()` runs only after a valid selected
@@ -119,11 +119,10 @@ work belong to [document 27](27-renderer-sampling-audit-and-repair-plan.md).
 - **Source selection PDF enters current MIS:** re-evaluation retains source `proposalPdf`, although
   finite-light importance selection depends on receiver position. It is not generally the current
   receiver's competing NEE PDF.
-- **Continuation MIS uses ordinary counts/PDFs:** `CSWavefrontClassify` reconstructs competing PDFs
-  with `_EnvironmentLightSampleCount` or `GetLightPdfForHit()` and its ordinary all-light/count
-  behavior, then multiplies by the RIS branch probability. That is not generally the proposal used
-  by the RIS direct path. `previousInitialRisSampled` records successful selection/normalization,
-  not which technique was attempted, so an empty RIS outcome can change complementary weighting.
+- **Local continuation MIS repaired (T2/R5):** `previousInitialRisAttempted` records the technique
+  independently of selection success. Continuation reconstructs the one-proposal local partition,
+  without ordinary counts or all-lights fallback. Focused count/empty/terminal GPU tests pass.
+  This does not repair source-PDF/current-target interpretation or support for reused reservoirs.
 - **Sphere disks are not reusable world emitter points:** the sampled disk faces the source
   receiver. Reusing its world point at another receiver does not sample that receiver's disk domain;
   merely reconstructing distance/direction does not supply a valid domain mapping or Jacobian.

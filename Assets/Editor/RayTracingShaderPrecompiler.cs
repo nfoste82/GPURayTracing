@@ -350,7 +350,8 @@ public static class RayTracingShaderPrecompiler
         shader.SetTexture(kernel, "AccumulationResult", r.Color);
         shader.SetTexture(kernel, "Beauty", r.Color);
         shader.SetTexture(kernel, "CausticResult", r.Color);
-        shader.SetTexture(kernel, "CausticAccumulation", r.Color);
+        shader.SetTexture(kernel, "CausticSppmState", r.Color);
+        shader.SetTexture(kernel, "CausticSppmPhotonCount", r.Scalar);
         shader.SetTexture(kernel, "FeatureNormal", r.Color);
         shader.SetTexture(kernel, "FeatureAlbedo", r.Color); 
         shader.SetTexture(kernel, "FeatureDepth", r.Scalar);

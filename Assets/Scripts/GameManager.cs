@@ -85,7 +85,7 @@ public class GameManager : MonoBehaviour
     [Tooltip("Width of the random sub-pixel camera filter in pixel units. 1 uses the full pixel footprint and is the correct anti-aliasing default; values above 1 deliberately blur across neighboring pixels.")]
     public float subpixelJitterScale = 1.4f;
 
-    [Tooltip("Progressively averages final-color renders while the camera, scene, and quality settings are unchanged. Debug render modes are not accumulated.")]
+    [Tooltip("Progressively averages final-color and photon-caustics debug renders while the camera, scene, and quality settings are unchanged. Other debug modes are not accumulated.")]
     public bool enableFrameAccumulation = true;
 
     [Tooltip("Leaves this percentage of the measured previous render duration idle between live frames. This improves editor responsiveness without interrupting an in-progress render. 0 disables pacing.")]
@@ -318,6 +318,7 @@ public class GameManager : MonoBehaviour
     private RenderTexture _beautyTexture;
     private RenderTexture _causticResultTexture;
     private RenderTexture _causticAccumulationTexture;
+    private RenderTexture _causticSppmPhotonCountTexture;
     private RenderTexture _featureNormalTexture;
     private RenderTexture _featureAlbedoTexture;
     private RenderTexture _featureDepthTexture;
@@ -678,6 +679,8 @@ public class GameManager : MonoBehaviour
     private static readonly int NumMeshes = Shader.PropertyToID("_NumMeshes");
     private static readonly int Result = Shader.PropertyToID("Result");
     private static readonly int AccumulationResult = Shader.PropertyToID("AccumulationResult");
+    private static readonly int CausticSppmState = Shader.PropertyToID("CausticSppmState");
+    private static readonly int CausticSppmPhotonCount = Shader.PropertyToID("CausticSppmPhotonCount");
     private static readonly int Beauty = Shader.PropertyToID("Beauty");
     private static readonly int FeatureNormal = Shader.PropertyToID("FeatureNormal");
     private static readonly int FeatureAlbedo = Shader.PropertyToID("FeatureAlbedo");
@@ -1013,6 +1016,7 @@ public class GameManager : MonoBehaviour
         _beautyTexture?.Release();
         _causticResultTexture?.Release();
         _causticAccumulationTexture?.Release();
+        _causticSppmPhotonCountTexture?.Release();
         _featureNormalTexture?.Release();
         _featureAlbedoTexture?.Release();
         _featureDepthTexture?.Release();
@@ -1059,6 +1063,7 @@ public class GameManager : MonoBehaviour
         _beautyTexture = CreateFeatureTexture(RenderTextureFormat.ARGBFloat);
         _causticResultTexture = CreateFeatureTexture(RenderTextureFormat.ARGBFloat);
         _causticAccumulationTexture = CreateFeatureTexture(RenderTextureFormat.ARGBFloat);
+        _causticSppmPhotonCountTexture = CreateFeatureTexture(RenderTextureFormat.RFloat);
         _featureNormalTexture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
         _featureAlbedoTexture = CreateFeatureTexture(RenderTextureFormat.ARGBHalf);
         _featureDepthTexture = CreateFeatureTexture(RenderTextureFormat.RHalf);
@@ -1297,6 +1302,7 @@ public class GameManager : MonoBehaviour
         _beautyTexture?.Release();
         _causticResultTexture?.Release();
         _causticAccumulationTexture?.Release();
+        _causticSppmPhotonCountTexture?.Release();
         _featureNormalTexture?.Release();
         _featureAlbedoTexture?.Release();
         _featureDepthTexture?.Release();
@@ -1457,6 +1463,8 @@ public class GameManager : MonoBehaviour
                 utilityShader.SetTexture(clearKernel, AccumulationResult, _adaptiveBootstrapPriorityTexture);
                 ComputeDispatch.Dispatch(utilityShader, clearKernel, clearGroupsX, clearGroupsY, 1);
                 utilityShader.SetTexture(clearKernel, AccumulationResult, _causticAccumulationTexture);
+                ComputeDispatch.Dispatch(utilityShader, clearKernel, clearGroupsX, clearGroupsY, 1);
+                utilityShader.SetTexture(clearKernel, AccumulationResult, _causticSppmPhotonCountTexture);
                 ComputeDispatch.Dispatch(utilityShader, clearKernel, clearGroupsX, clearGroupsY, 1);
                 _accumulationClearPending = false;
             }
@@ -1895,9 +1903,8 @@ public class GameManager : MonoBehaviour
         int gatherKernel = causticsShader.FindKernel("CSCausticsFinalColor");
         SetShaderParameters(causticsShader, gatherKernel);
         causticsShader.SetTexture(gatherKernel, Result, _causticResultTexture);
-        causticsShader.SetTexture(gatherKernel, "CausticAccumulation", _causticAccumulationTexture);
-        causticsShader.SetInt("_UseCausticAccumulation", useFrameAccumulation ? 1 : 0);
-        causticsShader.SetInt("_CausticAccumulatedFrameCount", _accumulatedFrameCount);
+        BindCausticSppmState(gatherKernel);
+        causticsShader.SetInt("_UseCausticSppm", useFrameAccumulation ? 1 : 0);
         ComputeDispatch.Dispatch(causticsShader, gatherKernel,
             Mathf.CeilToInt(_textureSize.x / 8.0f), Mathf.CeilToInt(_textureSize.y / 4.0f), 1);
 
@@ -1908,6 +1915,12 @@ public class GameManager : MonoBehaviour
         ComputeDispatch.Dispatch(utilityShader, compositeKernel,
             Mathf.CeilToInt(_textureSize.x / (float)RenderThreadCountX),
             Mathf.CeilToInt(_textureSize.y / (float)RenderThreadCountY), 1);
+    }
+
+    private void BindCausticSppmState(int kernelHandle)
+    {
+        causticsShader.SetTexture(kernelHandle, CausticSppmState, _causticAccumulationTexture);
+        causticsShader.SetTexture(kernelHandle, CausticSppmPhotonCount, _causticSppmPhotonCountTexture);
     }
 
     private void PresentLinearTexture(RenderTexture source, RenderTexture destination)
@@ -1970,7 +1983,6 @@ public class GameManager : MonoBehaviour
 
     internal void ResetFrameAccumulation(bool invalidateTemporalRisHistory, bool invalidatePathGuide = true)
     {
-        _causticsManager.ResetProgressiveRadius();
         if (invalidateTemporalRisHistory)
         {
             _temporalRisManager.InvalidateHistory();
@@ -2201,6 +2213,12 @@ public class GameManager : MonoBehaviour
             _causticsManager.PreviousEnabled = true;
             return;
         }
+        else if (_accumulatedFrameCount == 0 && _causticsManager.PreviousEnabled)
+        {
+            // Camera and mode changes invalidate pixel-space SPPM state, not the current
+            // world-space photon batch. Reuse it once before advancing the photon sequence.
+            return;
+        }
 
         if (causticsShader == null)
         {
@@ -2272,7 +2290,8 @@ public class GameManager : MonoBehaviour
         var animatedWater = WaterManager.IsAnimated && !_singleFrame;
         
         return enableFrameAccumulation && 
-               debugRenderMode == DebugRenderMode.FinalColor && 
+               (debugRenderMode == DebugRenderMode.FinalColor ||
+                (debugRenderMode == DebugRenderMode.Caustics && enableCaustics && causticsShader != null)) &&
                !animatedWater && 
                !_temporalDenoisingManager.IsCameraMovingForSampling &&
                !ShouldUseTemporalAccumulation();
@@ -2421,7 +2440,6 @@ public class GameManager : MonoBehaviour
         CameraManager.UpdateAutoFocus(numberOfPasses, WaterManager.CalculateAutoFocusStateHash(),
             _nearestIntersectionDistanceCallback);
         CameraManager.AutoFocusSceneChanged = false;
-        UpdateCausticPhotonMap();
 
         if (Lighting.InitialRisCandidateCount != _initialRisCandidateCount)
         {
@@ -2436,21 +2454,29 @@ public class GameManager : MonoBehaviour
         }
         
         frame.useFrameAccumulation = ShouldUseFrameAccumulation();
+        var accumulationStateHash = frame.useFrameAccumulation ? CalculateAccumulationStateHash() : 0;
         
         if (frame.useFrameAccumulation)
         {
-            var stateHash = CalculateAccumulationStateHash();
-            if (!_hasAccumulationStateHash || stateHash != _accumulationStateHash)
+            if (!_hasAccumulationStateHash || accumulationStateHash != _accumulationStateHash)
             {
                 ResetFrameAccumulation();
-                _accumulationStateHash = stateHash; 
-                _hasAccumulationStateHash = true;
             }
         }
         else
         {
             ResetFrameAccumulation(!_preserveTemporalRisHistoryForNextNonAccumulatedFrame, false);
             _preserveTemporalRisHistoryForNextNonAccumulatedFrame = false;
+        }
+
+        // Reset the sequence before emission; photon-state changes can also reset accumulation.
+        UpdateCausticPhotonMap();
+        if (frame.useFrameAccumulation)
+        {
+            // Photon-state changes are folded into the accumulation hash during the update.
+            // Record the post-update value so a rebuild does not force a redundant reset next frame.
+            _accumulationStateHash = CalculateAccumulationStateHash();
+            _hasAccumulationStateHash = true;
         }
         
         frame.computeShader = frame.useDedicatedCausticsDebugKernel ? causticsShader : ActiveFinalColorShader;
@@ -2461,6 +2487,11 @@ public class GameManager : MonoBehaviour
     private void DispatchRenderFrame(ref RenderFrame frame)
     {
         SetShaderParameters(frame.computeShader, frame.kernelHandle);
+        if (frame.useDedicatedCausticsDebugKernel)
+        {
+            BindCausticSppmState(frame.kernelHandle);
+            causticsShader.SetInt("_UseCausticSppm", frame.useFrameAccumulation ? 1 : 0);
+        }
         if (focusShader != null)
         {
             var activeFocusShader = ActiveFocusShader;
@@ -2537,7 +2568,7 @@ public class GameManager : MonoBehaviour
             _pathGuidingManager.Rebuild(_pathGuidingShader);
         }
         _renderedFrameCount++;
-        if (frame.useFrameAccumulation && !frame.useDedicatedCausticsDebugKernel)
+        if (frame.useFrameAccumulation)
         {
             _accumulatedFrameCount++;
         }
@@ -4059,6 +4090,7 @@ public class GameManager : MonoBehaviour
             var hash = 17;
             hash = AddHash(hash, _textureSize.x);
             hash = AddHash(hash, _textureSize.y);
+            hash = AddHash(hash, (int)debugRenderMode);
             hash = AddHash(hash, numberOfPasses);
             hash = AddHash(hash, pathGuidingMinimumSamples);
             hash = AddHash(hash, enableAdaptiveSampling ? 1 : 0);

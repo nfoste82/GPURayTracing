@@ -67,6 +67,12 @@ public sealed class GameManagerEditor : Editor
             DrawProperty("fireflyClamp");
             DrawProperty("randomNoise");
         });
+
+        DrawSection(manager, "Debug View", true, () =>
+        {
+            DrawProperty("debugRenderMode", "Debug Render Mode");
+            EditorGUILayout.HelpBox("The first use of a debug mode may compile its shader variant and temporarily stall the editor.", MessageType.Info);
+        });
         
         DrawSection(manager, "Performance Throttling", true, () =>
         {
@@ -185,7 +191,6 @@ public sealed class GameManagerEditor : Editor
         DrawSection(manager, "Image Export", true, () => DrawImageExport(manager));
         DrawSection(manager, "Diagnostics", false, () =>
         {
-            DrawProperty("debugRenderMode", "Debug Render Mode");
             DrawProperty("profileStartup");
             DrawProperty("maxLightSamples");
             EditorGUILayout.Space();
@@ -396,8 +401,11 @@ public sealed class GameManagerEditor : Editor
         using (new EditorGUI.DisabledScope(!serializedObject.FindProperty("enableCaustics").boolValue))
         {
             EditorGUILayout.PropertyField(caustics.FindPropertyRelative("_photonCount"), new GUIContent("Caustic Photon Count"));
+            EditorGUILayout.PropertyField(caustics.FindPropertyRelative("_seed"), new GUIContent("Photon Seed",
+                "Deterministic seed for photon emission and transport, independent of the camera sampling seed. Changing it rebuilds the photon map and resets accumulation."));
             EditorGUILayout.PropertyField(caustics.FindPropertyRelative("_gatherRadius"));
-            EditorGUILayout.PropertyField(caustics.FindPropertyRelative("_gatherRadiusDecayRate"));
+            EditorGUILayout.PropertyField(caustics.FindPropertyRelative("_gatherRadiusDecayRate"),
+                new GUIContent("SPPM Radius Reduction", "Controls SPPM radius shrinkage as accepted photons accumulate. Zero keeps the initial radius; one shrinks most aggressively."));
             EditorGUILayout.PropertyField(caustics.FindPropertyRelative("_intensity"));
         }
         DrawProperty("causticPreservationThreshold");
