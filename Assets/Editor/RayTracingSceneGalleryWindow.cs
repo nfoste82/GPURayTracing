@@ -42,7 +42,7 @@ public sealed class RayTracingSceneGalleryWindow : EditorWindow
 
     private Vector2 _scrollPosition;
 
-    [MenuItem("Window/Ray Tracing/Scene Gallery")]
+    [MenuItem("Tools/Ray Tracing/Windows/Scene Gallery", priority = 100)]
     public static void Open()
     {
         GetWindow<RayTracingSceneGalleryWindow>(

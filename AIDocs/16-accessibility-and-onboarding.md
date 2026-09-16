@@ -12,6 +12,8 @@ The following work is already in place:
 - `Window > Ray Tracing > Quick Controls` now renders the same collapsible `GameManagerEditor` categories as the GameManager inspector, followed by scene-specific controls.
 - The README provides the Unity version, a first-render workflow, runtime controls, compute-shader requirements, and recommended scenes.
 - `SceneSettings` controls renderer defaults including firefly clamping, subpixel jitter scale, and spatial denoising configuration.
+- The README explains editor-authored and procedural scene creation, including object registration under the `Game Manager` hierarchy.
+- `Tools > Ray Tracing > Generate a New Scene Generator` creates a named generator class built on `RayTracingSceneGenerator.CreateBaseScene()` and `Save()`, then registers it in `CustomSceneGenerator.cs`; the normal generate and regenerate commands run both built-in and custom generators.
 
 ## Next Priorities
 

@@ -61,7 +61,7 @@ public sealed class RayTracingAdaptiveAllocationWindow : EditorWindow
     private double _previousEditorRunPsnr;
     private double _previousEditorRunRmse;
 
-    [MenuItem("Window/Ray Tracing/Adaptive Allocation Monitor")]
+    [MenuItem("Tools/Ray Tracing/Windows/Adaptive Allocation Monitor")]
     public static void Open()
     {
         GetWindow<RayTracingAdaptiveAllocationWindow>(WindowTitle);

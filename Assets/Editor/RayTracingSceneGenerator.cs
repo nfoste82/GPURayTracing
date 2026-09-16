@@ -31,34 +31,11 @@ public static class RayTracingSceneGenerator
     private static readonly Vector3 MaterialBallRoomFocusPosition = new Vector3(0.008921146f, 3.3969116f, -0.021280289f);
     private const string RenderManTextureFolder = "Assets/Textures/RenderManSwatch";
     private const string MetalPlateTextureFolder = "Assets/Textures";
-    private const string TerrainPreviewMaterialPath = GeneratedAssetFolder + "/TerrainPreview.mat";
-    private static readonly string[] TerrainTexturePaths =
-    {
-        "Assets/Textures/Terrain/dirt_floor_diff_2k.jpg",
-        "Assets/Textures/Terrain/sparse_grass_diff_2k.jpg",
-        "Assets/Textures/Terrain/rock_05_diff_2k.jpg",
-        "Assets/Textures/Terrain/rock_boulder_dry_diff_2k.jpg"
-    };
-    private static readonly string[] TerrainNormalTexturePaths =
-    {
-        "Assets/Textures/Terrain/dirt_floor_nor_gl_2k.png",
-        "Assets/Textures/Terrain/sparse_grass_nor_gl_2k.png",
-        "Assets/Textures/Terrain/rock_05_nor_gl_2k.png",
-        "Assets/Textures/Terrain/rock_boulder_dry_nor_gl_2k.png"
-    };
-    private static readonly string[] TerrainMaskTexturePaths =
-    {
-        "Assets/Textures/Terrain/dirt_floor_mask_2k.png",
-        "Assets/Textures/Terrain/sparse_grass_mask_2k.png",
-        "Assets/Textures/Terrain/rock_05_mask_2k.png",
-        "Assets/Textures/Terrain/rock_boulder_dry_mask_2k.png"
-    };
-    private static readonly float[] TerrainTextureTileSizes = { 7.0f, 9.0f, 6.0f, 8.0f };
     private const int WolfensteinTextureTileSize = 64;
     private static HashSet<string> _requestedScenePaths;
     private static bool _overwriteExistingScenes;
 
-    [MenuItem("Tools/Ray Tracing/Generate Scenes")]
+    [MenuItem("Tools/Ray Tracing/Generate Scenes From Generator")]
     public static void GenerateScenes()
     {
         GenerateScenes(null, false);
@@ -69,7 +46,7 @@ public static class RayTracingSceneGenerator
     /// Use this after changing generator code: plain "Generate Scenes" skips scenes that already
     /// exist, so edits appear to have no effect until the scene file is deleted by hand.
     /// </summary>
-    [MenuItem("Tools/Ray Tracing/Regenerate Scenes (Delete Existing Scenes)")]
+    [MenuItem("Tools/Ray Tracing/Regenerate Generated Scenes (Delete Existing)")]
     public static void RegenerateScenes()
     {
         bool confirmed = EditorUtility.DisplayDialog(
@@ -92,10 +69,10 @@ public static class RayTracingSceneGenerator
         GenerateScenes(new[] { GetScenePath("Terrain") }, true);
     }
 
-    [MenuItem("Tools/Ray Tracing/Generate Empty Scene")]
+    [MenuItem("Tools/Ray Tracing/Generate Empty Scene", priority = 200)]
     public static void GenerateEmptyScene()
     {
-        string absolutePath = EditorUtility.SaveFilePanel(
+        var absolutePath = EditorUtility.SaveFilePanel(
             "Save Empty Ray Tracing Scene",
             "Assets/Scenes",
             "EmptyScene",
@@ -107,7 +84,7 @@ public static class RayTracingSceneGenerator
         }
 
         // Convert the absolute path to a project-relative path for EditorSceneManager.
-        string projectRoot = System.IO.Path.GetFullPath(Application.dataPath + "/..");
+        var projectRoot = Path.GetFullPath(Application.dataPath + "/..");
         if (!absolutePath.StartsWith(projectRoot))
         {
             EditorUtility.DisplayDialog(
@@ -117,8 +94,8 @@ public static class RayTracingSceneGenerator
             return;
         }
 
-        string relativePath = absolutePath.Substring(projectRoot.Length + 1);
-        string sceneName = System.IO.Path.GetFileNameWithoutExtension(relativePath);
+        var relativePath = absolutePath.Substring(projectRoot.Length + 1);
+        var sceneName = Path.GetFileNameWithoutExtension(relativePath);
 
         var context = CreateBaseScene(new SceneSettings
         {
@@ -168,10 +145,11 @@ public static class RayTracingSceneGenerator
             CreateWolfensteinScene();
             CreateVolumetricFogScene();
             CreateApertureBokehScene();
-            CreateTerrainScene();
+            TerrainSceneGenerator.CreateTerrainScene();
             CreateTeapotMaterialScene();
             CreateParallaxMappingScene();
             CreateKhronosGltfBrowserScene();
+            CustomSceneGenerator.GenerateScenes();
 
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
@@ -238,14 +216,6 @@ public static class RayTracingSceneGenerator
         {
             room.AddComponent<MaterialBallRoomRuntimeSetup>();
         }
-
-        var colors = new Color32[]
-            { new (71, 151, 218, 255), 
-                new (200, 55, 55, 255), 
-                new (55, 200, 55, 255),
-                new (250, 240, 55, 255),
-                new (255, 255, 255, 255),
-            };
 
         var radius = 0.9f;
         
@@ -411,7 +381,7 @@ public static class RayTracingSceneGenerator
             EnableCaustics = false,
         });
 
-        GameObject roomPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(MaterialBallRoomPrefabPath);
+        var roomPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(MaterialBallRoomPrefabPath);
         if (roomPrefab == null)
         {
             Debug.LogError($"Khronos glTF Browser requires the display-room prefab at {MaterialBallRoomPrefabPath}.");
@@ -420,7 +390,7 @@ public static class RayTracingSceneGenerator
 
         // Parent during instantiation so each PathTracingObject registers with the GameManager
         // from its OnEnable callback instead of becoming an unregistered raster-only preview.
-        GameObject room = PrefabUtility.InstantiatePrefab(roomPrefab, context.Root) as GameObject;
+        var room = PrefabUtility.InstantiatePrefab(roomPrefab, context.Root) as GameObject;
         if (room == null)
         {
             Debug.LogError($"Could not instantiate display-room prefab at {MaterialBallRoomPrefabPath}.");
@@ -529,13 +499,13 @@ public static class RayTracingSceneGenerator
             CreateHorizontalQuadMesh("Teapot Checkerboard Floor", 22.0f, 20.0f, 10.5f, 10.5f), 
             new Vector3(0f, 0f, 3.35f), Vector3.zero, new Vector3(1f, 1f, 1.5f), 
             Color.white, RayMaterial.MaterialType.Diffuse, 
-            0.2f, 1.0f, 1.0f, albedoTexture: defaultCheckerGray);
+            0.2f, albedoTexture: defaultCheckerGray);
         
         AddRayMesh(context.Root, "Checkerboard Back Wall", 
             CreateHorizontalQuadMesh("Teapot Checkerboard Floor", 22.0f, 20.0f, 6.0f, 6.0f), 
             new Vector3(0f, 0f, 30f), new Vector3(90.0f, 0.0f, 0.0f), new Vector3(5.0f, 5.0f, 5.0f), 
             Color.white, RayMaterial.MaterialType.Diffuse, 
-            0.2f, 1.0f, 1.0f, albedoTexture: defaultCheckerGray);
+            0.2f, albedoTexture: defaultCheckerGray);
         
         AddLight(context.Root, "Front Left Fill", new Vector3(-23.25f, 17.2f, -8.7f), 3f, new Color32(225, 247, 255, 255), 4f);
         AddLight(context.Root, "Back Light", new Vector3(0.73f, 3.47f, 23.4f), 1.5f, new Color32(255, 250, 235, 255), 10f);
@@ -558,9 +528,49 @@ public static class RayTracingSceneGenerator
         Save(context.Scene, sceneName);
         AssetDatabase.SaveAssets();
         AssetDatabase.Refresh();
+
+        return;
+        
+        static Texture2D LoadRenderManTexture(string fileName, bool linear)
+        {
+            var path = $"{RenderManTextureFolder}/{fileName}";
+            var importer = AssetImporter.GetAtPath(path) as TextureImporter;
+            if (importer == null)
+            {
+                return null;
+            }
+
+            var changed = false;
+            if (!importer.isReadable)
+            {
+                importer.isReadable = true;
+                changed = true;
+            }
+            if (importer.wrapMode != TextureWrapMode.Repeat)
+            {
+                importer.wrapMode = TextureWrapMode.Repeat;
+                changed = true;
+            }
+            if (importer.sRGBTexture == linear)
+            {
+                importer.sRGBTexture = !linear;
+                changed = true;
+            }
+            if (importer.textureCompression != TextureImporterCompression.Uncompressed)
+            {
+                importer.textureCompression = TextureImporterCompression.Uncompressed;
+                changed = true;
+            }
+            if (changed)
+            {
+                importer.SaveAndReimport();
+            }
+
+            return AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+        }
     }
 
-    private static BenchmarkContext CreateBaseScene(SceneSettings settings)
+    public static BenchmarkContext CreateBaseScene(SceneSettings settings)
     {
         var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
         scene.name = settings.SceneName;
@@ -599,9 +609,9 @@ public static class RayTracingSceneGenerator
 
     private static void MoveGameManagerToTop(GameManager manager)
     {
-        Component[] components = manager.GetComponents<Component>();
-        int managerIndex = Array.IndexOf(components, manager);
-        for (int index = managerIndex; index > 1; index--)
+        var components = manager.GetComponents<Component>();
+        var managerIndex = Array.IndexOf(components, manager);
+        for (var index = managerIndex; index > 1; index--)
         {
             if (!ComponentUtility.MoveComponentUp(manager))
             {
@@ -642,15 +652,6 @@ public static class RayTracingSceneGenerator
 
         AddFloor(context.Root, new Vector2(0.0f, 2.5f), new Vector2(35.0f, 500.0f), 0.12f, new Color32(204, 204, 204, 255), "Matte Floor");
         
-        // AddMeshLight(
-        //     context.Root,
-        //     "Rectangular Ceiling Light",
-        //     CreateHorizontalQuadMesh("Rectangular Ceiling Light", (slatCount - 1) * slatSpacing + slatWidth, slatDepth, 1.0f, 1.0f),
-        //     new Vector3(0.0f, 20.7f, 3.5f),
-        //     Vector3.zero,
-        //     new Vector3(0.15f, 1.0f, 1.0f),
-        //     new Color32(255, 255, 255, 255));
-
         for (var i = 0; i < slatCount; i++)
         {
             var x = (i - (slatCount - 1) * 0.5f) * slatSpacing;
@@ -667,14 +668,12 @@ public static class RayTracingSceneGenerator
                 1.0f);
         }
         
-        // Add left wall
         AddPrimitiveMesh(context.Root, "Left Wall",
             RayMeshPrimitive.PrimitiveType.Cube,
             new Vector3(-7.5f, 8.75f, 3.5f), Vector3.zero, new Vector3(1f, 40f, 100f),
             Color.black,
             RayMaterial.MaterialType.Diffuse, 0.0f, 1.0f);
         
-        // Add right wall
         AddPrimitiveMesh(context.Root, "Right Wall",
             RayMeshPrimitive.PrimitiveType.Cube,
             new Vector3(7.5f, 8.75f, 3.5f), Vector3.zero, new Vector3(1f, 40f, 100f),
@@ -745,7 +744,7 @@ public static class RayTracingSceneGenerator
             new Color32(180, 180, 180, 255), RayMaterial.MaterialType.Diffuse, 0.15f);
 
         float[] xPositions = { -4.0f, -2.0f, 0.0f, 2.0f, 4.0f };
-        for (int i = 0; i < xPositions.Length; i++)
+        for (var i = 0; i < xPositions.Length; i++)
         {
             AddLight(context.Root, $"Defocused Point Light {i + 1}", new Vector3(xPositions[i], 2.5f, 14.0f),
                 0.025f, Color.white, 10.0f);
@@ -792,368 +791,6 @@ public static class RayTracingSceneGenerator
         }
 
         Save(context.Scene, "Benchmark_ManySpheres");
-    }
-
-    private static void CreateTerrainScene()
-    {
-        const string sceneName = "Terrain";
-        const int seed = 481516;
-        if (ShouldSkipExistingScene(sceneName))
-        {
-            return;
-        }
-
-        Directory.CreateDirectory(GeneratedAssetFolder);
-        var terrainData = CreateSeededTerrainData(seed);
-        var context = CreateBaseScene(new SceneSettings
-        {
-            SceneName = sceneName,
-            CameraPosition = new Vector3(0.0f, 13.3f, -0.42f),
-            CameraEuler = new Vector3(10.85f, 0.0f, 0.0f),
-            NumBounces = 5,
-            ShadowQuality = 0,
-            LightFalloffScale = 0.02f,
-            Exposure = 1.0f,
-            TopLevelBvhMinObjectCount = 0,
-            ShadowBvhMinObjectCount = 0,
-            CameraMovementSpeed = 3.0f,
-            DirectionalLightIntensity = 5.0f,
-            SkyboxLightColor = new Color32(227, 206, 206, 255)
-        });
-
-        var terrainObject = Terrain.CreateTerrainGameObject(terrainData);
-        terrainObject.name = "Seeded Ray Tracing Terrain";
-        terrainObject.transform.SetParent(context.Root, false);
-        terrainObject.transform.localPosition = new Vector3(-500.0f, 0.0f, -80.0f);
-        
-        var terrain = terrainObject.GetComponent<Terrain>();
-        terrain.drawHeightmap = true;
-        terrain.materialTemplate = GetOrCreateTerrainPreviewMaterial();
-        terrain.GetComponent<TerrainCollider>().enabled = false;
-        
-        var rayTracingTerrain = terrainObject.AddComponent<RayTracingTerrain>();
-        rayTracingTerrain.Terrain = terrain;
-        rayTracingTerrain.Seed = seed;
-        rayTracingTerrain.AccelerationResolution = 32;
-        rayTracingTerrain.MarchSteps = 12;
-        rayTracingTerrain.RefinementSteps = 5;
-        
-        Save(context.Scene, sceneName);
-    }
-
-    private static TerrainData CreateSeededTerrainData(int seed)
-    {
-        EditorUtility.DisplayProgressBar("Generating Terrain", "Building 1 km heightfield", 0.05f);
-        try
-        {
-        const string path = GeneratedAssetFolder + "/SeededTerrain.asset";
-        TerrainData terrainData = AssetDatabase.LoadAssetAtPath<TerrainData>(path);
-        if (terrainData == null)
-        {
-            terrainData = new TerrainData();
-            AssetDatabase.CreateAsset(terrainData, path);
-        }
-
-        const int resolution = 257;
-        terrainData.heightmapResolution = resolution;
-        // One terrain unit represents one metre: the heightmap covers one square kilometre
-        // and uses a 100 m vertical range, representative of a rolling mountain valley.
-        terrainData.size = new Vector3(1000.0f, 100.0f, 1000.0f);
-        var heights = new float[resolution, resolution];
-        var random = new System.Random(seed);
-        float offsetX = (float)random.NextDouble() * 64.0f;
-        float offsetZ = (float)random.NextDouble() * 64.0f;
-        Vector2 massifA = new Vector2(0.20f, 0.68f);
-        Vector2 massifB = new Vector2(0.77f, 0.72f);
-        Vector2 massifC = new Vector2(0.62f, 0.30f);
-        float valleyOffset = Mathf.Lerp(-0.08f, 0.08f, (float)random.NextDouble());
-        for (int z = 0; z < resolution; z++)
-        {
-            if ((z & 15) == 0)
-            {
-                EditorUtility.DisplayProgressBar("Generating Terrain", "Building natural landforms", 0.05f + 0.60f * z / (resolution - 1));
-            }
-            for (int x = 0; x < resolution; x++)
-            {
-                float nx = (float)x / (resolution - 1);
-                float nz = (float)z / (resolution - 1);
-                float warpX = FractalNoise(offsetX + nx * 2.0f, offsetZ + nz * 2.0f, 3, 2.0f, 0.5f) - 0.5f;
-                float warpZ = FractalNoise(offsetX + 17.0f + nx * 2.0f, offsetZ + 31.0f + nz * 2.0f, 3, 2.0f, 0.5f) - 0.5f;
-                float warpedX = nx + warpX * 0.16f;
-                float warpedZ = nz + warpZ * 0.16f;
-                float continental = FractalNoise(offsetX + warpedX * 1.15f, offsetZ + warpedZ * 1.15f, 4, 2.0f, 0.52f);
-                float foothills = FractalNoise(offsetX + 13.0f + warpedX * 4.0f, offsetZ + 7.0f + warpedZ * 4.0f, 4, 2.05f, 0.5f);
-                float detail = FractalNoise(offsetX + 29.0f + warpedX * 13.0f, offsetZ + 41.0f + warpedZ * 13.0f, 3, 2.2f, 0.48f);
-                float ridges = RidgedNoise(offsetX + 47.0f + warpedX * 4.8f, offsetZ + 19.0f + warpedZ * 4.8f, 4);
-                float mountainMask = Mathf.Clamp01((continental - 0.43f) / 0.36f);
-                float massifs = Gaussian(warpedX, warpedZ, massifA, 0.13f, 0.34f)
-                    + Gaussian(warpedX, warpedZ, massifB, 0.16f, 0.29f)
-                    + Gaussian(warpedX, warpedZ, massifC, 0.11f, 0.20f);
-
-                // A gently meandering lowland joins open terrain instead of terminating in a circular depression.
-                float valleyCenter = 0.48f + valleyOffset + Mathf.Sin(warpedZ * Mathf.PI * 1.3f) * 0.14f + warpX * 0.08f;
-                float valleyDistance = Mathf.Abs(warpedX - valleyCenter);
-                float valley = (1.0f - Mathf.SmoothStep(0.035f, 0.20f, valleyDistance)) * Mathf.SmoothStep(0.02f, 0.15f, warpedZ);
-                float openBasin = Gaussian(warpedX, warpedZ, new Vector2(0.30f, 0.24f), 0.20f, 1.0f);
-                float edgeDistance = Mathf.Min(Mathf.Min(nx, 1.0f - nx), Mathf.Min(nz, 1.0f - nz));
-                float edge = Mathf.SmoothStep(0.0f, 0.08f, edgeDistance);
-                float height = 0.075f + continental * 0.11f + foothills * 0.055f + detail * 0.018f;
-                height += massifs + ridges * mountainMask * 0.16f;
-                height -= valley * 0.19f + openBasin * 0.055f;
-                heights[z, x] = Mathf.Clamp01(Mathf.Lerp(0.035f, height, edge));
-            }
-        }
-        NormalizeTerrainHeights(heights, 0.02f, 0.98f);
-        terrainData.SetHeights(0, 0, heights);
-
-        EditorUtility.DisplayProgressBar("Generating Terrain", "Assigning terrain textures", 0.70f);
-        TerrainLayer[] layers = new TerrainLayer[4];
-        Color[] colors = { new Color(0.20f, 0.29f, 0.11f), new Color(0.42f, 0.55f, 0.18f), new Color(0.48f, 0.34f, 0.17f), new Color(0.80f, 0.78f, 0.68f) };
-        for (int i = 0; i < layers.Length; i++)
-        {
-            ConfigureTerrainTexture(TerrainTexturePaths[i]);
-            ConfigureTerrainDataTexture(TerrainNormalTexturePaths[i]);
-            ConfigureTerrainDataTexture(TerrainMaskTexturePaths[i]);
-            layers[i] = CreateTerrainLayer(i, colors[i], TerrainTexturePaths[i], TerrainNormalTexturePaths[i], TerrainMaskTexturePaths[i], TerrainTextureTileSizes[i]);
-        }
-        terrainData.terrainLayers = layers;
-
-        EditorUtility.DisplayProgressBar("Generating Terrain", "Painting terrain materials", 0.75f);
-        terrainData.alphamapResolution = 128;
-
-        // Layer placement is declared in self-calibrating units, not raw heightmap values:
-        //   * elevation as a PERCENTILE RANK of this heightmap (0.9 = highest 10% by area)
-        //   * slope in real DEGREES
-        // The noise chain above plus NormalizeTerrainHeights produces a strongly bottom-weighted
-        // distribution (median elevation near 0.11, not 0.5), so absolute thresholds silently
-        // paint almost nothing. Rank space stays correct if the height generator changes.
-        // To rebalance the terrain, move these ranks; do not hand-tune height constants.
-        var rules = new[]
-        {
-            new TerrainLayerPainter.LayerRule
-            {
-                LayerIndex = 0, Name = "dirt_floor",
-                MinElevationRank = 0.00f, MaxElevationRank = 0.34f,
-                ElevationFeatherRank = 0.10f
-            },
-            new TerrainLayerPainter.LayerRule
-            {
-                LayerIndex = 1, Name = "sparse_grass",
-                MinElevationRank = 0.28f, MaxElevationRank = 0.72f,
-                // Grass only holds on ground shallow enough to keep soil.
-                MaxSlopeDegrees = 26.0f, SlopeFeatherDegrees = 8.0f,
-                ElevationFeatherRank = 0.10f,
-                NoiseInfluence = 0.25f
-            },
-            new TerrainLayerPainter.LayerRule
-            {
-                LayerIndex = 2, Name = "rock_05",
-                MinElevationRank = 0.62f, MaxElevationRank = 0.94f,
-                ElevationFeatherRank = 0.10f
-            },
-            new TerrainLayerPainter.LayerRule
-            {
-                LayerIndex = 3, Name = "rock_boulder_dry",
-                MinElevationRank = 0.88f, MaxElevationRank = 1.00f,
-                ElevationFeatherRank = 0.08f
-            }
-        };
-
-        TerrainLayerPainter.PaintResult paint = TerrainLayerPainter.Paint(
-            heights,
-            terrainData.size,
-            terrainData.alphamapResolution,
-            rules,
-            (u, v) => FractalNoise(offsetX + u * 5.0f, offsetZ + v * 5.0f, 3, 2.0f, 0.5f));
-
-        TerrainLayerPainter.ValidateCoverage(paint);
-        terrainData.SetAlphamaps(0, 0, paint.Weights);
-        Debug.Log(TerrainLayerPainter.BuildReport(paint, "Generated Terrain Layer Coverage"));
-        foreach (string warning in paint.Warnings)
-        {
-            Debug.LogWarning($"Terrain painting: {warning}");
-        }
-
-        EditorUtility.SetDirty(terrainData);
-        return terrainData;
-        }
-        finally
-        {
-            EditorUtility.ClearProgressBar();
-        }
-    }
-
-    private static float FractalNoise(float x, float z, int octaves, float lacunarity, float persistence)
-    {
-        float sum = 0.0f;
-        float amplitude = 1.0f;
-        float frequency = 1.0f;
-        float amplitudeSum = 0.0f;
-        for (int octave = 0; octave < octaves; octave++)
-        {
-            sum += Mathf.PerlinNoise(x * frequency, z * frequency) * amplitude;
-            amplitudeSum += amplitude;
-            frequency *= lacunarity;
-            amplitude *= persistence;
-        }
-        return sum / amplitudeSum;
-    }
-
-    private static float RidgedNoise(float x, float z, int octaves)
-    {
-        float noise = FractalNoise(x, z, octaves, 2.0f, 0.52f);
-        return Mathf.Pow(1.0f - Mathf.Abs(noise * 2.0f - 1.0f), 2.0f);
-    }
-
-    private static float Gaussian(float x, float z, Vector2 center, float radius, float amplitude)
-    {
-        float deltaX = x - center.x;
-        float deltaZ = z - center.y;
-        return amplitude * Mathf.Exp(-(deltaX * deltaX + deltaZ * deltaZ) / (2.0f * radius * radius));
-    }
-
-    private static void NormalizeTerrainHeights(float[,] heights, float minimum, float maximum)
-    {
-        float sourceMinimum = float.PositiveInfinity;
-        float sourceMaximum = float.NegativeInfinity;
-        int resolution = heights.GetLength(0);
-        for (int z = 0; z < resolution; z++)
-        {
-            for (int x = 0; x < resolution; x++)
-            {
-                sourceMinimum = Mathf.Min(sourceMinimum, heights[z, x]);
-                sourceMaximum = Mathf.Max(sourceMaximum, heights[z, x]);
-            }
-        }
-
-        float sourceRange = Mathf.Max(0.0001f, sourceMaximum - sourceMinimum);
-        for (int z = 0; z < resolution; z++)
-        {
-            for (int x = 0; x < resolution; x++)
-            {
-                float normalized = (heights[z, x] - sourceMinimum) / sourceRange;
-                heights[z, x] = Mathf.Lerp(minimum, maximum, normalized);
-            }
-        }
-    }
-
-
-    private static TerrainLayer CreateTerrainLayer(int index, Color fallbackColor, string texturePath, string normalPath, string maskPath, float tileSize)
-    {
-        string layerPath = GeneratedAssetFolder + $"/SeededTerrainLayer{index}.terrainlayer";
-        TerrainLayer layer = AssetDatabase.LoadAssetAtPath<TerrainLayer>(layerPath);
-        if (layer == null)
-        {
-            layer = new TerrainLayer();
-            AssetDatabase.CreateAsset(layer, layerPath);
-        }
-        Texture2D texture = AssetDatabase.LoadAssetAtPath<Texture2D>(texturePath);
-        if (texture == null)
-        {
-            Debug.LogWarning($"Terrain texture is missing at {texturePath}; using the generated fallback swatch.");
-            texture = CreateTerrainColorTexture(index, fallbackColor);
-        }
-        layer.diffuseTexture = texture;
-        layer.normalMapTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(normalPath);
-        layer.maskMapTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(maskPath);
-        layer.metallic = 1.0f;
-        layer.smoothness = 1.0f;
-        layer.normalScale = 1.0f;
-        layer.tileSize = Vector2.one * tileSize;
-        EditorUtility.SetDirty(layer);
-        return layer;
-    }
-
-    private static Material GetOrCreateTerrainPreviewMaterial()
-    {
-        Material material = AssetDatabase.LoadAssetAtPath<Material>(TerrainPreviewMaterialPath);
-        Shader shader = Shader.Find("Nature/Terrain/RayTracingPreview");
-        if (shader == null)
-        {
-            Debug.LogWarning("Terrain preview shader was not found; Unity Scene view will use its default terrain material.");
-            return null;
-        }
-        if (material == null)
-        {
-            material = new Material(shader) { name = "Ray Tracing Terrain Preview" };
-            AssetDatabase.CreateAsset(material, TerrainPreviewMaterialPath);
-        }
-        else if (material.shader != shader)
-        {
-            material.shader = shader;
-            EditorUtility.SetDirty(material);
-        }
-        return material;
-    }
-
-    private static void ConfigureTerrainTexture(string path)
-    {
-        var importer = AssetImporter.GetAtPath(path) as TextureImporter;
-        if (importer == null)
-        {
-            return;
-        }
-
-        bool changed = false;
-        if (importer.wrapMode != TextureWrapMode.Repeat)
-        {
-            importer.wrapMode = TextureWrapMode.Repeat;
-            changed = true;
-        }
-        if (importer.textureCompression != TextureImporterCompression.CompressedHQ)
-        {
-            importer.textureCompression = TextureImporterCompression.CompressedHQ;
-            changed = true;
-        }
-        if (changed)
-        {
-            importer.SaveAndReimport();
-        }
-    }
-
-    private static void ConfigureTerrainDataTexture(string path)
-    {
-        var importer = AssetImporter.GetAtPath(path) as TextureImporter;
-        if (importer == null)
-        {
-            return;
-        }
-
-        bool changed = false;
-        if (importer.sRGBTexture)
-        {
-            importer.sRGBTexture = false;
-            changed = true;
-        }
-        if (importer.wrapMode != TextureWrapMode.Repeat)
-        {
-            importer.wrapMode = TextureWrapMode.Repeat;
-            changed = true;
-        }
-        if (importer.textureCompression != TextureImporterCompression.CompressedHQ)
-        {
-            importer.textureCompression = TextureImporterCompression.CompressedHQ;
-            changed = true;
-        }
-        if (changed)
-        {
-            importer.SaveAndReimport();
-        }
-    }
-
-    private static Texture2D CreateTerrainColorTexture(int index, Color color)
-    {
-        string texturePath = GeneratedAssetFolder + $"/SeededTerrainLayer{index}.asset";
-        Texture2D texture = AssetDatabase.LoadAssetAtPath<Texture2D>(texturePath);
-        if (texture != null)
-        {
-            AssetDatabase.DeleteAsset(texturePath);
-        }
-        texture = new Texture2D(2, 2, TextureFormat.RGBA32, false, false) { name = $"Seeded Terrain Layer {index}" };
-        texture.SetPixels(new[] { color, color, color, color });
-        texture.Apply(false, false);
-        AssetDatabase.CreateAsset(texture, texturePath);
-        return texture;
     }
 
     private static void CreateShadowBlockersScene()
@@ -1590,6 +1227,26 @@ public static class RayTracingSceneGenerator
             0.0f);
         
         Save(context.Scene, sceneName);
+
+        return;
+        
+        Mesh CreateHorizontalTriangleMesh(string name, float width, float depth)
+        {
+            var mesh = new Mesh
+            {
+                name = name,
+                vertices = new[]
+                {
+                    new Vector3(-width * 0.5f, 0.0f, -depth * 0.5f),
+                    new Vector3(0.0f, 0.0f, depth * 0.5f),
+                    new Vector3(width * 0.5f, 0.0f, -depth * 0.5f)
+                },
+                triangles = new[] { 0, 2, 1 }
+            };
+            mesh.RecalculateNormals();
+            mesh.RecalculateBounds();
+            return mesh;
+        }
     }
 
     private static void CreateDynamicScene()
@@ -1674,12 +1331,6 @@ public static class RayTracingSceneGenerator
         water.WaveSpeed = 0.85f;
         water.MarchSteps = 36;
         water.RefinementSteps = 6;
-
-        //AddLight(context.Root, "Low Sun Reflection Light", new Vector3(-5.0f, 4.0f, -5.5f), 1.2f, new Color32(255, 226, 188, 255));
-        // AddLight(context.Root, "Cool Sky Fill", 
-        //     new Vector3(8.0f, 15f, 8.0f), 
-        //     1.8f, 
-        //     new Color32(255, 253, 155, 255));
 
         AddPrimitiveMesh(context.Root, "Ground Plane", 
             RayMeshPrimitive.PrimitiveType.Cube, 
@@ -1883,14 +1534,14 @@ public static class RayTracingSceneGenerator
         AddMeshLight(context.Root, "Ceiling Area Light", CreateHorizontalQuadMesh("Demofox Ceiling Area Light", 2.8f, roomDepth * 0.5f, 1.0f, 1.0f), new Vector3(0.0f, roomHeight - wallThickness + 0.012f, roomDepth * 0.5f), Vector3.zero, Vector3.one, Color.white, 1.5f);
 
         float[] roughnessSteps = { 1.0f, 0.75f, 0.5f, 0.25f, 0.0f };
-        var smallSphereRadius = 0.48f;
-        for (int i = 0; i < roughnessSteps.Length; i++)
+        const float smallSphereRadius = 0.48f;
+        for (var i = 0; i < roughnessSteps.Length; i++)
         {
             AddSphere(context.Root, $"Green Metal Smoothness {1.0f - roughnessSteps[i]:0.00}", new Vector3(-2.85f + i * 1.4f, 3.35f, roomDepth - smallSphereRadius), smallSphereRadius, new Color(0.3f, 1.0f, 0.3f, 1.0f), RayMaterial.MaterialType.Metal, roughnessSteps[i]);
         }
 
-        var sphereRadius = 0.85f;
-        var sidePadding = 0.17f;
+        const float sphereRadius = 0.85f;
+        const float sidePadding = 0.17f;
         var yellowDielectric = AddSphere(context.Root, "Yellow Dielectric", new Vector3(-(roomWidth * 0.5f) + sphereRadius + sidePadding, sphereRadius, roomDepth - sphereRadius), sphereRadius, new Color32(180, 170, 50, 255), RayMaterial.MaterialType.Diffuse, 0.95f);
         yellowDielectric.GetComponent<RayMaterial>().Metallic = 0.1f;
         var pinkDielectric = AddSphere(context.Root, "Pink Dielectric", new Vector3(0.0f, sphereRadius, roomDepth - sphereRadius), sphereRadius, new Color32(220, 115, 172, 255), RayMaterial.MaterialType.Diffuse, 0.95f);
@@ -2082,7 +1733,7 @@ public static class RayTracingSceneGenerator
         const float roomHeight = 4.2f;
         const float roomDepth = 8.2f;
         const float roomCenterZ = 0.5f;
-        var backZ = roomCenterZ + roomDepth * 0.5f;
+        const float backZ = roomCenterZ + roomDepth * 0.5f;
 
         AddPrimitiveMesh(context.Root, "Floor", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 0.02f, roomCenterZ), Vector3.zero, new Vector3(roomWidth, 0.04f, roomDepth), new Color32(230, 226, 214, 255), RayMaterial.MaterialType.Diffuse, 0.5f, 1.0f);
         AddPrimitiveMesh(context.Root, "Ceiling", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, roomHeight, roomCenterZ), Vector3.zero, new Vector3(roomWidth, 0.04f, roomDepth), new Color32(226, 224, 214, 255), RayMaterial.MaterialType.Diffuse, 0.5f, 1.0f);
@@ -2092,9 +1743,8 @@ public static class RayTracingSceneGenerator
 
         AddMeshLight(context.Root, "Rectangular Ceiling Light", CreateHorizontalQuadMesh("Rectangular Ceiling Light", 1.25f, 0.72f, 1.0f, 1.0f), new Vector3(0.0f, roomHeight - 0.021f, 0.7f), Vector3.zero, new Vector3(1.25f, 1.25f, 1.25f), new Color32(255, 255, 255, 255), 2.0f);
 
-        var dragon = AddRayMesh(context.Root, "Stanford Dragon", dragonMesh, new Vector3(0.0f, 0.0f, 0.0f), new Vector3(0.0f, 148.0f, 0.0f), new Vector3(3.0f, 3.0f, 3.0f), Color.white, RayMaterial.MaterialType.Diffuse, 0.75f, 1.0f, 1.0f);
+        var dragon = AddRayMesh(context.Root, "Stanford Dragon", dragonMesh, new Vector3(0.0f, 0.0f, 0.0f), new Vector3(0.0f, 148.0f, 0.0f), new Vector3(3.0f, 3.0f, 3.0f), Color.white, RayMaterial.MaterialType.Diffuse, 0.75f);
         dragon.GetComponent<RayMaterial>().InterpolateNormals = true;
-        //FitObjectToBox(dragon.transform, dragonMesh.bounds, new Vector3(0.0f, 0.04f, 0.15f), new Vector3(2.45f, 2.35f, 2.45f));
 
         Save(context.Scene, sceneName);
     }
@@ -2136,7 +1786,7 @@ public static class RayTracingSceneGenerator
             new Vector3(2.6f, 0.35f, 1.4f), Vector3.zero, new Vector3(1.4f, 0.7f, 1.4f),
             new Color32(88, 105, 125, 255), RayMaterial.MaterialType.Diffuse, 0.35f, 1.0f);
         AddSphere(context.Root, "Receiver Sphere", new Vector3(2.6f, 1.35f, 1.4f), 0.95f,
-            new Color32(190, 210, 225, 255), RayMaterial.MaterialType.Diffuse, 0.35f, 1.0f);
+            new Color32(190, 210, 225, 255), RayMaterial.MaterialType.Diffuse, 0.35f);
 
         var dragon = AddMeshLight(context.Root, "Emissive Stanford Dragon", dragonMesh,
             new Vector3(-0.4f, 2.1f, 1.2f), new Vector3(0.0f, 148.0f, 0.0f),
@@ -2190,6 +1840,7 @@ public static class RayTracingSceneGenerator
         });
 
         ConfigureReadableEnvironmentTexture(AutumnFieldSkyboxPath);
+        
         var autumnField = AssetDatabase.LoadAssetAtPath<Texture2D>(AutumnFieldSkyboxPath);
         if (autumnField == null)
         {
@@ -2197,6 +1848,7 @@ public static class RayTracingSceneGenerator
             return;
         }
         context.Manager.skyboxTexture = autumnField;
+        
         // CreateBaseScene supplies a directional-light authoring object for most fixtures.
         // Remove it entirely so this scene has no analytic or emissive scene lights.
         var directionalLight = context.Root.Find("Directional Light");
@@ -2212,6 +1864,20 @@ public static class RayTracingSceneGenerator
         bunny.GetComponent<RayMaterial>().InterpolateNormals = true;
 
         Save(context.Scene, sceneName);
+
+        return;
+        
+        void ConfigureReadableEnvironmentTexture(string path)
+        {
+            var importer = AssetImporter.GetAtPath(path) as TextureImporter;
+            if (importer == null || importer.isReadable)
+            {
+                return;
+            }
+
+            importer.isReadable = true;
+            importer.SaveAndReimport();
+        }
     }
 
     private static void CreateWolfensteinScene()
@@ -2247,8 +1913,7 @@ public static class RayTracingSceneGenerator
         AddRayMesh(context.Root, "Right Stone Wall", CreateQuadMesh("Right Stone Wall", 12.0f, 3.0f, 6.0f, 1.5f), new Vector3(6.0f, 1.5f, 1.0f), new Vector3(0.0f, -90.0f, 0.0f), Vector3.one, Color.white, RayMaterial.MaterialType.Diffuse, 0.18f, 1.0f, 1.0f, albedoTexture: wallTexture);
         AddRayMesh(context.Root, "Floor", CreateHorizontalQuadMesh("Floor", 12.0f, 12.0f, 3.0f, 3.0f), new Vector3(0.0f, 0.002f, 1.0f), Vector3.zero, Vector3.one, new Color32(78, 68, 48, 255), RayMaterial.MaterialType.Diffuse, 0.28f);
         AddRayMesh(context.Root, "Ceiling", CreateHorizontalQuadMesh("Ceiling", 12.0f, 12.0f, 3.0f, 3.0f), new Vector3(0.0f, 2.0f, 1.0f), new Vector3(180.0f, 0.0f, 0.0f), Vector3.one, new Color32(92, 78, 54, 255), RayMaterial.MaterialType.Diffuse, 0.2f);
-
-        //AddLight(context.Root, "Bright Wall Light", new Vector3(1.9f, 0.75f, 5.35f), 0.42f, new Color32(255, 245, 190, 255));
+        
         AddLight(context.Root, "Small Warm Light", new Vector3(-0.35f, 1.1f, 5.85f), 0.35f, new Color32(255, 238, 178, 255), intensity: 5f);
         AddLight(context.Root, "Ceiling Fill", new Vector3(0.47f, 1.25f, -1.62f), 0.7f, new Color32(170, 135, 85, 255), intensity: 5f);
 
@@ -2470,15 +2135,17 @@ public static class RayTracingSceneGenerator
             0.0f, 
             metallicRoughnessTexture, 
             normalTexture);
-    }
+        
+        return;
 
-    private static void ConfigureTeapotPart(GameObject part, float metallic, Texture2D metallicRoughnessTexture, Texture2D normalTexture)
-    {
-        var material = part.GetComponent<RayMaterial>();
-        material.Metallic = metallic;
-        material.MetallicRoughnessTexture = metallicRoughnessTexture;
-        material.NormalTexture = normalTexture;
-        material.InterpolateNormals = true;
+        void ConfigureTeapotPart(GameObject part, float partMetallic, Texture2D partMetallicRoughnessTexture, Texture2D partNormalTexture)
+        {
+            var material = part.GetComponent<RayMaterial>();
+            material.Metallic = partMetallic;
+            material.MetallicRoughnessTexture = partMetallicRoughnessTexture;
+            material.NormalTexture = partNormalTexture;
+            material.InterpolateNormals = true;
+        }
     }
 
     private static Mesh LoadFirstMeshFromAsset(string path)
@@ -2510,56 +2177,6 @@ public static class RayTracingSceneGenerator
 
         importer.isReadable = true;
         importer.SaveAndReimport();
-    }
-
-    private static void ConfigureReadableEnvironmentTexture(string path)
-    {
-        var importer = AssetImporter.GetAtPath(path) as TextureImporter;
-        if (importer == null || importer.isReadable)
-        {
-            return;
-        }
-
-        importer.isReadable = true;
-        importer.SaveAndReimport();
-    }
-
-    private static Texture2D LoadRenderManTexture(string fileName, bool linear)
-    {
-        string path = $"{RenderManTextureFolder}/{fileName}";
-        var importer = AssetImporter.GetAtPath(path) as TextureImporter;
-        if (importer == null)
-        {
-            return null;
-        }
-
-        bool changed = false;
-        if (!importer.isReadable)
-        {
-            importer.isReadable = true;
-            changed = true;
-        }
-        if (importer.wrapMode != TextureWrapMode.Repeat)
-        {
-            importer.wrapMode = TextureWrapMode.Repeat;
-            changed = true;
-        }
-        if (importer.sRGBTexture == linear)
-        {
-            importer.sRGBTexture = !linear;
-            changed = true;
-        }
-        if (importer.textureCompression != TextureImporterCompression.Uncompressed)
-        {
-            importer.textureCompression = TextureImporterCompression.Uncompressed;
-            changed = true;
-        }
-        if (changed)
-        {
-            importer.SaveAndReimport();
-        }
-
-        return AssetDatabase.LoadAssetAtPath<Texture2D>(path);
     }
 
     private static Mesh CreateQuadMesh(string name, float width, float height, float uScale, float vScale)
@@ -2608,24 +2225,6 @@ public static class RayTracingSceneGenerator
                 new Vector2(0.0f, vScale)
             },
             triangles = new[] { 0, 1, 2, 0, 2, 3 }
-        };
-        mesh.RecalculateNormals();
-        mesh.RecalculateBounds();
-        return mesh;
-    }
-
-    private static Mesh CreateHorizontalTriangleMesh(string name, float width, float depth)
-    {
-        var mesh = new Mesh
-        {
-            name = name,
-            vertices = new[]
-            {
-                new Vector3(-width * 0.5f, 0.0f, -depth * 0.5f),
-                new Vector3(0.0f, 0.0f, depth * 0.5f),
-                new Vector3(width * 0.5f, 0.0f, -depth * 0.5f)
-            },
-            triangles = new[] { 0, 2, 1 }
         };
         mesh.RecalculateNormals();
         mesh.RecalculateBounds();
@@ -2743,19 +2342,17 @@ public static class RayTracingSceneGenerator
         for (var i = 0; i < segments; i++)
         {
             var next = (i + 1) % segments;
-            var outerBottom = i;
             var outerTop = i + segments;
             var innerBottom = i + segments * 2;
             var innerTop = i + segments * 3;
-            var nextOuterBottom = next;
             var nextOuterTop = next + segments;
             var nextInnerBottom = next + segments * 2;
             var nextInnerTop = next + segments * 3;
 
-            triangles[triangleIndex++] = outerBottom;
+            triangles[triangleIndex++] = i;
             triangles[triangleIndex++] = outerTop;
-            triangles[triangleIndex++] = nextOuterBottom;
-            triangles[triangleIndex++] = nextOuterBottom;
+            triangles[triangleIndex++] = next;
+            triangles[triangleIndex++] = next;
             triangles[triangleIndex++] = outerTop;
             triangles[triangleIndex++] = nextOuterTop;
 
@@ -2959,7 +2556,7 @@ public static class RayTracingSceneGenerator
 
     private static Texture2D ExtractTopLeftTextureTile(Texture2D source, int tileSize, string textureName)
     {
-        int size = Mathf.Min(tileSize, source.width, source.height);
+        var size = Mathf.Min(tileSize, source.width, source.height);
         var texture = new Texture2D(size, size, TextureFormat.RGBA32, false)
         {
             name = textureName,
@@ -2967,10 +2564,10 @@ public static class RayTracingSceneGenerator
             wrapMode = TextureWrapMode.Repeat
         };
 
-        int sourceY = source.height - size;
-        for (int y = 0; y < size; y++)
+        var sourceY = source.height - size;
+        for (var y = 0; y < size; y++)
         {
-            for (int x = 0; x < size; x++)
+            for (var x = 0; x < size; x++)
             {
                 texture.SetPixel(x, y, source.GetPixel(x, sourceY + y));
             }
@@ -2991,12 +2588,12 @@ public static class RayTracingSceneGenerator
         FillRect(texture, x + 2, y + height - 3, width - 2, 3, light);
         FillRect(texture, x + width / 5, y + height / 4, Mathf.Max(3, width / 2), Mathf.Max(3, height / 4), highlight);
 
-        for (int py = y + 4; py < y + height - 4; py += 4)
+        for (var py = y + 4; py < y + height - 4; py += 4)
         {
-            for (int px = x + 4; px < x + width - 4; px += 4)
+            for (var px = x + 4; px < x + width - 4; px += 4)
             {
-                int hash = (px * 37 + py * 17 + width * 13 + height * 7) & 3;
-                Color32 speckle = hash == 0 ? light : hash == 1 ? shadow : mid;
+                var hash = (px * 37 + py * 17 + width * 13 + height * 7) & 3;
+                var speckle = hash == 0 ? light : hash == 1 ? shadow : mid;
                 FillRect(texture, px, py, 2, 2, speckle);
             }
         }
@@ -3018,8 +2615,9 @@ public static class RayTracingSceneGenerator
         }
     }
 
-    private static void Save(Scene scene, string sceneName)
+    public static void Save(Scene scene, string sceneName)
     {
+        Directory.CreateDirectory(GeneratedSceneFolder);
         var path = GetScenePath(sceneName);
         if (File.Exists(path) && !_overwriteExistingScenes)
         {
@@ -3030,7 +2628,7 @@ public static class RayTracingSceneGenerator
         EditorSceneManager.SaveScene(scene, path);
     }
 
-    private static bool ShouldSkipExistingScene(string sceneName)
+    public static bool ShouldSkipExistingScene(string sceneName)
     {
         string path = GetScenePath(sceneName);
         if (_requestedScenePaths != null && !_requestedScenePaths.Contains(path))
@@ -3062,7 +2660,7 @@ public static class RayTracingSceneGenerator
         return $"{GeneratedSceneFolder}/{generatedName}.unity";
     }
 
-    private readonly struct BenchmarkContext
+    public readonly struct BenchmarkContext
     {
         public readonly Scene Scene;
         public readonly Transform Root;

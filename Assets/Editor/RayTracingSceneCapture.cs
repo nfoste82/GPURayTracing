@@ -397,18 +397,6 @@ public static class RayTracingSceneCapture
         StartCapture(label, scenes, outputRoot, samplesPerScene, captureWidth, captureHeight);
     }
 
-    [MenuItem("Tools/Ray Tracing/Generate Scene Gallery Thumbnails")]
-    public static void CaptureGalleryThumbnails()
-    {
-        StartCapture(
-            GalleryThumbnailLabel,
-            RayTracingSceneGalleryWindow.GetThumbnailScenePaths(),
-            GalleryThumbnailOutputFolder,
-            DefaultSamplesPerScene,
-            DefaultCaptureWidth,
-            DefaultCaptureHeight);
-    }
-
     public static string ImportReferencePng(string sourcePath, string scenePath)
     {
         if (string.IsNullOrWhiteSpace(sourcePath) || !File.Exists(sourcePath))

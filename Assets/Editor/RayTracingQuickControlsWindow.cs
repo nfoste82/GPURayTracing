@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -6,12 +5,12 @@ using UnityEngine.SceneManagement;
 
 public sealed class RayTracingQuickControlsWindow : EditorWindow
 {
-    private const string WindowTitle = "Ray Tracing Controls";
+    private const string WindowTitle = "Quick Controls";
     private Vector2 _scrollPosition;
     private Editor _gameManagerEditor;
     private GameManager _inspectedManager;
 
-    [MenuItem("Window/Ray Tracing/Quick Controls")]
+    [MenuItem("Tools/Ray Tracing/Windows/Quick Controls", priority = 50)]
     public static void Open()
     {
         GetWindow<RayTracingQuickControlsWindow>(typeof(EditorWindow).Assembly.GetType("UnityEditor.InspectorWindow"));

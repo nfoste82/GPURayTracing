@@ -114,6 +114,30 @@ Useful next scenes include:
 | `Terrain.unity` | Ray-traced Unity terrain |
 | `ManySpheres.unity`, `ManyMeshes.unity`, `ManyLights.unity` | Stress and benchmark workloads |
 
+## Creating a Scene
+
+### Build a Scene in the Editor
+
+1. Run `Tools > Ray Tracing > Generate Empty Scene`, choose a location inside the project's `Assets` folder, and open the saved scene.
+2. In the Hierarchy, right-click the generated `Game Manager` object and use its `Ray Tracing` submenu to add spheres, light spheres, directional lights, fog or water volumes, and mesh primitives.
+3. Position the generated `Ray Tracing Camera` and the new objects in the Scene view. Enter Play mode and use the Game view to see the path-traced result.
+4. Select an object to edit its `Ray Material`, `Ray Light`, or feature-specific component. Unity's Scene view shows an approximate preview; the Game view is authoritative for path-traced materials and lighting.
+
+Keep ray-traced objects below the `Game Manager` hierarchy. A root-level object also registers when the scene has exactly one active manager, but parenting it explicitly avoids ambiguity as the scene grows. Regular sphere geometry needs `PathTracingObject`, `RayMaterial`, and a `SphereCollider`; sphere lights use `PathTracingObject`, `RayLight`, and a `SphereCollider`. Imported triangle meshes need `PathTracingObject`, `RayMaterial`, and a `MeshFilter` without a `SphereCollider`, and the source mesh must have **Read/Write** enabled in its import settings. You can also drag a generated `<asset>.RayTracing.prefab` from an imported `.gltf` or `.glb` file below the manager.
+
+### Generate a Scene with Code
+
+Procedural generators make scenes repeatable and are useful for examples, benchmarks, or scenes with many objects. Run `Tools > Ray Tracing > Generate a New Scene Generator` and enter a class name such as `MySceneGenerator`. The tool creates `Assets/Editor/MySceneGenerator.cs` and registers `MySceneGenerator.CreateScene()` in `Assets/Editor/CustomSceneGenerator.cs`.
+
+The generated `CreateScene()` method:
+
+* skips the scene when `Assets/Scenes/Generated/MyScene.unity` already exists;
+* calls `RayTracingSceneGenerator.CreateBaseScene(...)` to create a configured camera, `Game Manager`, and directional light;
+* gives you `context.Root` as the parent for scene content; and
+* saves through `RayTracingSceneGenerator.Save(...)`.
+
+Open your generated class and add GameObjects and components before its `Save` call. `CustomSceneGenerator.cs` is only the registry that invokes each custom class; `Assets/Editor/TerrainSceneGenerator.cs` is a larger example of a generator that builds on the same static methods. Run `Tools > Ray Tracing > Generate Scenes From Generator` to generate missing built-in and custom scenes. Existing scenes are deliberately protected from accidental overwrites; use `Tools > Ray Tracing > Regenerate Generated Scenes (Delete Existing)` to rebuild both built-in and custom scenes after changing generator code.
+
 ### Special Thanks
 Thanks to these projects and blogs which have been learning material:
 

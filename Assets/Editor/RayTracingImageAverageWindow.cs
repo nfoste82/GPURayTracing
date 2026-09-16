@@ -12,16 +12,17 @@ public sealed class RayTracingImageAverageWindow : EditorWindow
     private int _width;
     private int _height;
 
-    [MenuItem("Window/Ray Tracing/Average PNG Images")]
+    [MenuItem("Tools/Ray Tracing/Windows/Combine PNG Images")]
     public static void Open()
     {
-        GetWindow<RayTracingImageAverageWindow>("Average PNG Images");
+        GetWindow<RayTracingImageAverageWindow>("Combine PNG Images");
     }
 
     private void OnGUI()
     {
         EditorGUILayout.HelpBox(
-            "Adds matching PNG images and writes their per-channel arithmetic average. Enter an optional sample count for each image to apply weighted averaging; blank fields use weight 1. This is an image experiment and averages decoded PNG values directly.",
+            "Adds matching PNG images and writes their per-channel arithmetic average. Enter an optional sample count for each image to apply weighted averaging; blank fields use weight 1. " +
+            "Note that this tool does not guarantee that images used as inputs are unbiased.",
             MessageType.Info);
 
         using (new EditorGUILayout.HorizontalScope())
