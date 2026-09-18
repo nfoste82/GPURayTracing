@@ -294,6 +294,27 @@ void CSRegressionProbe(uint3 id : SV_DispatchThreadID)
     triangleLight.type = LightTypeTriangle;
     RegressionResults[31] = float4(PowerHeuristic(0.25f, 0.5f), PowerHeuristic(0.5f, 0.25f), PowerHeuristic(1.0f, 1.0f), 1.0f);
     RegressionResults[32] = float4(GetLightShapePdf(triangleLight, float3(0.0f, 0.0f, 0.0f), float3(0.0f, 2.0f, 0.0f)), GetSurfaceF0(waterHit, waterHit.color));
+    RegressionResults[48] = float4(
+        GetLightShapePdf(triangleLight, float3(0.0f, 4.0f, 0.0f), float3(0.0f, 2.0f, 0.0f)),
+        GetTriangleLightGeometryFactor(triangleLight, float3(0.0f, 0.0f, 0.0f), float3(0.0f, 2.0f, 0.0f)),
+        GetTriangleLightGeometryFactor(triangleLight, float3(0.0f, 0.0f, 0.0f), float3(0.0f, 4.0f, 0.0f)),
+        1.0f);
+    MeshTriangle emitterTriangle = smoothTriangle;
+    emitterTriangle.vertex0 = float3(-1.0f, 2.0f, -1.0f);
+    emitterTriangle.vertex1 = float3(1.0f, 2.0f, 1.0f);
+    emitterTriangle.vertex2 = float3(1.0f, 2.0f, -1.0f);
+    emitterTriangle.normal = float3(0.0f, -1.0f, 0.0f);
+    emitterTriangle.emission = 1.0f;
+    emitterTriangle.materialType = MaterialEmissive;
+    emitterTriangle.lightIndex = 0;
+    RayHit emitterBackHit = IntersectTriangle(
+        CreateRay(float3(0.0f, 4.0f, 0.0f), float3(0.0f, -1.0f, 0.0f)),
+        CreateRayHit(), emitterTriangle, 0);
+    RegressionResults[49] = float4(emitterBackHit.emission, DidHitLight(emitterBackHit) ? 1.0f : 0.0f);
+    RayHit glassSphereHit = CreateRayHit();
+    glassSphereHit.materialType = MaterialGlass;
+    glassSphereHit.lightIndex = 0;
+    RegressionResults[50] = float4(DidHitLight(glassSphereHit) ? 1.0f : 0.0f, 0.0f, 0.0f, 1.0f);
     RegressionResults[33] = float4(ClampFirefly(float3(4.0f, 2.0f, 1.0f)), 1.0f);
     RayHit opaqueGlassHit = glassHit;
     opaqueGlassHit.opacity = 1.0f;

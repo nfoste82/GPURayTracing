@@ -105,11 +105,19 @@ public class MaterialBallSceneController : MonoBehaviour
         {
             meshFilter.sharedMesh = CreateRectAreaLightQuad(size);
         }
-        var light = lightObject.GetComponent<RayLight>() ?? lightObject.AddComponent<RayLight>();
+        var light = lightObject.GetComponent<RayLight>();
+        bool createdLight = light == null;
+        if (createdLight)
+        {
+            light = lightObject.AddComponent<RayLight>();
+        }
         light.Color = Color.white;
-        // Match the source's watts-to-luminance conversion, then scale into this renderer's
-        // emitter units. The 24.36-unit ceiling panels evaluate to approximately 7.0.
-        light.Intensity = watts * LumensPerWatt / (size * size * 4.0f * Mathf.PI) * AreaLightRadianceScale;
+        if (createdLight)
+        {
+            // Dynamically loaded scenes have no serialized RayLight settings, so use the source's
+            // watts-to-luminance conversion scaled into this renderer's emitter units.
+            light.Intensity = watts * LumensPerWatt / (size * size * 4.0f * Mathf.PI) * AreaLightRadianceScale;
+        }
         if (lightObject.GetComponent<PathTracingObject>() == null)
         {
             lightObject.AddComponent<PathTracingObject>();

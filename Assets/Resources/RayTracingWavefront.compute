@@ -359,7 +359,16 @@ void CSWavefrontDirectLight(uint3 id : SV_DispatchThreadID)
     uint pathIndex = _WavefrontCurrentQueue[id.x];
     WavefrontPathState path = _WavefrontPaths[pathIndex];
     if (path.active == 0) return;
-    if (!ShouldSampleDirectLight(path.throughput))
+    RayHit hit = _WavefrontHits[pathIndex];
+    if (path.volumeEvent == 0 && !ShouldSampleDirectLight(path.throughput, hit))
+    {
+        path.previousDirectLightSampled = 0;
+        path.previousInitialRisAttempted = 0;
+        path.previousSoftShadows = 0;
+        _WavefrontPaths[pathIndex] = path;
+        return;
+    }
+    if (path.volumeEvent != 0 && !ShouldSampleDirectLight(path.throughput))
     {
         path.previousDirectLightSampled = 0;
         path.previousInitialRisAttempted = 0;

@@ -22,7 +22,7 @@ Important shader globals:
 - `_DebugRenderMode`: selects final path-traced color or a debug visualization.
 - `_ShadowQuality`: soft-shadow sample budget control. Bounce-0 direct lighting takes `max(1, _ShadowQuality + 1)` stochastic area-light samples per light.
 - `_ShadowRandomness`: area-light sampling radius multiplier for soft shadow samples.
-- `_LightFalloffScale`: distance falloff scale for direct light. Higher values make light intensity decrease faster with distance.
+- `_LightFalloffScale`: legacy sphere/point-like direct-light falloff scale. Physical mesh area emitters and directional suns ignore it.
 - `_FocalDistance`: depth-of-field focal distance.
 - `_ApertureRadius`, `_ApertureBladeCount`, `_ApertureBladeRotation`, and `_AnamorphicRatio`: thin-lens aperture size and shape. Radius zero is an exact pinhole path; blade counts below three use a circular aperture.
 - `_Exposure`: master brightness multiplier applied before tone mapping. Acts like a camera exposure dial.

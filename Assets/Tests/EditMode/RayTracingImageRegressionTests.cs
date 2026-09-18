@@ -491,6 +491,30 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void MeshLight_PhysicalAreaEmissionIgnoresLegacyFalloffScale()
+        {
+            CreateEmissiveQuad(out MeshTriangleData[] triangles, out MeshInfoData[] meshes,
+                out BvhNodeData[] bvhNodes, out LightData[] lights, true);
+            SphereData[] spheres =
+            {
+                Sphere(new Vector3(0.0f, 0.75f, 1.5f), new Vector3(0.75f, 0.35f, 0.12f),
+                    0.75f, 0.2f, 1.0f, 1.0f, 0)
+            };
+
+            Vector4[] lowScale = RenderSignature(spheres, false, new Vector3(0.0f, 1.6f, -4.5f),
+                Quaternion.Euler(4.0f, 0.0f, 0.0f), triangles, meshes, bvhNodes, lights,
+                width: 16, height: 16, numberOfPasses: 256, lightFalloffScale: 0.01f,
+                applyToneMapping: false);
+            Vector4[] highScale = RenderSignature(spheres, false, new Vector3(0.0f, 1.6f, -4.5f),
+                Quaternion.Euler(4.0f, 0.0f, 0.0f), triangles, meshes, bvhNodes, lights,
+                width: 16, height: 16, numberOfPasses: 256, lightFalloffScale: 4.0f,
+                applyToneMapping: false);
+
+            AssertMeanRadianceMatches(lowScale, highScale, 0.0001f,
+                "physical mesh-light falloff-scale invariance");
+        }
+
+        [Test]
         public void InitialRis_EnvironmentMeanMatchesOrdinaryNeeAndBrdfSkyEstimator()
         {
             SphereData[] spheres =
@@ -546,6 +570,84 @@ namespace GPURayTracing.Tests
 
                 AssertMeanRadianceMatches(reference, ris, 0.035f,
                     $"mixed RIS candidate count {candidateCount}");
+            }
+        }
+
+        [Test]
+        public void GlassLighting_NeeAndContinuationOnlyHdrMeansAgree()
+        {
+            CreateEmissiveQuad(out MeshTriangleData[] triangles, out MeshInfoData[] meshes,
+                out BvhNodeData[] bvhNodes, out LightData[] lights, true);
+            SphereData[] indexMatched =
+            {
+                Sphere(new Vector3(0.0f, 1.8f, 1.0f), Vector3.one, 0.8f, 1.0f, 0.0f, 1.0f, 2)
+            };
+            SphereData[] demofoxGlass =
+            {
+                Sphere(new Vector3(0.0f, 1.8f, 1.0f), new Vector3(245.0f, 248.0f, 250.0f) / 255.0f,
+                    0.8f, 1.0f, 0.04f, 1.14f, 2)
+            };
+            demofoxGlass[0].specular = 0.02f;
+            // Camera sees only the floor. Physically, index-matched lossless glass should be
+            // invisible. Current Schlick Fresnel still reflects at grazing angles when IORs
+            // match, so continuation-only is a diagnostic, not an exact physical reference.
+            int[] seeds = { 1, 81723, 12345 };
+            var means = new Vector4[2, 2];
+            foreach (int seed in seeds)
+            {
+                for (int configuration = 0; configuration < 6; configuration++)
+                {
+                    int material = configuration % 3;
+                    bool directSampling = configuration >= 3;
+                    // Keep intersectable emission but remove its NEE registration for BSDF-only.
+                    foreach (int index in new[] { 0, 1 })
+                        triangles[index].lightIndex = directSampling ? 0 : -1;
+                    Vector4 mean = RenderSignature(material == 0 ? Array.Empty<SphereData>()
+                            : material == 1 ? indexMatched : demofoxGlass, false,
+                        new Vector3(0.0f, 0.5f, 1.0f), Quaternion.Euler(90.0f, 0.0f, 0.0f),
+                        triangles, meshes, bvhNodes, directSampling ? lights : Array.Empty<LightData>(),
+                        width: 16, height: 16, numberOfPasses: 2048, receiverSmoothness: 0.2f,
+                        skyboxColor: Color.black, applyToneMapping: false, seed: seed, maxBounces: 8)[0];
+                    TestContext.WriteLine($"Base transport: seed={seed}, material={material}, NEE={directSampling}, HDR={mean.ToString("F8")}");
+                    for (int channel = 0; channel < 3; channel++)
+                        Assert.That(mean[channel], Is.InRange(0.001f, 100.0f));
+                    if (material > 0)
+                        means[directSampling ? 1 : 0, material - 1] += mean / seeds.Length;
+                }
+            }
+
+            for (int material = 0; material < 2; material++)
+                AssertMeanRadianceMatches(new[] { means[0, material] }, new[] { means[1, material] },
+                    0.02f, material == 0 ? "index-matched glass" : "Demofox glass");
+        }
+
+        [Test]
+        public void RoughGlass_ConstantEnvironmentRetainsEnergyAcrossSmoothness()
+        {
+            int[] seeds = { 1, 81723, 12345 };
+            float[] smoothnessValues = { 1.0f, 0.75f, 0.5f };
+            var means = new Vector4[smoothnessValues.Length];
+            for (int smoothnessIndex = 0; smoothnessIndex < smoothnessValues.Length; smoothnessIndex++)
+            {
+                foreach (int seed in seeds)
+                {
+                    SphereData glass = Sphere(Vector3.zero, Vector3.one, 2.0f,
+                        smoothnessValues[smoothnessIndex], 0.0f, 1.14f, 2);
+                    glass.specular = 0.0f;
+                    Vector4 mean = RenderSignature(new[] { glass }, false,
+                        new Vector3(0.0f, 0.0f, -3.0f), Quaternion.identity,
+                        includeReceiver: false, width: 16, height: 16, numberOfPasses: 512,
+                        skyboxColor: Color.white, applyToneMapping: false, seed: seed, maxBounces: 16)[0];
+                    means[smoothnessIndex] += mean / seeds.Length;
+                }
+                TestContext.WriteLine($"Rough-glass furnace smoothness {smoothnessValues[smoothnessIndex]:F2}: " +
+                    means[smoothnessIndex].ToString("F8"));
+            }
+
+            for (int smoothnessIndex = 1; smoothnessIndex < smoothnessValues.Length; smoothnessIndex++)
+            {
+                AssertMeanRadianceMatches(new[] { means[0] }, new[] { means[smoothnessIndex] }, 0.03f,
+                    $"rough glass furnace smoothness {smoothnessValues[smoothnessIndex]:F2}");
             }
         }
 
@@ -1264,20 +1366,20 @@ namespace GPURayTracing.Tests
 
         private static readonly Vector4[] MeshLightBaseline =
         {
-            new Vector4(0.44834990f, 0.48779580f, 0.55782050f, 1.0f), new Vector4(0.85733920f, 0.84358080f, 0.80975880f, 1.0f),
-            new Vector4(0.00124548f, 0.00098756f, 0.00054195f, 1.0f), new Vector4(0.86185900f, 0.85183450f, 0.82754330f, 1.0f),
-            new Vector4(0.12874670f, 0.24321990f, 0.42752190f, 1.0f), new Vector4(0.96300010f, 0.84629810f, 0.63569310f, 1.0f),
-            new Vector4(0.12940260f, 0.24389800f, 0.42811010f, 1.0f), new Vector4(0.11942720f, 0.22987970f, 0.41089870f, 1.0f),
+            new Vector4(0.25364810f, 0.32111430f, 0.43826470f, 1.0f), new Vector4(0.41859050f, 0.43983710f, 0.47349100f, 1.0f),
+            new Vector4(0.00124360f, 0.00098602f, 0.00054098f, 1.0f), new Vector4(0.44682240f, 0.49023940f, 0.55795070f, 1.0f),
+            new Vector4(0.12819510f, 0.24276290f, 0.42727870f, 1.0f), new Vector4(0.65890460f, 0.40751750f, 0.17862510f, 1.0f),
+            new Vector4(0.12848030f, 0.24313460f, 0.42770410f, 1.0f), new Vector4(0.11942720f, 0.22987970f, 0.41089870f, 1.0f),
             new Vector4(0.11942720f, 0.22987970f, 0.41089870f, 1.0f)
         };
 
         private static readonly Vector4[] TransparentSphereShadowBaseline =
         {
-            new Vector4(0.41922840f, 0.47758780f, 0.57647220f, 1.0f), new Vector4(0.64237960f, 0.64118550f, 0.66169260f, 1.0f),
-            new Vector4(0.73235340f, 0.73293060f, 0.75206740f, 1.0f), new Vector4(0.77955880f, 0.77884020f, 0.79354230f, 1.0f),
-            new Vector4(0.40369710f, 0.46547320f, 0.57372070f, 1.0f), new Vector4(0.47141260f, 0.51387620f, 0.59751280f, 1.0f),
-            new Vector4(0.49985710f, 0.52441320f, 0.58516820f, 1.0f), new Vector4(0.11942720f, 0.22987970f, 0.41089870f, 1.0f),
-            new Vector4(0.24755700f, 0.40863210f, 0.56735480f, 1.0f)
+            new Vector4(0.40725170f, 0.46631670f, 0.56873200f, 1.0f), new Vector4(0.64233830f, 0.64111760f, 0.66158630f, 1.0f),
+            new Vector4(0.73233380f, 0.73289880f, 0.75201910f, 1.0f), new Vector4(0.77955030f, 0.77882610f, 0.79352090f, 1.0f),
+            new Vector4(0.40368850f, 0.46546180f, 0.57370680f, 1.0f), new Vector4(0.47140880f, 0.51387110f, 0.59750650f, 1.0f),
+            new Vector4(0.49985030f, 0.52440300f, 0.58515390f, 1.0f), new Vector4(0.11942720f, 0.22987970f, 0.41089870f, 1.0f),
+            new Vector4(0.19956590f, 0.33550320f, 0.47593510f, 1.0f)
         };
 
         private static readonly Vector4[] TransparentMeshShadowBaseline =
@@ -1291,11 +1393,11 @@ namespace GPURayTracing.Tests
 
         private static readonly Vector4[] StackedTransparentShadowBaseline =
         {
-            new Vector4(0.41399710f, 0.46763260f, 0.56484620f, 1.0f), new Vector4(0.64237960f, 0.64118550f, 0.66169260f, 1.0f),
-            new Vector4(0.73235340f, 0.73293060f, 0.75206740f, 1.0f), new Vector4(0.77955880f, 0.77884020f, 0.79354230f, 1.0f),
-            new Vector4(0.40369710f, 0.46547320f, 0.57372070f, 1.0f), new Vector4(0.47141260f, 0.51387620f, 0.59751280f, 1.0f),
-            new Vector4(0.49985710f, 0.52441320f, 0.58516820f, 1.0f), new Vector4(0.11942720f, 0.22987970f, 0.41089870f, 1.0f),
-            new Vector4(0.24755700f, 0.40863210f, 0.56735480f, 1.0f)
+            new Vector4(0.39508480f, 0.45120850f, 0.55286010f, 1.0f), new Vector4(0.64233830f, 0.64111760f, 0.66158630f, 1.0f),
+            new Vector4(0.73233380f, 0.73289880f, 0.75201910f, 1.0f), new Vector4(0.77955030f, 0.77882610f, 0.79352090f, 1.0f),
+            new Vector4(0.40368850f, 0.46546180f, 0.57370680f, 1.0f), new Vector4(0.47140880f, 0.51387110f, 0.59750650f, 1.0f),
+            new Vector4(0.49985030f, 0.52440300f, 0.58515390f, 1.0f), new Vector4(0.11942720f, 0.22987970f, 0.41089870f, 1.0f),
+            new Vector4(0.19956590f, 0.33550320f, 0.47593510f, 1.0f)
         };
 
         private static readonly Vector4[] SphereCausticBaseline =

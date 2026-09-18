@@ -547,19 +547,38 @@ namespace PathTracing.Lighting
             out Light second)
         {
             var lightDirection = directionalLight.transform.forward.normalized;
+            var angularRadius = Mathf.Clamp(directionalLight.AngularRadius, 0.0f, 10.0f);
+            var emission = directionalLight.Color.ToVector3() * Mathf.Max(0.0f, directionalLight.Intensity);
+            if (angularRadius <= 1e-6f)
+            {
+                first = CreateHardSun(lightDirection, emission * 0.5f);
+                second = first;
+                return;
+            }
+
             var center = -lightDirection * VirtualSunDistance;
             var radius = VirtualSunDistance * Mathf.Tan(
-                Mathf.Clamp(directionalLight.AngularRadius, 0.0f, 10.0f) * Mathf.Deg2Rad);
+                angularRadius * Mathf.Deg2Rad);
             var tangent = Vector3.Cross(
                 Mathf.Abs(lightDirection.y) < 0.999f ? Vector3.up : Vector3.right,
                 lightDirection).normalized * radius;
             var bitangent = Vector3.Cross(lightDirection, tangent).normalized * radius;
-            var emission = directionalLight.Color.ToVector3() * Mathf.Max(0.0f, directionalLight.Intensity);
-
             first = CreateVirtualSunTriangle(
                 center - tangent - bitangent, tangent * 2.0f, bitangent * 2.0f, lightDirection, emission);
             second = CreateVirtualSunTriangle(
                 center + tangent + bitangent, -tangent * 2.0f, -bitangent * 2.0f, lightDirection, emission);
+        }
+
+        private static Light CreateHardSun(Vector3 lightDirection, Vector3 emission)
+        {
+            return new Light
+            {
+                position = lightDirection,
+                emission = emission,
+                radius = 0.0f,
+                normal = lightDirection,
+                type = (int)PathTracedLightType.Directional
+            };
         }
 
         private static Light CreateVirtualSunTriangle(

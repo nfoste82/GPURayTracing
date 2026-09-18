@@ -1453,9 +1453,13 @@ public static class RayTracingSceneGenerator
             SkyboxLightColor = new Color32(0, 0, 0, 255),
             DirectionalLightIntensity = 0.0f,
             EnableCaustics = false,
-            FireflyClamp = 50f,
+            FireflyClamp = 35f,
             LightSamplingStrategy = LightSamplingStrategy.AllLights,
             SubpixelJitterScale = 1.1f,
+            EnablePathGuiding = true,
+            PathGuidingMinimumSamples = 64,
+            PathGuidingMixtureWeight = 0.5f,
+            GlareIntensity = 0.123f,
         });
 
         const float roomWidth = 6.0f;
@@ -1472,7 +1476,7 @@ public static class RayTracingSceneGenerator
         AddPrimitiveMesh(context.Root, "Far Mirror Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, roomHeight * 0.5f, backZ), Vector3.zero, new Vector3(roomWidth, roomHeight, 0.04f), Color.white, RayMaterial.MaterialType.Metal, 1.0f, 1.0f);
         AddPrimitiveMesh(context.Root, "Camera-Side Mirror Wall", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, roomHeight * 0.5f, frontZ), Vector3.zero, new Vector3(roomWidth, roomHeight, 0.04f), Color.white, RayMaterial.MaterialType.Metal, 1.0f, 1.0f);
         
-        AddMeshLight(context.Root, "Middle Rectangular Ceiling Light", CreateHorizontalQuadMesh("Middle Rectangular Ceiling Light", 1.35f, 0.46f, 1.0f, 1.0f), new Vector3(0.0f, roomHeight - 0.04f, 0.65f), Vector3.zero, new Vector3(2.0f, 1.0f, 1.0f), new Color32(255, 248, 220, 255), intensity: 2f);
+        AddMeshLight(context.Root, "Middle Rectangular Ceiling Light", CreateHorizontalQuadMesh("Middle Rectangular Ceiling Light", 1.35f, 0.46f, 1.0f, 1.0f), new Vector3(0.0f, roomHeight - 0.04f, 0.65f), Vector3.zero, new Vector3(2.0f, 1.0f, 1.0f), new Color32(255, 248, 220, 255), intensity: 35f);
 
         AddPrimitiveMesh(context.Root, "Near Left Block", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-1.85f, 0.82f, -1.85f), Vector3.zero, new Vector3(1.45f, 1.6f, 1.15f), new Color32(218, 212, 196, 255), RayMaterial.MaterialType.Diffuse, 0.15f, 1.0f);
         AddPrimitiveMesh(context.Root, "Tall Center Block", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(-0.55f, 1.55f, 0.8f), Vector3.zero, new Vector3(1.0f, 3.1f, 1.0f), new Color32(220, 216, 202, 255), RayMaterial.MaterialType.Diffuse, 0.12f, 1.0f);
@@ -1480,12 +1484,12 @@ public static class RayTracingSceneGenerator
         AddPrimitiveMesh(context.Root, "Glass Box", RayMeshPrimitive.PrimitiveType.Cube,
             new Vector3(1.45f, 0.81f, 1.9f), new Vector3(0.0f, -8.0f, 0.0f), new Vector3(1.2f, 1.48f, 1.0f),
             new Color32(232, 232, 226, 255), RayMaterial.MaterialType.Glass, 
-            1.0f, 0.32f, 1.85f, 0.086f, 0.85f);
+            1.0f, 0.12f, 1.5f, 0.023f, 0.981f);
         
         AddPrimitiveMesh(context.Root, "Glass Pyramid", RayMeshPrimitive.PrimitiveType.Pyramid, 
-            new Vector3(0.0f, 1.05f, -0.7f), new Vector3(0.0f, 22.0f, 0.0f), Vector3.one * 1.8f,
+            new Vector3(0.0f, 0.95f, -0.7f), new Vector3(0.0f, 22.0f, 0.0f), Vector3.one * 1.8f,
             new Color32(210, 235, 255, 255), RayMaterial.MaterialType.Glass,
-            1.0f, 0.32f, 1.85f, 0.086f, 0.85f);
+            1.0f, 0.12f, 1.5f, 0.023f, 0.981f);
         
         AddSphere(context.Root, "Chrome Sphere", new Vector3(2.05f, 0.82f, -2.25f), 0.82f, new Color32(236, 233, 226, 255), RayMaterial.MaterialType.Metal, 1.0f);
 
@@ -1560,6 +1564,7 @@ public static class RayTracingSceneGenerator
         }
 
         var context = CreateDemofoxOrbGradientTestScene(sceneName);
+        
         const int sphereCount = 7;
         for (var i = 0; i < sphereCount; i++)
         {
@@ -1574,7 +1579,8 @@ public static class RayTracingSceneGenerator
                 smoothness,
                 0.04f,
                 1.14f,
-                0.02f);
+                0.046f,
+                0.984f);
         }
 
         Save(context.Scene, sceneName);
@@ -1603,8 +1609,8 @@ public static class RayTracingSceneGenerator
                 1.0f,
                 0.04f,
                 refractionIndex,
-                0.04f,
-                0.95f);
+                0.012f,
+                0.981f);
         }
 
         Save(context.Scene, sceneName);
@@ -1656,28 +1662,34 @@ public static class RayTracingSceneGenerator
             LightFalloffScale = 0.175f,
             TopLevelBvhMinObjectCount = 0, 
             ShadowBvhMinObjectCount = 0,
-            SkyboxLightColor = new Color32(255, 245, 223, 255), 
+            SkyboxLightColor = new Color32(255, 255, 255, 255),
             CameraApertureMode = CameraApertureMode.Pinhole,
             FieldOfView = 33.6f,
             DirectionalLightIntensity = 0.0f,
             CausticGatherRadius = 0.09f,
             CausticGatherRadiusDecayRate = 0.35f,
             CausticIntensity = 0.15f,
+            EnableEnvironmentLighting = true,
+            EnvironmentHighlightThreshold = 0.47f,
+            EnvironmentHighlightSoftKnee = 0.127f,
+            EnvironmentHighlightIntensity = 10.5f
         });
 
-        const float stageWidth = 19.0f;
-        AddPrimitiveMesh(context.Root, "White Receiver", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, 0.02f, 4.8f), Vector3.zero, new Vector3(stageWidth, 0.04f, 7.0f), new Color32(140, 140, 140, 255), RayMaterial.MaterialType.Diffuse, 0.08f, 1.0f);
+        const float stageWidth = 20.0f;
+        AddPrimitiveMesh(context.Root, "White Receiver", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, -0.24f, 5.0f), Vector3.zero, new Vector3(stageWidth, 0.04f, 7.0f), new Color32(140, 140, 140, 255), RayMaterial.MaterialType.Diffuse, 0.08f, 1.0f);
         
         const float lightWidth = 4.0f;
         const float lightDepth = 2.0f;
-        const float lightHeight = 7.1f;
+        const float lightHeight = 7.54f;
         const float lightZ = 4.8f;
         const float lightBorder = 0.5f;
         AddPrimitiveMesh(context.Root, "Overhead Light Frame", RayMeshPrimitive.PrimitiveType.Cube, new Vector3(0.0f, lightHeight + 0.03f, lightZ), new Vector3(10.8f, 0f, 0f), new Vector3(lightWidth + lightBorder * 2.0f, 0.06f, lightDepth + lightBorder * 2.0f), new Color32(54, 50, 42, 255), RayMaterial.MaterialType.Diffuse, 0.2f, 1.0f);
-        AddMeshLight(context.Root, "Overhead Area Light", CreateHorizontalQuadMesh("Demofox Refraction Area Light", lightWidth, lightDepth, 1.0f, 1.0f), new Vector3(0.0f, lightHeight - 0.1f, lightZ), new Vector3(10.8f, 0f, 0f), Vector3.one, new Color32(255, 246, 223, 255), 9.0f);
+        // This fixture was authored against the legacy 0.175 mesh-light falloff scale. Preserve
+        // its direct-light exposure now that mesh emitters use unscaled physical area radiometry.
+        AddMeshLight(context.Root, "Overhead Area Light", CreateHorizontalQuadMesh("Demofox Refraction Area Light", lightWidth, lightDepth, 1.0f, 1.0f), new Vector3(0.0f, lightHeight - 0.1f, lightZ), new Vector3(10.8f, 0f, 0f), Vector3.one, new Color32(255, 246, 223, 255), 20.0f);
 
         const int stripeCount = 100;
-        const float stripeWidth = stageWidth / stripeCount;
+        const float stripeWidth = (stageWidth - 1.0f) / stripeCount;
         var stripeParent = new GameObject("Backdrop Stripes").transform;
         stripeParent.SetParent(context.Root, false);
         for (var i = 0; i < stripeCount; i++)
@@ -1779,6 +1791,7 @@ public static class RayTracingSceneGenerator
             TopLevelBvhMinObjectCount = 0,
             ShadowBvhMinObjectCount = 0,
             TemporalRisEnabled = true,
+            GlareIntensity = 0.5f,
         });
 
         AddFloor(context.Root, Vector2.zero, new Vector2(14.0f, 14.0f), 0.25f, new Color32(204, 204, 204, 255), "Diffuse Receiver");
@@ -1790,7 +1803,7 @@ public static class RayTracingSceneGenerator
 
         var dragon = AddMeshLight(context.Root, "Emissive Stanford Dragon", dragonMesh,
             new Vector3(-0.4f, 2.1f, 1.2f), new Vector3(0.0f, 148.0f, 0.0f),
-            new Vector3(2.8f, 2.8f, 2.8f), new Color32(255, 180, 105, 255), 3.5f);
+            new Vector3(2.8f, 2.8f, 2.8f), new Color32(255, 180, 105, 255), 20.0f);
         dragon.GetComponent<MeshRenderer>().enabled = false;
 
         Save(context.Scene, sceneName);

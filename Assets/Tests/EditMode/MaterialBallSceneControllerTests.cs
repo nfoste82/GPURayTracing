@@ -84,7 +84,10 @@ namespace GPURayTracing.Tests
             var areaLight = new GameObject("Area Light");
             areaLight.transform.SetParent(anchor.transform);
             areaLight.AddComponent<MeshFilter>();
-            areaLight.AddComponent(Type.GetType("RayLight, Assembly-CSharp"));
+            Type rayLightType = Type.GetType("RayLight, Assembly-CSharp");
+            Component light = areaLight.AddComponent(rayLightType);
+            FieldInfo intensity = rayLightType.GetField("Intensity");
+            intensity.SetValue(light, 17.0f);
             areaLight.AddComponent(Type.GetType("PathTracingObject, Assembly-CSharp"));
 
             try
@@ -92,6 +95,7 @@ namespace GPURayTracing.Tests
                 Type controllerType = Type.GetType("MaterialBallSceneController, Assembly-CSharp");
                 controllerType.GetMethod("EnsureAreaLights").Invoke(null, new object[] { root });
                 Assert.That(areaLight.GetComponent<MeshFilter>().sharedMesh, Is.Not.Null);
+                Assert.That((float)intensity.GetValue(light), Is.EqualTo(17.0f));
             }
             finally
             {

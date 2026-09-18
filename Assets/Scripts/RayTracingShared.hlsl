@@ -1761,9 +1761,7 @@ void IntersectLightSphere(Ray ray, inout RayHit bestHit, Light light, int object
     IntersectSphere(ray, bestHit, sphere, objectIndex);
 }
 
-// Boolean occlusion test for opaque shadow blockers: returns true when the sphere blocks the ray
-// before maxDistance. Avoids building a RayHit, used by the pure-occlusion shadow fast path when
-// the scene has no transparent shadow blockers.
+// Boolean shadow-occlusion test: all sphere boundaries block straight NEE connections.
 bool SphereOccludes(Ray ray, Sphere sphere, float maxDistance)
 {
     float3 d = sphere.position - ray.origin;
@@ -2043,6 +2041,7 @@ RayHit IntersectTriangle(Ray ray, RayHit currentHit, MeshTriangle meshTriangle, 
         && hitDistance > 0.001f && hitDistance < bestHit.distance)
     {
         float3 geometricNormal = normal;
+        bool emitterFrontFacing = dot(meshTriangle.normal, -ray.direction) > 0.0f;
         float2 uv = meshTriangle.uv0 * (1.0f - barycentric.x - barycentric.y)
             + meshTriangle.uv1 * barycentric.x
             + meshTriangle.uv2 * barycentric.y;
@@ -2073,7 +2072,7 @@ RayHit IntersectTriangle(Ray ray, RayHit currentHit, MeshTriangle meshTriangle, 
         bestHit.obj_position = bestHit.position;
         bestHit.normal = normal;
         bestHit.geometricNormal = geometricNormal;
-        bestHit.emission = meshTriangle.emission;
+        bestHit.emission = emitterFrontFacing ? meshTriangle.emission : 0.0f;
         bestHit.color = meshTriangle.color;
         bestHit.obj_radius = 0.0f;
         bestHit.distance = hitDistance;
@@ -2231,9 +2230,7 @@ void IntersectMeshBvh(Ray ray, inout RayHit bestHit, MeshInfo meshInfo)
     }
 }
 
-// Pure-occlusion mesh traversal for the opaque-only shadow fast path. Returns true on the first
-// triangle that blocks the ray before maxDistance. Assumes the scene has no transparent shadow
-// blockers, so any hit fully occludes and the search can stop immediately.
+// Pure-occlusion mesh traversal. Any triangle boundary blocks a straight NEE connection.
 bool MeshBvhOccludes(Ray ray, float maxDistance, MeshInfo meshInfo)
 {
     float3 inverseDirection = 1.0f / ray.direction;
@@ -2584,11 +2581,7 @@ float GetDirectLightFalloff(float distanceToLight, float lightRadius)
     return saturate(areaScale / distanceScale);
 }
 
-// Pure-occlusion shadow query used when the scene has no transparent shadow blockers
-// (_HasTransparentShadowBlockers == 0). Returns true as soon as any opaque blocker is found
-// before the light, skipping all the nearest-transparent-blocker bookkeeping and the per-leaf
-// RayHit construction the general path needs. Mirrors the structure of GetShadowTransmittance's
-// traversal (flat loops for small scenes, shadow BVH otherwise) but returns a boolean.
+// Pure-occlusion shadow query. Returns true as soon as any surface boundary is found.
 bool IsShadowRayBlocked(Ray rayToLight, float distanceToLight)
 {
     if (_NumShadowBvhNodes <= 0)
@@ -2765,79 +2758,12 @@ bool HasPairedMeshShadowExit(Ray rayToLight, RayHit entryHit, float distanceToLi
 
 float3 GetShadowTransmittance(Ray rayToLight, float distanceToLight)
 {
-    // Opaque-only fast path: a single occlusion query, no transparent-blocker tracking.
-    if (_HasTransparentShadowBlockers == 0)
-    {
-        return IsShadowRayBlocked(rayToLight, distanceToLight)
-            ? float3(0.0f, 0.0f, 0.0f)
-            : float3(1.0f, 1.0f, 1.0f);
-    }
-
-    float3 transmittance = float3(1.0f, 1.0f, 1.0f);
-    MediumStack mediumStack = CreateShadowMediumStack(rayToLight.origin);
-    Ray segmentRay = rayToLight;
-    float remainingDistance = distanceToLight;
-    int boundaryIndex;
-
-    [loop]
-    for (boundaryIndex = 0; boundaryIndex < MaxTransparentShadowBoundaries && remainingDistance > 0.001f; boundaryIndex++)
-    {
-        RayHit blockerHit = GetNearestShadowBlocker(segmentRay, remainingDistance);
-        float segmentDistance = min(blockerHit.distance, remainingDistance);
-        transmittance *= GetMediumSegmentTransmittance(GetCurrentMedium(mediumStack), segmentDistance);
-
-        if (max(transmittance.x, max(transmittance.y, transmittance.z)) <= 0.001f)
-        {
-            return float3(0.0f, 0.0f, 0.0f);
-        }
-
-        if (blockerHit.distance >= remainingDistance)
-        {
-            return transmittance;
-        }
-
-        if (blockerHit.opacity >= 1.0f)
-        {
-            return float3(0.0f, 0.0f, 0.0f);
-        }
-
-        MediumIdentity boundaryMedium = CreateHitMedium(blockerHit);
-        bool exiting = MediumStackContains(mediumStack, boundaryMedium);
-        bool isMeshBoundary = blockerHit.meshIndex >= 0;
-        bool useThinSurfaceFallback = isMeshBoundary && !exiting &&
-            !HasPairedMeshShadowExit(segmentRay, blockerHit, remainingDistance);
-
-        if (useThinSurfaceFallback)
-        {
-            transmittance *= GetTransparentShadowTransmittance(blockerHit, ThinTransparentSurfaceDistance);
-        }
-        else if (exiting)
-        {
-            RemoveMatchingMedium(mediumStack, boundaryMedium);
-        }
-        else
-        {
-            // Mesh opacity describes its transmissive boundary response. Spheres historically
-            // apply that factor once for the whole analytic volume, so preserve that behavior.
-            if (isMeshBoundary)
-            {
-                transmittance *= GetTransparentShadowBoundaryTransmittance(blockerHit);
-            }
-            PushMedium(mediumStack, boundaryMedium);
-        }
-
-        if (max(transmittance.x, max(transmittance.y, transmittance.z)) <= 0.001f)
-        {
-            return float3(0.0f, 0.0f, 0.0f);
-        }
-
-        float advanceDistance = blockerHit.distance + 0.002f;
-        segmentRay.origin += segmentRay.direction * advanceDistance;
-        remainingDistance -= advanceDistance;
-    }
-
-    // A malformed or excessively deep transparent boundary sequence must not leak full light.
-    return remainingDistance > 0.001f ? float3(0.0f, 0.0f, 0.0f) : transmittance;
+    // A straight NEE connection cannot represent Snell refraction through a dielectric boundary
+    // or share a PDF with dielectric continuation. All surfaces therefore occlude shadow rays;
+    // illumination through glass is sampled only by dielectric continuation paths.
+    return IsShadowRayBlocked(rayToLight, distanceToLight)
+        ? float3(0.0f, 0.0f, 0.0f)
+        : float3(1.0f, 1.0f, 1.0f);
 }
 
 float3 GetAlbedo(RayHit hit)
@@ -2958,9 +2884,7 @@ float PowerHeuristic(float firstPdf, float secondPdf)
     return firstSquared / max(firstSquared + secondSquared, 1e-12f);
 }
 
-// Returns the sampling density in solid angle for MIS weighting. The renderer's historical
-// light-strength model remains unchanged; these PDFs only decide how explicit-light and BRDF
-// samples share paths that both techniques can discover.
+// Returns the sampling density in solid angle for MIS weighting.
 float GetLightShapePdf(Light light, float3 shadingPosition, float3 lightPosition)
 {
     if (light.type == LightTypeDirectional)
@@ -2999,6 +2923,19 @@ float GetLightShapePdf(Light light, float3 shadingPosition, float3 lightPosition
     return diskArea > 1e-8f && radialDistanceSquared <= diskRadius * diskRadius
         ? (diskDistance * diskDistance) / (directionDotDiskNormal * diskArea)
         : 0.0f;
+}
+
+float GetTriangleLightGeometryFactor(Light light, float3 shadingPosition, float3 lightPosition)
+{
+    float3 toLight = lightPosition - shadingPosition;
+    float distanceSquared = dot(toLight, toLight);
+    if (distanceSquared <= 1e-8f || light.area <= 1e-6f)
+    {
+        return 0.0f;
+    }
+
+    float lightFacing = saturate(dot(light.normal, -toLight * rsqrt(distanceSquared)));
+    return lightFacing > 1e-6f ? lightFacing * light.area / distanceSquared : 0.0f;
 }
 
 float GetTriangleArea(MeshTriangle meshTriangle)
@@ -3345,9 +3282,11 @@ float EvaluateTemporalRisCandidateTarget(Ray ray, RayHit hit, InitialRisCandidat
     }
     else if (candidate.light.type == LightTypeTriangle || candidate.light.type == LightTypeSunTriangle)
     {
-        float distanceScale = max(1.0f, candidate.distance * candidate.distance * max(0.001f, _LightFalloffScale));
-        float lightStrength = saturate(dot(candidate.light.normal, -candidate.direction)) * candidate.light.area / distanceScale;
-        if (candidate.light.type == LightTypeSunTriangle) lightStrength = 0.5f;
+        float lightShapePdf = GetLightShapePdf(candidate.light, hit.position, candidate.samplePosition);
+        if (lightShapePdf <= 0.0f) return 0.0f;
+        float lightStrength = candidate.light.type == LightTypeSunTriangle
+            ? 0.5f
+            : GetTriangleLightGeometryFactor(candidate.light, hit.position, candidate.samplePosition);
         unshadowed = candidate.light.emission * lightStrength * materialResponse * normalDotLight
             * (candidate.isMeshLight != 0 ? 1.0f / max(candidate.triangleSelectionProbability, 1e-8f) : 1.0f);
     }
@@ -3365,7 +3304,7 @@ float EvaluateTemporalRisCandidateTarget(Ray ray, RayHit hit, InitialRisCandidat
     {
         unshadowed *= PowerHeuristic(candidate.proposalPdf, materialPdf);
     }
-    else if (candidate.light.type == LightTypeTriangle || candidate.light.type == LightTypeSunTriangle)
+    else if (candidate.light.type == LightTypeTriangle)
     {
         float lightShapePdf = GetLightShapePdf(candidate.light, hit.position, candidate.samplePosition);
         unshadowed *= PowerHeuristic(candidate.proposalPdf * candidate.triangleSelectionProbability * lightShapePdf, materialPdf);
@@ -3511,6 +3450,8 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
         }
     }
     bool isDirectional = false;
+    bool isTriangleLight = false;
+    bool isSunTriangle = false;
     float3 lightPos = 0.0f;
     float3 ptToLight = 0.0f;
     float3 sphereTangent = 0.0f;
@@ -3518,6 +3459,8 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
     if (!isEnvironment)
     {
         isDirectional = light.type == LightTypeDirectional;
+        isTriangleLight = light.type == LightTypeTriangle;
+        isSunTriangle = light.type == LightTypeSunTriangle;
         lightPos = light.type == LightTypeTriangle || light.type == LightTypeSunTriangle
             ? light.position + (light.u + light.v) / 3.0f
             : light.position;
@@ -3621,6 +3564,14 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
             continue;
         }
 
+        float lightShapePdf = (isTriangleLight || isSunTriangle)
+            ? GetLightShapePdf(light, hit.position, offsetPt)
+            : 0.0f;
+        if ((isTriangleLight || isSunTriangle) && lightShapePdf <= 0.0f)
+        {
+            continue;
+        }
+
         float3 shadowTransmittance = GetShadowTransmittance(rayToLight, distanceToLight);
         if (max(shadowTransmittance.x, max(shadowTransmittance.y, shadowTransmittance.z)) <= 0.001f)
         {
@@ -3675,7 +3626,6 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
             continue;
         }
 
-        float lightShapePdf = GetLightShapePdf(light, hit.position, offsetPt);
         float ignoredBsdfPdf;
         float3 materialResponse = EvaluateMaterialBrdf(ray, hit, ptToOffset, ignoredBsdfPdf);
         float materialPdf = GetMaterialContinuationPdf(ray, hit, ptToOffset, allowPathGuide);
@@ -3689,22 +3639,22 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
         // Sphere lights retain the renderer's historical falloff-scaled direct-light model,
         // which is not the same estimator as an emissive sphere hit. Applying complementary
         // MIS weights between them removes energy from the center of reflected sphere lights.
-        if ((light.type == LightTypeTriangle || light.type == LightTypeSunTriangle) && lightShapePdf > 0.0f)
+        if (isTriangleLight)
         {
             float lightPdf = lightSelectionPdf * triangleSelectionProbability * lightShapePdf;
             float misWeight = useRisCandidate ? risCandidate.risScale
                 * PowerHeuristic(risCandidate.proposalPdf * triangleSelectionProbability * lightShapePdf, materialPdf)
                 : PowerHeuristic(lightTechniqueSampleCount * lightPdf, materialPdf);
-            float distanceScale = max(1.0f, distanceToLight * distanceToLight * max(0.001f, _LightFalloffScale));
-            float lightStrength = saturate(dot(light.normal, -ptToOffset)) * light.area / distanceScale;
-            if (light.type == LightTypeSunTriangle)
-            {
-                // The virtual sun is represented by two triangle-light entries. Each entry
-                // contributes half of the analytic directional radiance.
-                lightStrength = 0.5f;
-            }
+            float lightStrength = GetTriangleLightGeometryFactor(light, hit.position, offsetPt);
             lightTotal += light.emission * lightStrength * shadowTransmittance * materialResponse
                 * rayNormalDot * misWeight * (isMeshLight ? 1.0f / triangleSelectionProbability : 1.0f);
+        }
+        else if (isSunTriangle)
+        {
+            // Virtual sun geometry defines only the sampled direction and penumbra. It is not
+            // intersectable, so there is no competing BRDF-hit technique.
+            lightTotal += light.emission * 0.5f * shadowTransmittance * materialResponse * rayNormalDot
+                * (useRisCandidate ? risCandidate.risScale : 1.0f);
         }
         else if (isDirectional)
         {
@@ -3764,7 +3714,6 @@ float GetLightSelectionPdf(int lightIndex, int lightCount, bool sampleAllLights,
 // importance sampling toward nearby/bright lights. Intentionally ignores shadows and the
 // surface normal (too expensive to evaluate before picking), so it is only an estimate;
 // the 1/pdf correction keeps the final result unbiased regardless of estimate accuracy.
-// Uses squared distance directly to avoid a sqrt; mirrors GetDirectLightFalloff's math.
 float LightImportanceWeight(int lightIndex, float3 shadingPosition)
 {
     Light light = _Lights[lightIndex];
@@ -3783,11 +3732,16 @@ float LightImportanceWeight(int lightIndex, float3 shadingPosition)
     float3 toLight = light.position - shadingPosition;
     float distSq = dot(toLight, toLight);
 
-    float lightRadius = light.radius;
-    float areaScale = max(1.0f, (light.type == LightTypeTriangle || light.type == LightTypeSunTriangle) ? light.area
-        : light.type == LightTypeMesh ? light.totalArea : lightRadius * lightRadius);
-    float distanceScale = max(1.0f, distSq * max(0.001f, _LightFalloffScale));
-    float falloff = saturate(areaScale / distanceScale);
+    float falloff;
+    if (light.type == LightTypeTriangle || light.type == LightTypeMesh)
+    {
+        float area = light.type == LightTypeMesh ? light.totalArea : light.area;
+        falloff = area / max(1e-6f, distSq);
+    }
+    else
+    {
+        falloff = GetDirectLightFalloff(sqrt(distSq), light.radius);
+    }
 
     // Keep a small floor so every light retains a nonzero pick probability (required for
     // the estimator to stay unbiased).
@@ -4050,9 +4004,11 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
                 proposalPdf = branchPdf * selectionPdf;
                 if (candidate.light.type == LightTypeTriangle || candidate.light.type == LightTypeSunTriangle)
                 {
-                    float distanceScale = max(1.0f, candidate.distance * candidate.distance * max(0.001f, _LightFalloffScale));
-                    float lightStrength = saturate(dot(candidate.light.normal, -candidate.direction)) * candidate.light.area / distanceScale;
-                    if (candidate.light.type == LightTypeSunTriangle) lightStrength = 0.5f;
+                    float lightShapePdf = GetLightShapePdf(candidate.light, hit.position, candidate.samplePosition);
+                    if (lightShapePdf <= 0.0f) continue;
+                    float lightStrength = candidate.light.type == LightTypeSunTriangle
+                        ? 0.5f
+                        : GetTriangleLightGeometryFactor(candidate.light, hit.position, candidate.samplePosition);
                     unshadowed = candidate.light.emission * lightStrength * materialResponse * normalDotLight
                         * (candidate.isMeshLight != 0 ? 1.0f / max(candidate.triangleSelectionProbability, 1e-8f) : 1.0f);
                 }
@@ -4064,7 +4020,7 @@ float3 GetLightHittingPoint(Ray ray, RayHit hit, int samplesPerLight,
                 {
                 unshadowed *= PowerHeuristic(proposalPdf, materialPdf);
                 }
-                else if (candidate.light.type == LightTypeTriangle || candidate.light.type == LightTypeSunTriangle)
+                else if (candidate.light.type == LightTypeTriangle)
                 {
                 float lightShapePdf = GetLightShapePdf(candidate.light, hit.position, candidate.samplePosition);
                 unshadowed *= PowerHeuristic(proposalPdf * candidate.triangleSelectionProbability * lightShapePdf, materialPdf);
@@ -4458,7 +4414,11 @@ bool DidHitSky(RayHit hit)
 
 bool DidHitLight(RayHit hit)
 {
-    return (hit.emission.x + hit.emission.y + hit.emission.z) > 0.0f;
+    // Sphere intersections store their object index in lightIndex even when the sphere is not a
+    // registered light. MaterialEmissive still identifies back-facing mesh emitters whose
+    // one-sided emission was intentionally set to zero at intersection time.
+    return hit.materialType == MaterialEmissive
+        || (hit.emission.x + hit.emission.y + hit.emission.z) > 0.0f;
 }
 
 float3 GetTerminalHitColor(Ray ray, RayHit hit)
@@ -4723,21 +4683,12 @@ float3 SampleDielectricBoundaryNormal(float3 opticalNormal, float3 geometricNorm
             : geometricBoundaryNormal;
     }
 
-    [unroll]
-    for (int sampleIndex = 0; sampleIndex < 8; sampleIndex++)
-    {
-        float3 microfacetNormal = SampleGgxHalfDirection(opticalBoundaryNormal, roughness * roughness, rngState);
-        float3 reflectedDirection = reflect(incidentDirection, microfacetNormal);
-        float3 transmittedDirection;
-        bool canTransmit = RefractSnell(incidentDirection, sourceRefraction, targetRefraction, microfacetNormal, transmittedDirection);
-        bool crossesBoundary = !canTransmit || dot(transmittedDirection, geometricBoundaryNormal) < -1e-5f;
-        if (dot(reflectedDirection, geometricBoundaryNormal) > 1e-5f && crossesBoundary)
-        {
-            return microfacetNormal;
-        }
-    }
-
-    return geometricBoundaryNormal;
+    float3 viewDirection = normalize(-incidentDirection);
+    float3 microfacetNormal = SampleGgxVisibleNormal(
+        opticalBoundaryNormal, viewDirection, roughness * roughness, rngState);
+    return dot(microfacetNormal, geometricBoundaryNormal) >= 0.0f
+        ? microfacetNormal
+        : -microfacetNormal;
 }
 
 BrdfSample SampleMaterialBrdf(Ray ray, RayHit hit, bool allowPathGuide, inout RngState rngState)
@@ -4796,6 +4747,13 @@ bool HasPathEnergy(float3 throughput)
 bool ShouldSampleDirectLight(float3 throughput)
 {
     return max(throughput.x, max(throughput.y, throughput.z)) > MinDirectLightThroughput;
+}
+
+bool ShouldSampleDirectLight(float3 throughput, RayHit hit)
+{
+    // Dielectric continuation does not use EvaluateMaterialBrdf's opaque GGX reflection sampler
+    // or PDF. Keeping NEE off these boundaries avoids an unmatched second estimator.
+    return !IsGlassMaterial(hit) && ShouldSampleDirectLight(throughput);
 }
 
 void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int remainingBounces, bool entering, float sourceRefraction, float targetRefraction, float3 boundaryNormal, inout RngState rngState, out int bouncesConsumed, out int mediumTransition, out float mediumDistanceTraveled)
@@ -5179,13 +5137,6 @@ CausticGather TraceVisibleCausticFlux(Ray ray, float gatherRadius, inout RngStat
     return CreateEmptyCausticGather();
 }
 
-float3 TraceVisibleCausticRadiance(Ray ray, inout RngState rngState)
-{
-    CausticGather gather = TraceVisibleCausticFlux(ray, _CausticGatherRadius, rngState);
-    float radiusSquared = _CausticGatherRadius * _CausticGatherRadius;
-    float normalization = max(1.0f, _CausticPhotonAttemptCount * PI * radiusSquared);
-    return gather.flux * (_CausticIntensity / normalization);
-}
 #endif
 
 float3 ClampFirefly(float3 radiance)

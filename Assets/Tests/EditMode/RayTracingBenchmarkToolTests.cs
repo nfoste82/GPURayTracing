@@ -375,6 +375,37 @@ public class RayTracingBenchmarkToolTests
     }
 
     [Test]
+    public void GameManager_RegistersZeroRadiusSunAsDirectionalDeltaLights()
+    {
+        var root = new GameObject("Game Manager hard sun registration test");
+        var lightObject = new GameObject("Hard sun");
+        try
+        {
+            Type managerType = GetRuntimeType("GameManager");
+            Type directionalLightType = GetRuntimeType("RayDirectionalLight");
+            Component manager = root.AddComponent(managerType);
+            lightObject.transform.SetParent(root.transform);
+            Component directionalLight = lightObject.AddComponent(directionalLightType);
+            directionalLightType.GetField("AngularRadius").SetValue(directionalLight, 0.0f);
+
+            managerType.GetMethod("RegisterDirectionalLight").Invoke(manager, new object[] { directionalLight });
+
+            ICollection lights = GetCollection(manager, "_lights");
+            Assert.That(lights.Count, Is.EqualTo(2));
+            foreach (object light in lights)
+            {
+                Assert.That(light.GetType().GetField("type").GetValue(light), Is.EqualTo(2));
+                Assert.That(light.GetType().GetField("radius").GetValue(light), Is.EqualTo(0.0f));
+            }
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(lightObject);
+            UnityEngine.Object.DestroyImmediate(root);
+        }
+    }
+
+    [Test]
     public void GameManager_ClassifiesMaterialEditsWithoutGeometryRebuild()
     {
         var root = new GameObject("Game Manager mesh change test");

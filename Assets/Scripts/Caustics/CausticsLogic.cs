@@ -32,6 +32,7 @@ namespace PathTracing.Caustics
         public static bool IsCausticLight(Light light)
         {
             return light.type == (int)PathTracedLightType.Sphere || 
+                   light.type == (int)PathTracedLightType.Directional ||
                    ((light.type == (int)PathTracedLightType.Triangle || light.type == (int)PathTracedLightType.SunTriangle)
                        && light.area > 1e-6f) ||
                    (light.type == (int)PathTracedLightType.Mesh && light.totalArea > 1e-6f);
@@ -39,6 +40,12 @@ namespace PathTracing.Caustics
         
         public static float GetCausticPairWeight(Light light, Vector3 targetPosition, float targetRadius)
         {
+            if (light.type == (int)PathTracedLightType.Directional)
+            {
+                var directionalLuminance = Vector3.Dot(light.emission, new Vector3(0.2126f, 0.7152f, 0.0722f));
+                return Mathf.Max(0.0f, directionalLuminance) * Mathf.PI * targetRadius * targetRadius;
+            }
+
             var isTriangle = light.type == (int)PathTracedLightType.Triangle || light.type == (int)PathTracedLightType.SunTriangle;
             var lightPosition = isTriangle
                 ? light.position + (light.u + light.v) / 3.0f

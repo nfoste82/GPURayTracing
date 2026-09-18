@@ -1480,6 +1480,26 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void EnvironmentLighting_DoesNotReadFiniteLightTypeForTriangleRejection()
+        {
+            string source = System.IO.File.ReadAllText("Assets/Scripts/RayTracingShared.hlsl");
+            int start = source.IndexOf("float3 SampleSingleLight(", StringComparison.Ordinal);
+            int end = source.IndexOf("float LightImportanceWeight(", start, StringComparison.Ordinal);
+            string sampling = source.Substring(start, end - start).Replace("\r\n", "\n");
+
+            // Undefined finite-light data can happen to pass GPU tests on one compiler/backend.
+            Assert.That(sampling, Does.Contain("bool isTriangleLight = false;"));
+            Assert.That(sampling, Does.Contain("bool isSunTriangle = false;"));
+            Assert.That(sampling, Does.Contain("if (!isEnvironment)\n    {\n"
+                + "        isDirectional = light.type == LightTypeDirectional;\n"
+                + "        isTriangleLight = light.type == LightTypeTriangle;\n"
+                + "        isSunTriangle = light.type == LightTypeSunTriangle;"));
+            Assert.That(CountOccurrences(sampling, "isTriangleLight = light.type"), Is.EqualTo(1));
+            Assert.That(CountOccurrences(sampling, "isSunTriangle = light.type"), Is.EqualTo(1));
+            Assert.That(sampling, Does.Contain("float lightShapePdf = (isTriangleLight || isSunTriangle)"));
+        }
+
+        [Test]
         public void InitialRis_UsesOneSelectedProductionShadowPath()
         {
             string source = System.IO.File.ReadAllText("Assets/Scripts/RayTracingShared.hlsl");
@@ -1489,6 +1509,10 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("GetShadowTransmittance(rayToLight, distanceToLight)"));
             Assert.That(CountOccurrences(source, "GetShadowTransmittance(rayToLight, distanceToLight)"), Is.EqualTo(1),
                 "RIS candidates must reuse SampleSingleLight's only production shadow query.");
+            Assert.That(source, Does.Contain("return !IsGlassMaterial(hit) && ShouldSampleDirectLight(throughput);"),
+                "Dielectric surfaces must remain continuation-only until NEE has a matching dielectric PDF.");
+            Assert.That(source, Does.Contain("illumination through glass is sampled only"),
+                "Straight shadow connections must not approximate refracted dielectric transport.");
             Assert.That(CountOccurrences(source, "accumulated += SampleSingleLight("), Is.EqualTo(1),
                 "RIS candidates must reuse GetLightHittingPoint's only production light-sampling call site.");
             string wavefront = System.IO.File.ReadAllText(WavefrontShaderPath);
@@ -1789,7 +1813,7 @@ namespace GPURayTracing.Tests
             }
 
             int kernel = shader.FindKernel("CSRegressionProbe");
-                var buffer = new ComputeBuffer(48, sizeof(float) * 4);
+                var buffer = new ComputeBuffer(51, sizeof(float) * 4);
                 var sphereBuffer = new ComputeBuffer(1, 64);
                 var sobolBuffer = new ComputeBuffer(1, sizeof(uint));
                 try
@@ -1811,7 +1835,7 @@ namespace GPURayTracing.Tests
                 shader.SetBuffer(kernel, "RegressionResults", buffer);
                 shader.Dispatch(kernel, 1, 1, 1);
 
-                var results = new Vector4[48];
+                var results = new Vector4[51];
                 buffer.GetData(results);
 
                 AssertVector(results[0], new Vector4(0.70710677f, 0.70710677f, 0.0f, 1.0f), "reflection");
@@ -1847,6 +1871,12 @@ namespace GPURayTracing.Tests
                 AssertVector(results[30], new Vector4(0.0f, 0.4472136f, 0.8944272f, 1.0f), "interpolated shading and geometric normals", 0.0002f);
                 AssertVector(results[31], new Vector4(0.2f, 0.8f, 0.5f, 1.0f), "MIS power heuristic");
                 AssertVector(results[32], new Vector4(2.0f, 0.1111111f, 0.1111111f, 0.1111111f), "triangle-light PDF and water F0");
+                AssertVector(results[48], new Vector4(0.0f, 0.5f, 0.125f, 1.0f),
+                    "triangle back-face rejection and physical area geometry", 0.0002f);
+                AssertVector(results[49], new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
+                    "back-facing mesh emitters terminate without radiance");
+                AssertVector(results[50], new Vector4(0.0f, 0.0f, 0.0f, 1.0f),
+                    "non-emissive refractive spheres are not lights despite their object index");
                 AssertVector(results[33], new Vector4(1.6999575f, 0.8499787f, 0.4249894f, 1.0f), "firefly luminance clamp", 0.0002f);
                 AssertVector(results[34], new Vector4(0.0f, 0.4472136f, 0.8944272f, 1.0f), "caustic optical normal", 0.0002f);
                 AssertVector(results[35], new Vector4(0.0f, -0.1602089f, -0.9870830f, 0.0400126f), "interpolated mesh refraction and Fresnel", 0.0002f);
@@ -3349,6 +3379,10 @@ namespace GPURayTracing.Tests
             Assert.That(final, Does.Contain("if (_UseTemporalJitter != 0) uv += _FrameJitterNdc"));
             Assert.That(debug, Does.Contain("CreateCausticCameraRay(uv, rngState)"));
             Assert.That(final, Does.Contain("CreateCausticCameraRay(uv, rngState)"));
+            Assert.That(debug, Does.Contain("CausticGather gather = TraceVisibleCausticFlux(ray, gatherRadius, rngState)"));
+            Assert.That(final, Does.Contain("CausticGather gather = TraceVisibleCausticFlux(ray, gatherRadius, rngState)"));
+            Assert.That(debug, Does.Not.Contain("TraceVisibleCausticRadiance"));
+            Assert.That(final, Does.Not.Contain("TraceVisibleCausticRadiance"));
         }
 
         [Test]

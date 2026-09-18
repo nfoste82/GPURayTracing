@@ -232,7 +232,7 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
         refractorPosition.y = GetWaterWaveHeight(refractorPosition.xz);
     }
 
-    bool isDirectionalSun = light.type == LightTypeSunTriangle;
+    bool isDirectionalSun = light.type == LightTypeSunTriangle || light.type == LightTypeDirectional;
     float3 emissionPosition = light.position;
     float emissionAreaScale = 1.0f;
     if (light.type == LightTypeTriangle || light.type == LightTypeSunTriangle)
@@ -257,8 +257,10 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
     float directionalLaunchArea = 0.0f;
     if (isDirectionalSun)
     {
-        float3 sunDirection = normalize(light.normal);
-        float angularRadius = atan(sqrt(max(0.0f, light.area * 0.5f)) / max(1.0f, light.radius));
+        float3 sunDirection = light.type == LightTypeDirectional ? normalize(light.position) : normalize(light.normal);
+        float angularRadius = light.type == LightTypeDirectional
+            ? 0.0f
+            : atan(sqrt(max(0.0f, light.area * 0.5f)) / max(1.0f, light.radius));
         directionalPhotonDirection = SampleCone(sunDirection, angularRadius, rngState);
         float3 launchTangent;
         float3 launchBitangent;
@@ -386,7 +388,7 @@ void TraceCausticPhotons(uint3 id : SV_DispatchThreadID)
     float inverseDirectionalPdf = refractorMeshIndex >= 0 ? meshTargetInversePdf
         : targetPair.refractorType == 2 ? waterTargetInversePdf
         : coneSolidAngle;
-    if (light.type == LightTypeSunTriangle)
+    if (isDirectionalSun)
     {
         // The two virtual triangles represent one analytic emitter, not two independent
         // area emitters whose total power grows with their arbitrary placement distance.
@@ -528,15 +530,17 @@ void CSCausticsDebug(uint3 id : SV_DispatchThreadID)
         float2 uv = ((id.xy + pixelJitter) / float2(width, height)) * 2.0f - 1.0f;
         if (_UseTemporalJitter != 0) uv += _FrameJitterNdc;
         Ray ray = CreateCausticCameraRay(uv, rngState);
+        CausticGather gather = TraceVisibleCausticFlux(ray, gatherRadius, rngState);
         if (_UseCausticSppm != 0)
         {
-            CausticGather gather = TraceVisibleCausticFlux(ray, gatherRadius, rngState);
             batchGather.flux += gather.flux;
             batchGather.photonCount += gather.photonCount;
         }
         else
         {
-            result += TraceVisibleCausticRadiance(ray, rngState);
+            float radiusSquared = gatherRadius * gatherRadius;
+            float normalization = max(1.0f, _CausticPhotonAttemptCount * PI * radiusSquared);
+            result += gather.flux * (_CausticIntensity / normalization);
         }
     }
     batchGather.flux /= max(1, _NumberOfPasses);
@@ -576,15 +580,17 @@ void CSCausticsFinalColor(uint3 id : SV_DispatchThreadID)
         float2 uv = ((id.xy + pixelJitter) / float2(width, height)) * 2.0f - 1.0f;
         if (_UseTemporalJitter != 0) uv += _FrameJitterNdc;
         Ray ray = CreateCausticCameraRay(uv, rngState);
+        CausticGather gather = TraceVisibleCausticFlux(ray, gatherRadius, rngState);
         if (_UseCausticSppm != 0)
         {
-            CausticGather gather = TraceVisibleCausticFlux(ray, gatherRadius, rngState);
             batchGather.flux += gather.flux;
             batchGather.photonCount += gather.photonCount;
         }
         else
         {
-            result += TraceVisibleCausticRadiance(ray, rngState);
+            float radiusSquared = gatherRadius * gatherRadius;
+            float normalization = max(1.0f, _CausticPhotonAttemptCount * PI * radiusSquared);
+            result += gather.flux * (_CausticIntensity / normalization);
         }
     }
 

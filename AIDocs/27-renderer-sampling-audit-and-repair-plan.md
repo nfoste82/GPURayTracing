@@ -7,8 +7,8 @@ This is the **authoritative active plan** for renderer sampling correctness, ada
 RIS reuse, and their convergence/performance validation. The first T1 GGX repair is now implemented
 with focused GPU coverage; broader T1 acceptance remains pending. T2 and local R5 MIS consistency
 are now repaired with focused production-GPU coverage. T3/T7 terminal-event and per-path depth
-handling are also repaired with focused production-GPU coverage. Phase 1 is in progress, not
-complete. Phase 0 and Phases 2-4 remain pending; S1/S2/S3 are next within Phase 1.
+handling and T4/T8 triangle/sun lighting are also repaired with focused production-GPU coverage.
+Phase 1 is in progress, not complete. Phase 0 and Phases 2-4 remain pending; S1/S2/S3 remain open.
 
 The review inspected the active wavefront shaders, shared transport/sampling helpers, C# lifecycle,
 adaptive scheduler, tests, and existing capture reports. No new Unity tests, compiles, or captures
@@ -45,7 +45,7 @@ Sound foundations worth preserving:
 ## Finding Register
 
 This register preserves findings and source references at the historical audit revision above,
-not a claim that every row still describes current code. T1/T2/T3/T7/local R5 are marked repaired below; subsequent
+not a claim that every row still describes current code. T1/T2/T3/T4/T7/T8/local R5 are marked repaired below; subsequent
 implementation evidence and remaining gates are recorded in Repair Progress.
 
 Priority **P1** means correctness/safety or a prerequisite for trustworthy acceptance. **P2** means
@@ -59,11 +59,11 @@ statistical magnitudes require measurement even where the underlying code behavi
 | T1 | P1 | **Repaired (first repair; broader acceptance pending).** At the audit revision, `GgxDistribution` floored the entire squared denominator at `1e-6`, clipping smooth lobes and reporting a PDF different from the VNDF sampler. At roughness 0.03, the analytic normal-incidence D was about 392,975 versus 0.81 implemented. Pure-metal f/pdf cancellation could conceal this; mixture sampling and MIS did not generally cancel it. See Repair Progress for the current implementation and focused evidence. | [Shared:2932-2936](../Assets/Scripts/RayTracingShared.hlsl#L2932), `EvaluateMaterialBrdf` at 3039-3079 |
 | T2 | P1 | **Repaired; focused acceptance below.** At audit, environment NEE used `H(q,p)` while continuation used `H(p,n*q)`. For n > 1 these were not complementary; at n=4 and p=q their sum was about 0.559. | [Shared:3664-3671](../Assets/Scripts/RayTracingShared.hlsl#L3664), [Wavefront:308-315](../Assets/Resources/RayTracingWavefront.compute#L308) |
 | T3 | P1 | **Repaired; focused acceptance below.** At audit, final-event NEE competed with a BSDF continuation that was retired without evaluating sky/emitter hits. The missing complementary contribution caused energy loss. | [Manager:118-143](../Assets/Scripts/WavefrontPathTracingManager.cs#L118), [Wavefront:525-535](../Assets/Resources/RayTracingWavefront.compute#L525) |
-| T4 | P1 | Triangle NEE uses clamped artistic distance/falloff scaling while emitter hits return unscaled emission. The techniques integrate different functions; complementary MIS weights cannot reconcile them. A back-facing triangle with zero shape PDF also falls into the sphere/point fallback. | [Shared:3689-3718](../Assets/Scripts/RayTracingShared.hlsl#L3689), [Wavefront:325-338](../Assets/Resources/RayTracingWavefront.compute#L325) |
-| T5 | P1 | Dielectric direct-light MIS uses an opaque-style GGX reflection PDF, but glass/water continuation samples different approximate distributions and reports material PDF zero. Delta and rough dielectric transport need distinct, coherent sample/evaluate/PDF contracts. | [Shared:3039-3081](../Assets/Scripts/RayTracingShared.hlsl#L3039), `GetMaterialContinuationPdf`, `CreateScatteredRay` at 4632-4997 |
+| T4 | P1 | **Repaired; focused acceptance below.** At audit, triangle NEE used clamped artistic falloff while emitter hits returned unscaled emission, and zero shape PDFs fell into a sphere/point fallback. Mesh emitters now use one-sided radiance with physical area geometry and no legacy falloff scale. | [Shared:3689-3718](../Assets/Scripts/RayTracingShared.hlsl#L3689), [Wavefront:325-338](../Assets/Resources/RayTracingWavefront.compute#L325) |
+| T5 | P1 | **Repaired with continuation-only dielectric transport; full dielectric NEE remains future work.** Dielectric surfaces no longer run the unmatched opaque-GGX direct estimator, and straight NEE segments no longer pass through dielectric boundaries. Delta and rough dielectric direct sampling would still require coherent sample/evaluate/PDF contracts before reintroduction. | `ShouldSampleDirectLight`, `GetShadowTransmittance`, `CreateScatteredRay` |
 | T6 | P1 | The mesh-glass shortcut refracts through the exit whenever Snell permits, without exit Fresnel reflection. The internally consumed segment also bypasses ordinary wavefront fog events. | [Shared:4853-4926](../Assets/Scripts/RayTracingShared.hlsl#L4853) |
 | T7 | P1 | **Repaired; focused acceptance below.** At audit, mesh scattering could consume multiple events, but requeueing never checked the updated per-path bounce count. The host counted queue iterations instead, allowing paths past their event budget. | [Wavefront:473-503](../Assets/Resources/RayTracingWavefront.compute#L473) |
-| T8 | P1/P2 | Production directional lights become virtual sun triangles. Zero angular radius gives zero area and zero RIS target; the ordinary fallback has a different energy convention. Nonzero sun samples receive triangle MIS despite no matching renderable virtual emitter. | [LightingManager:544-582](../Assets/Scripts/Lighting/LightingManager.cs#L544), [Shared:2976-2981](../Assets/Scripts/RayTracingShared.hlsl#L2976), 3691-3718, 4050-4067 |
+| T8 | P1/P2 | **Repaired; focused acceptance below.** Zero-radius suns upload analytic directional-delta records. Positive-radius virtual sun triangles remain direct-only penumbra proposals and no longer receive triangle/BRDF-hit MIS. | [LightingManager:544-582](../Assets/Scripts/Lighting/LightingManager.cs#L544), [Shared:2976-2981](../Assets/Scripts/RayTracingShared.hlsl#L2976), 3691-3718, 4050-4067 |
 | T9 | P2 | Multiple-scattering fog uses direct lighting with competing phase PDF zero, then adds phase-sampled emitter hits without complementary MIS. This double-counts overlapping finite-emitter connections. | [Shared:3679-3684](../Assets/Scripts/RayTracingShared.hlsl#L3679), [Wavefront:447-456](../Assets/Resources/RayTracingWavefront.compute#L447) |
 | T10 | P2 | Initial medium construction includes water/spheres, not containing closed meshes. Cameras or shadow origins inside mesh glass can start in the wrong medium. Opaque normal-mapped reflection also checks shading rather than geometric hemisphere, allowing below-surface rays. | [Shared:845-944](../Assets/Scripts/RayTracingShared.hlsl#L845), 3039-3048, 4755-4765, 5000-5003 |
 | T11 | P2 | Hard throughput/PDF cutoffs introduce non-vanishing bias; low throughput does not bound contribution from a bright emitter. First-hit debug presentation reads a hit buffer overwritten on later bounces. | [Shared:279](../Assets/Scripts/RayTracingShared.hlsl#L279), 3659-3662; [Wavefront:291-295](../Assets/Resources/RayTracingWavefront.compute#L291), 643-716 |
@@ -198,8 +198,8 @@ Local verification artifacts are under `/var/folders/hk/2wk9yqf564g4c39vrly7dgd8
   unchanged shader lines. No full-suite or image-baseline update was performed.
 - Remaining gates: broader multi-seed finite/mixed-light mean acceptance on physically matched
   integrands, guided/reuse runtime validation, and terrain permutations. These checks do not repair
-  T3 terminal truncation, T4 artistic triangle falloff, low-PDF/throughput cutoffs, or reuse R1-R4/R6.
-  Temporal/spatial reuse stays experimental/default-off. T3/T7 are the next Phase 1 repair.
+  low-PDF/throughput cutoffs or reuse R1-R4/R6. Temporal/spatial reuse stays experimental/default-off.
+  T3/T7 and T4/T8 were repaired subsequently as recorded below.
 
 Artifacts: `/var/folders/hk/2wk9yqf564g4c39vrly7dgd80000gq/T/opencode/mis-t2-r5-*`.
 The initial post-edit run caught a missing HLSL forward declaration; it was fixed before the passing
@@ -229,6 +229,64 @@ verified/final runs and wrapper compiles.
   terminal means, and runtime fog/guiding/reuse validation. S1/S2/S3 RNG consistency are next.
 
 Artifacts: `/var/folders/hk/2wk9yqf564g4c39vrly7dgd80000gq/T/opencode/t3-t7-*`.
+
+### T4 / T8: Physical Mesh Emitters And Sun Semantics Implemented
+
+- Mesh-light emission is radiance. NEE now uses the physical one-sided area geometry factor
+  `cos(light) * area / distance^2`; `_LightFalloffScale` no longer affects mesh-light radiometry or
+  its importance proposal. Direct emitter hits use the same one-sided radiance contract.
+- Back-facing or degenerate triangle samples contribute zero and cannot fall through to the legacy
+  sphere/point fallback. Back-face emitter hits still terminate the path but return zero radiance.
+- A zero-angular-radius `RayDirectionalLight` uploads two half-radiance analytic directional records,
+  preserving existing two-slot indexing while producing a true delta sun and infinite shadow ray.
+  Positive-radius virtual sun triangles remain finite penumbra proposals but are direct-only because
+  their virtual geometry is not intersectable by continuation rays.
+- Focused Metal coverage checks front/back triangle PDFs, inverse-square area geometry, one-sided
+  emitter hits, mesh-light invariance under legacy falloff-scale changes, local-RIS/ordinary mean
+  agreement, triangle-caustic photon production, and hard-sun upload. The reviewed mesh-light image
+  baseline changed under the new physical brightness/sidedness contract.
+
+Artifacts: `/var/folders/hk/2wk9yqf564g4c39vrly7dgd80000gq/T/opencode/t4-*`.
+
+### T5: Continuation-Only Dielectric Transport Implemented
+
+The original `GlassLighting_BaseTransportHdrDiagnostic` exposed the mismatch below. A downward-facing camera sees a diffuse floor beneath a mesh panel, with no
+sphere, an index-matched lossless sphere, or a sphere using Demofox's smooth glass parameters
+(IOR 1.14, specular 0.02, opacity 0.04, near-white tint). It compares registered mesh-light NEE
+against the same intersectable emission with NEE registration removed. Photon mapping, adaptive
+sampling, denoising, environment lighting, tone mapping, and firefly clamping are disabled.
+
+At 16x16, 2048 spp, eight scatter events, seeds 1/81723/12345, red-channel mean radiance was:
+
+| Fixture | Continuation Only | NEE Plus Continuation |
+| --- | --- | --- |
+| No sphere | 0.56310 | 0.56157 |
+| Index-matched glass | 0.59515 | 1.15285 |
+| Demofox-parameter glass | 1.10656 | 1.65828 |
+
+This established a substantial base-transport energy discrepancy without photon mapping. Straight
+transparent shadow connections retained absorption-only transmission while refracted continuation
+paths also reached the emitter; dielectric scatter reported PDF zero and those emitter hits retained
+full weight.
+The index-matched fixture is not an exact implemented identity: Schlick's grazing term remains
+nonzero even for equal IORs. Do not interpret continuation-only results as a fully physical oracle.
+The repair uses one coherent supported estimator rather than pretending the straight connection is
+refracted: dielectric surfaces skip direct-light sampling, and every surface boundary occludes
+ordinary NEE shadow rays. Refracted illumination is sampled by dielectric continuation and optional
+photon caustics. Reintroducing dielectric NEE requires refractive path connections and matching
+reflection/BTDF PDFs; absorption-only straight shadows are not sufficient.
+
+The promoted `GlassLighting_NeeAndContinuationOnlyHdrMeansAgree` Metal test passed. Across the same
+three seeds, Demofox glass measured 1.10656 continuation-only versus 1.10322 with the emitter also
+registered for NEE (0.30% difference), replacing the prior 1.65828 result. Index-matched glass was
+0.59515 versus 0.59393 (0.20%). The 2% raw-HDR acceptance covers sampling variance. Reviewed sphere
+and stacked dielectric-shadow baselines changed because straight light leakage was removed; all
+three shadow fixtures pass. No scene settings were changed.
+
+The environment finite-light-type guard regression and existing three-seed opaque environment
+MIS mean test also passed. Artifacts: `glass-identity-diagnostic.*` and `glass-base-diagnostic.*`
+under `/var/folders/hk/2wk9yqf564g4c39vrly7dgd80000gq/T/opencode/`.
+These isolated fixtures do not establish the cause of overall darkness in the full Demofox scene.
 
 ## Ordered Repair Plan
 
@@ -267,8 +325,9 @@ fail accounting. A/A and reversed partial-override experiments must resolve to i
 4. Repair S1/S2/S3: unique pixel identity, bounded semantic coordinate addressing with a separately
    domain-separated overflow stream, and one bound seed per frame. Fixed progressive captures retain
    one scramble across frames. Test prepass/main ray and RNG parity with aperture on/off.
-5. Fix triangle back-face fallback and hard-sun behavior. Resolve T4's physical-versus-artistic light
-   contract explicitly before changing historical scene brightness.
+5. T4/T8 triangle back-face, hard-sun, and non-intersectable soft-sun MIS behavior are repaired.
+   Mesh lights use the accepted physical one-sided radiance contract; reviewed historical brightness
+   changes are recorded above.
 
 Gate: analytical white-furnace/PDF fixtures; NEE-only, BSDF-only, and combined mean agreement where
 techniques estimate the same integrand; no systematic mean drift when only sample counts change.
