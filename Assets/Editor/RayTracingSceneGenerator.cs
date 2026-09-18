@@ -1042,8 +1042,8 @@ public static class RayTracingSceneGenerator
         var context = CreateBaseScene(new SceneSettings
         {
             SceneName = sceneName, 
-            CameraPosition = new Vector3(-6.65f, 4.86f, -1.99f), CameraEuler = new Vector3(37.42f, 54.6f, 0.0f),
-            NumBounces = 16, 
+            CameraPosition = new Vector3(-7.58f, 5.45f, -2.434f), CameraEuler = new Vector3(35.02f, 54.553f, 0.0f),
+            NumBounces = 10, 
             ShadowQuality = 0,
             LightFalloffScale = 0.015f, 
             Exposure = 3.0f,
@@ -1051,12 +1051,14 @@ public static class RayTracingSceneGenerator
             TopLevelBvhMinObjectCount = 1024, 
             ShadowBvhMinObjectCount = 1024,
             DirectionalLightAngularRadius = 1.61f,
-            DirectionalLightIntensity = 2.0f,
+            DirectionalLightIntensity = 10f,
             EnableCaustics = true,
-            CausticIntensity = 0.16f,
+            CausticIntensity = 1.0f,
             EnableSpatialDenoising = true,
             DenoiserLuminanceSigma = 0.05f,
             DenoiserIterations = 2,
+            SobolDimensionLimit = 1,
+            EnableAdaptiveSampling = false,
         });
 
 
@@ -1400,8 +1402,8 @@ public static class RayTracingSceneGenerator
             CausticPhotonCount = 600000,
             CausticGatherRadius = 0.06f,
             CausticGatherRadiusDecayRate = 0.35f,
-            CausticIntensity = 0.55f,
-            DirectionalLightIntensity = 2f,
+            CausticIntensity = 1.0f,
+            DirectionalLightIntensity = 3f,
             DirectionalLightAngularRadius = 0.27f,
             EnvironmentHighlightThreshold = 0.08f,
             EnvironmentHighlightIntensity = 1.6f

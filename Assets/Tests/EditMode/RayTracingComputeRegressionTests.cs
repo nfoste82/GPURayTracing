@@ -1509,8 +1509,10 @@ namespace GPURayTracing.Tests
             Assert.That(source, Does.Contain("GetShadowTransmittance(rayToLight, distanceToLight)"));
             Assert.That(CountOccurrences(source, "GetShadowTransmittance(rayToLight, distanceToLight)"), Is.EqualTo(1),
                 "RIS candidates must reuse SampleSingleLight's only production shadow query.");
-            Assert.That(source, Does.Contain("return !IsGlassMaterial(hit) && ShouldSampleDirectLight(throughput);"),
-                "Dielectric surfaces must remain continuation-only until NEE has a matching dielectric PDF.");
+            Assert.That(source, Does.Contain("(!IsGlassMaterial(hit) || HasDirectDielectricLight())"),
+                "Dielectric surfaces should directly sample only non-intersectable directional reflection.");
+            Assert.That(source, Does.Contain("IsGlassMaterial(hit) && (isEnvironment || (!isDirectional && !isSunTriangle))"),
+                "Finite lights and the environment must remain continuation-only on dielectric surfaces.");
             Assert.That(source, Does.Contain("illumination through glass is sampled only"),
                 "Straight shadow connections must not approximate refracted dielectric transport.");
             Assert.That(CountOccurrences(source, "accumulated += SampleSingleLight("), Is.EqualTo(1),

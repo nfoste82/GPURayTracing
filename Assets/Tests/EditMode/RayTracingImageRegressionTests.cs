@@ -622,6 +622,31 @@ namespace GPURayTracing.Tests
         }
 
         [Test]
+        public void GlassLighting_DirectionalLightReflectsDirectly()
+        {
+            SphereData glass = Sphere(Vector3.zero, Vector3.one, 2.0f, 0.5f, 0.35f, 1.5f, 2);
+            LightData directional = new LightData
+            {
+                position = Vector3.forward,
+                emission = new Vector3(2.0f, 2.0f, 2.0f),
+                type = 2
+            };
+
+            Vector4 unlit = RenderSignature(new[] { glass }, false,
+                new Vector3(0.0f, 0.0f, -3.0f), Quaternion.identity,
+                lights: Array.Empty<LightData>(), width: 16, height: 16, numberOfPasses: 64,
+                skyboxColor: Color.black, applyToneMapping: false, includeReceiver: false)[0];
+            Vector4 lit = RenderSignature(new[] { glass }, false,
+                new Vector3(0.0f, 0.0f, -3.0f), Quaternion.identity,
+                lights: new[] { directional }, width: 16, height: 16, numberOfPasses: 64,
+                skyboxColor: Color.black, applyToneMapping: false, includeReceiver: false)[0];
+
+            Assert.That(unlit.x + unlit.y + unlit.z, Is.LessThan(1e-5f));
+            Assert.That(lit.x + lit.y + lit.z, Is.GreaterThan(0.01f),
+                "A directional light should contribute through the glass surface reflection lobe.");
+        }
+
+        [Test]
         public void RoughGlass_ConstantEnvironmentRetainsEnergyAcrossSmoothness()
         {
             int[] seeds = { 1, 81723, 12345 };

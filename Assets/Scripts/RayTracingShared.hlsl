@@ -3403,6 +3403,25 @@ bool IsInitialRisEligible(RayHit hit)
         && !IsGlassMaterial(hit);
 }
 
+bool HasDirectDielectricLight()
+{
+    int lightCount = _NumLights;
+    if (_MaxLightSamples > 0)
+    {
+        lightCount = min(lightCount, _MaxLightSamples);
+    }
+    [loop]
+    for (int lightIndex = 0; lightIndex < lightCount; lightIndex++)
+    {
+        int lightType = _Lights[lightIndex].type;
+        if (lightType == LightTypeDirectional || lightType == LightTypeSunTriangle)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 float GetMaterialContinuationPdf(Ray ray, RayHit hit, float3 direction, bool allowPathGuide);
 
 float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
@@ -3470,6 +3489,13 @@ float3 SampleSingleLight(int lightIndex, Ray ray, RayHit hit, int sampleCount,
         {
             CreateBasisFromNormal(ptToLight, sphereTangent, sphereBitangent);
         }
+    }
+    // A sun can be connected directly to the reflected dielectric lobe without pretending that
+    // an unrefracted shadow segment estimates transmission. Other dielectric lighting remains
+    // continuation-only until it has a matching reflection/refraction sampling contract.
+    if (IsGlassMaterial(hit) && (isEnvironment || (!isDirectional && !isSunTriangle)))
+    {
+        return lightTotal;
     }
 
     int sampleIndex;
@@ -4751,9 +4777,11 @@ bool ShouldSampleDirectLight(float3 throughput)
 
 bool ShouldSampleDirectLight(float3 throughput, RayHit hit)
 {
-    // Dielectric continuation does not use EvaluateMaterialBrdf's opaque GGX reflection sampler
-    // or PDF. Keeping NEE off these boundaries avoids an unmatched second estimator.
-    return !IsGlassMaterial(hit) && ShouldSampleDirectLight(throughput);
+    // Directional lights have no intersectable continuation event, so their reflected dielectric
+    // lobe is safe to evaluate directly. All transmissive and finite-emitter transport remains on
+    // the dielectric continuation path.
+    return ShouldSampleDirectLight(throughput)
+        && (!IsGlassMaterial(hit) || HasDirectDielectricLight());
 }
 
 void ApplySphereRefraction(inout Ray ray, Ray sourceRay, inout RayHit hit, int remainingBounces, bool entering, float sourceRefraction, float targetRefraction, float3 boundaryNormal, inout RngState rngState, out int bouncesConsumed, out int mediumTransition, out float mediumDistanceTraveled)

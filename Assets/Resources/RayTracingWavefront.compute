@@ -413,10 +413,13 @@ void CSWavefrontTraceShadows(uint3 id : SV_DispatchThreadID)
     work.directLight = directLight;
     if (_DebugRenderMode == DebugDirectLight && path.bounce == 0)
         _WavefrontFirstDirectLight[work.pathIndex] = directLight;
-    path.previousDirectLightSampled = 1;
+    // Direct sun reflection on a dielectric has no competing intersectable-light technique.
+    // Do not make later environment or emitter continuation hits apply complementary MIS.
+    bool dielectricDirectLight = !volumeEvent && IsGlassMaterial(hit);
+    path.previousDirectLightSampled = dielectricDirectLight ? 0 : 1;
     // An empty reservoir is still an attempted RIS technique, not ordinary NEE or no NEE.
     path.previousInitialRisAttempted = useInitialRis ? 1 : 0;
-    path.previousSoftShadows = softShadows ? 1 : 0;
+    path.previousSoftShadows = !dielectricDirectLight && softShadows ? 1 : 0;
     _WavefrontPaths[work.pathIndex] = path;
     _WavefrontShadowWork[id.x] = work;
 }
