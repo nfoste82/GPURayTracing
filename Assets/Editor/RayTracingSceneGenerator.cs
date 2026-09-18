@@ -803,10 +803,15 @@ public static class RayTracingSceneGenerator
         var context = CreateBaseScene(new SceneSettings
         {
             SceneName = "Benchmark_ShadowBlockers", CameraPosition = new Vector3(0.0f, 8.0f, -22.0f), CameraEuler = new Vector3(18.0f, 0.0f, 0.0f),
-            NumBounces = 4, ShadowQuality = 0,
-            ShadowBvhMinObjectCount = 1024, LightFalloffScale = 0.027f
+            NumBounces = 4, 
+            ShadowQuality = 0,
+            ShadowBvhMinObjectCount = 1024, 
+            LightFalloffScale = 0.027f,
+            FieldOfView = 32.5f,
+            DirectionalLightIntensity = 0f,
         });
-        AddLight(context.Root, "Wide Light", new Vector3(0.0f, 12.0f, -6.0f), 2.4f, new Color32(255, 240, 220, 255));
+        
+        AddLight(context.Root, "Wide Light", new Vector3(0.0f, 12.0f, -6.0f), 2.4f, new Color32(255, 240, 220, 255), 5.0f);
         AddFloor(context.Root, new Vector2(0.0f, 5.0f), new Vector2(26.0f, 18.0f), 0.5f, new Color32(204, 204, 204, 255));
 
         for (int z = 0; z < 9; z++)
